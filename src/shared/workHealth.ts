@@ -13,7 +13,7 @@ export type Pattern = keyof typeof patternNames
 export const patterns = Object.keys(patternNames) as Pattern[]
 export const patternDefinitions: Record<Pattern, { rule: string; unavailable?: string }> = {
   stalled: { rule: 'In Progress, assigned verified workers, no running/runnable path and no active resolver; requires complete fresh evidence.', unavailable: 'Runnable paths and active resolver coverage are not published.' },
-  blocked: { rule: 'Explicit Work Waiting For plus linked waiting workers or a tracked blocker. A legitimate wait is not a deadlock.' },
+  blocked: { rule: 'Work Status is Waiting For with non-empty Waiting For text, independently of worker freshness. A legitimate wait is not a deadlock.' },
   unstaffed: { rule: 'In Progress with no verified assigned worker under complete configured source and explicit accountability coverage.' },
   idle: { rule: 'Waiting/idle worker with no runnable assigned work, excluding intentional wait and terminal history.', unavailable: 'Runnable assignment availability is not published.' },
   decision: { rule: 'Explicit Notion Will action or a structured human approval/input request from a verified worker.' },
@@ -21,7 +21,7 @@ export const patternDefinitions: Record<Pattern, { rule: string; unavailable?: s
   stale: { rule: 'No meaningful progress beyond an inspected threshold, independently of heartbeat/check-in age.', unavailable: 'Meaningful progress time is not published; no threshold can be applied yet.' },
   active: { rule: 'In Progress with at least one fresh verified running/runnable path. Only Running is currently published.' },
 }
-export interface PatternResult { outcome: 'match' | 'no-match' | 'unavailable'; evidence: string[] }
+export interface PatternResult { outcome: 'match' | 'no-match' | 'unavailable'; evidence: string[]; reason: string }
 export interface WorkHealth {
   cardId: string
   workerIds: string[]
@@ -73,7 +73,8 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const waiting = workers.filter(worker => worker.liveness === 'waiting').length
   const terminal = workers.filter(worker => ['finished', 'absent'].includes(worker.liveness)).length
   const unknown = workers.filter(worker => worker.liveness === 'liveness-not-observed' || !freshObservation(worker.observation, now) || readFailed).length
-  const inProgress = status.toLowerCase() === 'in progress'
+  const inProgress = status.trim().toLowerCase() === 'in progress'
+  const closed = card.source.archived || card.source.in_trash || ['done', 'archived'].includes(status.trim().toLowerCase())
   // The reconciler additionally requires explicit per-card home accountability;
   // globally complete configured homes alone are not a census of the farm.
   const absenceKnown = context.gaps.has(cardId)
@@ -82,8 +83,16 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
     ...workers.map(worker => `${worker.identity.task_id}: ${worker.liveness}; observed ${worker.observation.observedAt ?? 'unknown'} (${worker.observation.status}/${worker.observation.coverage})`),
     ...links.filter(verifiedLink).map(link => `Verified link: ${link.sources.join(', ') || 'explicit source'}; observed ${link.observedAt ?? 'unknown'}`),
     ...blockers.map(blocker => `Published blocker: ${blocker}`)]
-  const result = (outcome: PatternResult['outcome'], reason: string): PatternResult => ({ outcome, evidence: [...evidence, reason] })
-  const uncertain = (reason: string) => result('unavailable', reason)
+  const result = (outcome: PatternResult['outcome'], reason: string): PatternResult => ({ outcome, evidence: [...evidence, reason], reason })
+  const sourceReason = readFailed ? 'Source read failed; showing last known work' : !sourceFresh ? 'Notion source is unavailable, stale or incomplete' : !status.trim() ? 'Work status is not published' : null
+  const workerReasons = workers.filter(worker => !freshObservation(worker.observation, now) || worker.liveness === 'liveness-not-observed').map(worker => {
+    const age = worker.source.last_event.age_seconds
+    const observed = Date.parse(worker.observation.observedAt ?? '')
+    const elapsed = (Number.isFinite(observed) ? Math.max(0, now - observed) : NaN) + (typeof age === 'number' ? age * 1000 : 0)
+    const duration = !Number.isFinite(elapsed) ? 'at an unknown time' : elapsed >= 86400_000 ? `${Math.floor(elapsed / 86400_000)}d ago` : elapsed >= 3600_000 ? `${Math.floor(elapsed / 3600_000)}h ago` : `${Math.max(0, Math.floor(elapsed / 60_000))}m ago`
+    return `${worker.identity.task_id ?? 'Worker'} last reported ${duration}; observation ${worker.observation.status}/${worker.observation.coverage}${worker.liveness === 'liveness-not-observed' ? '; liveness not observed' : ''}`
+  })
+  const uncertain = (reason: string) => result('unavailable', [...new Set([sourceReason, ...workerReasons, reason].filter(Boolean))].join('; '))
   const boolean = (matches: boolean, reason: string) => result(matches ? 'match' : 'no-match', reason)
   // An explicit Will action is authoritative; a status explanation mentioning a
   // decision is not. Structured needs-decision entries retain their provenance.
@@ -95,13 +104,14 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
     runnable: null, activeResolverCount: null, lastProgressAt: null, observedAt: scene.coverage.intentions.observedAt,
     coverage: complete ? 'complete' : 'unknown', blockers,
     patterns: {
-      active: sourceFresh ? inProgress && !running ? uncertain('Runnable availability is not published; no verified running path observed') : boolean(inProgress && running > 0, running ? 'At least one verified running path' : 'Work is outside In Progress') : uncertain('Source unavailable or stale'),
-      blocked: sourceFresh && workers.every(worker => freshObservation(worker.observation, now))
-        ? boolean(status.toLowerCase() === 'waiting for' && !!wait && (waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; resolver coverage unavailable — no Stalled inference`)
-        : uncertain('Source unavailable or stale'),
-      unstaffed: complete && (workers.length > 0 || absenceKnown) ? boolean(inProgress && workers.length === 0, 'Complete configured source and explicit accountability coverage; no verified assigned worker') : uncertain('Incomplete source, link or accountability coverage; no absence conclusion'),
-      decision: sourceFresh ? boolean(decision || request, decision ? `Explicit Notion Will action: ${String(will)}` : request ? 'Published needs-decision request on a verified worker' : 'No explicit human decision request') : uncertain('Source unavailable or stale'),
-      stalled: result(stalledOutcome({ inProgress, complete, workerCount: workers.length, running, runnable: null, activeResolverCount: null }), running > 0 ? 'A verified worker is progressing' : 'Runnable paths and active resolver coverage are not published'),
+      active: sourceReason ? uncertain(sourceReason) : inProgress && !running ? uncertain('Runnable availability is not published; no verified running path observed') : boolean(inProgress && running > 0, running ? 'At least one verified running path' : 'Work is outside In Progress'),
+      blocked: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason)
+        : boolean(status.trim().toLowerCase() === 'waiting for' && !!wait, `Waiting For: ${wait || 'not set'}; worker freshness is not required`),
+      unstaffed: sourceReason ? uncertain(sourceReason) : !inProgress || workers.length > 0 ? boolean(false, workers.length ? 'A verified assigned worker exists' : 'Work is outside In Progress')
+        : complete && absenceKnown ? boolean(true, 'Complete configured source and explicit accountability coverage; no verified assigned worker') : uncertain('Incomplete source, link or accountability coverage; no absence conclusion'),
+      decision: !sourceFresh ? uncertain(sourceReason!) : decision || request ? boolean(true, decision ? `Explicit Notion Will action: ${String(will)}` : 'Published needs-decision request on a verified worker')
+        : complete ? boolean(false, 'No explicit human decision request') : uncertain('Worker decision requests or assignment coverage are incomplete'),
+      stalled: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason) : result(stalledOutcome({ inProgress, complete, workerCount: workers.length, running, runnable: null, activeResolverCount: null }), running > 0 ? 'A verified worker is progressing' : [...workerReasons, 'Runnable paths and active resolver coverage are not published'].join('; ')),
       idle: uncertain('Runnable assignment availability is not published; waiting is not proof of idle'),
       mismatch: uncertain('Tracked continuation coverage is not published'),
       stale: uncertain('Meaningful progress time is not published; heartbeat/check-in age is not progress'),
@@ -116,7 +126,7 @@ export const dialNames: Record<DialPattern, string> = { all: 'All', ...patternNa
 export const patternReminders: Record<DialPattern, string> = {
   all: 'No operational pattern applied. See the board under your other filters.',
   stalled: 'Work says In Progress, but no linked worker can advance it and no active resolver exists. Look for an unassigned blocker, missing wake-up, or stopped worker. Requires adequate fresh source/link coverage; one waiting + one running worker is NOT stalled.',
-  blocked: 'Work is Waiting For and its linked execution is waiting on a known dependency. Look for a real blocker, owner and next wake-up; blocked can be healthy.',
+  blocked: 'Work is Waiting For with a named dependency in Waiting For text. Worker freshness does not change this. Look for a real blocker, owner and next wake-up; blocked can be healthy.',
   decision: 'Work explicitly requires your decision, merge or elevated action. Look at the required action and supporting evidence, never infer approval from a worker state.',
   unstaffed: 'In Progress work with confirmed absence of a linked worker under adequate source coverage. Unknown/unverified links and stale source are not confidently unstaffed.',
   mismatch: 'Notion work and worker execution disagree (e.g. Done work with running execution, In Progress with all terminal workers and no follow-on). Review before changing either state.',
@@ -131,4 +141,16 @@ export function stalledOutcome(input: { inProgress: boolean; complete: boolean; 
   if (!input.inProgress || input.running > 0 || (input.runnable ?? 0) > 0 || (input.activeResolverCount ?? 0) > 0) return 'no-match'
   if (!input.complete || input.runnable === null || input.activeResolverCount === null) return 'unavailable'
   return input.workerCount > 0 ? 'match' : 'no-match'
+}
+
+/** Conjunction keeps unknown evidence visible unless another predicate rules it out. */
+export function combinedPatternResult(health: WorkHealth, selected: readonly Pattern[]): PatternResult {
+  const results = selected.map(pattern => health.patterns[pattern])
+  const outcome = results.some(result => result.outcome === 'no-match') ? 'no-match' : results.some(result => result.outcome === 'unavailable') ? 'unavailable' : 'match'
+  return { outcome, reason: results.filter(result => result.outcome === outcome).map(result => result.reason).join('; '), evidence: results.flatMap(result => result.evidence) }
+}
+
+export const patternEmptyText: Record<Pattern, string> = {
+  stalled: 'No stalled work', blocked: 'No blocked work', decision: 'No work needs your decision',
+  unstaffed: 'No unstaffed work', mismatch: 'No state mismatches', stale: 'No stale work', active: 'No active work', idle: 'No idle workers',
 }

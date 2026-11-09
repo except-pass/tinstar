@@ -153,8 +153,8 @@ Machine and the manager/home tag follow the title; activity and age share a
 divided footer. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
-Unknown, not Finished. Search focus dimming is described in
-[Smart Search](#smart-search-core); it never represents execution status.
+Unknown, not Finished. Secondary linked counterparts in
+[Smart Search](#smart-search-core) never represent execution status.
 
 Expanded and Detailed task cards keep the same field order in every grouping: Initiative / Epic
 breadcrumb and top-right Priority, two-line title, then a status dot and
@@ -216,11 +216,11 @@ are named suggestions derived from the same authorized scene; PR matches keep
 their original card/worker target.
 
 Typing leaves Overview unchanged. Arrows/Enter or pointer/touch select a result,
-close the palette and spotlight the seed plus its direct verified neighbors in
-the existing Workers-left / Tasks-right graph. Unrelated rows stay visible and
-dimmed. The real SVG gutter and compact row density remain; no recursive fan-out
-or text-inferred connection is added. An outside-view result is temporarily
-revealed alongside the current rows, including planned work hidden by roadmap
+close the palette and filter to the seed plus its direct verified neighbors in
+the existing Workers-left / Tasks-right graph. Unrelated rows are hidden; linked
+counterparts have a secondary, dashed appearance. The real SVG gutter and compact
+row density remain; no recursive fan-out or text-inferred connection is added. An
+outside-view result can temporarily reveal planned work hidden by roadmap
 visibility. Clear search focus restores organizer, scope, donuts, density,
 expansions, scroll and selection. Escape first closes an open palette, then clears
 focus. Mobile Back dismisses the same transient layers. Focus and its restoration
@@ -234,9 +234,15 @@ Workers/Cards status donuts. Its circular order is All → Stalled → Blocked �
 Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
 scroll horizontally or use Left/Right on the dial to move one detent. Vertical
 scroll is unaffected and trackpad momentum cannot race through several patterns.
-All clears only the pattern; other search/facet, donut and base-scope conditions
-remain. Pattern selection uses the existing search-filter reducer and persists
-with the ordinary view preferences.
+Picking any detent, including All, clears temporary search focus and its restore
+session. All also clears the pattern; other search/facet, donut and base-scope
+conditions remain. Pattern selection uses the existing search-filter reducer and persists
+with the ordinary view preferences. Non-matches are hidden. Matches retain only
+their direct linked counterparts as secondary context; uncertain cards stay
+visible with a Can't tell marker and a tooltip explaining the missing evidence.
+An empty result names the selected pattern, for example No blocked work. See the
+[shared execution-health contract](#shared-execution-health-contract) for pattern
+evidence requirements.
 
 Center and neighbor counts preview unique matching work under the other filters,
 ignoring the dial's current pattern. They are overlapping predicates, not pie
@@ -310,7 +316,7 @@ until the next source observation expiry or new scene, with bounded query caches
 First Mate liveness reconciler. It returns canonical verified worker IDs/count,
 running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
 `null` for unpublished runnable/resolver/progress evidence, and per-pattern
-`match`, `no-match` or `unavailable` plus concrete evidence. Null never means zero.
+`match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
 The existing liveness precedence and authoritative source/link coverage remain
 unchanged. This feature implements no recovery, watchdog or scheduling behavior.
 
@@ -319,10 +325,10 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Pattern | Required evidence / current behavior |
 |---|---|
 | Active | In Progress plus a fresh verified running path. Missing runnable availability stays unknown. |
-| Blocked | Work status is Waiting For with a nonempty Waiting For field, plus linked waiting workers or a published tracked blocker. Legitimate waiting is not called deadlock. |
+| Blocked | Fresh, complete Notion evidence with status Waiting For and a nonempty Waiting For field; worker freshness is not required. Done/Archived never match. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
-| Stalled | Requires no running/runnable path and no active resolver. Unavailable because runnable/resolver coverage is unpublished; a running neighbor explicitly rules it out. |
+| Stalled | Requires no running/runnable path and no active resolver. Done/Archived never match. Otherwise unavailable when runnable/resolver coverage is needed but unpublished; a running neighbor explicitly rules it out. |
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |

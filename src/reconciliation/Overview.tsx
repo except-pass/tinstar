@@ -8,7 +8,7 @@ import { semanticId, ancestorHomes, isPlanned, type FloorScene, type Presentatio
 import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
+import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
@@ -21,11 +21,12 @@ import { AskSurface } from '../ask/AskSurface'
 import { askElement } from '../ask/element'
 import { useElementAsk } from '../ask/useElementAsk'
 import { AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit, useAskControls } from '../ask/Ask'
+import { combinedPatternResult, sceneWorkHealth, patternEmptyText, type PatternResult } from '../shared/workHealth'
 
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 
 type Dispatch = (action: PresentationAction) => void
-interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
+interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; patternResults?: ReadonlyMap<string, PatternResult>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[]; coverage?: ReturnType<typeof workerSourceCoverage> } }
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const same = (a: Target | null, b: Target) => !!a && semanticId(a) === semanticId(b)
 const safeUrl = (value: string | null | undefined) => { try { const url = new URL(value ?? ''); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null } }
@@ -114,6 +115,8 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const confirmedLinks = links.filter(c => c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
   const coverage = compact?.coverage ?? workerSourceCoverage(scene.coverage.homes, now, readFailed)
   const linkLabel = confirmedLinks.length ? '' : links.length ? 'Link unverified' : worker ? readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : 'No linked task' : workerAbsenceLabel(coverage, 'column')
+  const patternResult = card ? view.patternResults?.get(card.id) : undefined
+  const cantTell = patternResult?.outcome === 'unavailable'
   const flashed = flashRelated(view, item)
   const status = worker ? workerState(worker) : cardStatus(card!)
   const priority = card ? propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '') : ''
@@ -124,8 +127,8 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     event.stopPropagation()
     send({ type: 'focus', target: item })
   }
-  return <div ref={askRoot} className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
-    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={title}
+  return <div ref={askRoot} className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${cantTell ? ' ov-pattern-unknown' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
+    data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={cantTell ? `${title}. Can't tell: ${patternResult.reason}` : title}
     onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle() } }}
     onMouseEnter={() => hover(item)} onMouseLeave={() => hover(null)} onFocus={() => hover(item)} onBlur={() => hover(null)} onClick={toggle}>
     {!expanded && <><span className="ov-tiny-glyph" aria-hidden="true">{worker ? '◇' : '▤'}</span><strong {...askElement('title', 'Title', title)}>{title}</strong><span {...(card && checkIn(card, now).state === 'overdue' ? nextCheckIn : askElement('status', 'Status', status))} className={`ov-compact-status ${worker ? `status-${status.toLowerCase()}` : checkIn(card!, now).state === 'overdue' ? 'check-overdue' : /waiting/i.test(status) ? 'status-waiting' : ''}`}>{card && checkIn(card, now).state === 'overdue' ? compactCheckIn(card, now) : status}{lastKnown ? ' · Last known' : ''}</span>{linkLabel && <span {...askElement('relationship', 'Task link')} className="ov-link-label">{linkLabel}</span>}<span className="ov-full-title">{title}</span></>}
@@ -142,6 +145,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
       <span className="ov-record-foot"><span {...nextCheckIn} className={`ov-check check-${checkIn(card!, now).state}`} title={`Next check-in: ${checkIn(card!, now).label}. Right-click or long-press to ask.`}>◷ {compactCheckIn(card!, now)}</span><span className="ov-age" {...askElement('last_edited', 'Last edited', card!.source.last_edited_time)} title={`Last touched by ${propertyText(card!, 'Last touched by') || 'Unknown'}. Right-click or long-press to ask.`}>Edited {ageLabel(Date.parse(card!.source.last_edited_time), now)}</span></span>
       {taskFields(card!, now, view.actionableCardIds.has(card!.id)).filter(([label]) => ['Due Date', 'Waiting For', 'Will action'].includes(label)).map(([label, value]) => <span key={label} {...askElement(label === 'Waiting For' ? 'waiting_for' : label === 'Due Date' ? 'due_date' : 'will_action', label, value)} className="ov-context-field" title={`${label}: ${value}. Right-click or long-press to ask.`}>{label}: {value}</span>)}
     </>)}
+    {cantTell && <span className="ov-pattern-unknown-marker" title={patternResult.reason} aria-label={`Can't tell: ${patternResult.reason}`}>? Can't tell</span>}
     {compact && expanded && <span {...askElement('relationship', 'Relationship view')} className="ov-expansion-hint">{openRoot ? '− Collapse this relationship' : '+ Expand this relationship'}</span>}
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     {askGesture.hint && <span className="ask-gesture-hint" aria-hidden="true">← Ask in text · release to compose</span>}
@@ -316,14 +320,8 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => { setHovered(null) }, [state.revision])
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
-  const searchMatches = useMemo(() => scene && state.searchFocus ? directNeighbors(scene, state.searchFocus) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
-  const searchEdgeStyle = useMemo(() => {
-    if (!scene || !state.searchFocus || !searchMatches) return ''
-    const quote = (value: string) => '"' + value.replace(/["\\\n\r\f]/g, character => '\\' + character.charCodeAt(0).toString(16) + ' ') + '"'
-    const selectors = scene.claims.filter(link => link.basis === 'explicit' && link.verification === 'confirmed' && link.state === 'current' && searchMatches.has(`execution:${link.executionId}`) && searchMatches.has(`card:${link.cardId}`))
-      .map(link => `.ov-search-focused .ov-compact-connections [data-worker-id=${quote(link.executionId)}][data-card-id=${quote(link.cardId)}]`)
-    return `.ov-search-focused .ov-compact-connections .ov-line{opacity:.12}${selectors.length ? `${selectors.join(',')}{opacity:1;stroke-width:2}` : ''}`
-  }, [scene, state.searchFocus, searchMatches])
+  const searchMatches = useMemo(() => scene && state.searchFocus?.length ? new Set(state.searchFocus.map(targetKey)) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
+  const patternResults = useMemo(() => scene && state.search?.patterns.length ? new Map(sceneWorkHealth(scene, now).map(health => [health.cardId, combinedPatternResult(health, state.search!.patterns)])) : undefined, [scene, state.search, now])
   const displayGroups = useMemo(() => density === 'compact' ? canonicalOverviewGroups(groups) : groups, [groups, density])
   useEffect(() => {
     if (search.isRestoring()) return
@@ -359,7 +357,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
       }
     }
   }
-  const view: View = { scene, state, send, now, readFailed: !!error, searchMatches, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
+  const view: View = { scene, state, send, now, readFailed: !!error, searchMatches, patternResults, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
   const gaps = gapTargets(scene, now, !!error)
   const notionUnavailable = !!error || stale(scene.coverage.intentions, now)
   const fleetCoverage = workerSourceCoverage(scene.coverage.homes, now, !!error)
@@ -382,7 +380,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
         }
       }} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${state.searchFocus ? ' ov-search-focused' : ''}`}>{searchEdgeStyle && <style>{searchEdgeStyle}</style>}<div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
+      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
@@ -393,7 +391,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
           </section>
         })}
         {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} />}
-        {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? 'No confirmed pattern matches in available records. The pattern reminder explains any missing evidence.' : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
+        {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? patternEmptyText[state.search.patterns[0]!] : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
         {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>
     </div></div>{state.selection && <Inspector view={view} workers={workers} />}

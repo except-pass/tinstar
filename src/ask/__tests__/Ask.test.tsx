@@ -157,7 +157,6 @@ describe('one-card text Ask and Desk', () => {
     }
     expect(card(container)).toBeNull()
     const before = JSON.parse(localStorage.getItem(preferencesKey)!)
-    const visibleBefore = [...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId)
     if (history) fireEvent.click(screen.getByRole('button', { name: 'Question history' }))
     const answer = await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })
     vi.mocked(Element.prototype.scrollIntoView).mockClear()
@@ -167,7 +166,9 @@ describe('one-card text Ask and Desk', () => {
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
     const after = JSON.parse(localStorage.getItem(preferencesKey)!)
     expect(after).toEqual(before)
-    expect([...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId).filter(id => id !== fixtureId(1))).toEqual(visibleBefore)
+    // Answer anchors use the shared focus lens: retain the target and its
+    // direct counterparts while leaving persisted filters unchanged.
+    expect([...new Set([...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId))]).toEqual([fixtureId(1)])
     expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
   })
   it('offers the original source when a retained card is trashed', async () => {

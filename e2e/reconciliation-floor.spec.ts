@@ -629,7 +629,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test('single-row toolbar Smart Search ranks, spotlights one-hop clusters and restores scroll and filters', async ({ page }) => {
+test('single-row toolbar Smart Search ranks, filters one-hop clusters and restores scroll and filters', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const proofNow = Date.parse('2026-11-06T00:00:00Z')
   await page.clock.install({ time: proofNow })
@@ -641,7 +641,6 @@ test('single-row toolbar Smart Search ranks, spotlights one-hop clusters and res
   await page.goto(base)
   await expect(page.locator('.ov')).toHaveAttribute('data-density', 'compact')
   const beforeCards = await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))
-  const beforeWorkers = await page.locator('.ov-execution').count()
   await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
   await expect(page.locator('.ov-donut')).toHaveCount(2)
   await page.locator('.ov-workspace').evaluate(node => { node.scrollTop = 420 })
@@ -663,9 +662,10 @@ test('single-row toolbar Smart Search ranks, spotlights one-hop clusters and res
   const card = page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`)
   await expect(card).toBeFocused()
   await expect(card).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.locator('.ov-execution')).toHaveCount(beforeWorkers)
-  await expect(page.locator('.ov-execution.ov-search-match')).toHaveCount(2)
-  await expect(page.locator('.ov-search-context').first()).toHaveCSS('opacity', '0.25')
+  await expect(page.locator('.ov-execution')).toHaveCount(2)
+  await expect(page.locator('.ov-card')).toHaveCount(1)
+  await expect(page.locator('.ov-execution.ov-search-context')).toHaveCount(2)
+  await expect(page.locator('.ov-search-context').first()).toHaveCSS('opacity', '0.65')
   const paths = page.locator('.ov-compact-connections path')
   expect(await paths.count()).toBeGreaterThan(1)
   await screenshot(page, 'smart-search-desktop-focus')
@@ -681,7 +681,7 @@ test('single-row toolbar Smart Search ranks, spotlights one-hop clusters and res
   const outside = results.getByRole('option').filter({ hasText: 'Roadmap: planned integration' })
   await expect(outside).toContainText('Outside current view'); await outside.click()
   await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveCount(1)
-  await expect(page.locator('.ov-card')).toHaveCount(beforeCards.length + 1)
+  await expect(page.locator('.ov-card')).toHaveCount(1)
   await expect(page.locator('.ov')).toHaveAttribute('data-preset', 'operational')
   await page.getByRole('button', { name: 'Clear search focus', exact: true }).click()
   await expect(page.locator(`.ov-card[data-entity-id="${fixtureId(5)}"]`)).toHaveCount(0)
@@ -710,7 +710,8 @@ test('single-row toolbar Smart Search exact identifiers, named entities and expl
   const center = page.locator('.ov-pattern-selected')
   await center.focus(); await center.press('ArrowRight'); await center.press('ArrowRight'); await center.press('ArrowRight')
   await expect(center).toContainText('Needs me')
-  await expect(page.locator('.ov-card')).toHaveCount(1)
+  await expect(page.locator('.ov-card:not(.ov-pattern-unknown)')).toHaveCount(1)
+  await expect(page.locator('.ov-card.ov-pattern-unknown')).toHaveCount(1)
   await screenshot(page, 'smart-search-explicit-decision')
   // Deliver disposable source snapshots through the running browser's normal refresh.
   const text = '  PR #29201; PR #2920 then oﬃce release'

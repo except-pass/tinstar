@@ -103,12 +103,14 @@ export interface FloorGroup {
 export function statusProjection(scene: FloorScene, state: PresentationState, now: number) {
   const selection = state.donutFilter ?? { cards: [], workers: [] }
   const searching = hasSearch(state.search)
-  const seeds = searching ? directNeighbors(scene, searchSeeds(scene, state.search!, now)) : null
-  const reveal = state.searchReveal?.kind === 'card' && state.searchReveal.id === state.navigation?.cardId
+  const matched = searching ? directNeighbors(scene, searchSeeds(scene, state.search!, now)) : null
+  const focused = state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
+  const seeds = focused ? state.search?.patterns.length && matched ? new Set([...focused].filter(key => matched.has(key))) : focused : matched
+  const reveal = state.search?.patterns.length ? new Set<string>() : state.searchReveal?.kind === 'card' && state.searchReveal.id === state.navigation?.cardId
     ? new Set([`card:${state.searchReveal.id}`])
     : directNeighbors(scene, state.searchFocus ?? (state.searchReveal ? [state.searchReveal] : []))
   const explicit = hasDonutFilter(selection) || searching || reveal.size > 0
-  const workers = [...new Map(scene.executions.filter(w => (activeWorker(w) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
+  const workers = [...new Map(scene.executions.filter(w => (activeWorker(w) || !!state.search?.patterns.length && seeds?.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
   const cards = [...new Map(scene.cards.filter(c => !c.source.in_trash && (!c.source.archived || reveal.has(`card:${c.id}`)) && (!seeds || seeds.has(`card:${c.id}`) || reveal.has(`card:${c.id}`)) && (
     reveal.has(`card:${c.id}`) ||
     matchesStatus(c, state.statusFilter ?? defaultStatusFilter()) || !explicit && (

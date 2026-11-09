@@ -4,6 +4,7 @@ import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/re
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { preferencesKey } from '../presentationPreferences'
 import type { FloorScene, PresentationAction } from '../presentation'
+import * as health from '../../shared/workHealth'
 import { actionSchema } from '../../shared/reconciliationCommands'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, send: null as null | ((action: PresentationAction) => unknown) }))
@@ -49,7 +50,7 @@ describe('compact search palette and temporary graph focus', () => {
     expect(cardIds(container)).toEqual(before)
   })
 
-  it('ranks fuzzy names and expands only a verified one-hop cluster while retaining dimmed context', () => {
+  it('ranks fuzzy names and filters to a verified one-hop cluster with secondary counterparts', () => {
     const link = scene.claims.find(link => link.cardId === fixtureId(1))!
     scene.claims.push({ ...link, id: 'second-hop', cardId: fixtureId(6) })
     const { container } = mount(), before = cardIds(container)
@@ -62,10 +63,10 @@ describe('compact search palette and temporary graph focus', () => {
     const selected = container.querySelector(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
     expect(selected).toHaveFocus()
     expect(selected).toHaveAttribute('aria-expanded', 'true')
-    expect(container.querySelectorAll('.ov-execution.ov-search-match')).toHaveLength(2)
-    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toHaveClass('ov-search-context')
-    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toHaveAttribute('aria-expanded', 'false')
-    expect(cardIds(container)).toEqual(before)
+    expect(container.querySelectorAll('.ov-execution.ov-search-context')).toHaveLength(2)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+    expect(cardIds(container)).not.toEqual(before)
     expect(screen.queryByRole('region', { name: 'Inspector' })).toBeNull()
   })
 
@@ -76,8 +77,9 @@ describe('compact search palette and temporary graph focus', () => {
     const machine = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: /^Hulk.*Machine/ })
     fireEvent.click(machine)
     expect(container.querySelectorAll('.ov-execution.ov-search-match')).toHaveLength(4)
-    expect(container.querySelectorAll('.ov-card.ov-search-match')).toHaveLength(2)
-    expect(container.querySelectorAll('.ov-execution.ov-search-context')).toHaveLength(1)
+    expect(container.querySelectorAll('.ov-card.ov-search-context')).toHaveLength(2)
+    expect(container.querySelectorAll('.ov-execution.ov-search-context')).toHaveLength(0)
+    expect(container.querySelectorAll('.ov-execution')).toHaveLength(4)
     expect(container.querySelectorAll('.ov-execution[aria-expanded="true"]')).toHaveLength(4)
   })
 
@@ -94,7 +96,7 @@ describe('compact search palette and temporary graph focus', () => {
     expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
   })
 
-  it('reveals outside active scope without replacing existing results and restores all prior view settings', () => {
+  it('filters to a result outside active scope and restores all prior view settings', () => {
     localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'machine', inner: 'initiative', order: 'priority', direction: 'desc' }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] }, donutFilter: { cards: ['Waiting For'], workers: [] }, search: { query: '', patterns: [], facets: [] } }))
     const { container } = mount()
     const original = container.querySelector<HTMLElement>(`.ov-card[data-entity-id="${fixtureId(4)}"]`)!
@@ -107,8 +109,8 @@ describe('compact search palette and temporary graph focus', () => {
     const result = within(screen.getByRole('listbox', { name: 'Search results' })).getByRole('option', { name: /Roadmap: planned integration/ })
     expect(result).toHaveTextContent('Outside current view')
     fireEvent.click(result)
-    expect(cardIds(container).sort()).toEqual([fixtureId(4), fixtureId(5)].sort())
-    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveClass('ov-search-context')
+    expect(cardIds(container)).toEqual([fixtureId(5)])
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toBeNull()
     viewport.scrollLeft = 0
     fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
     expect(cardIds(container)).toEqual([fixtureId(4)])
@@ -125,7 +127,7 @@ describe('compact search palette and temporary graph focus', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     fireEvent.keyDown(input(), { key: 'Escape' })
     expect(screen.queryByRole('dialog', { name: 'Smart Search' })).toBeNull()
-    expect(container.querySelectorAll('.ov-search-match')).toHaveLength(3)
+    expect(container.querySelectorAll('.ov-search-match')).toHaveLength(1)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
@@ -212,4 +214,102 @@ describe('compact search palette and temporary graph focus', () => {
     expect(container.querySelector(selector)).toHaveAttribute('aria-expanded', 'false')
     expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'detailed')
   })
+})
+
+
+describe('shared dial filtering contract', () => {
+  const patterns = health.dialPatterns.filter(pattern => pattern !== 'all')
+  // Exercise the consumer with all three evaluator outcomes, including future
+  // evidence-backed matches for patterns whose current adapters report unknown.
+  function outcomes(pattern: health.Pattern, matched: boolean) {
+    const records = health.sceneWorkHealth(scene, Date.now()).map(record => ({ ...record, patterns: { ...record.patterns,
+      [pattern]: { outcome: matched && record.cardId === fixtureId(1) ? 'match' : matched && record.cardId === fixtureId(2) ? 'unavailable' : 'no-match',
+        reason: 'Worker last reported 3d ago', evidence: ['Worker last reported 3d ago'] } as health.PatternResult,
+    } }))
+    vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
+  }
+  it.each(patterns)('%s hides non-matches, retains one-hop counterparts as secondary, and labels unknown evidence', pattern => {
+    const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
+    scene.claims.push({ ...claim, id: 'second-hop', cardId: fixtureId(6) })
+    outcomes(pattern, true)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-pattern', pattern }) })
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveClass('ov-search-match')
+    const counterpart = [...container.querySelectorAll<HTMLElement>('.ov-execution')].find(element => element.dataset.entityId === claim.executionId)!
+    expect(counterpart).toHaveClass('ov-search-context')
+    expect(counterpart).not.toHaveClass('ov-search-match')
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
+    const untracked = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+    expect([...container.querySelectorAll<HTMLElement>('[data-entity-id]')].find(element => element.dataset.entityId === untracked.id) ?? null).toBeNull()
+    const unknown = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
+    expect(unknown).toHaveClass('ov-pattern-unknown')
+    expect(within(unknown as HTMLElement).getByLabelText("Can't tell: Worker last reported 3d ago")).toHaveAttribute('title', 'Worker last reported 3d ago')
+    fireEvent.click(counterpart)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
+  })
+  it.each(patterns)('%s shows its explicit empty state when every result is no-match', pattern => {
+    outcomes(pattern, false)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-pattern', pattern }) })
+    expect(container.querySelectorAll('.ov-item')).toHaveLength(0)
+    expect(screen.getByText(health.patternEmptyText[pattern])).toBeVisible()
+  })
+  it('replaces an earlier search focus when choosing a dial pattern', () => {
+    scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'reveal-search', target: { kind: 'card', id: fixtureId(1) } }) })
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'blocked' }) })
+    expect(cardIds(container)).toEqual([fixtureId(4)])
+    expect(container.querySelectorAll('.ov-search-context')).toHaveLength(1)
+  })
+})
+
+
+describe('worker search roots under dial patterns', () => {
+  it.each(health.dialPatterns.filter(pattern => pattern !== 'all'))('%s keeps the directly linked cards secondary to a matching worker', pattern => {
+    const records = health.sceneWorkHealth(scene, Date.now()).map(record => ({ ...record, patterns: { ...record.patterns,
+      [pattern]: { outcome: record.cardId === fixtureId(1) ? 'match' : 'no-match', reason: 'Test evidence', evidence: ['Test evidence'] } as health.PatternResult,
+    } }))
+    vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-search', search: { query: 'linked-worker', patterns: [pattern], facets: [] } }) })
+    expect(container.querySelectorAll('.ov-execution.ov-search-match')).toHaveLength(1)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveClass('ov-search-context')
+    expect(container.querySelectorAll('.ov-card')).toHaveLength(1)
+    expect(container.querySelectorAll('.ov-execution')).toHaveLength(1)
+  })
+})
+
+
+describe('All clears temporary search focus', () => {
+  it.each(['current', 'stale'] as const)('restores the normal floor without gray cards after %s focus', freshness => {
+    const { container } = mount(), before = cardIds(container)
+    act(() => { observed.send!({ type: 'reveal-search', target: { kind: 'card', id: fixtureId(1) } }) })
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+    if (freshness === 'stale') {
+      observed.scene = { ...scene, cards: scene.cards.filter(card => card.id !== fixtureId(1)), claims: scene.claims.filter(claim => claim.cardId !== fixtureId(1)) }
+    }
+    act(() => { observed.send!({ type: 'set-pattern', pattern: null }) })
+    expect(container.querySelector('.ov-pattern-selected')).toHaveTextContent('All')
+    expect(cardIds(container).sort()).toEqual((freshness === 'stale' ? before.filter(id => id !== fixtureId(1)) : before).sort())
+    expect(container.querySelectorAll('.ov-search-context, .ov-search-match')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  })
+})
+
+
+it('choosing All exits the palette focus session without Escape restoring the previous pattern', () => {
+  const { container } = mount()
+  act(() => { observed.send!({ type: 'set-pattern', pattern: 'active' }) })
+  fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+  search('Release Coordinator')
+  fireEvent.keyDown(input(), { key: 'Enter' })
+  expect(cardIds(container)).toEqual([fixtureId(1)])
+  fireEvent.click(screen.getByRole('button', { name: /^Select All,/ }))
+  const all = cardIds(container)
+  expect(all.length).toBeGreaterThan(1)
+  fireEvent.keyDown(window, { key: 'Escape' })
+  expect(container.querySelector('.ov-pattern-selected')).toHaveTextContent('All')
+  expect(cardIds(container)).toEqual(all)
+  expect(container.querySelectorAll('.ov-search-context, .ov-search-match')).toHaveLength(0)
 })

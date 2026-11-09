@@ -78,6 +78,13 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     else if (clear) send({ type: 'clear-search' })
     snapshot.current = null; setOpen(false)
   }
+  // A dial/filter action can clear focus outside the palette. End its temporary
+  // session too, so a later Escape/Back cannot restore the superseded view.
+  useLayoutEffect(() => {
+    if (!active || open || state.searchFocus || !snapshot.current || restorePending.current) return
+    leaveHistory(ownedHistoryDepth())
+    snapshot.current = null
+  }, [active, open, state.searchFocus])
   useLayoutEffect(() => {
     const saved = restorePending.current
     if (!active || !saved || !canvas.current) return

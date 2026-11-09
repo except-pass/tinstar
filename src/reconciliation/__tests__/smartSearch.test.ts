@@ -264,3 +264,81 @@ describe('health and graph predicates', () => {
     expect(actionSchema.safeParse({ type: 'set-search', search: { ...search, sql: 'arbitrary' } }).success).toBe(false)
   })
 })
+
+
+describe('pattern evidence dependencies', () => {
+  it.each(['stalled', 'blocked', 'decision', 'unstaffed', 'mismatch', 'stale', 'active'] as const)('%s retains cards with unavailable evidence and an explanation', pattern => {
+    const scene = fixtureScene({ now })
+    scene.coverage.intentions.status = 'stale'
+    const card = scene.cards.find(card => card.id === fixtureId(1))!
+    const result = workHealth(scene, card.id, now).patterns[pattern]
+    expect(result.outcome).toBe('unavailable')
+    expect(result.reason.length).toBeGreaterThan(0)
+    expect(searchSeeds(scene, { ...emptySearch(), patterns: [pattern] }, now)).toContainEqual({ kind: 'card', id: card.id })
+  })
+  it.each(['stale', 'liveness-not-observed', 'no worker'] as const)('Waiting For plus non-empty text is blocked with %s', condition => {
+    const scene = fixtureScene({ now })
+    const worker = scene.executions.find(worker => worker.identity.task_id === 'blocked-worker')!
+    if (condition === 'stale') worker.observation.status = 'stale'
+    if (condition === 'liveness-not-observed') worker.liveness = 'liveness-not-observed'
+    if (condition === 'no worker') { scene.executions = scene.executions.filter(entry => entry.id !== worker.id); scene.claims = scene.claims.filter(claim => claim.executionId !== worker.id) }
+    expect(workHealth(scene, fixtureId(4), now).patterns.blocked.outcome).toBe('match')
+    scene.cards.find(card => card.id === fixtureId(4))!.source.properties['Waiting For']!.value = '  '
+    expect(workHealth(scene, fixtureId(4), now).patterns.blocked.outcome).toBe('no-match')
+  })
+  it('gives the stale worker age when current execution evidence cannot decide a pattern', () => {
+    const scene = fixtureScene({ now })
+    for (const worker of scene.executions) {
+      worker.observation.status = 'stale'
+      worker.source.last_event.age_seconds = 3 * 86400
+    }
+    const result = workHealth(scene, fixtureId(1), now).patterns.active
+    expect(result.outcome).toBe('unavailable')
+    expect(result.reason).toContain('last reported 3d ago')
+  })
+  it('does not turn unread worker decision requests into a negative result', () => {
+    const scene = fixtureScene({ now })
+    const worker = scene.executions.find(worker => worker.identity.task_id === 'blocked-worker')!
+    worker.observation.status = 'stale'
+    expect(workHealth(scene, fixtureId(4), now).patterns.decision.outcome).toBe('unavailable')
+  })
+  it('keeps the card visibly secondary when a text-qualified pattern matches its worker', () => {
+    const scene = fixtureScene({ now })
+    const worker = scene.executions.find(worker => worker.identity.task_id === 'blocked-worker')!
+    const search = { ...emptySearch(), query: worker.identity.task_id!, patterns: ['blocked' as const] }
+    const seeds = searchSeeds(scene, search, now)
+    expect(seeds).toEqual([{ kind: 'execution', id: worker.id }])
+    expect(directNeighbors(scene, seeds)).toContain(`card:${fixtureId(4)}`)
+    expect(statusProjection(scene, { ...initialPresentation(), search }, now).cards.map(card => card.id)).toEqual([fixtureId(4)])
+  })
+})
+
+
+it.each(['Done', 'Archived'] as const)('%s never enters Blocked or Stalled, even with old source evidence and waiting workers', status => {
+  const scene = fixtureScene({ now })
+  const card = scene.cards.find(card => card.id === fixtureId(4))!
+  card.source.properties.Status!.value = status
+  scene.coverage.intentions.status = 'stale'
+  for (const pattern of ['blocked', 'stalled'] as const) {
+    expect(workHealth(scene, card.id, now).patterns[pattern].outcome).toBe('no-match')
+    expect(searchSeeds(scene, { ...emptySearch(), patterns: [pattern] }, now)).not.toContainEqual({ kind: 'card', id: card.id })
+  }
+})
+
+it('retains a terminal worker as secondary context for a matching work card', () => {
+  const scene = fixtureScene({ now })
+  const worker = scene.executions.find(worker => worker.identity.task_id === 'blocked-worker')!
+  worker.liveness = 'finished'
+  const search = { ...emptySearch(), patterns: ['blocked' as const] }
+  expect(statusProjection(scene, { ...initialPresentation(), search }, now).workers.map(worker => worker.id)).toContain(worker.id)
+})
+
+
+it('rechecks unknown membership when a worker observation expires before the home/source observations', () => {
+  const scene = fixtureScene({ now })
+  for (const worker of scene.executions) worker.observation = { ...worker.observation, expiresAt: new Date(now + 5000).toISOString() }
+  const search = { ...emptySearch(), patterns: ['stalled' as const] }
+  const card = { kind: 'card', id: fixtureId(1) }
+  expect(searchSeeds(scene, search, now)).not.toContainEqual(card)
+  expect(searchSeeds(scene, search, now + 6000)).toContainEqual(card)
+})
