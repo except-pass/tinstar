@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
-import { cardWorkerFact, patternCheckSummary } from '../overviewEvidence'
+import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import type { PatternResult } from '../../shared/workHealth'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
+describe('worker link source health', () => {
+  it('counts unique visible unknown and unverified cards separately from positive conflicts', () => {
+    const scene = fixtureScene({ now })
+    const ids = [fixtureId(1), fixtureId(2), fixtureId(2), fixtureId(3)]
+    expect(workerLinkSourceHealth(scene, ids, now)).toEqual({ unknown: 1, unverified: 1, conflicting: 0 })
+    scene.claims.find(link => link.cardId === fixtureId(3))!.verification = 'conflicting'
+    expect(workerLinkSourceHealth(scene, ids, now)).toEqual({ unknown: 1, unverified: 0, conflicting: 1 })
+    expect(workerLinkSourceHealth(scene, [], now)).toEqual({ unknown: 0, unverified: 0, conflicting: 0 })
+  })
+  it('ages confirmed relationships and keeps healthy home links through an unrelated outage', () => {
+    const scene = fixtureScene({ now })
+    scene.coverage.homes[0]!.observation.status = 'stale'
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now).unverified).toBe(0)
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now, true).unverified).toBe(1)
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now + 3600_000).unverified).toBe(1)
+    scene.claims.forEach(link => { link.state = 'historical' })
+    expect(workerLinkSourceHealth(scene, [fixtureId(1)], now).unknown).toBe(1)
+  })
+})
+
 function singleWorker() {
   const scene = fixtureScene({ now })
   const worker = scene.executions.find(worker => worker.identity.task_id === 'linked-worker')!

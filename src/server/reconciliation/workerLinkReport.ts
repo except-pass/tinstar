@@ -185,6 +185,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
       ...(finding.kind === 'unknown-stale-source' ? ['unknown-coverage'] : !finding.workerLinkDetectors?.length ? [finding.kind] : [])]
     return detectors.map(detector => ({ detector, classification: finding.kind,
       cardIds: sorted(finding.cardIds), executionIds: sorted(finding.executionIds), homeIds: sorted(finding.homeIds),
+      ...(finding.sourceHealth ? { sourceHealth: true as const } : {}),
       reason: finding.kind === 'legitimate-wait-planned' ? 'Source classification is waiting/planned; inspect the source for details' : finding.reason }))
   })
   // One duplicate-primary detector row can be supported by multiple declaration

@@ -35,6 +35,20 @@ const search = (value: string) => fireEvent.change(input(), { target: { value } 
 const cardIds = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('.ov-card')].map(element => element.dataset.entityId)
 
 describe('compact search palette and temporary graph focus', () => {
+  it('moves unknown and unverified link information into Source health while keeping conflicts explicit', () => {
+    scene.coverage.absenceConclusions = 'suppressed'
+    scene.coverage.homes[0]!.observation.coverage = 'partial'
+    scene.claims.find(link => link.cardId === fixtureId(3))!.verification = 'conflicting'
+    const { container } = mount()
+    for (const card of container.querySelectorAll('.ov-card')) expect(card.textContent).not.toMatch(/Unknown worker|Link unverified/)
+    expect(container.querySelectorAll('[data-tone="gap"], [data-tone="orphan"]')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Coverage incomplete · Details' }))
+    const health = screen.getByRole('region', { name: 'Source health' })
+    expect(health).toHaveTextContent('cards with unknown workers')
+    expect(health).toHaveTextContent('Incomplete coverage does not establish missing workers or work exceptions.')
+    expect(health).toHaveTextContent('1 card has conflicting worker evidence. First Mate investigation is still required')
+  })
+
   it('opens empty without changing the floor, limits suggestions and omits replaced controls', () => {
     const { container } = mount(), before = cardIds(container)
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })

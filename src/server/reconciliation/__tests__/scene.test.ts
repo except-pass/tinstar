@@ -56,6 +56,26 @@ function expectedHome(source = snapshot()): SourceSnapshot {
 }
 
 describe('claim evidence and stable identity', () => {
+  it('keeps incomplete coverage and single advisory links out of exception totals, retaining real conflicts', () => {
+    const source = snapshot([task()], [card(a, { Status: 'Backlog' }), card(b, { Status: 'Backlog' })])
+    const declaration = source.intentions.data!.cards[0]!.properties['First Mate tasks']!
+    const original = declaration.value
+    declaration.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] })
+    source.fleet[0]!.observation.coverage = 'partial'
+    const neutral = reconcileScene(source, now)
+    expect(neutral.claims[0]?.verification).toBe('unverified')
+    expect(neutral.findings.some(f => f.sourceHealth)).toBe(true)
+    expect(neutral.counts.exceptions).toBe(0)
+    for (const groups of Object.values(neutral.arrangements)) expect(groups.every(g => g.counts.exceptions === 0)).toBe(true)
+    declaration.value = original
+    source.intentions.data!.cards[1]!.properties['First Mate tasks']!.value = original
+    const conflict = reconcileScene(source, now)
+    expect(conflict.coverage.absenceConclusions).toBe('suppressed')
+    expect(conflict.counts.exceptions).toBe(2)
+    expect(conflict.findings.filter(f => f.workerLinkDetectors?.includes('duplicate-primary')).every(f =>
+      f.reason.includes('multiple primary cards') && !f.reason.includes('spawn evidence differs'))).toBe(true)
+  })
+
   it('confirms only explicit IDs and retains accountability without asserting progress', () => {
     const scene = reconcileScene(snapshot([task()]), now)
     expect(scene.claims[0]).toMatchObject({ cardId: a, basis: 'explicit', verification: 'confirmed', observedAt: at,
@@ -386,7 +406,7 @@ describe('arrangement data and rollups', () => {
     expect(scene.arrangements.machine.find(g => g.label === 'Unassigned / unknown')?.executionIds).toHaveLength(1)
     expect(scene.arrangements.secondMate.find(g => g.label === 'missing')?.homeIds).toEqual(['/farm/missing'])
     expect(scene.coverage.wholeFarm).toBe('not-certified')
-    expect(scene.arrangements.secondMate.find(g => g.label === 'missing')?.counts.exceptions).toBe(1)
+    expect(scene.arrangements.secondMate.find(g => g.label === 'missing')?.counts.exceptions).toBe(0)
     expect(scene.findings.some(f => f.kind === 'untracked-worker')).toBe(false)
   })
 

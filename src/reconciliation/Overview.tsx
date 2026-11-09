@@ -6,7 +6,7 @@ import { apiFetch } from '../apiClient'
 import { AgentIcon } from '../components/agentIcon'
 import { semanticId, ancestorHomes, isPlanned, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { cardTitle, cardStatus, workerTitle, workerState, workerActivity, observedAt, historyRecord, managerName, stale, entityTone, gapTargets, overviewGroups, workerSourceCoverage, relevantWorkerHomes, workerSummary, workerAbsenceLabel, emptyWorkerScopeLabel, workerCoverageNotice, unreadableWorkerHomes, expandedRelationships, canonicalOverviewGroups, tasksByWorkerPosition } from './overviewModel'
-import { cardWorkerFact, patternCheckSummary } from './overviewEvidence'
+import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from './overviewEvidence'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
 import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
@@ -117,7 +117,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const openRoot = compact?.roots.some(root => same(root, item))
   const links = scene.claims.filter(c => (worker ? c.executionId === worker.id : c.cardId === card!.id))
   const confirmedLinks = links.filter(c => c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current')
-  const linkLabel = confirmedLinks.length ? '' : links.length ? 'Link unverified' : worker ? readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : 'No linked task' : ''
+  const linkLabel = card || confirmedLinks.length ? '' : links.length ? 'Link unverified' : readFailed || stale(scene.coverage.intentions, now) ? 'Notion unavailable' : 'No linked task'
   const workerFact = card ? cardWorkerFact(scene, card.id, now, readFailed) : null
   const flashed = flashRelated(view, item)
   const status = worker ? workerState(worker) : cardStatus(card!)
@@ -363,6 +363,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const visibleWorkers = new Set(groups.flatMap(g => g.workers.map(w => w.id))).size
   const visibleCardIds = new Set(groups.flatMap(g => g.cards.map(c => c.id)))
   const visibleCards = visibleCardIds.size
+  const linkHealth = workerLinkSourceHealth(scene, visibleCardIds, now, !!error)
   const patternSummary = patternCheckSummary([...visibleCardIds].map(id => patternResults?.get(id)))
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e))
@@ -393,6 +394,6 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
         {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>
     </div></div>{state.selection && <Inspector view={view} workers={workers} />}
-    {diagnostics && <section className="ov-inspector" aria-label="Source health"><header><h2>Source health</h2><button type="button" onClick={() => setDiagnostics(false)}>Close source health</button></header><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{coverageNotice && <p>{coverageNotice}{unreadHomes.length ? ` ${unreadHomes.map(home => `${managerName(scene, home.source.home)} · ${homeFreshness(home.observation, now)}`).join('; ')}` : ''}</p>}{checksSuspended && <p>Gap checks are suspended until the required observations can be verified.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section>}
+    {diagnostics && <section className="ov-inspector" aria-label="Source health"><header><h2>Source health</h2><button type="button" onClick={() => setDiagnostics(false)}>Close source health</button></header><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{coverageNotice && <p>{coverageNotice}{unreadHomes.length ? ` ${unreadHomes.map(home => `${managerName(scene, home.source.home)} · ${homeFreshness(home.observation, now)}`).join('; ')}` : ''}</p>}{checksSuspended && <><p>Gap checks are suspended until the required observations can be verified.</p><p>Worker links in this view: {linkHealth.unknown} cards with unknown workers; {linkHealth.unverified} cards with unverified links. Incomplete coverage does not establish missing workers or work exceptions.</p></>}{linkHealth.conflicting > 0 && <p>{linkHealth.conflicting} {linkHealth.conflicting === 1 ? 'card has' : 'cards have'} conflicting worker evidence. First Mate investigation is still required; select a card and open Evidence &amp; diagnostics.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section>}
   </div>
 }

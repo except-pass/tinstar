@@ -3,6 +3,22 @@ import type { FloorScene } from './presentation'
 import { ageLabel } from './recordFields'
 import { observedAt } from './overviewModel'
 
+/** Unique visible cards, with positive conflicts separate from missing evidence. */
+export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<string>, now: number, readFailed = false) {
+  let unknown = 0, unverified = 0, conflicting = 0
+  for (const cardId of new Set(cardIds)) {
+    const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
+    if (links.some(link => link.verification === 'conflicting')) { conflicting++; continue }
+    const current = links.some(link => verifiedLink(link) && !readFailed && freshObservation(scene.coverage.intentions, now) &&
+      scene.executions.some(worker => worker.id === link.executionId && freshObservation(worker.observation, now) &&
+        scene.coverage.homes.some(home => home.source.home === worker.home && freshObservation(home.observation, now))))
+    if (current) continue
+    if (links.length) unverified++
+    else unknown++
+  }
+  return { unknown, unverified, conflicting }
+}
+
 /** Facts about verified assignments, independent of the selected pattern. */
 export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, readFailed = false): string | null {
   const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
