@@ -499,8 +499,10 @@ it('sends an unedited overdue suggestion with the displayed element and original
   source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-05T15:00:00Z' }, hasMore: false }
   const { container } = mount(), task = card(container)
   fireEvent.click(task)
-  fireEvent.mouseOver(task.querySelector('.ov-check')!)
-  fireEvent.click(screen.getByRole('button', { name: /^Ask about Overdue/ }))
+  const check = task.querySelector('.ov-check')!
+  fireEvent.mouseOver(check)
+  expect(screen.queryByRole('button', { name: /^Ask about Overdue/ })).toBeNull()
+  fireEvent.contextMenu(check)
   expect(screen.getByLabelText('Element context')).toHaveTextContent('Next check-in Nov 5, 10:00 AM ET')
   expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('Why is this overdue?')
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Question' }), { key: 'Enter' })
