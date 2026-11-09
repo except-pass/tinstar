@@ -56,11 +56,14 @@ export class AskApi {
     if (path === '/api/ask/bridge') {
       if (req.headers.origin || !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`)) return fail(res, 'FORBIDDEN', 'Bridge authorization required', { headers, status: 401 })
       try {
+        const query = new URL(req.url!, 'http://localhost').searchParams
+        const syntheticId = query.has('synthetic_id') ? z.string().uuid().parse(query.get('synthetic_id')) : undefined
+        if (req.method === 'DELETE' && syntheticId) { await this.store.removeSynthetic(syntheticId); return ok(res, { removed: true }, { headers }) }
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
-          return ok(res, conversation ? await this.store.conversation(z.string().uuid().parse(conversation)) : await this.store.bridgeWork(), { headers })
+          return ok(res, conversation ? await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId) : await this.store.bridgeWork(syntheticId), { headers })
         }
-        if (req.method === 'POST') { await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req))); return ok(res, { accepted: true }, { headers }) }
+        if (req.method === 'POST') { await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req)), syntheticId); return ok(res, { accepted: true }, { headers }) }
         return fail(res, 'BAD_REQUEST', 'Use GET or POST', { headers, status: 405 })
       } catch (error) { return this.error(res, error, headers) }
     }
@@ -80,12 +83,20 @@ export class AskApi {
       }
       if (path === '/api/ask/requests' && req.method === 'POST') {
         const input = askCreateSchema.parse(await readBody(req))
+        // A smoke still traverses owner authentication and the normal create/ingest
+        // path, but cannot be picked up by the installed Mac puller. The random
+        // partition also lets a lost create response be cleaned up safely.
+        if (input.synthetic_id && (!secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`) || input.follow_up_to)) return fail(res, 'FORBIDDEN', 'Synthetic Ask requires bridge authorization and a new conversation', { headers })
         // A retry remains valid if its card was removed since capture.
-        const existing = (await this.store.list(login)).find(row => row.client_key === input.client_key)
+        const existing = (await this.store.list(login, input.synthetic_id)).find(row => row.client_key === input.client_key)
         const parent = input.follow_up_to ? await this.store.find(login, input.follow_up_to) : undefined
         if (input.follow_up_to && !parent) throw new AskNotFound('Original question unavailable')
         let context: AskContext
         if (existing || parent) context = (existing ?? parent)!.context
+        else if (input.synthetic_id) {
+          if (input.card_id !== '00000000000000000000000000000000') throw new AskNotFound('Synthetic Ask requires the smoke anchor')
+          context = { anchor: { kind: 'work', page_id: input.card_id, label: 'Deploy smoke', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: input.view }
+        }
         else if (isArtifactTarget(input.target)) {
           if (!this.artifacts) throw new AskNotFound('Artifact sources unavailable')
           context = await artifactContext(input.target, input.view, { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
@@ -107,10 +118,15 @@ export class AskApi {
         }
         if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value || JSON.stringify(input.element) !== JSON.stringify(context.element))) throw new AskConflict('Question field differs from the original')
         if (input.target ? JSON.stringify(input.target) !== JSON.stringify(context.target) : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
-        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to, input.follow_up_to && (input.element || input.field_key || input.field_value !== undefined) ? { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key } : {}), ...(input.field_value !== undefined ? { field_value: input.field_value } : {}) } : undefined)), { headers })
+        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to, input.follow_up_to && (input.element || input.field_key || input.field_value !== undefined) ? { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key } : {}), ...(input.field_value !== undefined ? { field_value: input.field_value } : {}) } : undefined, input.synthetic_id)), { headers })
       }
       const conversation = /^\/api\/ask\/conversations\/([a-f0-9-]{36})$/.exec(path)
-      if (conversation && req.method === 'GET') return ok(res, await this.store.conversation(conversation[1]!, login), { headers })
+      if (conversation && req.method === 'GET') {
+        const query = new URL(req.url!, 'http://localhost').searchParams
+        const syntheticId = query.has('synthetic_id') ? z.string().uuid().parse(query.get('synthetic_id')) : undefined
+        if (syntheticId && !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`)) return fail(res, 'FORBIDDEN', 'Synthetic Ask requires bridge authorization', { headers })
+        return ok(res, await this.store.conversation(conversation[1]!, login, syntheticId), { headers })
+      }
       const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|retry)$/.exec(path)
       if (match && req.method === 'POST') return ok(res, publicAsk(await this.store.action(login, match[1]!, match[2] as 'read' | 'dismiss' | 'retry')), { headers })
       return fail(res, 'NOT_FOUND', 'Unknown Ask route or method', { headers })

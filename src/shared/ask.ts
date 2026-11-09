@@ -99,6 +99,8 @@ export const askRecordSchema = z.object({
   reply: askReplySchema.nullable(), reply_cursor: z.string().nullable(),
   action_selection: askActionSelectionSchema.optional(),
   captured_selection: askCapturedSelectionSchema.optional(),
+  // Private deploy-smoke partition: ordinary pullers and Desk never read these rows.
+  synthetic_id: z.string().uuid().optional(),
   // Private aliases bind converged device retries to the original selection.
   client_key_aliases: z.array(z.string().uuid()).optional(),
   // Private immutable note payload: delivery retries must not acquire future history.
@@ -106,11 +108,12 @@ export const askRecordSchema = z.object({
   error: z.string().nullable(), read_at: z.string().datetime().nullable(), dismissed_at: z.string().datetime().nullable(),
 })
 export type AskRecord = z.infer<typeof askRecordSchema>
-export const askItemSchema = askRecordSchema.omit({ owner: true, client_key: true, note_id: true, reply_cursor: true, announced: true, dispatch_body: true, client_key_aliases: true })
+export const askItemSchema = askRecordSchema.omit({ owner: true, client_key: true, note_id: true, reply_cursor: true, announced: true, dispatch_body: true, client_key_aliases: true, synthetic_id: true })
 export const askItemsSchema = z.array(askItemSchema)
 export type AskItem = z.infer<typeof askItemSchema>
-export const publicAsk = ({ owner: _owner, client_key: _key, note_id: _note, reply_cursor: _cursor, announced: _announced, dispatch_body: _dispatch, client_key_aliases: _aliases, ...item }: AskRecord): AskItem => item
+export const publicAsk = ({ owner: _owner, client_key: _key, note_id: _note, reply_cursor: _cursor, announced: _announced, dispatch_body: _dispatch, client_key_aliases: _aliases, synthetic_id: _synthetic, ...item }: AskRecord): AskItem => item
 export const askCreateSchema = z.object({
+  synthetic_id: z.string().uuid().optional(),
   client_key: z.string().uuid(), card_id: pageIdSchema.optional(), target: askTargetSchema.optional(), ...semanticContext, question: z.string().trim().min(1).max(4000),
   view: askViewSchema, follow_up_to: z.string().uuid().optional(),
 }).strict().refine(input => !!input.card_id !== !!input.target, 'Choose one Ask entity')

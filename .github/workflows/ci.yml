@@ -31,7 +31,7 @@ jobs:
       # exact silent-pass this project documents in
       # docs/solutions/conventions/verify-a-guard-by-breaking-it.md.
       - name: Install live test dependencies
-        run: sudo apt-get update && sudo apt-get install -y ttyd tmux nats-server bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y ttyd tmux nats-server bubblewrap shellcheck
 
       # Noble restricts unprivileged user namespaces even with bwrap installed.
       # Allow only bwrap to create them; keep the host-wide restriction enabled.
@@ -51,6 +51,9 @@ jobs:
       # Catches case-only filename collisions that build on this Linux runner but
       # break module resolution on the macOS/Windows release runners — the silent
       # failure mode that blocked the v5.2.0 release. See docs/releasing.md.
+      - name: Deploy script lint
+        run: shellcheck scripts/deploy/floor-deploy.sh
+
       - name: Case-collision guard
         run: npm run check:case
 
