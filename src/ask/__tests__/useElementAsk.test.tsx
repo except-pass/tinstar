@@ -11,7 +11,7 @@ function Harness({ open, itemAsk = vi.fn() }: { open: (seed: AskSeed) => void; i
   const root = useRef<HTMLDivElement>(null), affordance = useElementAsk(root, subject, open), swipe = useAskGesture(itemAsk)
   return <><div ref={root}><button ref={swipe.ref} type="button"><span {...askElement('next_check_in', 'Overdue 3d · Next check-in', 'Nov 6, 10:00 AM ET', 'overdue')}>Overdue 3d</span><span {...askElement('status')}>In progress</span></button></div>{affordance}<p>Outside card</p></>
 }
-const hold = (node: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100, count = 1) => fireEvent[type](node, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : Array.from({ length: count }, () => ({ clientX: x, clientY: y })) })
+const hold = (node: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100, count = 1) => fireEvent[type](node, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: x, clientY: y })), changedTouches: [{ identifier: 0, clientX: x, clientY: y }] })
 afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.useRealTimers() })
 describe('shared element Ask gestures on the overdue badge', () => {
   it('reveals a layout-independent affordance on hover and captures the exact badge on click', () => {
@@ -118,7 +118,7 @@ it('leaves a mouse text-selection drag native while retaining touch item swipes'
   expect(itemAsk).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'Ask about this' })).toBeInTheDocument()
   window.getSelection()!.removeAllRanges()
-  hold(field, 'touchStart'); hold(field, 'touchMove', 40); hold(field, 'touchEnd', 40)
+  hold(field, 'touchStart'); hold(field, 'touchMove', 20); hold(field, 'touchEnd', 20)
   expect(itemAsk).toHaveBeenCalledOnce()
 })
 
@@ -150,9 +150,9 @@ it.each(['touch', 'mouse'])('assigns a nested %s swipe only to its nearest surfa
   render(<Nested />)
   const swipe = (node: HTMLElement) => {
     if (kind === 'touch') {
-      hold(node, 'touchStart'); hold(node, 'touchMove', 30); hold(node, 'touchEnd', 30)
+      hold(node, 'touchStart'); hold(node, 'touchMove', 20); hold(node, 'touchEnd', 20)
     } else {
-      for (const [type, x] of [['pointerdown', 100], ['pointermove', 30], ['pointerup', 30]] as const) {
+      for (const [type, x] of [['pointerdown', 100], ['pointermove', 20], ['pointerup', 20]] as const) {
         const event = new Event(type, { bubbles: true, cancelable: true })
         Object.assign(event, { pointerType: 'mouse', pointerId: 1, button: 0, clientX: x, clientY: 100 })
         fireEvent(node, event)
@@ -165,4 +165,33 @@ it.each(['touch', 'mouse'])('assigns a nested %s swipe only to its nearest surfa
   swipe(screen.getByText('Parent space'))
   expect(parentOpen).toHaveBeenCalledOnce()
   expect(childOpen).toHaveBeenCalledOnce()
+})
+
+
+it.each([false, true])('portals both swipe directions into the owning layer (dialog: %s)', modal => {
+  const ask = vi.fn(), inspect = vi.fn()
+  function Surface() {
+    const swipe = useAskGesture(ask, false, inspect)
+    const content = <><button ref={swipe.ref}>Swipe target</button>{swipe.overlay}</>
+    return modal ? <dialog open>{content}</dialog> : content
+  }
+  const { unmount } = render(<Surface />)
+  const target = screen.getByRole('button', { name: 'Swipe target' })
+  const owner = modal ? screen.getByRole('dialog') : document.body
+  for (const [x, label, action] of [[20, 'Release to compose', ask], [180, 'Release to open Inspector', inspect]] as const) {
+    hold(target, 'touchStart'); hold(target, 'touchMove', x)
+    const prompt = screen.getByText(label)
+    expect(prompt.closest('.swipe-rail')?.parentElement).toBe(owner)
+    hold(target, 'touchEnd', x)
+    expect(action).toHaveBeenCalledOnce()
+    expect(screen.queryByText(label)).toBeNull()
+  }
+  hold(target, 'touchStart'); hold(target, 'touchMove', 20); hold(target, 'touchCancel')
+  expect(screen.queryByText('Release to compose')).toBeNull()
+  const returning = document.querySelector('.swipe-rail')
+  if (returning) expect(returning.parentElement).toBe(owner)
+  expect(ask).toHaveBeenCalledOnce()
+  expect(inspect).toHaveBeenCalledOnce()
+  unmount()
+  expect(document.querySelector('.swipe-rail')).toBeNull()
 })

@@ -4,8 +4,8 @@ Slice 1 is one work card, text, **Sent / Delivered / Answered**, approved by
 First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
 The compact Ask/Inspect refinement reuses this request store and bridge.
 
-A left drag on a Notion task opens a text composer with that task's canonical
-page ID. The Ask speech-bubble icon in the existing Work/Worker header opens a blank,
+A left drag on a task, worker, or relationship opens a text composer for that
+item. A right drag opens the same Inspector as the Inspect icon. The Ask speech-bubble icon in the existing Work/Worker header opens a blank,
 focused overlay for exactly that entity. [Overview](overview.md) describes Inspect
 and card expansion. The overlay does not change
 card or relationship geometry and fits the phone viewport.
@@ -31,15 +31,26 @@ by the draft. Worker anchors retain the canonical execution ID in the legacy
 `anchor.page_id` slot and have no external Notion URL. Fresh authoritative state,
 not a draft or captured field value, remains First Mate's evidence.
 
-Movement under 12 CSS pixels stays a tap. At 12 pixels, left movement must be at
-least 1.4 times vertical movement to lock to text. Release requires 48 pixels.
-Vertical, diagonal and right movement stay native. A left drag that can scroll a
-horizontal overflow ancestor stays native; at its right edge, a left drag can
-open Ask. Use the visible action anywhere without changing the floor's scroll
-position. Pointer/touch cancellation never opens a composer. Desktop drags on
+Movement under 12 CSS pixels stays a tap. At 12 pixels, horizontal movement
+must be at least 1.4 times vertical movement to lock. Vertical and diagonal
+movement stay native and scroll. A horizontal drag that can still scroll an
+overflow ancestor in that direction stays native. Once locked, a floating rail
+stays anchored near the pointer-down point while its thumb tracks displacement:
+Ask arms at 72 pixels left and disarms
+at 58, Inspector arms at 72 pixels right and disarms at 58. Release uses the
+current arm, not the farthest point, and reversing through a disarm threshold
+clears that prompt immediately. Ask release opens the composer and does not
+send. Inspector release opens the Inspector where that surface provides an
+Inspector action; elsewhere, rightward drags stay native and show no Inspector
+release prompt. Pointer cancellation, lost capture, scroll, Escape, window blur,
+visibility loss and additional touches cancel without an action. Neutral release
+and cancellation return the rail thumb to center before dismissal; reduced
+motion dismisses it immediately. The rail sits above touch/pen contact or beside
+the mouse origin, repositions within the visual viewport, and stays inside the
+owning open dialog when present. Desktop drags on
 semantic fields leave text selection native; an active selection prevents an
-item swipe from opening Ask. Nested surfaces give the nearest item ownership
-of its swipe.
+item swipe from opening Ask or Inspector. Nested surfaces give the nearest
+item ownership of its swipe.
 
 Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
 Overview, PRs, Releases and worker navigation. Section changes, rail collapse and
@@ -318,7 +329,8 @@ The remaining parent-card items are follow-up slices:
   Work, Worker or Link context.
 - Discoverable microphone controls with press-and-hold and accessible tap-toggle
   recording, local transcription, cancellation and text fallback. Voice remains
-  a separate slice; right-drag is not the primary entry path.
+  a separate slice on the composer microphone. Right drag is the Inspector rail
+  above, not a second voice gesture.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery; unified priority for decisions, unread answers,
   investigations and failures.

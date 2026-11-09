@@ -63,7 +63,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const mount = () => render(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
 const card = (host: HTMLElement) => host.querySelector<HTMLButtonElement>(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
-const touch = (element: HTMLElement, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100) => fireEvent[type](element, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ clientX: x, clientY: y }], changedTouches: [{ clientX: x, clientY: y }] })
+const touch = (element: Element, type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel', x = 100, y = 100) => fireEvent[type](element, { touches: type === 'touchEnd' || type === 'touchCancel' ? [] : [{ identifier: 1, clientX: x, clientY: y }], changedTouches: [{ identifier: 1, clientX: x, clientY: y }] })
 
 describe('one-card text Ask and Desk', () => {
   it('keeps tap/vertical/cancel semantics and opens a context composer on left release without sending', () => {
@@ -73,15 +73,15 @@ describe('one-card text Ask and Desk', () => {
     expect(task).toHaveAttribute('aria-expanded', 'true')
     touch(task, 'touchStart'); touch(task, 'touchMove', 90, 140); touch(task, 'touchEnd', 30, 140)
     expect(screen.queryByRole('dialog')).toBeNull()
-    touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100); touch(task, 'touchCancel')
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchCancel')
     expect(screen.queryByRole('dialog')).toBeNull()
-    touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
     expect(screen.queryByRole('dialog')).toBeNull()
     // Chrome releases implicit touch pointer capture before emitting touchend.
     const captureRelease = new Event('lostpointercapture', { bubbles: true })
     Object.defineProperty(captureRelease, 'pointerId', { value: 7 })
     fireEvent(task, captureRelease)
-    touch(task, 'touchEnd', 30, 100)
+    touch(task, 'touchEnd', 20, 100)
     expect(screen.getByRole('dialog')).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveFocus()
     expect(screen.getByRole('button', { name: 'Remove task context' })).toBeVisible()
@@ -102,7 +102,7 @@ describe('one-card text Ask and Desk', () => {
   it('submits the canonical card ID only after review, shows Sent, then survives a second mount', async () => {
     const first = mount()
     const task = card(first.container)
-    touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100); touch(task, 'touchEnd')
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchEnd')
     fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'What is the blocker?' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -472,7 +472,7 @@ it('keeps independently pending turns recoverable in one conversation', async ()
 it.each(['swipe', 'right-click', 'icon', 'Desk follow-up'])('supports Enter, Shift+Enter, IME and Escape in the %s composer', async entry => {
   if (entry === 'Desk follow-up') records = [seed()]
   const { container } = mount(), task = card(container)
-  if (entry === 'swipe') { touch(task, 'touchStart'); touch(task, 'touchMove', 30, 100); touch(task, 'touchEnd') }
+  if (entry === 'swipe') { touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchEnd') }
   if (entry === 'right-click') { fireEvent.click(task); fireEvent.contextMenu(task.querySelector('.ov-task-status')!) }
   if (entry === 'icon') fireEvent.click(within(task.parentElement!).getByRole('button', { name: 'Ask about this item' }))
   if (entry === 'Desk follow-up') {
@@ -672,4 +672,238 @@ it('shows a conflicting two-device selection clearly and reconciles through the 
   expect(screen.queryByText('Requested')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
   expect(records).toHaveLength(1)
+})
+
+const drag = (element: Element, ...points: Array<[number, number]>) => {
+  touch(element, 'touchStart')
+  for (const [x, y] of points) touch(element, 'touchMove', x, y)
+  const [x, y] = points.at(-1) ?? [100, 100]
+  touch(element, 'touchEnd', x, y)
+}
+const worker = (host: HTMLElement) => {
+  const id = scene.executions.find(item => item.identity.task_id === 'linked-worker')!.id
+  return [...host.querySelectorAll<HTMLElement>('.ov-execution')].find(element => element.dataset.entityId === id)!
+}
+
+describe('spring-loaded Ask and Inspector rail', () => {
+  it('drops the Ask prompt on disarm and releases nothing past the origin', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart')
+    touch(task, 'touchMove', 20, 100)
+    expect(screen.getByText('Release to compose')).toBeTruthy()
+    touch(task, 'touchMove', 50, 100)
+    expect(screen.queryByText('Release to compose')).toBeNull()
+    expect(document.querySelector('.swipe-rail')).toBeTruthy()
+    touch(task, 'touchMove', 130, 100)
+    touch(task, 'touchEnd', 130, 100)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+  })
+
+  it.each([20, 180])('cancels an armed swipe at %s when a second finger lands outside', x => {
+    const { container } = mount(), task = card(container)
+    const first = { identifier: 1, clientX: x, clientY: 100 }
+    const second = { identifier: 2, clientX: 300, clientY: 300 }
+    touch(task, 'touchStart'); touch(task, 'touchMove', x)
+    expect(screen.getByText(x < 100 ? 'Release to compose' : 'Release to open Inspector')).toBeTruthy()
+    fireEvent.touchStart(document.body, { touches: [first, second], changedTouches: [second] })
+    expect(screen.queryByText('Release to compose')).toBeNull()
+    expect(screen.queryByText('Release to open Inspector')).toBeNull()
+    fireEvent.touchEnd(document.body, { touches: [first], changedTouches: [second] })
+    touch(task, 'touchMove', x); touch(task, 'touchEnd', x)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    drag(task, [x, 100])
+    expect(x < 100 ? screen.getByRole('dialog') : screen.getByLabelText('Inspector')).toBeTruthy()
+  })
+
+  it('does not move or dispatch from a different touch identifier', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20)
+    fireEvent.touchMove(window, { touches: [{ identifier: 2, clientX: 180, clientY: 100 }] })
+    fireEvent.touchEnd(window, { touches: [], changedTouches: [{ identifier: 2, clientX: 180, clientY: 100 }] })
+    touch(task, 'touchEnd', 20)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+  })
+
+  it('opens one composer from a left release and does not send', () => {
+    const { container } = mount(), task = card(container)
+    drag(task, [20, 100])
+    expect(screen.getByRole('dialog')).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Question' })).toHaveFocus()
+    expect(requests).toHaveLength(0)
+    expect(document.querySelector('.swipe-rail')).toBeNull()
+  })
+
+  it.each(['card', 'worker', 'relationship'] as const)('opens Inspector from a right release on a %s and keeps the row still', kind => {
+    const { container } = mount()
+    const task = card(container)
+    const target = kind === 'card' ? task : kind === 'worker' ? worker(container) : container.querySelector<SVGPathElement>('.ov-relationship-hit')!
+    const expanded = target.getAttribute?.('aria-expanded') ?? null
+    drag(target, [180, 100])
+    const inspector = screen.getByLabelText('Inspector')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.querySelector('.swipe-rail')).toBeNull()
+    if (kind === 'relationship') {
+      expect(inspector).toHaveTextContent('Latest activity')
+      expect(target.parentElement!.querySelector('.ov-line')).toHaveClass('hot')
+    } else {
+      expect(within(inspector).getByRole('heading', { level: 3 })).toHaveTextContent(kind === 'card' ? 'Build live reconciliation' : 'linked worker')
+      expect(target).toHaveClass('selected')
+      expect(target.getAttribute('aria-expanded')).toBe(expanded)
+      if (kind === 'card') expect(screen.queryByRole('heading', { name: 'Latest activity' })).toBeNull()
+    }
+  })
+
+  it('releases only Inspector after one stroke from Ask through neutral', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart')
+    touch(task, 'touchMove', 20, 100)
+    expect(screen.getByText('Release to compose')).toBeTruthy()
+    touch(task, 'touchMove', 50, 100)
+    expect(screen.queryByText('Release to compose')).toBeNull()
+    touch(task, 'touchMove', 180, 100)
+    expect(screen.getByText('Release to open Inspector')).toBeTruthy()
+    expect(screen.queryByText('Release to compose')).toBeNull()
+    touch(task, 'touchEnd', 180, 100)
+    expect(screen.getByLabelText('Inspector')).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('releases only Ask after the inverse stroke', () => {
+    const { container } = mount(), task = card(container)
+    drag(task, [180, 100], [20, 100])
+    expect(screen.getByRole('dialog')).toBeVisible()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    expect(requests).toHaveLength(0)
+  })
+
+  it('holds the armed label while dithering inside the hysteresis band', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart')
+    for (const x of [20, 40, 22, 41, 25]) {
+      touch(task, 'touchMove', x, 100)
+      expect(screen.getByText('Release to compose')).toBeTruthy()
+    }
+    touch(task, 'touchEnd', 25, 100)
+    expect(screen.getByRole('dialog')).toBeVisible()
+    expect(requests).toHaveLength(0)
+  })
+
+  it('does nothing for a short, diagonal, or vertical drag', () => {
+    const { container } = mount(), task = card(container)
+    for (const [x, y] of [[96, 100], [84, 116], [100, 140]] as const) {
+      drag(task, [x, y])
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(screen.queryByLabelText('Inspector')).toBeNull()
+      expect(document.querySelector('.swipe-rail')).toBeNull()
+    }
+    fireEvent.click(task)
+    expect(task).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('removes the rail without an action on cancel, Escape, scroll, and an open modal', () => {
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchCancel')
+    expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
+    fireEvent.keyDown(task, { key: 'Escape' })
+    touch(task, 'touchEnd', 20, 100)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
+    fireEvent.scroll(window)
+    touch(task, 'touchEnd', 20, 100)
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    const modal = document.createElement('dialog')
+    modal.setAttribute('open', '')
+    document.body.appendChild(modal)
+    drag(task, [180, 100])
+    modal.remove()
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it.each([20, 180])('cancels context departure without dispatch at %s', x => {
+    vi.useFakeTimers()
+    try {
+      const { container } = mount(), task = card(container)
+      for (const departure of ['blur', 'visibilitychange']) {
+        fireEvent(task, new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 100, clientY: 100, pointerType: 'mouse' }))
+        fireEvent(window, new PointerEvent('pointermove', { pointerId: 1, clientX: x, clientY: 100 }))
+        if (departure === 'blur') fireEvent.blur(window)
+        else {
+          vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+          fireEvent(document, new Event('visibilitychange'))
+        }
+        expect(screen.queryByText('Release to compose')).toBeNull()
+        expect(screen.queryByText('Release to open Inspector')).toBeNull()
+        expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+        fireEvent(window, new PointerEvent('pointerup', { pointerId: 1, clientX: x, clientY: 100 }))
+        act(() => vi.advanceTimersByTime(220))
+        expect(document.querySelector('.swipe-rail')).toBeNull()
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(screen.queryByLabelText('Inspector')).toBeNull()
+      }
+    } finally { vi.useRealTimers(); vi.restoreAllMocks() }
+  })
+
+  it('leaves a text-selection drag on either side closed', () => {
+    const { container } = mount(), task = card(container)
+    const pointer = (type: string, x: number) => {
+      const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, button: 0, clientX: x, clientY: 100, pointerType: 'mouse' })
+      fireEvent(task, event)
+    }
+    for (const x of [20, 180]) {
+      pointer('pointerdown', 100)
+      pointer('pointermove', x)
+      const range = document.createRange()
+      range.selectNodeContents(task)
+      const selection = window.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+      pointer('pointerup', x)
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(screen.queryByLabelText('Inspector')).toBeNull()
+      selection.removeAllRanges()
+    }
+  })
+
+  it('keeps a scrollable right drag from opening Inspector', () => {
+    const { container } = mount(), task = card(container), workspace = container.querySelector<HTMLElement>('.ov-workspace')!
+    workspace.style.overflowX = 'auto'
+    Object.defineProperty(workspace, 'scrollWidth', { configurable: true, value: 900 })
+    Object.defineProperty(workspace, 'clientWidth', { configurable: true, value: 300 })
+    Object.defineProperty(workspace, 'scrollLeft', { configurable: true, value: 40 })
+    drag(task, [180, 100])
+    expect(screen.queryByLabelText('Inspector')).toBeNull()
+    expect(screen.queryByText('Release to open Inspector')).toBeNull()
+  })
+
+  it('repositions the active rail when the visual viewport pans or resizes', () => {
+    const visual = Object.assign(new EventTarget(), { width: 390, height: 700, offsetLeft: 0, offsetTop: 0 })
+    vi.stubGlobal('visualViewport', visual)
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
+    const overlay = document.querySelector<HTMLElement>('.swipe-rail')!
+    visual.offsetLeft = 200; visual.offsetTop = 300; visual.width = 180
+    act(() => { visual.dispatchEvent(new Event('scroll')) })
+    expect(Number.parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(208)
+    expect(Number.parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(308)
+    expect(Number.parseFloat(overlay.style.width)).toBe(164)
+    visual.width = 390
+    act(() => { visual.dispatchEvent(new Event('resize')) })
+    expect(Number.parseFloat(overlay.style.width)).toBe(220)
+  })
+
+  it('marks the rail still when reduced motion is requested', () => {
+    const { container } = mount(), task = card(container)
+    const query = '(prefers-reduced-motion: reduce)'
+    vi.stubGlobal('matchMedia', (value: string) => ({ matches: value === query, media: value, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false } }))
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
+    expect(document.querySelector('.swipe-rail')).toHaveClass('swipe-rail-still')
+    touch(task, 'touchCancel')
+    expect(document.querySelector('.swipe-rail')).toBeNull()
+  })
 })
