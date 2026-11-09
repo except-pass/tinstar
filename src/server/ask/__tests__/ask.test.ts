@@ -878,3 +878,19 @@ describe('deploy smoke partition', () => {
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8')).map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
   })
 })
+
+it('restores owned archives persistently and resurfaces only a newly answered turn', async () => {
+  const { call, bridge, reload } = await setup()
+  const id = (await call('requests', input())).data.data.request_id
+  await call(`requests/${id}/dismiss`, {})
+  expect((await bridge()).data.data.pending).toMatchObject([{ request_id: id }])
+  expect((await call(`requests/${id}/restore`, {}, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+  expect((await call(`requests/${id}/restore`, {})).status).toBe(200)
+  reload()
+  expect((await call('requests')).data.data[0].dismissed_at).toBeNull()
+  await call(`requests/${id}/dismiss`, {})
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'A new answer', cursor: '1' } })
+  reload()
+  expect((await call('requests')).data.data[0]).toMatchObject({ dismissed_at: null, read_at: null, reply: { detail: 'A new answer' } })
+})

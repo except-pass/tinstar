@@ -141,8 +141,8 @@ export class AskApi {
         if (syntheticId && !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${settings.bridgeToken}`)) return fail(res, 'FORBIDDEN', 'Synthetic Ask requires bridge authorization', { headers })
         return ok(res, await this.store.conversation(conversation[1]!, login, syntheticId), { headers })
       }
-      const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|retry)$/.exec(path)
-      if (match && req.method === 'POST') return ok(res, publicAsk(await this.store.action(login, match[1]!, match[2] as 'read' | 'dismiss' | 'retry')), { headers })
+      const match = /^\/api\/ask\/requests\/([a-f0-9-]{36})\/(read|dismiss|restore|retry)$/.exec(path)
+      if (match && req.method === 'POST') return ok(res, publicAsk(await this.store.action(login, match[1]!, match[2] as 'read' | 'dismiss' | 'restore' | 'retry')), { headers })
       return fail(res, 'NOT_FOUND', 'Unknown Ask route or method', { headers })
     } catch (error) { return this.error(res, error, headers) }
   }

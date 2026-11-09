@@ -50,10 +50,11 @@ beforeEach(() => {
         action_selection: { selection_id: crypto.randomUUID(), answer_id: answer.request_id, action_id: recommendation.id, label: recommendation.label, instruction: recommendation.instruction, actor: 'owner@example.test', selected_at: new Date().toISOString() } }
       records.push(row); data = row
     }
-    const match = /\/api\/ask\/requests\/([^/]+)\/(read|dismiss|retry)$/.exec(url)
+    const match = /\/api\/ask\/requests\/([^/]+)\/(read|dismiss|restore|retry)$/.exec(url)
     if (match) {
       const row = records.find(record => record.request_id === match[1])!
       if (match[2] === 'read') row.read_at = new Date().toISOString()
+      if (match[2] === 'restore') row.dismissed_at = null
       if (match[2] === 'dismiss') row.dismissed_at = new Date().toISOString()
       data = row
     }
@@ -131,8 +132,7 @@ describe('one-card text Ask and Desk', () => {
     expect(screen.getByRole('link', { name: /Evidence/ })).toHaveAttribute('href', 'https://example.test/evidence')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).not.toHaveTextContent('New answer'))
-    fireEvent.click(screen.getByText('Actions', { selector: 'summary' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss to history' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Archive conversation' }))
     await waitFor(() => expect(within(screen.getByLabelText('Questions for First Mate')).queryByText('Why is this waiting?')).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: /^History/ }))
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search question history' }), { target: { value: 'dependency' } })
@@ -297,7 +297,7 @@ it('right-click relationship carries its canonical claim identity, with keyboard
   expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('How are these two items related?')
 })
 
-it('Desk starts with records and omits intro chrome; history dismissal is a secondary action', async () => {
+it('Desk starts with records and omits intro chrome; archive is directly accessible', async () => {
   records = [seed()]
   mount()
   const desk = screen.getByLabelText('Your desk')
@@ -307,9 +307,7 @@ it('Desk starts with records and omits intro chrome; history dismissal is a seco
   expect(within(desk).getByText('Review is pending')).toBeVisible()
   expect(within(desk).getByText('Captured task')).toBeVisible()
   expect(within(desk).getByText(/New answer/)).toBeVisible()
-  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).not.toBeVisible()
-  fireEvent.click(within(desk).getByText('Actions', { selector: 'summary' }))
-  expect(within(desk).getByRole('button', { name: 'Dismiss to history' })).toBeVisible()
+  expect(within(desk).getByRole('button', { name: 'Archive conversation' })).toBeVisible()
 })
 
 it('returns a retained worker answer after remount to its exact filtered execution and highlights it', async () => {
@@ -1016,4 +1014,21 @@ describe.each(['card', 'worker', 'relationship'] as const)('%s in-place swipe', 
       }
     } finally { vi.useRealTimers() }
   })
+})
+
+it('archives directly with Undo and restores searchable History without reading answers', async () => {
+  records = [seed()]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }))
+  await waitFor(() => expect(records[0]!.dismissed_at).toBeTruthy())
+  expect(records[0]!.read_at).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
+  await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
+  fireEvent.click(screen.getByRole('button', { name: 'Archive conversation' }))
+  await waitFor(() => expect(records[0]!.dismissed_at).toBeTruthy())
+  fireEvent.click(screen.getByRole('button', { name: /^History/ }))
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'dependency' } })
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore to inbox' }))
+  await waitFor(() => expect(records[0]!.dismissed_at).toBeNull())
+  expect(records[0]!.read_at).toBeNull()
 })

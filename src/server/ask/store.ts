@@ -73,11 +73,12 @@ export class AskStore {
     rows.push(row)
     return row
   }
-  action(owner: string, requestId: string, action: 'read' | 'dismiss' | 'retry') {
+  action(owner: string, requestId: string, action: 'read' | 'dismiss' | 'restore' | 'retry') {
     return this.change(rows => {
       const row = rows.find(row => row.request_id === requestId && row.owner === owner && !row.synthetic_id)
       if (!row) throw new AskNotFound('Question unavailable')
       if (action === 'read' && row.reply) row.read_at ??= this.now()
+      if (action === 'restore') row.dismissed_at = null
       if (action === 'dismiss') row.dismissed_at ??= this.now()
       if (action === 'retry' && !row.reply) { row.status = row.note_id ? 'delivered' : 'sent'; row.error = null }
       row.updated_at = this.now()
@@ -174,7 +175,7 @@ export class AskStore {
           row.reply = { summary: update.reply.body.slice(0, 240), detail: update.reply.body, references: [], suggested_actions: [] }
         }
         row.reply_cursor = update.reply.cursor
-        row.status = 'answered'; row.answered_at = update.reply.at; row.read_at = null; row.error = null
+        row.status = 'answered'; row.answered_at = update.reply.at; row.read_at = null; row.dismissed_at = null; row.error = null
       }
       if (update.error && !row.reply && !(row.note_id && update.error === 'capture-failed')) {
         row.error = update.error === 'wake-failed' ? 'First Mate saved the question but was not woken. Retry delivery.' : 'First Mate could not receive the question. Retry delivery.'

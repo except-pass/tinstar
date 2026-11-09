@@ -29,7 +29,7 @@ interface AskControls {
   replySeed: { conversationId: string; seed: AskSeed; key: string } | null;
   selectAction: (input: AskSelectionInput) => Promise<AskItem>
   items: AskItem[]; error: string | null; open: (subject?: AskSeed, parent?: AskItem) => void
-  returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss') => void
+  returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss' | 'restore') => void
 }
 const Controls = createContext<AskControls | null>(null)
 export const useAskControls = () => useContext(Controls)
@@ -79,8 +79,15 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     if (!scene && !isArtifactTarget(seed.target)) { setError('Source context is unavailable. Try again when sources connect.'); return }
     setComposer({ seed, key: crypto.randomUUID() })
   }
-  const action = (item: AskItem, value: 'retry' | 'dismiss') => {
-    void request(`requests/${item.request_id}/${value}`, {}).then(refresh).catch(reason => setError((reason as Error).message))
+  const action = (item: AskItem, value: 'retry' | 'dismiss' | 'restore') => {
+    const affected = value === 'retry' ? [item] : items.filter(turn => turn.conversation_id === item.conversation_id)
+    const previous = items
+    localRevision.current++
+    if (value !== 'retry') {
+      setItems(rows => rows.map(row => affected.some(turn => turn.request_id === row.request_id) ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null } : row))
+      setExpanded(null)
+    }
+    void Promise.all(affected.map(turn => request(`requests/${turn.request_id}/${value}`, {}))).then(refresh).catch(reason => { setItems(previous); setError((reason as Error).message); void refresh() })
   }
   const returnTo = (item: AskItem) => {
     setExpanded(item.conversation_id)
@@ -227,22 +234,24 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
 export function AskDesk({ now, view, showEmpty = true }: { now: number; view: DeskView; showEmpty?: boolean }) {
   const controls = useContext(Controls)
   const [search, setSearch] = useState('')
+  const [archived, setArchived] = useState<AskItem | null>(null)
   if (!controls) return null
   const history = view === 'history'
   const groups = deskConversations(controls.items).map(group => ({ ...group, visible: group.view === view && (!history || !search || group.turns.some(item => `${item.question} ${item.context.anchor.label} ${item.reply?.summary ?? ''} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))) })).filter(group => group.visible || group.id === controls.expanded)
   return <section className="ask-desk" aria-label="Questions for First Mate">
+    {archived && <div role="status">Conversation archived. <button type="button" aria-label="Undo archive" onClick={() => { controls.action(archived, 'restore'); setArchived(null) }}>Undo</button></div>}
     {controls.error && <p role="status">{controls.error}. Questions will refresh automatically.</p>}
     {history && <input aria-label="Search question history" type="search" value={search} onChange={event => setSearch(event.target.value)} />}
     {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers and decisions appear here.'}</p>}
     {groups.map(group => {
       const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
-      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
+      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread && !expanded} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
           <small {...askElement('status', 'Question status')}>{unread ? 'New answer' : group.failed ? 'Delivery failed' : item.reply ? 'Answered' : answerStatus(item)} · {ageLabel(Date.parse(group.updatedAt), now)}</small>
-          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>
+          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
-        {group.view !== 'history' && <details className="ask-item-actions"><summary aria-label="Question actions">Actions</summary><button type="button" onClick={() => { for (const turn of turns) controls.action(turn, 'dismiss') }}>Dismiss to history</button></details>}
+        <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : '⌑'}</button>
       </AskSurface>
     })}
   </section>
