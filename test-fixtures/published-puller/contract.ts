@@ -38,7 +38,11 @@ export async function publishedPullerContract(options: {
   await writeFile(inbox, (await readFile(inbox, 'utf8')).replace('#!/usr/bin/env python3', `#!${python}`))
   await chmod(inbox, 0o700)
   const clavis = join(bin, 'clavis')
-  await writeFile(clavis, `#!${python}\nimport json, pathlib, sys\nassert sys.argv[1:] == ['get', 'ci.ask-bridge']\nprint(json.loads(pathlib.Path(__file__).with_name('credential.json').read_text()))\n`)
+  await writeFile(clavis, `#!${python}
+import json, pathlib, sys
+assert sys.argv[1:] == ['get', 'ci.ask-bridge']
+print(json.loads(pathlib.Path(__file__).with_name('credential.json').read_text()))
+`)
   await chmod(clavis, 0o700)
   await writeFile(join(bin, 'credential.json'), JSON.stringify(token), { mode: 0o600 })
 
