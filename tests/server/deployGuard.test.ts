@@ -290,6 +290,25 @@ it('compares full catalog semantics, tolerates object order and rejects duplicat
   const schema = { name: 'schema', inputSchema: { type: 'object', required: ['a', 'b'], properties: { a: { enum: ['x', 'y'] } } } }
   expect(() => compareCatalogs([schema], [{ ...schema, inputSchema: { ...schema.inputSchema, required: ['b', 'a'], properties: { a: { enum: ['y', 'x'] } } } }], ['schema'])).not.toThrow()
 })
+it.each(['allOf', 'anyOf', 'oneOf'])('ignores object-key and alternative ordering in %s schemas', keyword => {
+  for (const field of ['inputSchema', 'outputSchema']) {
+    const original = { name: 'schema', [field]: { [keyword]: [
+      { type: 'string', minLength: 1 }, { type: 'number', minimum: 1 },
+    ] } }
+    const reordered = { name: 'schema', [field]: { [keyword]: [
+      { minimum: 1, type: 'number' }, { minLength: 1, type: 'string' },
+    ] } }
+    const nested = (tool: typeof original) => ({ name: tool.name, [field]: { properties: { value: tool[field] } } })
+    for (const wrap of [(tool: typeof original) => tool, nested]) {
+      expect(() => compareCatalogs([wrap(original)], [wrap(reordered)], ['schema'])).not.toThrow()
+      expect(() => compareCatalogs([wrap(reordered)], [wrap(original)], ['schema'])).not.toThrow()
+    }
+    const changed = { name: 'schema', [field]: { [keyword]: [
+      { type: 'string', minLength: 2 }, { type: 'number', minimum: 1 },
+    ] } }
+    expect(() => compareCatalogs([original], [changed], ['schema'])).toThrow()
+  }
+})
 it('preserves array values in schema defaults and tool metadata', () => {
   const tool = { name: 'data', inputSchema: { type: 'object', default: { required: ['a', 'b'] } }, _meta: { enum: ['x', 'y'] } }
   expect(() => compareCatalogs([tool], [{ ...tool, inputSchema: { ...tool.inputSchema, default: { required: ['b', 'a'] } } }], ['data'])).toThrow()

@@ -86,7 +86,7 @@ function schemaMeaning(schema) {
     // Normalize only schema sets. Defaults, examples, const values and tuple
     // schemas are data: their array ordering must retain its meaning.
     if (['required', 'enum', 'type', 'allOf', 'anyOf', 'oneOf'].includes(key) && Array.isArray(value)) {
-      const items = value.map(item => ['allOf', 'anyOf', 'oneOf'].includes(key) ? schemaMeaning(item) : canonical(item))
+      const items = value.map(item => canonical(['allOf', 'anyOf', 'oneOf'].includes(key) ? schemaMeaning(item) : item))
       return [key, items.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]
     }
     if (['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas'].includes(key) && value && typeof value === 'object') {
