@@ -258,6 +258,10 @@ focus dismissal, while an open search palette closes first. At narrow widths the
 single toolbar scrolls horizontally; the centered pattern stays legible and its
 neighbors retain touch targets.
 
+An unrelated stale home does not make conclusive visible predicates unknown.
+Home coverage still matters when worker filters, text search or machine/manager/entity
+facets can hide cards. The reminder names unavailable evidence classes and home paths.
+
 Search and patterns are read-only and never send Ask requests or change Notion,
 assignment or execution state.
 
@@ -333,7 +337,7 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Blocked | Fresh, complete Notion evidence with status Waiting For and a nonempty Waiting For field; worker freshness is not required for that Notion state. An In Progress card with Waiting For and a verified waiting worker or published blocker also matches. Done/Archived never match. Legitimate waiting is not called deadlock. |
 | Unstaffed | In Progress, no verified assigned worker, and complete configured source/link coverage with explicit accountability. Missing/blank links or stale/partial homes are unknown. |
 | Needs my decision | Explicit Notion Will action or structured needs-decision request from a verified worker. Never inferred from prose. |
-| Stalled | Requires no running/runnable path and no active resolver. Done/Archived never match. Requires complete fresh running, runnable and resolver zeros; unknown coverage stays unavailable. Explicit Waiting For or a positive running/runnable/resolver path rules it out. |
+| Stalled | In Progress with assigned verified workers and complete fresh running, runnable and resolver zeros; unknown coverage stays unavailable. Done/Archived, explicit Waiting For or a positive running/runnable/resolver path rules it out. |
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
@@ -344,13 +348,13 @@ retain one Work cluster and deduplicated blocker identifiers. Detailed evidence
 remains in the shared health projection for tests and consumers; it is not a
 second results inventory. Readiness is projected read-only from each configured home's existing snapshot:
 queued, unheld, non-captain-actionable backlog rows with an explicit empty
-`unresolved_blocker_ids` list are runnable. Accountable rows come from confirmed
+`unresolved_blocker_ids` list are runnable only when no observed execution is
+working or has unknown activity. Accountable rows come from confirmed
 current explicit links; card references alone never join.
-Distinct named blockers can supply runnable paths, and fresh working blockers or
-explicit Origin continuations can supply active resolvers. Home/task identities
-are retained, with missing or ambiguous blocker IDs unknown. A complete fresh
+Distinct named blockers and explicit Origin continuations can supply runnable
+paths; their fresh working executions instead supply active resolvers.
+Blockers and continuations join only within the same home/task identity.
+Missing blocker rows, candidates with unresolved dependencies, and continuation
+paths beyond the directly inspected candidates leave coverage unknown. A complete fresh
 backlog census and known candidate crew-state are required to prove zero;
 missing lists, incomplete inventories and stale/failed home reads remain null.
-The tooltip names unavailable evidence classes and home paths. Counts remain
-unique visible tasks: N when decided, N+ for confirmed matches with incomplete
-coverage, and ? when coverage is incomplete without confirmed matches.
