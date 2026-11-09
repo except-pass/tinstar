@@ -1,8 +1,10 @@
 import { afterEach, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -114,3 +116,42 @@ it('fails safely when the private backend is unavailable without disclosing eith
     expect(String(error)).not.toContain(callerToken)
   }
 })
+
+it('starts from the shared Authorization file and rejects invalid caller values', async () => {
+  const { options } = await setup()
+  const root = await mkdtemp(join(tmpdir(), 'tinstar-tunnel-cli-')); roots.push(root)
+  await writeFile(join(root, 'mcp-token'), options.installToken, { mode: 0o600 })
+  const callerFile = join(root, 'caller-header')
+  const reservation = createServer()
+  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
+  const port = (reservation.address() as { port: number }).port
+  await new Promise<void>(resolve => reservation.close(() => resolve()))
+  for (const value of [`Bearer ${callerToken}`, `Bearer ${callerToken}\n`, callerToken, `Bearer Bearer ${callerToken}`, `Bearer ${callerToken}\nextra`, `Bearer short`]) {
+    await writeFile(callerFile, value, { mode: 0o600 })
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/server/reconciliation/tunnelMain.ts', '--port', String(port), '--upstream-port', String(options.upstreamPort), '--caller-id', 'owner-chatgpt', '--caller-token-file', callerFile], { env: { ...process.env, TINSTAR_CONFIG_HOME: root }, stdio: ['ignore', 'pipe', 'pipe'] })
+    const exited = once(child, 'exit')
+    let output = ''
+    child.stdout.on('data', chunk => { output += chunk })
+    child.stderr.on('data', chunk => { output += chunk })
+    try {
+      if (value === `Bearer ${callerToken}` || value === `Bearer ${callerToken}\n`) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('CLI startup timed out')), 5000)
+          child.stdout.on('data', () => { clearTimeout(timer); resolve() })
+          child.once('exit', () => { clearTimeout(timer); reject(new Error('CLI exited before startup')) })
+        })
+        const client = new Client({ name: 'cli-test', version: '1' }); clients.push(client)
+        await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: value.trim() } } }))
+        expect((await client.listTools()).tools).toHaveLength(7)
+        await client.close()
+      } else {
+        expect((await exited)[0]).toBe(1)
+      }
+      expect(output).not.toContain(callerToken)
+      expect(output).not.toContain(options.installToken)
+    } finally {
+      if (child.exitCode === null) child.kill()
+      await exited
+    }
+  }
+}, 20000)

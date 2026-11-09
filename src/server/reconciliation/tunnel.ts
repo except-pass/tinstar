@@ -13,8 +13,6 @@ export interface TunnelOptions {
   installToken: string
   caller: { id: string; token: string; allowView: boolean }
 }
-/** A separate bearer authorizes one owner-configured caller. Never inject it in
- * tunnel-client: doing so would authorize every caller of the tunnel alike. */
 export function createTunnelFacade(options: TunnelOptions) {
   const { caller, installToken, upstreamPort } = options
   // Missing/ambiguous caller policy must not turn the private install token into
@@ -24,9 +22,6 @@ export function createTunnelFacade(options: TunnelOptions) {
   const allowed = new Set([...reads, ...(caller.allowView ? views : [])])
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Cache-Control', 'no-store')
-    // Discovery must honestly report no OAuth server; a bearer credential must be
-    // configured in the calling client. No browser origin or forwarded identity
-    // headers grant authority, and no UI bridge is exposed here.
     if (req.url !== '/mcp') { res.writeHead(404); res.end(); return }
     const authorizationHeaders = req.rawHeaders.filter((_, index) => index % 2 === 0 && req.rawHeaders[index]!.toLowerCase() === 'authorization').length
     if (authorizationHeaders !== 1 || req.headers.origin || !secretEquals(String(req.headers.authorization ?? ''), `Bearer ${caller.token}`)) {

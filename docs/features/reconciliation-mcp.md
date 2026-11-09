@@ -41,12 +41,12 @@ Build with `npm run build:all`, then run:
 ```sh
 TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel.js \
   --upstream-port 5281 --port 5297 \
-  --caller-id owner-chatgpt --caller-token-file /absolute/private/chatgpt-caller-token
+  --caller-id owner-chatgpt --caller-token-file /absolute/private/facade-caller-header
 ```
 
 The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools.
 Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
-Generate a separate random caller bearer with at least 32 characters and supply it through the calling client's private Authorization configuration.
+The approved caller boundary is the private org tunnel. Generate a separate opaque random token of at least 32 non-whitespace characters. Store the full Authorization header value in a single owner-only file shared by the facade and tunnel-client: `Bearer <opaque-random-token>` on one line, with an optional trailing newline. Raw tokens, extra lines and double prefixes are rejected by the CLI. Normal ChatGPT needs no extra authentication; tunnel-client injects the header from this file.
 Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
 The facade reads the existing install token from `TINSTAR_CONFIG_HOME/mcp-token` without creating or rotating it.
 Never use the install token as the caller token.
@@ -58,22 +58,27 @@ The tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
 ```sh
 tunnel-client run \
   --control-plane.tunnel-id tunnel_YOUR_EXISTING_ID \
-  --control-plane.api-key env:CONTROL_PLANE_API_KEY \
+  --control-plane.api-key file:/home/farm/.config/tinstar-tunnel/control-plane-api-key \
   --mcp.server-url 'url=http://127.0.0.1:5297/mcp,channel=main' \
+  --mcp.extra-headers 'Authorization: file:/absolute/private/facade-caller-header' \
   --health.listen-addr 127.0.0.1:0
 ```
 
-Supply the runtime key through the operator's secret mechanism, never a literal argument or source-controlled file.
-Do not enable embedded stub mode, payload capture, raw HTTP logging, public health listeners, or `--mcp.extra-headers` injecting the caller credential.
-Injecting a static caller credential in the tunnel runtime would authenticate every tunnel caller and defeat caller authorization.
-The caller must supply its own bearer on every request; the facade sends only the separate install token to the fixed localhost backend and refuses redirects.
-This facade does not implement OAuth/DCR or advertise an OAuth issuer.
-A ChatGPT connector that cannot supply the configured bearer requires an owner-approved caller authentication integration before live acceptance; do not bypass this by granting the tunnel ambient authority.
-Local SDK/browser proof alone does not prove ChatGPT caller compatibility.
+The control-plane key is already placed at the path above; never read or print it. Keep credentials out of argv values, environment values, logs and source control; only file paths appear in commands.
+Do not enable embedded stub mode, payload capture, raw HTTP logging or public health listeners.
+The facade checks the injected bearer on every request, sends only the separate install token to the fixed localhost backend, and refuses redirects. It does not implement OAuth/DCR or advertise an OAuth issuer.
 
-Restart the facade after rotating either credential; update the calling client's private secret for caller-token rotation.
-The facade never installs a service or changes tunnel configuration automatically.
-Operational startup/restart and any runtime-key storage require an operator decision.
+Firstmate owns deployment and live ChatGPT acceptance after deploy; local SDK/browser proof does not establish live acceptance. The first ChatGPT test enables `--allow-view`, retaining seven read tools plus the two browser-acknowledged view tools and no domain writes. Do not modify or restart the existing live tunnel during validation.
+
+For the LIVE floor operator handoff, use the installed Node executable and deployed repository directory as the service's working directory. The exact facade command is:
+
+```ini
+Environment=TINSTAR_CONFIG_HOME=/home/farm/srv/tinstar-config
+ExecStart=/usr/bin/env node bin/tinstar-mcp-tunnel.js --port 5297 --upstream-port 5281 --caller-id owner-chatgpt --caller-token-file /home/farm/.config/tinstar-tunnel/facade-caller-header --allow-view
+```
+
+Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. The caller file contains exactly `Bearer <opaque-random-token>` (optional trailing newline), is owned by the service user, and has mode 0600. The backend's `mcp-token` remains a separate raw install token.
+Restart the facade after rotating either credential; restart tunnel-client after caller-file rotation so both use the same value. The facade never installs a service or changes tunnel configuration automatically. These are operator handoff instructions, not validation commands against the live floor.
 
 ## Tools and authority
 
