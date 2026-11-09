@@ -788,3 +788,51 @@ describe('actual conversation history delivered through the existing bridge', ()
     expect(Buffer.byteLength(work.pending[0]!.body)).toBeLessThan(96 * 1024)
   })
 })
+
+describe('deploy smoke partition', () => {
+  it('round trips on the real owner/bridge routes while hiding pending, tracked and answered smoke rows across reload', async () => {
+    const { call, bridge, reload, base } = await setup()
+    const syntheticId = randomUUID(), secondId = randomUUID()
+    const auth = { Authorization: `Bearer ${token}` }
+    const ownerAuth = { ...auth, 'Tailscale-User-Login': owner, 'X-Tinstar-UI': '1' }
+    const smoke = { ...input(), card_id: '00000000000000000000000000000000', synthetic_id: syntheticId }
+    expect((await call('requests', smoke)).status).toBe(403)
+    expect((await call('requests', smoke, auth)).status).toBe(403)
+    const regular = (await call('requests', input())).data.data
+    const created = await call('requests', smoke, ownerAuth)
+    expect(created.status).toBe(200)
+    const row = created.data.data
+    expect(row).not.toHaveProperty('synthetic_id')
+    const scoped = (id = syntheticId, body?: unknown) => call(`bridge?synthetic_id=${id}`, body, auth)
+    reload()
+    expect((await call('requests')).data.data.map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
+    expect((await bridge()).data.data.pending.map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
+    expect((await scoped()).data.data.pending.map((r: { request_id: string }) => r.request_id)).toEqual([row.request_id])
+    expect((await scoped(secondId)).data.data).toEqual({ pending: [], tracked: [] })
+    expect((await bridge({ request_id: row.request_id, note: note(row.request_id) })).status).toBe(404)
+    expect((await scoped(syntheticId, { request_id: regular.request_id, note: note(regular.request_id) })).status).toBe(404)
+    expect((await scoped(syntheticId, { request_id: row.request_id, note: note(row.request_id) })).status).toBe(200)
+    expect((await bridge()).data.data.tracked).toEqual([])
+    expect((await scoped()).data.data.tracked).toHaveLength(1)
+    const update = { request_id: row.request_id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Synthetic answer', cursor: '1' } }
+    expect((await scoped(secondId, update)).status).toBe(404)
+    expect((await scoped(syntheticId, update)).status).toBe(200)
+    reload()
+    expect((await call(`conversations/${row.conversation_id}`)).status).toBe(404)
+    expect((await call(`bridge?conversation_id=${row.conversation_id}`, undefined, auth)).status).toBe(404)
+    expect((await call(`conversations/${row.conversation_id}?synthetic_id=${syntheticId}`)).status).toBe(403)
+    expect((await call(`conversations/${row.conversation_id}?synthetic_id=${syntheticId}`, undefined, ownerAuth)).data.data.turns.at(-1).reply.detail).toBe('Synthetic answer')
+    expect((await call('requests')).data.data).toHaveLength(1)
+    expect((await call('requests', { ...input(), follow_up_to: row.request_id })).status).toBe(404)
+    expect((await call(`requests/${row.request_id}/retry`, {})).status).toBe(404)
+    expect((await call('selections', { answer_id: row.request_id, action_id: 'test', client_key: randomUUID() })).status).toBe(404)
+    const remove = async (id: string, headers = auth) => fetch(`${base}/api/ask/bridge?synthetic_id=${id}`, { method: 'DELETE', headers })
+    expect((await remove(syntheticId, {} as typeof auth)).status).toBe(401)
+    expect((await remove(secondId)).status).toBe(200)
+    expect((await scoped()).data.data.pending).toEqual([]) // answered, not deleted
+    expect((await remove(syntheticId)).status).toBe(200)
+    expect((await remove(syntheticId)).status).toBe(200) // lost cleanup ack is safe
+    reload()
+    expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8')).map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
+  })
+})

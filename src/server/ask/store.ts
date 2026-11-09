@@ -40,23 +40,25 @@ export class AskStore {
     this.writing = task.catch(() => undefined)
     return task
   }
-  async list(owner: string) {
+  async list(owner: string, syntheticId?: string) {
     await this.writing
-    return structuredClone((await this.load()).filter(row => row.owner === owner))
+    return structuredClone((await this.load()).filter(row => row.owner === owner && row.synthetic_id === syntheticId))
   }
-  async find(owner: string, requestId: string) { return (await this.list(owner)).find(row => row.request_id === requestId) }
-  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string, capturedSelection?: AskCapturedSelection) {
+  async find(owner: string, requestId: string, syntheticId?: string) { return (await this.list(owner, syntheticId)).find(row => row.request_id === requestId) }
+  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string, capturedSelection?: AskCapturedSelection, syntheticId?: string) {
     return this.change(rows => {
       const previous = rows.find(row => row.owner === owner && (row.client_key === clientKey || row.client_key_aliases?.includes(clientKey)))
       if (previous) {
-        if (JSON.stringify(previous.captured_selection) !== JSON.stringify(capturedSelection) || previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
+        if (previous.synthetic_id !== syntheticId || JSON.stringify(previous.captured_selection) !== JSON.stringify(capturedSelection) || previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
           JSON.stringify(previous.context.target) !== JSON.stringify(context.target) ||
           (previous.follow_up_to !== undefined ? previous.follow_up_to !== (followUpTo ?? null) : followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
         return previous
       }
       const parent = followUpTo ? rows.find(row => row.request_id === followUpTo && row.owner === owner) : null
       if (followUpTo && !parent) throw new AskNotFound('Original question unavailable')
-      return this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent, undefined, capturedSelection)
+      const row = this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent, undefined, capturedSelection)
+      if (syntheticId) row.synthetic_id = syntheticId
+      return row
     })
   }
   private appendRequest(rows: AskRecord[], owner: string, clientKey: string, question: string, context: AskContext, parent?: AskRecord | null, selection?: AskActionSelection, capturedSelection?: AskCapturedSelection) {
@@ -73,7 +75,7 @@ export class AskStore {
   }
   action(owner: string, requestId: string, action: 'read' | 'dismiss' | 'retry') {
     return this.change(rows => {
-      const row = rows.find(row => row.request_id === requestId && row.owner === owner)
+      const row = rows.find(row => row.request_id === requestId && row.owner === owner && !row.synthetic_id)
       if (!row) throw new AskNotFound('Question unavailable')
       if (action === 'read' && row.reply) row.read_at ??= this.now()
       if (action === 'dismiss') row.dismissed_at ??= this.now()
@@ -82,9 +84,9 @@ export class AskStore {
       return row
     })
   }
-  async conversation(conversationId: string, owner?: string) {
+  async conversation(conversationId: string, owner?: string, syntheticId?: string) {
     await this.writing
-    const rows = (await this.load()).filter(row => row.conversation_id === conversationId && (owner === undefined || row.owner === owner))
+    const rows = (await this.load()).filter(row => row.synthetic_id === syntheticId && row.conversation_id === conversationId && (owner === undefined || row.owner === owner))
     if (!rows.length) throw new AskNotFound('Conversation unavailable')
     return { schema: 'tinstar.ask-conversation.v1' as const, conversation_id: conversationId,
       context: structuredClone(rows[0]!.context), turns: structuredClone(conversationTurns(rows)), omitted: null }
@@ -101,7 +103,7 @@ export class AskStore {
         if (previous.action_selection?.answer_id !== answerId || previous.action_selection.action_id !== actionId) throw new AskConflict('Retry key belongs to another selection')
         return previous
       }
-      const answer = rows.find(row => row.owner === owner && row.request_id === answerId)
+      const answer = rows.find(row => row.owner === owner && row.request_id === answerId && !row.synthetic_id)
       if (!answer?.reply) throw new AskNotFound('Original answer unavailable')
       // Both same-key retries and another device's same-action retry recover the
       // original request even after its answer is superseded by a later reply.
@@ -120,10 +122,10 @@ export class AskStore {
       return this.appendRequest(rows, owner, clientKey, selection.instruction, answer.context, answer, selection)
     })
   }
-  async bridgeWork() {
+  async bridgeWork(syntheticId?: string) {
     // Persist legacy payloads on first dispatch too. Capturing under the writer
     // lock freezes each note body before a puller can save it and lose its ack.
-    const eligible = (row: AskRecord) => row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error
+    const eligible = (row: AskRecord) => row.synthetic_id === syntheticId && (row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error)
     const collect = (rows: AskRecord[]) => {
       const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
       for (const row of rows) {
@@ -134,15 +136,20 @@ export class AskStore {
         if (pending.length && (pending.length >= 50 || jsonBytes(pending) + jsonBytes(entry) > 1024 * 1024)) break
         pending.push(entry)
       }
-      return { pending, tracked: rows.filter(row => row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
+      return { pending, tracked: rows.filter(row => row.synthetic_id === syntheticId && row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
     }
     await this.writing
     const rows = await this.load()
     return rows.some(row => eligible(row) && row.dispatch_body === undefined) ? this.change(collect) : collect(rows)
   }
-  ingest(update: BridgeUpdate) {
+  removeSynthetic(syntheticId: string) {
     return this.change(rows => {
-      const row = rows.find(row => row.request_id === update.request_id)
+      for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.synthetic_id === syntheticId) rows.splice(i, 1)
+    })
+  }
+  ingest(update: BridgeUpdate, syntheticId?: string) {
+    return this.change(rows => {
+      const row = rows.find(row => row.request_id === update.request_id && row.synthetic_id === syntheticId)
       if (!row) throw new AskNotFound('Unknown request')
       if (update.note) {
         if (update.note.request_id !== inboxRequestId(row.request_id) || row.note_id && row.note_id !== update.note.id ||

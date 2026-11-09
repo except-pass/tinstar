@@ -1,0 +1,11 @@
+[
+  "get_card_context",
+  "get_command",
+  "get_queue",
+  "get_scene",
+  "get_worker_link_report",
+  "list_ui_sessions",
+  "next_queue_item",
+  "present_view",
+  "read_record"
+]
