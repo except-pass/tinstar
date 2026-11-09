@@ -75,7 +75,7 @@ describe('Notion authoritative observation table', () => {
     const scene = reconcile(input)
     expect(scene.claims).toHaveLength(2)
     expect(scene.claims.every(c => c.verification === 'conflicting')).toBe(true)
-    expect(scene.findings.filter(f => f.reason.includes('Competing'))).toHaveLength(2)
+    expect(scene.findings.filter(f => f.workerLinkDetectors?.includes('duplicate-primary'))).toHaveLength(2)
     input.intentions.data!.cards.find(c => c.id === fixtureId(5))!.properties.Status!.value = 'Done'
     expect(reconcile(input).claims.every(c => c.verification === 'conflicting')).toBe(true)
   })
