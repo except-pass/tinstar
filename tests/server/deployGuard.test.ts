@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -13,9 +13,19 @@ const roots: string[] = [], servers: Server[] = []
 const token = 'preview-only-bridge-credential-1234567890', caller = 'Bearer preview-only-caller-credential-1234567890'
 const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }]
 const script = resolve('scripts/deploy/floor-deploy.sh')
+// A deploy runs this suite with its own exported configuration. Never let those
+// unit names, live paths/URLs or shell/Node startup hooks leak into fixtures.
+const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
+const deploymentEnv = (key: string) => key.startsWith('TINSTAR_') || relatedEnv.has(key)
+beforeEach(async () => {
+  for (const key of Object.keys(process.env)) if (deploymentEnv(key)) vi.stubEnv(key, undefined)
+  const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-env-')); roots.push(root)
+  vi.stubEnv('TINSTAR_CONFIG_HOME', root)
+})
 afterEach(async () => {
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())) }
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  vi.unstubAllEnvs()
 })
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-')); roots.push(root)
@@ -50,7 +60,8 @@ async function fixture() {
   // or git checkout outside the temporary fixture can be touched by these tests.
   const command = '#!/bin/bash\nname=${0##*/}\nprintf "%s %s\\n" "$name" "$*" >> "$COMMAND_LOG"\nif [[ "$name $*" == "npm run test:unit" && "${FAIL_TESTS:-}" == 1 ]]; then exit 42; fi\n'
   for (const name of ['git', 'npm', 'sudo']) await writeFile(join(bin, name), command, { mode: 0o700 })
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: join(root, 'commands.log'), TINSTAR_DEPLOY_SOURCE: root,
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !deploymentEnv(key)))
+  const env = { ...inherited, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: join(root, 'commands.log'), TINSTAR_DEPLOY_SOURCE: root,
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
@@ -68,12 +79,41 @@ describe('floor deploy executable', () => {
     expect(result.code, result.stderr).toBe(0)
     const commands = (await readFile(join(root, 'commands.log'), 'utf8')).trim().split('\n')
     expect(commands).toEqual(['git status --porcelain', 'git fetch origin main', 'git checkout --detach origin/main', 'npm ci --include=dev', 'npm run typecheck', 'npm run test:unit', 'npm run build:all',
-      'sudo -n systemctl restart tinstar-floor', 'sudo -n systemctl restart tinstar-mcp-facade', 'sudo -n systemctl restart tinstar-mcp-shim', 'sudo -n systemctl restart tinstar-mcp-tunnel'])
+      'sudo -n systemctl restart tinstar-floor', 'sudo -n systemctl restart tinstar-mcp-facade', 'sudo -n systemctl restart tinstar-mcp-tunnel'])
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))).toEqual([])
     await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(result.stdout).toContain('Ask and MCP smoke passed')
     expect(result.stdout + result.stderr).not.toContain(token)
     expect(result.stdout + result.stderr).not.toContain(caller)
+  })
+  it('ignores ambient deploy settings and startup hooks', async () => {
+    const ambient = await mkdtemp(join(tmpdir(), 'tinstar-deploy-ambient-')); roots.push(ambient)
+    const shellHook = join(ambient, 'shell-hook')
+    await writeFile(shellHook, 'exit 88\n')
+    const poison = {
+      TINSTAR_FLOOR_UNIT: 'ambient-floor', TINSTAR_FACADE_UNIT: 'ambient-facade', TINSTAR_TUNNEL_UNIT: 'ambient-tunnel', TINSTAR_SHIM_UNIT: 'retired-ambient-shim',
+      TINSTAR_CONFIG_HOME: join(ambient, 'config'), TINSTAR_DATA_DIR: join(ambient, 'data'), TINSTAR_DEPLOY_SOURCE: join(ambient, 'source'), TINSTAR_DEPLOY_BLOCK: join(ambient, 'block'),
+      TINSTAR_OWNER_URL: 'http://127.0.0.1:1', TINSTAR_BRIDGE_URL: 'http://127.0.0.1:1', TINSTAR_FACADE_URL: 'http://127.0.0.1:1',
+      TINSTAR_TUNNEL_TARGET_URL: 'http://127.0.0.1:1', TINSTAR_TUNNEL_HEALTH_URL: 'http://127.0.0.1:1', TINSTAR_SMOKE_WAIT_MS: '600000',
+      TINSTAR_CALLER_HEADER_FILE: join(ambient, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(ambient, 'tools'), TINSTAR_FACADE_STARTED_AT: 'invalid',
+      FAIL_TESTS: '1', COMMAND_LOG: join(ambient, 'log'), NODE_OPTIONS: `--require=${join(ambient, 'missing-hook')}`, BASH_ENV: shellHook,
+    }
+    for (const [key, value] of Object.entries(poison)) vi.stubEnv(key, value)
+    const { root, run } = await fixture()
+    const result = await run()
+    expect(result.code, result.stderr).toBe(0)
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands).not.toContain('ambient')
+    expect(commands).not.toContain('shim')
+    expect(commands).toContain('sudo -n systemctl restart tinstar-floor')
+    expect(commands).toContain('sudo -n systemctl restart tinstar-mcp-tunnel')
+  })
+  it('restarts a legacy shim only when the fixture explicitly opts in', async () => {
+    const { root, run } = await fixture()
+    const optional = await run(false, { TINSTAR_SHIM_UNIT: 'preview-shim' })
+    expect(optional.code, optional.stderr).toBe(0)
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands).toContain('sudo -n systemctl restart tinstar-mcp-facade\nsudo -n systemctl restart preview-shim\nsudo -n systemctl restart tinstar-mcp-tunnel')
   })
   it('blocks before build or restart when tests fail and refuses the next deploy before git', async () => {
     const { root, run } = await fixture()

@@ -4,7 +4,7 @@ Use `scripts/deploy/floor-deploy.sh` for each floor deploy, including unattended
 invocations. It replaces the manual fetch/checkout/install/test/build/restart
 sequence. It fetches `origin/main`, checks it out detached, installs dev dependencies,
 runs **typecheck and the complete unit suite**, builds the shipped client/server,
-then restarts the floor, facade, temporary shim and tunnel in that order. No unit
+then restarts the floor, facade and tunnel in that order. No unit
 is restarted if any build gate fails. The source checkout must be clean.
 
 The script gives owner availability and MCP read checks a shared retry deadline
@@ -43,12 +43,12 @@ arguments or printed, even on errors. HTTP requests reject redirects.
 | `TINSTAR_DEPLOY_BLOCK` | `$TINSTAR_CONFIG_HOME/deploy.blocked` | Durable failure latch; use the same path on every deploy |
 | `TINSTAR_FLOOR_UNIT` | `tinstar-floor` | systemd unit |
 | `TINSTAR_FACADE_UNIT` | `tinstar-mcp-facade` | systemd unit; also queried for last start time |
-| `TINSTAR_SHIM_UNIT` | `tinstar-mcp-shim` | Temporary systemd unit; empty disables its restart |
+| `TINSTAR_SHIM_UNIT` | empty | Optional legacy shim unit; no shim restart by default |
 | `TINSTAR_TUNNEL_UNIT` | `tinstar-mcp-tunnel` | Restarted after the facade to refresh its startup catalog |
 | `TINSTAR_OWNER_URL` | `https://hulk.taile890bc.ts.net:8450` | Real authenticated owner route, via Tailscale Serve |
 | `TINSTAR_BRIDGE_URL` | `http://127.0.0.1:5281` | Real `/api/ask/bridge` |
 | `TINSTAR_FACADE_URL` | `http://127.0.0.1:5297/mcp` | Facade `tools/list` |
-| `TINSTAR_TUNNEL_TARGET_URL` | `http://127.0.0.1:5299/mcp` | Actual configured tunnel target (temporary shim) |
+| `TINSTAR_TUNNEL_TARGET_URL` | `http://127.0.0.1:5297/mcp` | Actual configured tunnel target (facade directly) |
 | `TINSTAR_TUNNEL_HEALTH_URL` | `http://127.0.0.1:5298` | `/readyz`, `/api/status`, `/metrics` |
 | `TINSTAR_CALLER_HEADER_FILE` | `/home/farm/.config/tinstar-tunnel/facade-caller-header` | Private file containing `Bearer <caller-token>`; never the backend install token |
 | `TINSTAR_APPROVED_TOOLS_FILE` | `scripts/deploy/approved-tools.json` beside helper | Explicit approved names; default matches Hulk's read + view facade |
@@ -57,13 +57,16 @@ arguments or printed, even on errors. HTTP requests reject redirects.
 
 The script does not change a unit's environment or URLs. Those must match the
 selected deployment configuration. Changing a facade to read-only requires a
-corresponding approved names file; do not silently accept a missing tool. When the
-shim is removed, set `TINSTAR_SHIM_UNIT=''` and point
-`TINSTAR_TUNNEL_TARGET_URL` at the facade. Approved names are an intentional caller
-scope contract: an added, removed or duplicated tool fails the smoke because it
+corresponding approved names file; do not silently accept a missing tool. Hulk's
+shim is retired: the facade handles the tunnel protocol directly, and the defaults
+neither restart nor target a shim. Legacy installations can explicitly set
+`TINSTAR_SHIM_UNIT` and `TINSTAR_TUNNEL_TARGET_URL` together. Approved names are
+an intentional caller scope contract: an added, removed or duplicated tool fails the smoke because it
 can either break ChatGPT's expected tools or expose a tool outside approved scope.
 Descriptions, annotations, schemas and other tool fields must also match between
 the facade and target (JSON object key order and tool ordering are ignored).
+
+Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
 
 `--check-only` runs the same post-deploy checks and failure latch without checkout,
 build or restart. It still creates/removes a synthetic Ask record, acquires the
@@ -163,6 +166,9 @@ Use separate preview caller credentials, facade/target/health ports, approved
 tools and a preview facade start timestamp; never reuse live tunnel config.
 `--check-only` performs the complete check without restarting any production unit.
 
+Deploy tests clear ambient `TINSTAR_*` settings and related shell/Node startup
+hooks, then explicitly configure each isolated fixture. Exporting deploy URLs or
+unit names when running the suite cannot redirect its requests or restarts.
 Behavioral shell tests use executable git/npm/systemctl command doubles and real
 HTTP Ask routes in isolated temp configs. They verify restart ordering, no
 restart after test failure, no credentials in output, smoke cleanup, durable

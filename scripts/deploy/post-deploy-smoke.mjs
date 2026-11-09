@@ -127,7 +127,7 @@ async function main() {
     const facadeStartedAt = e.TINSTAR_FACADE_STARTED_AT ?? execFileSync('systemctl', ['show', e.TINSTAR_FACADE_UNIT ?? 'tinstar-mcp-facade', '--property=ActiveEnterTimestamp', '--value'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     while (true) {
       try {
-        await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5299/mcp',
+        await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5297/mcp',
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
       approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE ?? fileURLToPath(new URL('./approved-tools.json', import.meta.url)), facadeStartedAt })
         break

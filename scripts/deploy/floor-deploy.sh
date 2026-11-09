@@ -9,7 +9,7 @@ source_dir="${TINSTAR_DEPLOY_SOURCE:-/home/farm/srv/tinstar-src}"
 block="${TINSTAR_DEPLOY_BLOCK:-$TINSTAR_CONFIG_HOME/deploy.blocked}"
 floor_unit="${TINSTAR_FLOOR_UNIT:-tinstar-floor}"
 facade_unit="${TINSTAR_FACADE_UNIT:-tinstar-mcp-facade}"
-shim_unit="${TINSTAR_SHIM_UNIT-tinstar-mcp-shim}"
+shim_unit="${TINSTAR_SHIM_UNIT:-}"
 tunnel_unit="${TINSTAR_TUNNEL_UNIT:-tinstar-mcp-tunnel}"
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 phase=preflight
@@ -62,8 +62,8 @@ if [[ "${1:-}" != --check-only ]]; then
   phase=build
   env -u NODE_ENV npm run build:all
   phase=restart
-  # Refresh the startup catalog against the newly started facade. The optional
-  # shim is today's tunnel target; set TINSTAR_SHIM_UNIT='' when it is removed.
+  # Refresh the startup catalog against the newly started facade. An optional
+  # legacy shim is restarted only when an operator explicitly configures one.
   sudo -n systemctl restart "$floor_unit"
   sudo -n systemctl restart "$facade_unit"
   if [[ -n "$shim_unit" ]]; then sudo -n systemctl restart "$shim_unit"; fi
