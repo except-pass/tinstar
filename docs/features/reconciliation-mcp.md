@@ -29,7 +29,56 @@ Use a conversational client with **Streamable HTTP and custom Authorization head
 
 This is the transport configuration, not a universal client configuration-file format. Some clients support OAuth only; those cannot use this initial private-token interface directly. The official MCP Inspector accepts a Streamable HTTP URL and custom request headers; SDK clients can use `StreamableHTTPClientTransport` with `requestInit.headers` (example below). Use the client’s secret settings, rather than putting the literal credential in a repository.
 
-Localhost is the default. For a remote client, the operator must explicitly bind the existing backend to its Tailscale address and permit the intended tailnet client under the tailnet ACLs; set the URL to that private address. Both MCP and its UI bridge reject peers outside loopback/Tailscale IPv4/IPv6 ranges, ignore forwarded headers, and enforce the application origin policy for browser requests. Do not publish, forward or reverse-proxy this route publicly: a proxy running on localhost would itself be a trusted network peer. Do not use an Internet tunnel to bridge the private interface. Remote web/desktop UI origins must also be in the existing application origin allowlist. No network configuration is silently changed.
+Localhost is the default. For a remote client, the operator must explicitly bind the existing backend to its Tailscale address and permit the intended tailnet client under the tailnet ACLs; set the URL to that private address. Both MCP and its UI bridge reject peers outside loopback/Tailscale IPv4/IPv6 ranges, ignore forwarded headers, and enforce the application origin policy for browser requests. Do not publish, forward or reverse-proxy this route publicly: a proxy running on localhost would itself be a trusted network peer. For an outbound ChatGPT tunnel, use the separately authenticated scoped facade below; never target this private route directly. Remote web/desktop UI origins must also be in the existing application origin allowlist. No network configuration is silently changed.
+
+## Scoped outbound tunnel facade
+
+`tinstar-mcp-tunnel` is a separate loopback-only MCP facade for an existing backend.
+It forwards only the approved tools below using that backend's canonical projection and command receipts; it has no source collector or UI bridge of its own.
+The private `/api/reconciliation/mcp` endpoint remains private.
+Build with `npm run build:all`, then run:
+
+```sh
+TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel.js \
+  --upstream-port 5281 --port 5297 \
+  --caller-id owner-chatgpt --caller-token-file /absolute/private/facade-caller-header
+```
+
+The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
+Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
+The approved caller boundary is the private org tunnel. Generate a separate opaque random token of at least 32 non-whitespace characters. Store the full Authorization header value in a single owner-only file shared by the facade and tunnel-client: `Bearer <opaque-random-token>` on one line, with an optional trailing newline. Raw tokens, extra lines and double prefixes are rejected by the CLI. Normal ChatGPT needs no extra authentication; tunnel-client injects the header from this file.
+Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
+The facade reads the existing install token from `TINSTAR_CONFIG_HOME/mcp-token` without creating or rotating it.
+Never use the install token as the caller token.
+Missing/invalid caller configuration prevents startup; wrong, missing or duplicate Authorization and browser origins are rejected.
+Forwarded identity headers grant no authority.
+
+For the facade command above, the tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
+
+```sh
+tunnel-client run \
+  --control-plane.tunnel-id tunnel_YOUR_EXISTING_ID \
+  --control-plane.api-key file:/home/farm/.config/tinstar-tunnel/control-plane-api-key \
+  --mcp.server-url 'url=http://127.0.0.1:5297/mcp,channel=main' \
+  --mcp.extra-headers 'Authorization: file:/absolute/private/facade-caller-header' \
+  --health.listen-addr 127.0.0.1:0
+```
+
+The control-plane key is already placed at the path above; never read or print it. Keep credentials out of argv values, environment values, logs and source control; only file paths appear in commands.
+Do not enable embedded stub mode, payload capture, raw HTTP logging or public health listeners.
+The facade checks the injected bearer on every request, sends only the separate install token to the fixed localhost backend, and refuses redirects. It does not implement OAuth/DCR or advertise an OAuth issuer.
+
+Firstmate owns deployment and live ChatGPT acceptance after deploy; local SDK/browser proof does not establish live acceptance. The first ChatGPT test enables `--allow-view`, retaining seven read tools plus the two browser-acknowledged view tools and no domain writes. Do not modify or restart the existing live tunnel during validation.
+
+For the LIVE floor operator handoff, use the installed Node executable and deployed repository directory as the service's working directory. The exact facade command is:
+
+```ini
+Environment=TINSTAR_CONFIG_HOME=/home/farm/srv/tinstar-config
+ExecStart=/usr/bin/env node bin/tinstar-mcp-tunnel.js --port 5297 --upstream-port 5281 --caller-id owner-chatgpt --caller-token-file /home/farm/.config/tinstar-tunnel/facade-caller-header --allow-view
+```
+
+Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. Use the caller-file format and ownership requirements above. The backend's `mcp-token` remains a separate raw install token.
+Restart the facade after rotating either credential; restart tunnel-client after caller-file rotation so both use the same value. The facade never installs a service or changes tunnel configuration automatically. These are operator handoff instructions, not validation commands against the live floor.
 
 ## Tools and authority
 
