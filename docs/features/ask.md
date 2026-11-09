@@ -203,8 +203,10 @@ supplied Origin must be allowlisted; an absent Origin is accepted. No
 browser-provided principal is accepted in submission bodies. The
 bridge uses its own bearer token and accepts no browser Origin. The configured
 owner boundary and bearer authentication are deliberately separate. The bridge
-token grants access to all Ask requests and answers in this instance, so give it
-only to the designated primary-home puller.
+token grants access to all Ask requests and answers in this instance, so restrict
+it to the designated primary-home puller and the trusted
+[post-deploy smoke helper](floor-deploy.md#synthetic-ask-isolation). That reference
+owns the synthetic partition protocol and its additional authentication requirements.
 
 ## Outbound-only Mac puller
 

@@ -7,11 +7,16 @@ runs **typecheck and the complete unit suite**, builds the shipped client/server
 then restarts the floor, facade, temporary shim and tunnel in that order. No unit
 is restarted if any build gate fails. The source checkout must be clean.
 
-The script allows a bounded startup grace for owner availability and MCP read
-checks (60 seconds by default). It performs one synthetic Ask round trip and
+The script gives owner availability and MCP read checks a shared retry deadline
+(60 seconds after the helper starts by default); individual HTTP requests can
+finish after that deadline. It performs one synthetic Ask round trip and
 read-only MCP checks.
-Any failure exits nonzero, prints one `ALERT Tin Star deploy:` line to stderr, and
-writes `deploy.blocked`. Subsequent invocations refuse before fetching or restarting.
+After acquiring the lock and checking the existing block, any failure exits
+nonzero, prints an `ALERT Tin Star deploy:` line to stderr, and attempts to write
+`deploy.blocked`. Failure to persist the marker is reported in the alert and
+requires operator intervention. Earlier failures, including lock contention,
+do not create a marker. Subsequent invocations refuse an existing marker before
+fetching or restarting.
 A config-directory `flock` serializes deploys so concurrent invocations cannot
 race past the block. No daemon, monitoring service, notification credential or
 production infrastructure is installed. The calling CI/scheduler must retain
