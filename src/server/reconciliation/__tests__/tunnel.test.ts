@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { createServer, request, type Server } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -41,6 +41,87 @@ async function setup(allowView = true) {
   await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${callerToken}` } } }))
   return { mcp, scene, url, client, options }
 }
+async function post(url: URL, method: string, version = '2026-07-28', params: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
+  return fetch(url, { method: 'POST', headers: {
+    Authorization: `Bearer ${callerToken}`, Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json',
+    'Mcp-Protocol-Version': version, 'Mcp-Method': method, ...(typeof params.name === 'string' ? { 'Mcp-Name': params.name } : {}), ...headers,
+  }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method, params: { _meta: { 'io.modelcontextprotocol/protocolVersion': version }, ...params } }) })
+}
+it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with the same scoped canonical results', async version => {
+  const { url, mcp, options } = await setup(false)
+  const session = mcp.sessions.register(initialPresentation())
+  const listed = await post(url, 'tools/list', version)
+  expect(listed.status).toBe(200)
+  expect(listed.headers.get('mcp-session-id')).toBeNull()
+  expect(listed.headers.get('cache-control')).toBe('no-store')
+  const list = await listed.json()
+  expect(list.id).toBe(7)
+  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toHaveLength(7)
+  expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain('present_view')
+  if (version === '2026-07-28') expect(list.result).toMatchObject({ resultType: 'complete', ttlMs: 0, cacheScope: 'private' })
+  else expect(list.result).not.toHaveProperty('resultType')
+  const called = await post(url, 'tools/call', version, { name: 'list_ui_sessions', arguments: {} })
+  expect(called.status).toBe(200)
+  const call = await called.json()
+  expect(call.id).toBe(7)
+  expect(parse(call.result).sessions.map((s: { scene_id: string }) => s.scene_id)).toEqual([session.scene_id])
+  expect(JSON.stringify(call)).not.toContain(session.key)
+  expect(JSON.stringify(call)).not.toContain(options.installToken)
+  if (version === '2026-07-28') expect(call.result.resultType).toBe('complete')
+  const denied = await post(url, 'tools/call', version, { name: 'present_view', arguments: {} })
+  expect((await denied.json()).result).toMatchObject({ isError: true })
+})
+it('discovers facade capabilities and supported versions without initialization', async () => {
+  const { url } = await setup()
+  const response = await post(url, 'server/discover')
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ jsonrpc: '2.0', id: 7, result: {
+    resultType: 'complete', supportedVersions: expect.arrayContaining(['2026-07-28', '2025-11-25']),
+    capabilities: { tools: {} }, ttlMs: 0, cacheScope: 'private',
+    _meta: { 'io.modelcontextprotocol/serverInfo': { name: 'tinstar-overview-tunnel', version: '6.0.0' } },
+  } })
+})
+it('accepts an encoded modern tool name and keeps transport content negotiation', async () => {
+  const { url } = await setup()
+  const encoded = await post(url, 'tools/call', '2026-07-28', { name: 'list_ui_sessions', arguments: {} }, { 'Mcp-Name': '=?base64?bGlzdF91aV9zZXNzaW9ucw==?=' })
+  expect(encoded.status).toBe(200)
+  expect(parse((await encoded.json()).result)).toEqual({ sessions: [] })
+  expect((await post(url, 'tools/list', '2026-07-28', {}, { Accept: 'text/html' })).status).toBe(406)
+  expect((await post(url, 'tools/list', '2026-07-28', {}, { 'Content-Type': 'text/plain' })).status).toBe(415)
+})
+it('rejects unsupported versions and inconsistent routing metadata', async () => {
+  const { url, options } = await setup()
+  const unsupported = await post(url, 'tools/list', '2099-01-01')
+  expect(unsupported.status).toBe(400)
+  expect(await unsupported.json()).toMatchObject({ id: 7, error: { code: -32022, data: { requested: '2099-01-01', supported: expect.arrayContaining(['2026-07-28', '2025-11-25']) } } })
+  for (const headers of [{ 'Mcp-Method': 'tools/call' }, { 'Mcp-Protocol-Version': '2025-11-25' }] as Record<string, string>[]) {
+    const response = await post(url, 'tools/list', '2026-07-28', {}, headers)
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: { code: -32020 } })
+  }
+  const mismatch = await post(url, 'tools/call', '2026-07-28', { name: 'list_ui_sessions' }, { 'Mcp-Name': 'present_view' })
+  expect(mismatch.status).toBe(400)
+  const text = await mismatch.text()
+  expect(text).not.toContain(callerToken)
+  expect(text).not.toContain(options.installToken)
+  const removed = await post(url, 'ping')
+  expect(removed.status).toBe(404)
+  expect(await removed.json()).toMatchObject({ error: { code: -32601 } })
+  const noMeta = await post(url, 'tools/list', '2026-07-28', { _meta: {} })
+  expect(noMeta.status).toBe(400)
+  expect(await noMeta.json()).toMatchObject({ error: { code: -32020 } })
+})
+it('keeps modern discovery and tool calls behind exact bearer and origin checks', async () => {
+  const { url } = await setup()
+  for (const method of ['server/discover', 'tools/list', 'tools/call']) {
+    for (const headers of [{ Authorization: '' }, { Origin: 'https://chatgpt.com' }] as Record<string, string>[]) expect((await post(url, method, '2026-07-28', {}, headers)).status).toBe(401)
+    const status = await new Promise<number>(resolve => {
+      const req = request(url, { method: 'POST', headers: { Authorization: [`Bearer ${callerToken}`, `Bearer ${callerToken}`], 'Mcp-Protocol-Version': '2026-07-28' } }, res => { res.resume(); resolve(res.statusCode!) })
+      req.end(JSON.stringify({ jsonrpc: '2.0', id: 7, method }))
+    })
+    expect(status).toBe(401)
+  }
+})
 it('requires explicit separate caller auth and rejects forwarded identities and private routes', async () => {
   const { url, options, client } = await setup()
   for (const caller of [{ ...options.caller, token: '' }, { ...options.caller, id: '' }, { ...options.caller, token: options.installToken }]) {
@@ -106,7 +187,7 @@ it('reuses command receipts, requires browser acknowledgment and preserves manua
   expect(mcp.sessions.read(first.scene_id).state).toEqual(applied.state)
 })
 it('fails safely when the private backend is unavailable without disclosing either credential', async () => {
-  const { client, options } = await setup()
+  const { client, options, url } = await setup()
   const backend = servers[0]!
   await new Promise<void>(resolve => backend.close(() => resolve()))
   try { await client.callTool({ name: 'list_ui_sessions', arguments: {} }); throw new Error('Expected unavailable backend') }
@@ -115,6 +196,12 @@ it('fails safely when the private backend is unavailable without disclosing eith
     expect(String(error)).not.toContain(options.installToken)
     expect(String(error)).not.toContain(callerToken)
   }
+  const modern = await post(url, 'tools/call', '2026-07-28', { name: 'list_ui_sessions', arguments: {} })
+  expect(modern.status).toBe(503)
+  const error = await modern.text()
+  expect(error).toContain('Tin Star MCP unavailable')
+  expect(error).not.toContain(options.installToken)
+  expect(error).not.toContain(callerToken)
 })
 
 it('starts from the shared Authorization file and rejects invalid caller values', async () => {

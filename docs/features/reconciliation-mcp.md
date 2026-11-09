@@ -53,6 +53,17 @@ Never use the install token as the caller token.
 Missing/invalid caller configuration prevents startup; wrong, missing or duplicate Authorization and browser origins are rejected.
 Forwarded identity headers grant no authority.
 
+The facade accepts stateless `2026-07-28` requests from ChatGPT/tunnel-client as
+well as the existing SDK `2025-11-25` path. Modern requests carry matching
+`Mcp-Protocol-Version` and `params._meta['io.modelcontextprotocol/protocolVersion']`,
+plus `Mcp-Method` and (for calls) `Mcp-Name`. `server/discover` advertises the
+facade's supported versions and tools capability; `tools/list` returns only the
+configured caller's tools. Discovery and tool lists use private, zero-TTL cache
+hints and all responses retain `Cache-Control: no-store`.
+SDK 1.x does not yet support this revision, so compatibility is confined to the
+facade's discovery/list/call requests; the private backend transport is unchanged.
+No version-rewriting proxy is needed in front of the facade.
+
 For the facade command above, the tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
 
 ```sh
