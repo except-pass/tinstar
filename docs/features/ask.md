@@ -92,10 +92,23 @@ unanswered question shows the thread and delivery diagnostics. **Sent** and
 failed delivery offers **Retry delivery**, using the same request ID.
 A delivered question waiting for an answer has no retry button. An open thread
 follows a reply/read transition between views without replacing its composer.
-Dismiss under the secondary Actions menu moves only the conversation into
-searchable History. It does not dismiss a decision, change Notion, approve work,
-merge or deploy. Source response receipts remain available in the request
+The card's **Archive conversation** button immediately moves every turn into
+searchable History and offers **Undo**. In History, **Restore to inbox** restores
+the conversation. These visibility changes persist across reloads and devices;
+they do not cancel delivery, delete content, dismiss a source decision, change
+Notion, send instructions, execute suggestions, approve work, merge or deploy.
+A genuine new reply clears that turn's archived state and resurfaces its
+conversation as **New answer**, leaving unrelated archived conversations alone.
+Source response receipts remain available in the request
 inspector's **Response delivery details**; the retired receipt panel is removed.
+
+Collapsed cards show status/time, question, source name and an available answer
+snippet; expand inline for the full thread. An unopened answer has a teal left
+accent with a gentle 2.5-second pulse and a **New answer** label. Opening the
+conversation removes the pulse; read answers stay quiet. History never pulses,
+and `prefers-reduced-motion` keeps the accent static. The archive button remains
+available on touch and becomes more prominent on hover or keyboard focus;
+left/right swipes retain their Ask/Inspector meanings.
 
 Opening an item reveals its originating context, switching sections when
 necessary, while retaining the conversation in Desk. Work items use existing
@@ -367,8 +380,8 @@ The remaining parent-card items are follow-up slices:
   a separate slice on the composer microphone. Right drag is the Inspector rail
   above, not a second voice gesture.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
-  revision-aware delivery; unified priority for decisions, unread answers,
-  investigations and failures.
+  revision-aware delivery and priority for investigations beyond the current
+  Desk views described above.
 - Richer reassignment, stale and inaccessible context handling beyond the
   current scene availability check and captured source-link fallback.
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
