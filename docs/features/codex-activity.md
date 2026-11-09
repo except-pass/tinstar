@@ -11,8 +11,9 @@ For every Codex task, `paths.worktree.path` is matched exactly against the first
 `~/.codex/sessions`). Only files modified within the last seven days are
 candidates, newest mtime first; each folder lookup stops at its first match. Only the matching session's
 `event_msg.payload.type` values `task_started` / `task_complete` establish an open
-or closed turn. Other payloads, prompts and outputs are never accessed or copied
-into the publication. A partial final JSON line is ignored until the next run.
+or closed turn. The JSON parser decodes each record, but classification inspects only these
+metadata fields; prompt and output contents are never used or copied into the
+publication. A partial final JSON line is ignored until the next run.
 Directory age does not exclude a recently modified session. Files whose mtime
 is older than seven days are excluded from collection; no inference is made
 from a quiet log within that window.
@@ -37,7 +38,11 @@ turn events retains its activity timestamp with `turn_open: null` and
 `codex_reason: "no_turn_events"`. An unreadable log leaves the signal unknown.
 Known crew state takes precedence. Unknown crew state uses a known turn only
 while the collector observation is less than five minutes old and the home
-observation is fresh. Open means running; closed means waiting. Log mtime is
+observation is fresh. Open means running; closed means waiting. A fresh known
+turn also takes precedence over historical completion reports when deciding
+whether a worker belongs in History. An explicit unavailable collector signal
+leaves liveness unknown instead of reviving a historical status report; legacy
+snapshots without a `codex` field retain their prior status-report fallback. Log mtime is
 shown as **Last activity**, independently of turn state; there is no hung-worker
 timeout. This is evidence for the normal worker counts, Active/Stalled readiness
 and per-card unavailable facts, without changing the existing readiness census.
@@ -233,7 +238,8 @@ and unknown/running/waiting counts **per home** using the same Tin Star readines
 projection as the live view, and capture the dial plus worker cards with last
 activity. Record the deployed commit and evidence on the work card:
 https://app.notion.com/p/41350ce6d422816e9b82d2f025091ceb . Firstmate performs live
-installs and records the final per-machine freshness/count evidence after merge.
+Linux installs and records the final per-machine freshness/count evidence after
+merge; the parent installs the owner Mac bundle.
 
 To roll back, disable the collector timer (`systemctl --user disable --now
 tinstar-codex-activity.timer`) or unload its Mac launch agent with `bootout`, then

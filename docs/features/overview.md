@@ -160,7 +160,9 @@ in each card's Evidence & diagnostics. Confirmed worker facts remain on task row
 Expanded and Detailed worker cards show an identity avatar, title and a consistently placed worker status at the top right. Confirmed linked
 tasks supply the Initiative / Epic breadcrumb; independent workers have none.
 Machine and the manager/home tag follow the title; activity and age share a
-divided footer. Observation freshness is a separate
+divided footer. Last activity uses the [Codex log timestamp](codex-activity.md)
+when available, otherwise the status-report timestamp, for display, grouping
+and sorting. Status-report ages remain independent of log activity. Observation freshness is a separate
 Last known signal; retained status follows the same event/state precedence as
 [liveness](reconciliation-floor.md#floor-ui-s3). An absent endpoint displays
 Unknown, not Finished. Secondary linked counterparts in
@@ -351,9 +353,11 @@ First Mate liveness reconciler. It returns canonical verified worker IDs/count,
 running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
 `null` for unavailable runnable/resolver evidence and unpublished progress time, and per-pattern
 `match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
-Health reads authoritative fresh crew-state (`run-step` or `pane`); historical
+Health uses the shared current-activity classification: fresh crew-state
+(`run-step` or `pane`) and the [Codex turn fallback](codex-activity.md). Historical
 status verbs and endpoint existence do not prove current activity. Floor badge
-liveness precedence remains unchanged. This feature implements no recovery, watchdog or scheduling behavior.
+liveness follows the [liveness contract](reconciliation-floor.md#floor-ui-s3).
+This feature implements no recovery, watchdog or scheduling behavior.
 
 The inspectable builtin definitions live in `patternDefinitions`:
 
@@ -382,5 +386,5 @@ paths; their fresh working executions instead supply active resolvers.
 Blockers and continuations join only within the same home/task identity.
 Missing blocker rows, candidates with unresolved dependencies, and continuation
 paths beyond the directly inspected candidates leave coverage unknown. A complete fresh
-backlog census and known candidate crew-state are required to prove zero;
+backlog census and known candidate activity are required to prove zero;
 missing lists, incomplete inventories and stale/failed home reads remain null.

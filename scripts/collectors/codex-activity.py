@@ -45,8 +45,8 @@ def matching_session(files, folder):
 def session_turn(path):
     turn = None
     with path.open() as stream:
-        # Header already inspected during matching. Message bodies are never accessed
-        # or emitted: only the envelope type and event payload type are used.
+        # Header already inspected during matching. JSON parsing decodes records,
+        # but classification inspects only envelope and event payload types.
         next(stream, None)
         for line in stream:
             try:

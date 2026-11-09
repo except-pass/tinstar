@@ -40,11 +40,16 @@ describe('read-only task readiness projection', () => {
     helper.source.current_state.state = 'unknown'
     expect(health(scene, 1).patterns.active.outcome).toBe('match')
   })
-  it.each(['unknown', 'waiting', null])('never proves zero running from current_state %s', state => {
+  it.each(['unknown', null])('never proves zero running from current_state %s', state => {
     const scene = sceneFor(); assigned(scene).source.current_state.state = state
     expect(health(scene).patterns.active.outcome).toBe('unavailable')
     expect(health(scene).patterns.stalled.outcome).toBe('unavailable')
     expect(health(scene).patterns.active.reason).toContain('Running state unknown for /fixture/hulk')
+  })
+  it.each(['waiting', 'held', 'needs-decision'])('recognizes explicit crew-state %s as waiting', state => {
+    const scene = sceneFor(); assigned(scene).source.current_state.state = state
+    expect(health(scene)).toMatchObject({ running: 0, waiting: 1, unknown: 0,
+      patterns: { active: { outcome: 'no-match' }, stalled: { outcome: 'match' } } })
   })
   it.each(['status-log', 'none'])('rejects non-authoritative current-state source %s', source => {
     const scene = sceneFor(); assigned(scene).source.current_state.source = source
