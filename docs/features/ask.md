@@ -283,8 +283,14 @@ Structured recommendations use the strict bounded prose schema in
 [`ask-actions.ts`](../../src/shared/ask-actions.ts): per-answer unique IDs,
 short labels and instructions without links or source-code containers.
 Historical string suggestions still display as inert text.
-Malformed structured reply content is accepted with `reply.degraded: true`, preserving valid text and reference links within those limits.
-An invalid suggested-action collection is dropped, so it creates no buttons and cannot delay other answers in the installed puller.
+Malformed structured reply content is accepted with `reply.degraded: true`.
+String summaries and details are truncated to their schema limits; a missing or
+invalid summary falls back to the first 240 characters of the reply body, and a
+non-string detail falls back to the full bounded reply body. Only the first 20
+valid references are retained. An invalid suggested-action collection is dropped
+as a whole, so it creates no buttons and cannot delay other answers in the
+installed puller. Request/note correlation and immutable-answer conflicts still
+reject delivery.
 The first three structured choices appear as compact buttons immediately after
 the answer; remaining choices use a “More choices” disclosure.
 The shared inline composer remains available for free-form clarification.
