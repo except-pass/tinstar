@@ -114,5 +114,5 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
     onMouseDown={event => event.preventDefault()} onClick={event => { event.stopPropagation(); launch(hit) }}
     onKeyDown={event => { if (event.key === 'Escape') { hit.node.focus(); setHit(null) } }}>
     {hit.selection ? 'Ask about this' : <><span aria-hidden="true">?</span><span className="ask-element-word"> Ask</span></>}
-  </button>, document.body) : null
+  </button>, hit.node.closest('dialog[open]') ?? document.body) : null
 }

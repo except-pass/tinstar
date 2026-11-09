@@ -80,3 +80,61 @@ it('keeps unmarked action controls inside a marked block native', () => {
   expect(event.defaultPrevented).toBe(false); expect(open).not.toHaveBeenCalled()
   expect(screen.queryByRole('button', { name: /^Ask about/ })).toBeNull()
 })
+
+
+it('keeps field and selection affordances inside the owning open dialog', () => {
+  const open = vi.fn()
+  render(<dialog open aria-label="Release details"><Harness open={open} /></dialog>)
+  const field = screen.getByText('Overdue 3d'), dialog = screen.getByRole('dialog')
+  fireEvent.mouseOver(field)
+  expect(dialog).toContainElement(screen.getByRole('button', { name: /^Ask about Overdue/ }))
+  act(() => field.focus())
+  fireEvent.keyDown(field, { key: 'Tab' })
+  expect(screen.getByRole('button', { name: /^Ask about Overdue/ })).toHaveFocus()
+  const range = document.createRange(); range.selectNodeContents(field)
+  window.getSelection()!.addRange(range)
+  fireEvent(document, new Event('selectionchange'))
+  expect(dialog).toContainElement(screen.getByRole('button', { name: 'Ask about this' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Ask about this' }))
+  expect(open).toHaveBeenCalledOnce()
+})
+
+it('leaves a mouse text-selection drag native while retaining touch item swipes', () => {
+  const open = vi.fn(), itemAsk = vi.fn()
+  render(<Harness open={open} itemAsk={itemAsk} />)
+  const field = screen.getByText('Overdue 3d')
+  const pointer = (type: string, x: number) => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.assign(event, { pointerType: 'mouse', pointerId: 1, button: 0, clientX: x, clientY: 100 })
+    fireEvent(field, event)
+    expect(event.defaultPrevented).toBe(false)
+  }
+  pointer('pointerdown', 100); pointer('pointermove', 40)
+  const range = document.createRange(); range.selectNodeContents(field)
+  window.getSelection()!.addRange(range)
+  fireEvent(document, new Event('selectionchange'))
+  pointer('pointerup', 40)
+  expect(itemAsk).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Ask about this' })).toBeInTheDocument()
+  window.getSelection()!.removeAllRanges()
+  hold(field, 'touchStart'); hold(field, 'touchMove', 40); hold(field, 'touchEnd', 40)
+  expect(itemAsk).toHaveBeenCalledOnce()
+})
+
+
+it('asks about a marked relationship link while keeping its normal click', () => {
+  const open = vi.fn(), navigate = vi.fn()
+  function Relationship() {
+    const root = useRef<HTMLDivElement>(null), affordance = useElementAsk(root, subject, open)
+    return <><div ref={root}><span {...askElement('relationship', 'Linked cards')}><a {...askElement('relationship', 'Linked card')} href="#card" onClick={navigate}>Card name</a></span></div>{affordance}</>
+  }
+  render(<Relationship />)
+  const link = screen.getByRole('link')
+  fireEvent.click(link)
+  expect(navigate).toHaveBeenCalledOnce()
+  fireEvent.mouseOver(link)
+  fireEvent.click(screen.getByRole('button', { name: 'Ask about Linked card: Card name' }))
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ field_name: 'relationship', value: 'Card name' }) }))
+  fireEvent.contextMenu(link)
+  expect(open).toHaveBeenCalledTimes(2)
+})
