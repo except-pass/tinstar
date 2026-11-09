@@ -23,6 +23,23 @@ describe('worker link source health', () => {
     scene.claims.forEach(link => { link.state = 'historical' })
     expect(workerLinkSourceHealth(scene, [fixtureId(1)], now).unknown).toBe(1)
   })
+  it('keeps invalid records and proven absent declarations actionable during unrelated incomplete coverage', () => {
+    const sources = fixtureSources({ now, unavailable: true })
+    const cards = sources.intentions.data!.cards
+    cards.find(card => card.id === fixtureId(2))!.properties['First Mate tasks']!.value = '{'
+    cards.find(card => card.id === fixtureId(3))!.properties['First Mate tasks']!.value = JSON.stringify({
+      schema: 'tinstar.fm-links.v1',
+      tasks: [{ fm_home: sources.fleet[1]!.source.home, task_id: 'absent-worker', first_observed_spawn_gen: 'attempt-1' }],
+    })
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(scene.coverage.absenceConclusions).toBe('suppressed')
+    expect(scene.claims.some(link => link.cardId === fixtureId(2))).toBe(false)
+    expect(scene.claims.find(link => link.cardId === fixtureId(3))!.verification).toBe('unverified')
+    for (const readFailed of [false, true]) {
+      expect(workerLinkSourceHealth(scene, [fixtureId(2), fixtureId(3), fixtureId(3), fixtureId(5)], now, readFailed))
+        .toEqual({ unknown: 1, unverified: 0, conflicting: 2 })
+    }
+  })
 })
 
 function singleWorker() {

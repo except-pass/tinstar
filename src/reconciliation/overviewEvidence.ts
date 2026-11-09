@@ -8,7 +8,8 @@ export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<stri
   let unknown = 0, unverified = 0, conflicting = 0
   for (const cardId of new Set(cardIds)) {
     const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
-    if (links.some(link => link.verification === 'conflicting')) { conflicting++; continue }
+    if (links.some(link => link.verification === 'conflicting') ||
+      scene.findings.some(finding => finding.kind === 'unverified-conflicting' && finding.cardIds.includes(cardId))) { conflicting++; continue }
     const current = links.some(link => verifiedLink(link) && !readFailed && freshObservation(scene.coverage.intentions, now) &&
       scene.executions.some(worker => worker.id === link.executionId && freshObservation(worker.observation, now) &&
         scene.coverage.homes.some(home => home.source.home === worker.home && freshObservation(home.observation, now))))
