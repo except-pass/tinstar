@@ -13,12 +13,14 @@ card or relationship geometry and fits the phone viewport.
 Right-click a task title, status, next check-in, Waiting For, owner, priority or
 edit time for an editable deterministic draft. Right-click the background for a
 blank question; right-click a relationship for a draft about its two endpoints.
-Relationship paths also support Enter/Space, and Inspector connections expose
-Ask only for claims in the current scene claims collection, not claim history.
+Relationship paths also support Enter/Space. Dedicated Inspector claim Ask
+icons target only claims in the current scene claims collection. Connection
+fields and history text use the enclosing card/execution element context.
 Links and controls outside these targets keep their native context menus.
-Enter sends, Shift+Enter inserts a newline, Escape closes, and Send question is
-available for touch. Right-click never sends. The original left-swipe mapping is
-unchanged; voice is outside this refinement.
+Enter sends unless IME composition is active, Shift+Enter inserts a newline,
+and Escape closes. Send question is available for touch. Right-click never
+sends. See [shared element entry points](#shared-element-entry-points) for
+hover, focus, touch and selection gestures; voice is outside this refinement.
 
 The existing create endpoint still accepts `card_id` for work. An optional typed
 `target` identifies a canonical execution, claim or artifact instead (see
@@ -34,7 +36,10 @@ least 1.4 times vertical movement to lock to text. Release requires 48 pixels.
 Vertical, diagonal and right movement stay native. A left drag that can scroll a
 horizontal overflow ancestor stays native; at its right edge, a left drag can
 open Ask. Use the visible action anywhere without changing the floor's scroll
-position. Pointer/touch cancellation never opens a composer.
+position. Pointer/touch cancellation never opens a composer. Desktop drags on
+semantic fields leave text selection native; an active selection prevents an
+item swipe from opening Ask. Nested surfaces give the nearest item ownership
+of its swipe.
 
 Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
 Overview, PRs, Releases and worker navigation. Section changes, rail collapse and
@@ -313,21 +318,24 @@ The remaining parent-card items are follow-up slices:
 ## Shared element entry points
 
 `useElementAsk` and `askElement` in `src/ask/` provide one field contract for
-Overview cards (including expanded relationship hints and Inspector fields), PR
-rows/details, Releases rows/evidence, and Desk items. Existing `data-ask-field`
+Overview cards (including expanded relationship hints and card/execution
+Inspector fields), PR rows/details, Releases rows/evidence, and Desk items
+including Card context text. Manager, group and First Mate Inspector selections
+do not expose element Ask. Existing `data-ask-field`
 markup works with the same hook. Hover or focus a field to reveal the floating
 Ask control without changing layout. Tab from a focused field reaches that
 control; Shift+F10 / Context Menu still opens the semantic draft directly.
+Inside an open modal, the floating control stays in that modal.
 Right-click and a stationary 550 ms touch hold use the same context builder and
 existing field templates. Moving more than 10 px, scrolling, cancellation or a
 second touch cancels the hold; a successful hold cancels the item swipe and its
 synthetic click. Selecting text inside one item offers **Ask about this**. A
 selection crossing item boundaries or outside an item does not.
 
-The existing create/context schemas now also accept optional `element` metadata:
-`{field_name, label, value, type}`. This captures the displayed element label
-(e.g. `Overdue 3d` plus the formatted check-in), its exact value and deterministic
-question type. Existing `field_key` / `field_value`, server-owned item origins,
-bridge delivery, inline threads and Desk returns remain the same path. The sheet
-shows the captured element and an editable suggestion; Enter submits it,
-Shift+Enter stays a newline, IME Enter does not submit, and Escape closes it.
+The optional `element` metadata in the create/context schemas captures the
+displayed label (e.g. `Overdue 3d` plus the formatted check-in), value and
+deterministic question type. The authoritative shape and limits live in
+`askElementSchema` in `src/shared/ask.ts`. Existing `field_key` / `field_value`,
+server-owned item origins, bridge delivery, inline threads and Desk returns
+remain the same path. The sheet shows the captured element and an editable
+suggestion, using the composer keyboard controls described above.

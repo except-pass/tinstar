@@ -92,6 +92,7 @@ it('keeps field and selection affordances inside the owning open dialog', () => 
   fireEvent.keyDown(field, { key: 'Tab' })
   expect(screen.getByRole('button', { name: /^Ask about Overdue/ })).toHaveFocus()
   const range = document.createRange(); range.selectNodeContents(field)
+  window.getSelection()!.removeAllRanges()
   window.getSelection()!.addRange(range)
   fireEvent(document, new Event('selectionchange'))
   expect(dialog).toContainElement(screen.getByRole('button', { name: 'Ask about this' }))
