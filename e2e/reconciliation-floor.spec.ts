@@ -783,6 +783,7 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(1)
   await screenshot(page, 'smart-search-phone-focus')
   await page.keyboard.press('Control+k')
+  await expect(panel).toBeVisible()
   await page.goBack()
   await expect(panel).toHaveCount(0)
   await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(1)
