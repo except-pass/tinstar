@@ -59,7 +59,8 @@ export function workReadiness(scene: FloorScene, workers: Execution[], linksKnow
       runnableKnown = false; reasons.add(`Runnable coverage incomplete for ${row.home}`); return
     }
     const source = row.source
-    if (source.state === 'queued' && source.hold_reason === null && source.hold_until === null &&
+    const working = (context.executions.get(key(row.home, String(source.id))) ?? []).some(worker => currentActivity(worker, now) === 'working')
+    if (!working && source.state === 'queued' && source.hold_reason === null && source.hold_until === null &&
       (source.queue?.holdKind ?? null) === null && !source.hold_bucket && source.captain_actionable !== true && source.unresolved_blocker_ids!.length === 0) runnablePaths.add(row.id)
   }
   for (const { home, task } of accountable.values()) {
@@ -91,6 +92,10 @@ export function workReadiness(scene: FloorScene, workers: Execution[], linksKnow
   for (const [id, row] of candidates) {
     if (accountable.has(id)) continue // own running path is not an extra resolver
     inspectRunnable(row)
+    if (!Array.isArray(row.source.unresolved_blocker_ids) || row.source.unresolved_blocker_ids.length > 0) {
+      runnableKnown = false; resolversKnown = false
+      reasons.add(`Runnable and active resolver coverage incomplete for ${row.home}: ${row.source.id} dependencies outside inspected scope`)
+    }
     if (!fresh(row.observation, now) || !context.homes.has(row.home) || !fresh(context.homes.get(row.home)!, now)) {
       resolversKnown = false; reasons.add(`Active resolver coverage incomplete for ${row.home}`); continue
     }
@@ -99,6 +104,13 @@ export function workReadiness(scene: FloorScene, workers: Execution[], linksKnow
     if (executions.length !== 1 || currentActivity(executions[0]!, now) === 'unknown') {
       resolversKnown = false; reasons.add(`Active resolver unknown for ${row.home}: ${row.source.id}`)
     } else if (currentActivity(executions[0]!, now) === 'working') resolverPaths.add(id)
+  }
+  for (const path of [...scene.backlog.map(row => ({ home: row.home, task: String(row.source.id), origin: row.source.queue?.originTaskId })),
+    ...scene.executions.map(worker => ({ home: worker.home, task: worker.identity.task_id, origin: worker.source.queue?.originTaskId }))]) {
+    if (path.origin && candidates.has(key(path.home, path.origin)) && !accountable.has(key(path.home, path.task)) && !candidates.has(key(path.home, path.task))) {
+      runnableKnown = false; resolversKnown = false
+      reasons.add(`Runnable and active resolver coverage incomplete for ${path.home}: continuation of ${path.origin} outside inspected scope`)
+    }
   }
   return { runnable: runnableKnown ? runnablePaths.size : null, activeResolverCount: resolversKnown ? resolverPaths.size : null,
     hasRunnable: runnablePaths.size > 0, hasResolver: resolverPaths.size > 0, blockers: [...blockers], reasons: [...reasons],

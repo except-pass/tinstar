@@ -73,8 +73,8 @@ describe('read-only task readiness projection', () => {
     else if (hold === 'blocked') row.source.unresolved_blocker_ids = ['another-blocker']
     else if (hold === 'captain_actionable') row.source.captain_actionable = true
     else row.source[hold] = 'held'
-    expect(health(scene).runnable).toBe(0)
-    expect(health(scene).patterns.active.outcome).toBe('no-match')
+    expect(health(scene).runnable).toBe(hold === 'blocked' ? null : 0)
+    expect(health(scene).patterns.active.outcome).toBe(hold === 'blocked' ? 'unavailable' : 'no-match')
   })
   it.each(['blocker', 'continuation'])('counts a working %s as a resolver, not an own running path', kind => {
     const scene = sceneFor(), candidate = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
@@ -98,6 +98,32 @@ describe('read-only task readiness projection', () => {
       worker.source.current_state.state = 'paused'
     }
     expect(health(scene)).toMatchObject({ runnable: 1, activeResolverCount: 0, patterns: { active: { outcome: 'match' }, stalled: { outcome: 'no-match' } } })
+  })
+  it.each(['own', 'blocker', 'continuation'] as const)('excludes a working queued %s from runnable counts', kind => {
+    const scene = sceneFor()
+    const worker = kind === 'own' ? assigned(scene) : scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
+    const row = rowFor(scene, worker.identity.task_id!)
+    row.source.state = 'queued'
+    worker.source.current_state.state = 'working'
+    if (kind === 'blocker') rowFor(scene).source.unresolved_blocker_ids = ['untracked-worker']
+    if (kind === 'continuation') row.source.queue = { ...queue, originTaskId: 'blocked-worker' }
+    expect(health(scene)).toMatchObject({ runnable: 0, activeResolverCount: kind === 'own' ? 0 : 1,
+      patterns: { active: { outcome: kind === 'own' ? 'match' : 'no-match' }, stalled: { outcome: 'no-match' } } })
+  })
+  it.each(['blocker', 'backlog-origin', 'execution-origin'] as const)('preserves unknown for an uninspected nested %s', kind => {
+    const scene = sceneFor(), candidate = queued(scene)
+    rowFor(scene).source.unresolved_blocker_ids = ['ready-blocker']
+    candidate.source.hold_reason = 'held'
+    if (kind === 'blocker') {
+      candidate.source.unresolved_blocker_ids = ['nested-ready']
+      queued(scene, 'nested-ready')
+    } else if (kind === 'backlog-origin') {
+      queued(scene, 'nested-ready').source.queue = { ...queue, originTaskId: 'ready-blocker' }
+    } else {
+      scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!.source.queue = { ...queue, originTaskId: 'ready-blocker' }
+    }
+    expect(health(scene)).toMatchObject({ runnable: null, activeResolverCount: null,
+      patterns: { active: { outcome: 'unavailable' }, stalled: { outcome: 'unavailable' } } })
   })
   it('does not count a task own worker again as its resolver', () => {
     const scene = sceneFor(); rowFor(scene).source.unresolved_blocker_ids = ['blocked-worker']
