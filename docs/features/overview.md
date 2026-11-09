@@ -177,7 +177,7 @@ Not applicable; other statuses distinguish missing, upcoming, overdue and
 invalid checkpoints using the calendar rules above.
 
 Task and worker headers carry an Inspect panel icon in both densities, including
-collapsed rows. It opens the separate Inspector while Your desk remains available.
+collapsed rows. It opens the separate Inspector while Desk remains available.
 For swipe entry, see the shared [Ask/Inspector gesture contract](ask.md).
 Clicking
 the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection

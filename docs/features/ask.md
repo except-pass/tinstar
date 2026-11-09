@@ -1,8 +1,7 @@
 # Ask First Mate
 
-Slice 1 is one work card, text, **Sent / Delivered / Answered**, approved by
-First Mate 2026-11-05 22:54Z. **Failed** reports a known delivery failure.
-The compact Ask/Inspect refinement reuses this request store and bridge.
+Ask/Inspect and the persistent Desk share the existing owner-scoped request
+store and First Mate bridge.
 
 A left drag on a task, worker, or relationship opens a text composer for that
 item. A right drag opens the same Inspector as the Inspect icon. The Ask speech-bubble icon in the existing Work/Worker header opens a blank,
@@ -56,7 +55,7 @@ text selection native; an active selection prevents an
 item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
 
-Your Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
+Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
 Overview, Decisions, PRs, Releases and worker navigation. Section changes, rail collapse and
 mobile close keep the inbox, history, composer draft and answer selection mounted.
 The existing owner-scoped store, 5-second Ask refresh and First Mate bridge are

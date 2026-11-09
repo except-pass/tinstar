@@ -26,7 +26,7 @@ Canonical PR identity and many-to-many card edges come directly from `src/shared
 
 ## Navigation and receipts
 
-See [README navigation](../../README.md) for activity destinations and worker switching. The Ask inbox stays in Your Desk with its existing permissions and conversation lifecycle. PRs opens the persistent shared Desk directly; the [Ask reference](ask.md#typed-artifact-origins-and-returns) owns typed PR targeting and return behavior.
+See [README navigation](../../README.md) for activity destinations and worker switching. The Ask inbox stays in Desk with its existing permissions and conversation lifecycle. PRs opens the persistent shared Desk directly; the [Ask reference](ask.md#typed-artifact-origins-and-returns) owns typed PR targeting and return behavior.
 
 The [README URL table](../../README.md#worker-links) lists supported deep links. A navigation switch closes auxiliary panels so they do not become empty orphan drawers. At narrow widths the PR table scrolls horizontally; metadata and GitHub links remain available.
 
