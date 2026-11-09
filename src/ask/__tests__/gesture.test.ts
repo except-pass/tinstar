@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { moveAskGesture as move, placeSwipeRail, releaseAskGesture as release, startAskGesture as start, SWIPE_RAIL_HEIGHT, SWIPE_RAIL_WIDTH } from '../gesture'
+import { moveAskGesture as move, swipeTravel, releaseAskGesture as release, startAskGesture as start } from '../gesture'
 
 const rail = (allowInspect = true) => start(100, 100, false, false, allowInspect)
 
@@ -72,47 +72,16 @@ describe('shared Ask and Inspector rail', () => {
   })
 })
 
-describe('swipe rail placement', () => {
-  const covers = (origin: { x: number; y: number }, placed: { left: number; top: number }) =>
-    origin.x >= placed.left && origin.x <= placed.left + SWIPE_RAIL_WIDTH && origin.y >= placed.top && origin.y <= placed.top + SWIPE_RAIL_HEIGHT
-
-  it('sits above the thumb and inside a 390px viewport', () => {
-    const origin = { x: 200, y: 640 }
-    const placed = placeSwipeRail(origin, 'touch', { width: 390, height: 700 })
-    expect(placed.left).toBeGreaterThanOrEqual(8)
-    expect(placed.left + SWIPE_RAIL_WIDTH).toBeLessThanOrEqual(382)
-    expect(placed.top).toBeGreaterThanOrEqual(8)
-    expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThan(origin.y)
-  })
-
-  it('keeps an edge touch on screen', () => {
-    const placed = placeSwipeRail({ x: 12, y: 16 }, 'pen', { width: 390, height: 700 })
-    expect(placed.left).toBeGreaterThanOrEqual(8)
-    expect(placed.top).toBeGreaterThanOrEqual(8)
-    expect(placed.left + SWIPE_RAIL_WIDTH).toBeLessThanOrEqual(382)
-    expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThanOrEqual(692)
-  })
-
-  it('clamps both axes within a panned visual viewport for every pointer', () => {
-    for (const pointer of ['mouse', 'touch', 'pen'] as const) {
-      for (const origin of [{ x: 10, y: 10 }, { x: 900, y: 900 }]) {
-        const placed = placeSwipeRail(origin, pointer, { left: 100, top: 200, width: 180, height: 240 })
-        expect(placed.left).toBeGreaterThanOrEqual(108)
-        expect(placed.top).toBeGreaterThanOrEqual(208)
-        expect(placed.left + placed.width).toBeLessThanOrEqual(272)
-        expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThanOrEqual(432)
-      }
+describe('in-place card travel', () => {
+  it('tracks the drag up to arming and resists travel past it in both directions', () => {
+    for (const direction of [-1, 1]) {
+      expect(swipeTravel(direction * 40)).toBe(direction * 40)
+      expect(swipeTravel(direction * 72)).toBe(direction * 72)
+      const beyond = Math.abs(swipeTravel(direction * 100))
+      expect(beyond).toBeGreaterThan(72)
+      expect(beyond).toBeLessThan(100)
+      expect(Math.abs(swipeTravel(direction * 10000))).toBeLessThanOrEqual(104)
     }
   })
 
-  it('offsets the mouse rail off the pointer, including at the desktop edge', () => {
-    for (const origin of [{ x: 400, y: 300 }, { x: 1420, y: 860 }]) {
-      const placed = placeSwipeRail(origin, 'mouse', { width: 1440, height: 900 })
-      expect(placed.left).toBeGreaterThanOrEqual(8)
-      expect(placed.top).toBeGreaterThanOrEqual(8)
-      expect(placed.left + SWIPE_RAIL_WIDTH).toBeLessThanOrEqual(1432)
-      expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThanOrEqual(892)
-      expect(covers(origin, placed)).toBe(false)
-    }
-  })
 })

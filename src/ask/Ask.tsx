@@ -121,7 +121,7 @@ export function AskRelationshipHit({ claimId, d, onInspect }: { claimId: string;
   const controls = useAskControls()
   const ask = useSemanticAsk({ target: { kind: 'claim', id: claimId } })
   const gesture = useAskGesture<SVGPathElement>(controls ? () => controls.open({ target: { kind: 'claim', id: claimId }, field_key: 'relationship', field_value: claimId }) : undefined, false, onInspect)
-  return <><path ref={gesture.ref} className="ov-relationship-hit" data-claim-id={claimId} d={d} role="button" tabIndex={0} aria-label="Ask about this relationship" onContextMenu={event => ask(event, 'relationship', claimId)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') ask(event, 'relationship', claimId) }} />{gesture.overlay}</>
+  return <><path ref={gesture.ref} className="ov-relationship-hit" data-claim-id={claimId} d={d} role="button" tabIndex={0} aria-label="Ask about this relationship" onContextMenu={event => ask(event, 'relationship', claimId)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') ask(event, 'relationship', claimId) }} /></>
 }
 function useDialogFocus(enabled: boolean) {
   const ref = useRef<HTMLDialogElement>(null)

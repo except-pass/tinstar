@@ -4,10 +4,7 @@
 export const ASK_LOCK_PX = 12
 export const ASK_ARM_PX = 72
 export const ASK_DISARM_PX = 58
-export const SWIPE_RAIL_WIDTH = 220
-export const SWIPE_RAIL_HEIGHT = 64
 export type GesturePhase = 'tracking' | 'native' | 'neutral' | 'ask' | 'inspect'
-export type GesturePointer = 'mouse' | 'touch' | 'pen'
 export type Gesture = {
   x: number
   y: number
@@ -44,16 +41,10 @@ export type GestureRelease = 'ask' | 'inspect' | null
 export const releaseAskGesture = (state: Gesture | null): GestureRelease =>
   state?.phase === 'ask' || state?.phase === 'inspect' ? state.phase : null
 
-/** Touch sits above the contact point. Mouse sits beside it and never covers the hotspot. */
-export function placeSwipeRail(origin: { x: number; y: number }, pointer: GesturePointer, viewport: { width: number; height: number; left?: number; top?: number }) {
-  const x = viewport.left ?? 0, y = viewport.top ?? 0
-  const margin = 8, width = Math.max(0, Math.min(SWIPE_RAIL_WIDTH, viewport.width - margin * 2)), height = SWIPE_RAIL_HEIGHT, touch = pointer !== 'mouse'
-  let left = touch ? origin.x - width / 2 : origin.x + 18
-  let top = touch ? origin.y - height - 56 : origin.y + 20
-  if (left + width > x + viewport.width - margin) left = origin.x - width - 18
-  if (top + height > y + viewport.height - margin) top = origin.y - height - 20
-  if (top < y + margin) top = touch ? origin.y + 56 : y + margin
-  left = Math.max(x + margin, Math.min(left, Math.max(x + margin, x + viewport.width - width - margin)))
-  top = Math.max(y + margin, Math.min(top, Math.max(y + margin, y + viewport.height - height - margin)))
-  return { left, top, width }
+/** Follow the pointer up to arming, then resist further travel. The card
+ * retains some of its body via the presentation’s percentage clamp. */
+export function swipeTravel(dx: number) {
+  const distance = Math.abs(dx)
+  const resisted = distance <= ASK_ARM_PX ? distance : ASK_ARM_PX + 32 * (1 - Math.exp(-(distance - ASK_ARM_PX) / 100))
+  return Math.sign(dx) * resisted
 }

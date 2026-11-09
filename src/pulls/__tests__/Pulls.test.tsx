@@ -45,7 +45,7 @@ it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and ex
   expect(screen.getByText('10 selected')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Inspect alpha/repo#1' }))
   expect(await screen.findByText('Real PR body second paragraph')).toBeTruthy()
-  expect(screen.getByText('failed', { selector: 'td' })).toBeTruthy()
+  expect(screen.getByRole('cell', { name: 'failed' })).toBeTruthy()
   expect(screen.getByRole('link', { name: '#1 Change 1' }).getAttribute('href')).toBe('https://github.com/alpha/repo/pull/1')
   fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'zeta/repo' } })
   expect(tableRows()).toHaveLength(25)

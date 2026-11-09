@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { moveAskGesture, releaseAskGesture, startAskGesture, type Gesture, type GesturePointer } from './gesture'
-import { SwipeRail } from './SwipeRail'
+import { moveAskGesture, releaseAskGesture, startAskGesture, type Gesture } from './gesture'
 
 function scrollRoom(element: Element) {
   let scrollsLeft = false, scrollsRight = false
@@ -15,22 +14,23 @@ function blockingModal(element: Element) {
   const dialog = document.querySelector('dialog[open]')
   return !!dialog && !dialog.contains(element)
 }
-type Rail = { x: number; y: number; pointer: GesturePointer; dx: number; phase: 'neutral' | 'ask' | 'inspect' | 'returning' }
+export type SwipeState = { dx: number; phase: 'neutral' | 'ask' | 'inspect' | 'returning' }
 export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonElement>(open: (() => void) | undefined, ignoreControls = false, inspect?: () => void) {
   const ref = useRef<T>(null)
   const openRef = useRef(open); openRef.current = open
   const inspectRef = useRef(inspect); inspectRef.current = inspect
-  const [rail, setRail] = useState<Rail | null>(null)
+  const [rail, setRail] = useState<SwipeState | null>(null)
   useEffect(() => {
     const element = ref.current
     if (!element || !openRef.current && !inspectRef.current) return
     element.dataset.askGestureSurface = ''
-    let gesture: Gesture | null = null, pointerId: number | null = null, suppressUntil = 0, pointer: GesturePointer = 'mouse', ignoreLoss = false, alive = true
+    let gesture: Gesture | null = null, pointerId: number | null = null, suppressUntil = 0, ignoreLoss = false, alive = true
     let touchId: number | null = null
     let returnTimer: ReturnType<typeof setTimeout> | undefined
-    const shown = (value: Rail | null) => { if (alive) setRail(value) }
+    const shown = (value: SwipeState | null) => { if (alive) setRail(value) }
     const dismiss = () => {
       const current = gesture
+      modalObserver.disconnect()
       gesture = null
       pointerId = null
       touchId = null
@@ -39,18 +39,18 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
         shown(null)
         return
       }
-      shown({ x: current.x, y: current.y, pointer, dx: current.dx, phase: 'returning' })
+      shown({ dx: current.dx, phase: 'returning' })
       returnTimer = setTimeout(() => shown(null), 220)
     }
     const publish = () => {
       if (!gesture || gesture.phase === 'tracking' || gesture.phase === 'native') { shown(null); return }
-      shown({ x: gesture.x, y: gesture.y, pointer, dx: gesture.dx, phase: gesture.phase })
+      shown({ dx: gesture.dx, phase: gesture.phase })
     }
-    const start = (x: number, y: number, kind: GesturePointer) => {
+    const start = (x: number, y: number) => {
       if (blockingModal(element)) return
       clearTimeout(returnTimer)
+      modalObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] })
       const room = scrollRoom(element)
-      pointer = kind
       ignoreLoss = false
       gesture = startAskGesture(x, y, room.scrollsLeft, room.scrollsRight, !!inspectRef.current)
       shown(null)
@@ -73,7 +73,7 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       touchId = null
       const action = hasSelection() || blockingModal(element) ? null : releaseAskGesture(gesture)
       if (gesture.phase !== 'tracking' && gesture.phase !== 'native') suppressUntil = Date.now() + 700
-      if (action) { gesture = null; shown(null) }
+      if (action) { modalObserver.disconnect(); gesture = null; shown(null) }
       else dismiss()
       if (action === 'ask') openRef.current?.()
       else if (action === 'inspect') inspectRef.current?.()
@@ -88,7 +88,7 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       if (ignored(event)) return
       const touch = event.touches[0]
       if (event.touches.length === 1 && touch) {
-        start(touch.clientX, touch.clientY, 'touch')
+        start(touch.clientX, touch.clientY)
         if (gesture) touchId = touch.identifier
       }
       else cancel()
@@ -111,9 +111,9 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     const touchCancel = () => { if (touchId !== null) cancel() }
     const pointerStart = (event: PointerEvent) => {
       if (ignored(event)) return
-      if (event.pointerType === 'touch' || event.button !== 0 || event.target instanceof Element && event.target.closest('[data-ask-field]')) return
+      if (event.pointerType === 'touch' || event.button !== 0) return
       pointerId = event.pointerId
-      start(event.clientX, event.clientY, event.pointerType === 'pen' ? 'pen' : 'mouse')
+      start(event.clientX, event.clientY)
     }
     const pointerMove = (event: PointerEvent) => {
       if (event.pointerId !== pointerId) return
@@ -148,6 +148,7 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       target.addEventListener(type, wrapped, options)
       return () => target.removeEventListener(type, wrapped, options)
     }
+    const modalObserver = new MutationObserver(() => { if (blockingModal(element)) cancel() })
     const unbind = [
       bind(element, 'tinstar:element-ask', elementAsk),
       bind(element, 'touchstart', touchStart, { passive: true }),
@@ -168,11 +169,11 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     ]
     return () => {
       clearTimeout(returnTimer)
+      modalObserver.disconnect()
       alive = false
       delete element.dataset.askGestureSurface
       unbind.forEach(remove => remove())
     }
   }, [!!open, !!inspect, ignoreControls])
-  const overlay = rail ? <SwipeRail container={ref.current?.closest('dialog[open]') ?? document.body} x={rail.x} y={rail.y} pointer={rail.pointer} dx={rail.dx} phase={rail.phase} /> : null
-  return { ref, overlay }
+  return { ref, rail }
 }
