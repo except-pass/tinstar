@@ -156,3 +156,7 @@
 @media(max-width:600px){.ov-count-note{display:none}}
 
 .ov-desk-title{display:flex;align-items:center;gap:8px}.ov-desk-tools{display:flex;gap:4px;margin-left:auto}.ov-desk-tools button{padding:4px;border:0;background:none}.ov-desk-tools .material-symbols-outlined{font-size:20px}
+
+.ov-toolbar .ov-refresh { display:flex; align-items:center; justify-content:center; flex:none; width:28px; min-height:28px; padding:4px; }
+.ov-refresh[aria-busy="true"] { opacity:.6; }
+.ov-refresh:focus-visible { outline:2px solid #85d2b8; outline-offset:1px; }

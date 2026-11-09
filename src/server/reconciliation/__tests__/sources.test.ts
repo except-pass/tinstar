@@ -436,3 +436,97 @@ describe('config and HTTP boundary', () => {
     } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
   })
 })
+
+it('forces a source read past its TTL while coalescing concurrent manual refreshes', async () => {
+  const read = vi.fn().mockResolvedValue({ data: ['known'], observedAt: new Date().toISOString(), coverage: 'complete' })
+  const cache = new CachedObservation(read, 30_000, 120_000, 'Unavailable')
+  await cache.get(); await cache.get()
+  expect(read).toHaveBeenCalledTimes(1)
+  const [a, b] = await Promise.all([cache.get(true), cache.get(true)])
+  expect(a).toEqual(b)
+  expect(read).toHaveBeenCalledTimes(2)
+})
+
+it('retains missing cards on an incomplete Notion read while accepting changed status, then removes them on a complete read', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(timestamp))
+  let generation = 0
+  const other = { ...page, id: '30950ce6d42280d3a541cbd66c274f6a' }
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+    if (init?.method === 'GET') {
+      const properties = { ...schema.properties }
+      if (generation === 1) delete (properties as Partial<typeof schema.properties>).Link
+      return response({ ...schema, properties })
+    }
+    return response({ results: generation === 0 ? [page, other] : generation === 1 ? [{ ...page, properties: { ...page.properties, Status: { type: 'select', select: { name: 'Done' } } } }] : [other], has_more: false })
+  })
+  const cache = notionObservation({ token: 'secret', dataSourceId: id }, fetcher)
+  const initial = await cache.get()
+  expect(initial.coverage).toBe('complete')
+  generation++
+  vi.setSystemTime(Date.parse(timestamp) + 30_000)
+  const partial = await cache.get(true)
+  expect(partial).toMatchObject({ status: 'stale', coverage: 'partial', observedAt: initial.observedAt, expiresAt: initial.expiresAt })
+  expect(partial.data!.cards).toHaveLength(2)
+  expect(partial.data!.cards.find(card => card.id === initial.data!.cards[0]!.id)!.properties.Status!.value).toBe('Done')
+  vi.setSystemTime(Date.parse(timestamp) + 60_000)
+  const repeated = await cache.get(true)
+  expect(repeated).toMatchObject({ status: 'stale', observedAt: initial.observedAt, expiresAt: initial.expiresAt })
+  expect(repeated.data!.cards).toHaveLength(2)
+  generation++
+  const recovered = await cache.get(true)
+  expect(recovered.status).toBe('fresh')
+  expect(recovered.observedAt).not.toBe(initial.observedAt)
+  expect(recovered.data!.cards.map(card => card.id)).toEqual([other.id])
+})
+
+it('retains workers omitted by a partial home publication and accepts a complete removal', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(timestamp))
+  const dir = await temp(), file = join(dir, 'fleet.json')
+  const initial = { ...snapshot(), backlog: { records: [{ id: 'retained-wait', state: 'waiting' }] } }
+  initial.tasks[0]!.current_state.state = 'running'
+  initial.generated = new Date().toISOString()
+  initial.tasks.push({ ...initial.tasks[0]!, id: 'other-task' })
+  await writeFile(file, JSON.stringify(initial))
+  const cache = fleetObservation({ home: '/farm/hulk', snapshotFile: file })
+  const first = await cache.get()
+  expect(first.data!.tasks).toHaveLength(2)
+  vi.setSystemTime(Date.parse(timestamp) + 30_000)
+  const next = { ...initial, generated: new Date().toISOString(), tasks: [], backlog: { records: [] }, main_inventory: { valid: false } }
+  await writeFile(file, JSON.stringify(next))
+  const partial = await cache.get(true)
+  expect(partial).toMatchObject({ status: 'stale', coverage: 'partial', observedAt: first.observedAt, expiresAt: first.expiresAt })
+  expect(partial.data!.tasks).toHaveLength(2)
+  expect(partial.data!.backlog).toHaveLength(1)
+  vi.setSystemTime(Date.parse(timestamp) + 60_000)
+  await writeFile(file, JSON.stringify({ ...next, generated: new Date().toISOString() }))
+  const repeated = await cache.get(true)
+  expect(repeated).toMatchObject({ status: 'stale', observedAt: first.observedAt, expiresAt: first.expiresAt })
+  expect(repeated.data!.tasks).toHaveLength(2)
+  expect(repeated.data!.backlog).toHaveLength(1)
+  const empty = await new ReconciliationSources({ fleet: [], warnings: [] }).snapshot()
+  const scene = reconcileScene({ ...empty, fleet: [{ source: { home: '/farm/hulk', machineBasis: 'unknown' }, observation: repeated }] })
+  expect(scene.executions).toHaveLength(2)
+  expect(scene.executions.every(worker => worker.liveness === 'liveness-not-observed' && worker.observation.status === 'stale')).toBe(true)
+  await writeFile(file, JSON.stringify({ ...next, main_inventory: { valid: true } }))
+  const recovered = await cache.get(true)
+  expect(recovered.status).toBe('fresh')
+  expect(recovered.data!.tasks).toHaveLength(0)
+  expect(recovered.data!.backlog).toHaveLength(0)
+})
+
+it('routes a manual refresh through the existing scene endpoint', async () => {
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] })
+  const scene = await sources.scene()
+  const read = vi.spyOn(sources, 'scene').mockResolvedValue(scene)
+  const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('no port')
+  seedOriginAllowlist(address.port)
+  try {
+    await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene`)
+    await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene?refresh=1`)
+    expect(read.mock.calls).toEqual([[false], [true]])
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+})

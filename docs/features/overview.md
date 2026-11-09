@@ -91,7 +91,11 @@ donut or search predicates. Selecting a Smart Search suggestion uses the tempora
 reveal described below. Filtering never changes claim evidence or absence findings.
 Both donuts and the floor use the same canonical projection and presentation
 reducer; selections and organizer overrides persist in the existing browser
-preferences. Source refreshes recompute candidates from the current graph.
+preferences. Source refreshes recompute candidates from the current graph. The compact
+refresh icon beside Search runs the existing scene read without changing the view.
+Its hover/focus label reports refreshing/failure state and the last complete
+successful sync; incomplete or failed attempts retain the previous timestamp.
+Automatic polling and browser-focus refresh follow the [shared refresh contract](reconciliation-floor.md#floor-ui-s3).
 
 Available Worker fields are Manager, Machine, Worker status and Last activity.
 Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-in,

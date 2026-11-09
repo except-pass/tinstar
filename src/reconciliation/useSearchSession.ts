@@ -28,7 +28,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   const [open, setOpen] = useState(false)
   const snapshot = useRef<ViewSnapshot | null>(null), restorePending = useRef<ViewSnapshot | null>(null)
   const [historySession] = useState(() => crypto.randomUUID())
-  const historyEntries = useRef(0), ignorePop = useRef(false)
+  const historyEntries = useRef(0), ignorePop = useRef<boolean | 'restore'>(false)
   const ownedHistoryDepth = useCallback(() => {
     const entry = window.history.state?.tinstarSearch
     return entry?.session === historySession ? entry.depth as number : 0
@@ -36,12 +36,12 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   useLayoutEffect(() => {
     historyEntries.current = active ? ownedHistoryDepth() : 0
   }, [active, ownedHistoryDepth])
-  const leaveHistory = (count: number) => {
+  const leaveHistory = (count: number, restoring = false) => {
     const depth = ownedHistoryDepth()
     const steps = Math.min(count, depth)
     historyEntries.current = depth - steps
     if (!steps) return
-    ignorePop.current = true; window.history.go(-steps)
+    ignorePop.current = restoring ? 'restore' : true; window.history.go(-steps)
   }
   const captureBaseline = (): ViewSnapshot => {
     const viewport = canvas.current?.parentElement
@@ -73,7 +73,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     restorePending.current = saved
   }
   const restore = (clear = false, back = true) => {
-    if (back) leaveHistory(ownedHistoryDepth())
+    if (back) leaveHistory(ownedHistoryDepth(), true)
     if (snapshot.current) restoreView(snapshot.current, clear)
     else if (clear) send({ type: 'clear-search' })
     snapshot.current = null; setOpen(false)
@@ -82,7 +82,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   // session too, so a later Escape/Back cannot restore the superseded view.
   useLayoutEffect(() => {
     if (!active || open || state.searchFocus || !snapshot.current || restorePending.current) return
-    leaveHistory(ownedHistoryDepth())
+    leaveHistory(ownedHistoryDepth(), true)
     snapshot.current = null
   }, [active, open, state.searchFocus])
   useLayoutEffect(() => {
@@ -119,7 +119,12 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   onPop.current = () => {
     const previousDepth = historyEntries.current
     historyEntries.current = ownedHistoryDepth()
-    if (ignorePop.current) { ignorePop.current = false; return }
+    if (ignorePop.current) {
+      // Explicit restoration already applied the baseline. Do not let the
+      // workspace snapshot at the destination reapply the cleared focus.
+      if (ignorePop.current === 'restore') views?.navigated()
+      ignorePop.current = false; return
+    }
     if (!active || !snapshot.current || previousDepth <= historyEntries.current) return
     if (open) dismiss(false); else restore(false, false)
   }

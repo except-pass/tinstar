@@ -192,7 +192,7 @@ it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask a
   expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2)
 })
 
-it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Overview through App history using %s', async method => {
+it.each(['Clear', 'Escape', 'repeated search', 'repeated search Escape'])('keeps mobile restoration in Overview through App history using %s', async method => {
   Object.defineProperty(window, 'innerWidth', { value: 390 })
   const go = vi.spyOn(window.history, 'go')
   const view = render(<App />)
@@ -214,11 +214,12 @@ it.each(['Clear', 'Escape', 'repeated search'])('keeps mobile restoration in Ove
   fireEvent.click(within(nav).getByRole('button', { name: 'Overview' }))
   expect(window.location.search).toBe('')
   expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeVisible()
-  if (method === 'repeated search') {
+  if (method.startsWith('repeated search')) {
     choose('Build live reconciliation')
     expect(go).not.toHaveBeenCalled()
     const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    if (method.endsWith('Escape')) fireEvent.keyDown(window, { key: 'Escape' })
+    else fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
     await act(async () => { await popped })
     expect(go).toHaveBeenCalledTimes(1)
     expect(go).toHaveBeenCalledWith(-1)
