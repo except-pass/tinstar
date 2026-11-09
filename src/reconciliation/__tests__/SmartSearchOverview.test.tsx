@@ -263,3 +263,19 @@ describe('shared dial filtering contract', () => {
     expect(container.querySelectorAll('.ov-search-context')).toHaveLength(0)
   })
 })
+
+
+describe('worker search roots under dial patterns', () => {
+  it.each(health.dialPatterns.filter(pattern => pattern !== 'all'))('%s keeps the directly linked cards secondary to a matching worker', pattern => {
+    const records = health.sceneWorkHealth(scene, Date.now()).map(record => ({ ...record, patterns: { ...record.patterns,
+      [pattern]: { outcome: record.cardId === fixtureId(1) ? 'match' : 'no-match', reason: 'Test evidence', evidence: ['Test evidence'] } as health.PatternResult,
+    } }))
+    vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-search', search: { query: 'linked-worker', patterns: [pattern], facets: [] } }) })
+    expect(container.querySelectorAll('.ov-execution.ov-search-match')).toHaveLength(1)
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(1)}"]`)).toHaveClass('ov-pattern-context')
+    expect(container.querySelectorAll('.ov-card')).toHaveLength(1)
+    expect(container.querySelectorAll('.ov-execution')).toHaveLength(1)
+  })
+})

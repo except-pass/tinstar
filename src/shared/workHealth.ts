@@ -87,7 +87,8 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const sourceReason = readFailed ? 'Source read failed; showing last known work' : !sourceFresh ? 'Notion source is unavailable, stale or incomplete' : !status.trim() ? 'Work status is not published' : null
   const workerReasons = workers.filter(worker => !freshObservation(worker.observation, now) || worker.liveness === 'liveness-not-observed').map(worker => {
     const age = worker.source.last_event.age_seconds
-    const elapsed = typeof age === 'number' ? age * 1000 : now - Date.parse(worker.observation.observedAt ?? '')
+    const observed = Date.parse(worker.observation.observedAt ?? '')
+    const elapsed = (Number.isFinite(observed) ? Math.max(0, now - observed) : NaN) + (typeof age === 'number' ? age * 1000 : 0)
     const duration = !Number.isFinite(elapsed) ? 'at an unknown time' : elapsed >= 86400_000 ? `${Math.floor(elapsed / 86400_000)}d ago` : elapsed >= 3600_000 ? `${Math.floor(elapsed / 3600_000)}h ago` : `${Math.max(0, Math.floor(elapsed / 60_000))}m ago`
     return `${worker.identity.task_id ?? 'Worker'} last reported ${duration}; observation ${worker.observation.status}/${worker.observation.coverage}${worker.liveness === 'liveness-not-observed' ? '; liveness not observed' : ''}`
   })

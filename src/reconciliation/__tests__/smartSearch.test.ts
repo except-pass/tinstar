@@ -332,3 +332,13 @@ it('retains a terminal worker as secondary context for a matching work card', ()
   const search = { ...emptySearch(), patterns: ['blocked' as const] }
   expect(statusProjection(scene, { ...initialPresentation(), search }, now).workers.map(worker => worker.id)).toContain(worker.id)
 })
+
+
+it('rechecks unknown membership when a worker observation expires before the home/source observations', () => {
+  const scene = fixtureScene({ now })
+  for (const worker of scene.executions) worker.observation = { ...worker.observation, expiresAt: new Date(now + 5000).toISOString() }
+  const search = { ...emptySearch(), patterns: ['stalled' as const] }
+  const card = { kind: 'card', id: fixtureId(1) }
+  expect(searchSeeds(scene, search, now)).not.toContainEqual(card)
+  expect(searchSeeds(scene, search, now + 6000)).toContainEqual(card)
+})
