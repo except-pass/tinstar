@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askRecordSchema, askReplySchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import { askRecordSchema, askReplySchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
 
 export class AskConflict extends Error {}
 export class AskNotFound extends Error {}
@@ -44,26 +44,26 @@ export class AskStore {
     return structuredClone((await this.load()).filter(row => row.owner === owner))
   }
   async find(owner: string, requestId: string) { return (await this.list(owner)).find(row => row.request_id === requestId) }
-  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string) {
+  create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string, capturedSelection?: AskCapturedSelection) {
     return this.change(rows => {
       const previous = rows.find(row => row.owner === owner && (row.client_key === clientKey || row.client_key_aliases?.includes(clientKey)))
       if (previous) {
-        if (previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
+        if (JSON.stringify(previous.captured_selection) !== JSON.stringify(capturedSelection) || previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
           JSON.stringify(previous.context.target) !== JSON.stringify(context.target) ||
           (previous.follow_up_to !== undefined ? previous.follow_up_to !== (followUpTo ?? null) : followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
         return previous
       }
       const parent = followUpTo ? rows.find(row => row.request_id === followUpTo && row.owner === owner) : null
       if (followUpTo && !parent) throw new AskNotFound('Original question unavailable')
-      return this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent)
+      return this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent, undefined, capturedSelection)
     })
   }
-  private appendRequest(rows: AskRecord[], owner: string, clientKey: string, question: string, context: AskContext, parent?: AskRecord | null, selection?: AskActionSelection) {
+  private appendRequest(rows: AskRecord[], owner: string, clientKey: string, question: string, context: AskContext, parent?: AskRecord | null, selection?: AskActionSelection, capturedSelection?: AskCapturedSelection) {
     const requestId = randomUUID(), at = this.now()
     const row: AskRecord = {
       request_id: requestId, conversation_id: parent?.conversation_id ?? requestId, owner, client_key: clientKey,
       follow_up_to: parent?.request_id ?? null, ...(selection ? { action_selection: selection } : {}),
-      question, input_mode: 'text', context, created_at: at, updated_at: at,
+      question, input_mode: 'text', context, ...(capturedSelection ? { captured_selection: capturedSelection } : {}), created_at: at, updated_at: at,
       status: 'sent', answered_at: null, note_id: null, announced: null, reply: null, reply_cursor: null, error: null, read_at: null, dismissed_at: null,
     }
     row.dispatch_body = askBody(row, conversationTurns(rows.filter(previous => previous.owner === owner && previous.conversation_id === row.conversation_id)))

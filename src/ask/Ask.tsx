@@ -125,7 +125,8 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
   const linkedCard = claim && scene?.cards.find(card => card.id === claim.cardId)
   const label = parent?.context.anchor.label ?? seed.label ?? (isArtifactTarget(seed.target) ? seed.target.id : worker ? workerTitle(worker) : linkedCard ? `Relationship · ${cardTitle(linkedCard)}` : card ? cardTitle(card) : chosen)
   const bound = !!parent || !!seed.target || !!chosen
-  const element = parent?.context.element ?? (seed.target || chosen === seed.cardId ? seed.element : undefined)
+  const [selectionSent, setSelectionSent] = useState(false)
+  const element = !selectionSent && (seed.target || chosen === seed.cardId) ? seed.element : undefined
   // Freeze the whole uncertain envelope, including its exact parent. A refresh
   // may discover another turn before a lost acknowledgment is retried.
   const key = useRef(inline ? crypto.randomUUID() : clientKey), retryBody = useRef<unknown>(null)
@@ -136,15 +137,16 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
     event.preventDefault()
     if (locked.current || !bound || !question.trim()) return
     locked.current = true; setBusy(true); setError(null)
-    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
+    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...(!selectionSent && (seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
     void submit(retryBody.current).then(() => {
-      if (inline) { setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
+      if (inline) { setSelectionSent(true); setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
     }).catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
   }}>
     {!inline && <><header><h2 id={titleId}>Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
       <p>{seed.element ? 'Ask about this element. Send the suggested question or edit it.' : 'Swipe left on an item to ask; right-click or long-press a field to ask about it.'}</p>
       {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); edited() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); edited() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
-      {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}</>}
+      </>}
+    {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
     <label>{inline ? 'Reply to First Mate' : 'Question'}<textarea autoFocus={!inline || !!seed.question} required maxLength={4000} value={question} aria-busy={busy} readOnly={busy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Ask a follow-up in this conversation…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
     {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
     <footer>{!inline && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" disabled={busy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send reply' : 'Send question'}</button></footer>
@@ -174,6 +176,7 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
     {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Open originating source ↗</a>}
     {turns.map(turn => <section className="ask-turn" key={turn.request_id} aria-label={`Question: ${turn.question}`}>
       <p className="ask-thread-question">{turn.question}</p>
+      {turn.captured_selection && <blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote>}
       {turn.reply ? <><h3 {...askElement('answer', 'First Mate answer')}>{turn.reply.summary}</h3><p {...askElement('answer', 'Answer detail')} className="ask-detail">{turn.reply.detail}</p>
         {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
         {!!turn.reply.suggested_actions.length && <><h4>Suggested next actions</h4><ul>{turn.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}

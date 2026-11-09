@@ -311,6 +311,27 @@ it('retains exact element context in the existing bridge, retry and follow-up pr
   expect(follow.data.data).toMatchObject({ conversation_id: id, context: { element } })
 })
 
+it('persists Desk selections separately from the source across retry and history', async () => {
+  const { call, bridge, reload } = await setup()
+  const first = (await call('requests', input())).data.data
+  const element = { field_name: 'answer', label: 'First Mate answer', value: 'Wait for review', type: 'generic' }
+  const selection = { element, field_key: 'description', field_value: element.value }
+  const body = { ...input(), ...selection, follow_up_to: first.request_id, question: 'What does this mean and what needs attention?' }
+  const selected = (await call('requests', body)).data.data
+  expect(selected).toMatchObject({ context: first.context, captured_selection: selection })
+  const payload = () => bridge().then(result => JSON.parse(result.data.data.pending.find((row: { request_id: string }) => row.request_id === selected.request_id).body.split('\n')[1]))
+  expect(await payload()).toMatchObject({ question: body.question, captured_selection: selection, context: first.context })
+  reload()
+  expect((await call('requests', body)).data.data.request_id).toBe(selected.request_id)
+  expect((await call('requests', { ...body, element: { ...element, value: 'Different advice' } })).status).toBe(409)
+  const next = (await call('requests', { ...input(), follow_up_to: selected.request_id })).data.data
+  expect(next.captured_selection).toBeUndefined()
+  const pending = (await bridge()).data.data.pending.find((row: { request_id: string }) => row.request_id === next.request_id)
+  expect(JSON.parse(pending.body.split('\n')[1]).conversation.turns).toContainEqual(expect.objectContaining({ request_id: selected.request_id, role: 'user', captured_selection: selection }))
+  const history = (await call('conversations/' + first.conversation_id)).data.data
+  expect(history.turns).toContainEqual(expect.objectContaining({ request_id: selected.request_id, captured_selection: selection }))
+})
+
 describe('actual conversation history delivered through the existing bridge', () => {
   const envelope = (body: string) => JSON.parse(body.split('\n')[1]!)
   const answer = async (bridge: Awaited<ReturnType<typeof setup>>['bridge'], id: string, index: number, detail = 'The Feed change needs a fresh review.') => {

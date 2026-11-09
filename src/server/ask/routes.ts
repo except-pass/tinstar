@@ -100,7 +100,7 @@ export class AskApi {
         }
         if (existing && !parent && (input.field_key !== context.field_key || input.field_value !== context.field_value || JSON.stringify(input.element) !== JSON.stringify(context.element))) throw new AskConflict('Question field differs from the original')
         if (input.target ? JSON.stringify(input.target) !== JSON.stringify(context.target) : context.target || input.card_id !== context.anchor.page_id) throw new AskConflict('Question context differs from the original')
-        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to)), { headers })
+        return ok(res, publicAsk(await this.store.create(login, input.client_key, input.question, context, input.follow_up_to, input.follow_up_to && (input.element || input.field_key || input.field_value !== undefined) ? { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key } : {}), ...(input.field_value !== undefined ? { field_value: input.field_value } : {}) } : undefined)), { headers })
       }
       const conversation = /^\/api\/ask\/conversations\/([a-f0-9-]{36})$/.exec(path)
       if (conversation && req.method === 'GET') return ok(res, await this.store.conversation(conversation[1]!, login), { headers })
