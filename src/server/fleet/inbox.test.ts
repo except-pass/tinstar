@@ -108,6 +108,6 @@ elif command == 'ready':
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
   writeFileSync(join(home, 'state', 'broken'), '')
   const unread = { ...message, requestId: 'tinstar-00000000-0000-4000-8000-000000000003' }
-  expect(await reloaded.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
-  expect(await reloaded.list([home], () => true)).toMatchObject([{ requestId: unread.requestId, state: 'unknown', canReceive: 'unknown' }])
+  expect(await aged.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })
+  expect(await aged.list([home], () => true)).toMatchObject([{ requestId: unread.requestId, state: 'unknown', canReceive: 'unknown' }])
 }, 30_000)
