@@ -53,13 +53,16 @@ main ──●────●────●────●────●──
 
 ## The pre-merge gate
 
-Run before marking a PR ready — this is exactly what CI enforces:
+Run before marking a PR ready:
 
 ```bash
 npm run typecheck                      # app + e2e + test tsconfigs — must be 0 errors
 npm run build:all                      # vite client + esbuild server — what actually ships
 npx vitest run --exclude='e2e/**'      # unit/integration tests
 ```
+
+Also run the [published puller contract](../test-fixtures/published-puller/README.md),
+which CI enforces in a separate job on every PR.
 
 Two traps worth restating (both have bitten releases):
 

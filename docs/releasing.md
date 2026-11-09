@@ -71,6 +71,9 @@ npm publish --ignore-scripts --otp=NNNNNN
 
 Root `package.json` `files` **excludes `packages/`**, so this publish does *not* ship `@tinstar/plugin-api`. That is intentional — see the next gate.
 
+After publication, follow the [published puller fixture update procedure](../test-fixtures/published-puller/README.md)
+so subsequent PRs check compatibility with the latest released client.
+
 ### 2. The plugin API — `@tinstar/plugin-api` — **only if its surface changed**
 
 `@tinstar/plugin-api` is the typed SDK plugin authors compile against. It is a **separate publish** with its own gate. Republish it **iff its shipped surface changed** since the last published version. The shipped surface is exactly `packages/plugin-api/src/index.ts` (the package's `files` is `["src/index.ts","README.md"]` — it ships raw `.ts`, no build).

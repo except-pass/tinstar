@@ -15,6 +15,10 @@ The test home and socket are created in a temporary directory and removed after 
 
 ## Unit tests (vitest)
 
+For the **Published Mac puller contract** CI job, see the
+[fixture notes](../test-fixtures/published-puller/README.md) for local commands,
+coverage and release maintenance.
+
 ```bash
 # Full suite
 npx vitest run --exclude='e2e/**'
