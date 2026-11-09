@@ -35,7 +35,7 @@ export function useElementAsk(root: RefObject<HTMLElement>, subject: AskSubject,
     }
     const capture = (node: HTMLElement, element = readAskElement(node), selection = false): Hit => {
       const rect = selection ? window.getSelection()?.getRangeAt(0).getBoundingClientRect?.() ?? node.getBoundingClientRect() : node.getBoundingClientRect()
-      return { node, element, x: Math.min(Math.max(8, rect.right - (selection ? 116 : 48)), window.innerWidth - (selection ? 124 : 56)), y: Math.min(Math.max(8, rect.top - 8), window.innerHeight - 40), selection }
+      return { node, element, x: Math.min(Math.max(8, selection ? rect.right - 116 : rect.right + 4), window.innerWidth - (selection ? 124 : 56)), y: Math.min(Math.max(8, rect.top - 8), window.innerHeight - 40), selection }
     }
     const reveal = (event: Event) => { const field = fieldAt(event.target); if (field) { keep(); setHit(capture(field)) } }
     const cancelHold = () => { clearTimeout(hold); hold = undefined; start = null }
