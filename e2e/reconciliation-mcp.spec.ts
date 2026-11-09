@@ -99,7 +99,7 @@ test.afterAll(async () => {
   await rm(root, { recursive: true, force: true })
 })
 
-test('Smart Search restores MCP organizer-group selections and saved search through Escape and Back', async ({ page }) => {
+test('Smart Search drafts preserve MCP organizer-group selections and saved search on dismissal', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 })
   await page.goto(`${base}/?view=floor`)
   const scene_id = await windowId(page)
@@ -107,19 +107,20 @@ test('Smart Search restores MCP organizer-group selections and saved search thro
   const search = { query: 'Waiting', patterns: [], facets: [] }
   await present(page, { type: 'set-search', search }, 'saved-search')
   for (const level of ['id', 'outerId']) {
-    for (const exit of ['Escape', 'Back']) {
+    for (const exit of ['Escape', 'Close']) {
       const current = await call('get_scene', { scene_id })
       const group = current.records.groups.find((group: { cardIds: string[] }) => group.cardIds.length)
       expect(group).toBeTruthy()
       const target = { kind: 'group', id: group[level] }
       await present(page, { type: 'focus', target }, `focus-${level}-${exit}`)
+      const beforeDraft = await page.locator('.ov-card').count()
       await page.keyboard.press('Control+k')
       await page.getByRole('combobox', { name: 'Find names, IDs and text', exact: true }).fill('no-such-record')
       await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
-      await page.getByRole('button', { name: 'Apply filters', exact: true }).click({ timeout: 5000 })
-      await expect(page.locator('.ov-card')).toHaveCount(0)
+      await expect(page.getByRole('status').filter({ hasText: 'No matches in available records.' })).toBeVisible()
+      await expect(page.locator('.ov-card')).toHaveCount(beforeDraft)
       if (exit === 'Escape') await page.keyboard.press('Escape')
-      else await page.getByRole('button', { name: '← Back', exact: true }).press('Enter')
+      else await page.getByRole('button', { name: 'Close search palette', exact: true }).click()
       await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual(target)
       const restored = await call('get_scene', { scene_id })
       expect(restored.state.search).toEqual(search)
