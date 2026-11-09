@@ -5,7 +5,7 @@
 .swipe-rail-track i.is-center{left:50%;height:6px;top:-2px}
 .swipe-rail-track i:last-child{left:calc(50% + 72px)}
 .swipe-rail-thumb{position:absolute;left:50%;top:20px;width:30px;height:30px;margin-left:-15px;border-radius:50%;background:#d7e6ec;box-shadow:0 1px 4px #0008;transition:transform 90ms ease-out}
-.swipe-rail p{position:absolute;left:8px;right:8px;top:4px;margin:0;text-align:center;font-weight:650}
+.swipe-rail p{position:absolute;left:8px;right:8px;top:4px;margin:0;padding:2px 0;border-radius:4px;background:#0f172a;text-align:center;font-weight:650}
 .swipe-rail-ask .swipe-rail-thumb{background:#63cfb0}
 .swipe-rail-ask p{color:#8aebcd}
 .swipe-rail-inspect .swipe-rail-thumb{background:#6cb6ff}
