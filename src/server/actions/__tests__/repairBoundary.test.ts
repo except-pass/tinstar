@@ -12,6 +12,8 @@ import { sourceDigest } from '../examples'
 import { readerRepositories, type ActionOperation, type ActionReceipt } from '../../../shared/actions'
 import { stageTestRuntime } from './runtimeFixture'
 
+// Eleven bubblewrap runs plus loopback HTTP. The listener uses an ephemeral
+// port so a second suite can bind its own, and the shared runtime stays put.
 it('audits live Repair refusals and reconciles an uncertain rerun without repeating its write', async () => {
   const root = await mkdtemp(join(tmpdir(), 'repair-boundary-'))
   const servers: Server[] = []
@@ -70,7 +72,7 @@ it('audits live Repair refusals and reconciles an uncertain rerun without repeat
     const broker = await listenBroker(config, new LiveProvider(config, transport, true)); servers.push(broker.server)
     vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair'); vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', config.socket)
     const api = new ActionsApi(undefined, undefined, root)
-    const preview = await serve(createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) }), 5292)
+    const preview = await serve(createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) }))
     const call = async (path: string, body: unknown) => {
       const response = await fetch(preview + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner' }, body: JSON.stringify(body) })
       const result = await response.json(); expect(response.status, JSON.stringify(result)).toBe(200)
@@ -119,6 +121,6 @@ it('audits live Repair refusals and reconciles an uncertain rerun without repeat
   } finally {
     vi.unstubAllEnvs()
     for (const server of servers.reverse()) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
-    await rm(root, { recursive: true, force: true }); if (runtime) await rm(runtime, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   }
-}, 30_000)
+}, 60_000)

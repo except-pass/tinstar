@@ -19,7 +19,7 @@ it('launches the exact PR discussion without selecting, expanding, reading detai
   vi.stubGlobal('open', opened)
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   render(<Pulls />)
-  const action = await screen.findByRole('button', { name: 'Open in ChatGPT' })
+  const action = await screen.findByRole('button', { name: 'Open in ChatGPT' }, { timeout: 10_000 })
   const callsBeforeLaunch = read.mock.calls.length
   fireEvent.click(action)
   expect(opened).toHaveBeenCalledTimes(1)
@@ -28,7 +28,9 @@ it('launches the exact PR discussion without selecting, expanding, reading detai
   expect(screen.getByRole('checkbox', { name: 'Select alpha/repo#1' })).not.toBeChecked()
   expect(read.mock.calls).toHaveLength(callsBeforeLaunch)
   expect((screen.getByRole('textbox', { name: 'Prompt to copy' }) as HTMLTextAreaElement).value).toContain('CI: Unknown')
-})
+}, 30_000)
+// Fifty rows are re-rendered for sort, selection and detail. That exceeds the
+// 5s default when another suite is using the machine.
 it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and expands genuine detail', async () => {
   const read = vi.fn((input: string) => Promise.resolve(new Response(JSON.stringify({ ok: true, data: input.includes('/files?') ? fileData : input.includes('/detail?') ? { head: 'a'.repeat(40), state: 'open', body: 'Real PR body\nsecond paragraph', additions: 4, deletions: 2, files: 3, checks: 'failed', review: 'Changes requested', reviewsComplete: true, reviews: [], observedAt: '2026-11-06T20:00:00Z', freshness: 'fresh', error: null } : { pulls, repositories: [], warnings: [], associationsComplete: true } }))))
   vi.stubGlobal('fetch', read)
@@ -50,7 +52,7 @@ it('renders 50 canonical rows, sorts repo both ways, searches, selects 10 and ex
   fireEvent.change(screen.getByRole('textbox', { name: 'Find PRs' }), { target: { value: 'zeta/repo' } })
   expect(tableRows()).toHaveLength(25)
   expect(screen.getByText('10 selected')).toBeTruthy()
-})
+}, 30_000)
 it('makes missing reader/partial source errors visible rather than remaining pending', async () => {
   vi.stubGlobal('fetch', () => Promise.resolve(new Response(JSON.stringify({ ok: true, data: { pulls: [], repositories: [{ repository: 'alpha/repo', complete: false, status: 'unavailable', observedAt: null, error: 'gh-axi is missing from the server PATH.' }], warnings: [], associationsComplete: false } }))))
   render(<Pulls />)

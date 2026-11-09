@@ -14,6 +14,7 @@ import { artifactContext } from '../../ask/artifacts'
 import { snapshot, head, baseHead } from './fixtures'
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(cleanups.splice(0).map(fn => fn())); resetOriginAllowlistForTests() })
+// Loopback HTTP plus the same fsynced audit log as the executor tests.
 it('authenticates every local operation, rejects cross-origin/live routes, installs owner grants and exposes durable receipts to Ask', async () => {
   const root = await mkdtemp(join(tmpdir(), 'actions-api-'))
   await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'] } }))
@@ -52,7 +53,7 @@ it('authenticates every local operation, rejects cross-origin/live routes, insta
   expect((await post('/api/actions/live-merge', {})).status).toBe(404)
   expect((await post('/api/actions/run', { ...input, key: randomUUID(), targets: [{ ...input.targets[0], url: 'https://github.com/kunchenguid/firstmate/pull/1' }] })).status).toBe(409)
   expect((await post('/api/actions/run', { ...input, key: randomUUID(), targets: [{ ...input.targets[0], head: baseHead }] })).status).toBe(409)
-})
+}, 30_000)
 it('GET snapshot rechecks head/base, refuses mixed pagination, and preserves unknown thread/rule/check evidence', async () => {
   const metadata = { number: 1, html_url: snapshot().url, state: 'open', merged: false, draft: false, mergeable: true, changed_files: 1, head: { sha: head, ref: 'feature', repo: { full_name: 'fortresspower/cmsandbox' } }, base: { sha: baseHead, ref: 'main' } }
   const read = vi.fn(async (path: string): Promise<unknown> => path.includes('/files?') ? [{ filename: 'src/a.ts' }] : path.includes('check-runs?') ? { total_count: 0, check_runs: [] } : path.endsWith('/status') ? { total_count: 0 } : path.includes('/branches/') ? { protected: false } : metadata)

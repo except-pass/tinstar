@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
 import { preferencesKey } from '../../reconciliation/presentationPreferences'
 import { emptySearch } from '../../shared/smartSearch'
@@ -20,6 +20,8 @@ function item(target: AskTarget, section: 'pulls' | 'releases'): AskItem {
   return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
 }
 beforeEach(() => {
+  // App paint misses the 1s testing-library default when another suite is running.
+  configure({ asyncUtilTimeout: 10_000 })
   localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
   Element.prototype.scrollIntoView = vi.fn()
@@ -47,7 +49,9 @@ beforeEach(() => {
     return new Response(JSON.stringify({ ok: true, data }))
   }))
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/') })
+afterEach(() => { configure({ asyncUtilTimeout: 1_000 }); cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/') })
+// These drive the real App and wait on paints. A second full suite pushes that past 5s.
+describe('artifact ask', () => {
 it('keeps PR inspect normal while CI right-click opens the shared editable, genuinely PR-bound Ask', async () => {
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
@@ -451,3 +455,4 @@ it.each([false, true])('restores Overview Order by and direction after one sourc
   expect(rows()).toEqual(before)
   expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
 })
+}, 30_000)

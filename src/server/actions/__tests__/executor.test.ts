@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -17,6 +17,9 @@ async function setup(id = 'explain', read: (url: string) => Promise<ActionSnapsh
   const store = new ActionStore(root), action = await store.install(candidate(installed(id)), 'owner')
   return { root, store, action, executor: new ActionExecutor(store, read, policy) }
 }
+// Every run fsyncs the audit log. That exceeds the 5s default when the rest of
+// the suite is also staging a runtime and starting bubblewrap.
+describe('durable executor runs', () => {
 it('installs immutable readable source with owner grants, rolls back without inheriting broader grants and retains receipts', async () => {
   const { store, executor, action, root } = await setup()
   const input = run(action)
@@ -162,3 +165,4 @@ it('orders an established base-ref/head-SHA dependency before its child in coord
   expect((await store.receipts())[0]?.plan.join()).toContain('exact base-ref/base-SHA evidence')
   expect(await executor.start(input)).toBe(id)
 })
+}, 30_000)

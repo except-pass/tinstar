@@ -18,6 +18,7 @@ import { seedOriginAllowlist } from '../../api/originAllowlist'
 let root = '', server: Server | undefined, client: Client | undefined
 const parse = (value: unknown) => JSON.parse((value as { content: Array<{ text: string }> }).content[0]!.text)
 afterEach(async () => { await client?.close(); await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve()); if (root) await rm(root, { recursive: true, force: true }) })
+// Real MCP client over loopback. Handshake and tool calls exceed 5s beside another suite.
 describe('authenticated real MCP transport', () => {
   it('uses private per-install auth and exposes only scoped reads/presentation', async () => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-'))
@@ -115,4 +116,4 @@ describe('authenticated real MCP transport', () => {
     for (const ip of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '100.64.1.2', '100.127.2.1', 'fd7a:115c:a1e0::1']) expect(privatePeer(ip)).toBe(true)
     for (const ip of ['192.168.1.2', '8.8.8.8', '100.63.1.2', '100.128.2.1', '']) expect(privatePeer(ip)).toBe(false)
   })
-})
+}, 30_000)

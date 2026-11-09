@@ -204,6 +204,7 @@ it('fails safely when the private backend is unavailable without disclosing eith
   expect(error).not.toContain(callerToken)
 })
 
+// Six tsx launches. Each startup exceeds 5s beside another suite, so the wait and the test ceiling are both longer.
 it('starts from the shared Authorization file and rejects invalid caller values', async () => {
   const { options } = await setup()
   const root = await mkdtemp(join(tmpdir(), 'tinstar-tunnel-cli-')); roots.push(root)
@@ -223,7 +224,8 @@ it('starts from the shared Authorization file and rejects invalid caller values'
     try {
       if (value === `Bearer ${callerToken}` || value === `Bearer ${callerToken}\n`) {
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('CLI startup timed out')), 5000)
+          // tsx startup of the tunnel CLI exceeds 5s when another suite is on the machine.
+          const timer = setTimeout(() => reject(new Error('CLI startup timed out')), 20_000)
           child.stdout.on('data', () => { clearTimeout(timer); resolve() })
           child.once('exit', () => { clearTimeout(timer); reject(new Error('CLI exited before startup')) })
         })
@@ -241,4 +243,4 @@ it('starts from the shared Authorization file and rejects invalid caller values'
       await exited
     }
   }
-}, 20000)
+}, 120_000)

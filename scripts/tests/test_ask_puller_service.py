@@ -128,6 +128,16 @@ with m.single_flight(pathlib.Path(sys.argv[2])) as acquired:
         self.check_delivery_deadline('reply')
 
     def check_delivery_deadline(self, phase):
+        import time
+        started = time.monotonic()
+        subprocess.run([sys.executable, '-c', 'pass'], check=True)
+        spawn = max(time.monotonic() - started, 0.05)
+        # Token, note and receipt processes run before the slow step. A full
+        # suite stretches those starts. Size the pass deadline from a live
+        # spawn and hold the slow step past it, but stay inside the inbox
+        # command's own 30s timeout so this deadline is what stops the step.
+        budget = min(20, max(2, spawn * 12))
+        hold = budget + 2
         requests = [{'request_id': str(i), 'inbox_request_id': 'tinstar-ask-' + str(i),
                      'body': 'fixture question'} for i in range(3)]
         posts = []
@@ -159,7 +169,7 @@ with m.single_flight(pathlib.Path(sys.argv[2])) as acquired:
                     acknowledged.add(payload['request_id'])
                 if phase == 'reply' and payload['request_id'] == '1':
                     received_slow_reply.set()
-                    release_reply.wait(5)
+                    release_reply.wait(hold)
                 self.respond({})
 
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -187,18 +197,19 @@ if sys.argv[1] == 'note':
     note = {'saved': True, 'id': 'note-' + request_id.removeprefix('tinstar-ask-'), 'request_id': request_id}
     note_path.write_text(json.dumps(note))
     if first and request_id == 'tinstar-ask-1':
-        time.sleep(5)
+        time.sleep(HOLD_SECONDS)
     print(json.dumps(note))
 else:
     print((home / 'receipts.json').read_text())
 """)
+        script.write_text(script.read_text().replace('HOLD_SECONDS', repr(hold)))
         script.chmod(0o700)
         receipts = {'schema': 'fm-inbox-receipts.v1', 'pending': [], 'handled': [], 'omitted': []}
         if phase == 'reply':
             receipts['pending'] = [{'id': 'note-' + r['request_id'], 'request_id': r['inbox_request_id'],
                                     'reply': {'body': 'fixture answer'}} for r in requests]
         (self.home / 'receipts.json').write_text(json.dumps(receipts))
-        with patch.object(service, 'PASS_TIMEOUT', 1):
+        with patch.object(service, 'PASS_TIMEOUT', budget):
             self.assertEqual(service.tick(self.root, now=100), 'error')
         health = self.health()
         self.assertEqual(health['last_error_class'], 'timeout')

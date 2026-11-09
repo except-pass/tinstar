@@ -23,20 +23,30 @@ describe('deterministic Find', () => {
       remaining -= home.observation.data!.tasks.length
     }
     const scene = new SceneReconciler().reconcile(sources)
-    const documents = boundSearchDocuments(sceneSearchDocuments(scene).map(document => ({ ...document,
-      fields: [...document.fields, { name: 'Description', source: 'Notion blocks', text:
-        (`Bounded fixture prose for ${document.title}. Plan the migration, check errors and publish evidence. `).repeat(120) }],
+    const prose = (title: string, repeats: number) => (`Bounded fixture prose for ${title}. Plan the migration, check errors and publish evidence. `).repeat(repeats)
+    const documentsFor = (repeats: number) => boundSearchDocuments(sceneSearchDocuments(scene).map(document => ({ ...document,
+      fields: [...document.fields, { name: 'Description', source: 'Notion blocks', text: prose(document.title, repeats) }],
     }))).documents
+    const documents = documentsFor(120)
     expect(scene.cards).toHaveLength(150)
     expect(scene.executions).toHaveLength(30)
     expect(documents.reduce((total, document) => total + document.fields.reduce((length, field) => length + field.text.length, 0), 0)).toBeGreaterThan(1_000_000)
-    const index = new SmartSearchIndex(), started = performance.now()
-    index.update(documents)
-    // The expected build is ~125 ms; allow substantial CI variance while
-    // rejecting the multi-second eager-offset regression.
-    expect(performance.now() - started).toBeLessThan(450)
+    const elapsed = (docs: SearchDocument[]) => {
+      const index = new SmartSearchIndex(), started = performance.now()
+      index.update(docs)
+      return { index, ms: performance.now() - started }
+    }
+    // One sentence on the same cards. The median of five keeps a single
+    // scheduling hiccup from collapsing the baseline.
+    const baseline = [0, 1, 2, 3, 4].map(() => elapsed(documentsFor(1)).ms).sort((a, b) => a - b)[2]!
+    const { index, ms } = elapsed(documents)
+    // Idle this ratio is about 25 (roughly 70ms / 3ms). A busy machine slows
+    // both builds together. Mapping every excerpt offset during construction
+    // was a multi-second regression and blows the ratio out. 80 leaves room
+    // for the long build to be scheduled apart from the baseline.
+    expect(ms / baseline).toBeLessThan(80)
     expect(index.search('Roadmap', now).some(hit => hit.document.target.id === fixtureId(5))).toBe(true)
-  }, 10_000)
+  }, 30_000)
 
   it('preserves original fuzzy ranges across Unicode expansion and incremental replacement', () => {
     const index = new SmartSearchIndex()

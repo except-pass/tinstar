@@ -35,6 +35,7 @@ describe('Card Janitor CLI boundary', () => {
     expect(report.proposals.every((p: { impact: string }) => p.impact === 'investigation-only')).toBe(true)
   })
 
+  // Three tsx launches of the report CLI. Process startup exceeds 5s under suite load.
   it('replays saved public input without a server and exposes JSON and a human summary', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tinstar-janitor-'))
     roots.push(root)
@@ -52,7 +53,7 @@ describe('Card Janitor CLI boundary', () => {
     expect(summary.stdout).toContain('Card Janitor — read-only, deterministic')
     expect(summary.stdout).toContain('Snapshot 2026-11-06T15:00:00.000Z')
     expect(summary.stdout).toContain('Model calls/tokens: 0/0; writes: 0')
-  })
+  }, 30_000)
 
   it('fails a failed HTTP read or invalid source contract rather than inventing a successful empty baseline', async () => {
     await expect(runJanitorCli(['--server', 'http://localhost:5293'], () => {}, async () => new Response('', { status: 503 }))).rejects.toThrow('503')

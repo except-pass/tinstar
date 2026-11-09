@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, chmod, rm, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -18,7 +18,7 @@ import { stageTestRuntime } from './runtimeFixture'
 const roots: string[] = []
 const secret = 'fake-installation-secret-with-no-format-assumption'
 let privateKey: string, publicKey: string
-beforeAll(() => { ({ privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })) })
+beforeAll(() => { ({ privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })) }, 30_000)
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 async function setup(options: { credentials?: boolean; enabled?: boolean; response?: (input: ProviderRequest) => Promise<unknown> } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-live-provider-')); roots.push(root)
@@ -55,6 +55,9 @@ async function setup(options: { credentials?: boolean; enabled?: boolean; respon
   }
   return { root, custody, config, requests, transport, provider: new LiveProvider(config, transport, options.enabled ?? true) }
 }
+// Token minting is RSA-2048, and the socket test also starts bubblewrap.
+// 30s is wall-clock room for that work while the rest of the suite is running.
+describe('live provider under suite load', () => {
 const update: ActionOperation = { kind: 'repair.update', expectedHead: head, ref: 'refs/heads/feature-1' }
 const rerun: ActionOperation = { kind: 'repair.rerun', expectedHead: head, jobId: 123, runId: 456, attempt: 1 }
 
@@ -172,7 +175,7 @@ it.each(['pull_request', 'dependent', 'matrix', 'dynamic'])('refuses wider or un
 })
 
 it('serves the existing action API through the private Unix socket, runs isolated source, and migrates inventory without ambient login', async () => {
-  const fixture = await setup(), runtime = await stageTestRuntime(); roots.push(runtime)
+  const fixture = await setup(), runtime = await stageTestRuntime()
   const { server, api } = await listenBroker({ ...fixture.config, runtime }, fixture.provider)
   vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair'); vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
   vi.stubEnv('GH_TOKEN', 'ambient-host-test-secret')
@@ -248,3 +251,4 @@ it('checks branch/path grants before giving target evidence to generated source'
   expect(evaluate).not.toHaveBeenCalled()
   expect((await fixture.store.receipts())[0]?.reasons.join()).toContain('Changed path outside installed grant')
 })
+}, 30_000)

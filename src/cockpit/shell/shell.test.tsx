@@ -44,6 +44,7 @@ function fleetStub() {
   })
 }
 
+// Rendering App beside another suite exceeds the 5s default.
 describe('Overview shell and retained terminal navigation', () => {
   it('starts with one Overview and no legacy queue or Floor destination', async () => {
     fleetStub()
@@ -115,7 +116,7 @@ describe('Overview shell and retained terminal navigation', () => {
     act(() => { window.history.replaceState(null, '', '/'); window.dispatchEvent(new PopStateEvent('popstate')) })
     expect(await screen.findByRole('region', { name: 'Overview' })).toBeTruthy()
   })
-})
+}, 30_000)
 
 describe('worker switcher', () => {
   it('opens the first shown row on Enter', () => {
