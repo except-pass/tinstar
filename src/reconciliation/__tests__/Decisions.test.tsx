@@ -53,12 +53,53 @@ describe('Decisions', () => {
     expect(view.container.querySelector('.flashed')).toBeNull()
     expect(view.container.querySelector('[data-card-id]')).toBeNull()
   })
+  it('does not treat scene ownership as a published action in rows, search or summary', () => {
+    const queue = fixtureQueue(), scene = fixtureScene()
+    queue.items = [{ ...queue.items[0]!, cardIds: [fixtureId(5)], action: null }]
+    scene.cards.find(card => card.id === fixtureId(5))!.nextAction = 'Will'
+    workspace.value.queue = queue
+    workspace.value.scene = scene
+    state.selection = { kind: 'card', id: fixtureId(5) }
+    const view = render(<Decisions />)
+    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Next action not published')
+    expect(view.container.querySelector('[data-card-id]')).not.toHaveTextContent('Will')
+    state.selection = null
+    view.rerender(<Decisions />)
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Will' } })
+    expect(view.container.querySelector('[data-card-id]')).toBeNull()
+  })
+  it.each(['clear', 'replace', 'unmount'] as const)('restores both scroll axes in all ancestors on flash %s', async transition => {
+    vi.useFakeTimers()
+    const view = render(<Decisions />)
+    const list = screen.getByLabelText('Decision requests')
+    const outer = view.container
+    list.scrollTop = 90
+    list.scrollLeft = 12
+    outer.scrollTop = 40
+    outer.scrollLeft = 7
+    Element.prototype.scrollIntoView = vi.fn(() => {
+      list.scrollTop = 300
+      list.scrollLeft = 100
+      outer.scrollTop = 200
+      outer.scrollLeft = 50
+    })
+    state.flash = { ids: [`card:${fixtureId(5)}`], until: Date.now() + 2000 }
+    view.rerender(<Decisions />)
+    expect(outer.scrollTop).toBe(200)
+    if (transition === 'unmount') view.unmount()
+    else {
+      state.flash = transition === 'clear' ? null : { ids: [`card:${fixtureId(5)}`], until: Date.now() + 3000 }
+      view.rerender(<Decisions />)
+      if (transition === 'replace') await act(async () => { vi.advanceTimersByTime(3000) })
+    }
+    expect([list.scrollTop, list.scrollLeft, outer.scrollTop, outer.scrollLeft]).toEqual([90, 12, 40, 7])
+  })
   it('leaves scrolling under manual control after a flash', async () => {
     vi.useFakeTimers()
     state.flash = { ids: [`card:${fixtureId(5)}`], until: Date.now() + 2000 }
     render(<Decisions />)
     const list = screen.getByLabelText('Decision requests')
-    fireEvent.wheel(list)
+    fireEvent.wheel(document.body)
     list.scrollTop = 210
     await act(async () => { vi.advanceTimersByTime(2000) })
     expect(list.scrollTop).toBe(210)

@@ -30,7 +30,7 @@ export function Decisions() {
     if (!item.cardIds.length) return [{ key: item.id, item, id: null, title: decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : null }]
     return item.cardIds.map(id => {
       const card = scene?.cards.find(card => card.id === id)
-      return { key: `${item.id}:${id}`, item, id, title: card ? cardTitle(card) : decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : card?.nextAction ?? null }
+      return { key: `${item.id}:${id}`, item, id, title: card ? cardTitle(card) : decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : null }
     })
   })
   const selected = selectedId ? entries.find(entry => entry.id === selectedId) : undefined
@@ -47,16 +47,35 @@ export function Decisions() {
     const current = state.flash, viewport = list.current
     if (!current || current.until <= Date.now() || !viewport) return
     const row = Array.from(viewport.querySelectorAll<HTMLElement>('[data-card-id]')).find(row => current.ids.includes(`card:${row.dataset.cardId}`))
-    const scroll = viewport.scrollTop, before = interaction.current
+    const scrolls: { element: HTMLElement; top: number; left: number }[] = []
+    for (let element: HTMLElement | null = viewport; element; element = element.parentElement) {
+      scrolls.push({ element, top: element.scrollTop, left: element.scrollLeft })
+    }
+    const before = interaction.current
+    let restored = false
+    const restore = () => {
+      if (restored || interaction.current !== before) return
+      restored = true
+      for (const { element, top, left } of scrolls) {
+        element.scrollTop = top
+        element.scrollLeft = left
+      }
+    }
+    const takeOwnership = () => { interaction.current++ }
+    const events = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
+    for (const event of events) document.addEventListener(event, takeOwnership, true)
     row?.scrollIntoView({ block: 'nearest' })
     const timer = setTimeout(() => {
       setExpiredFlash(current.until)
-      // A wheel, click, search or keyboard input takes ownership of the list.
-      if (interaction.current === before) viewport.scrollTop = scroll
+      restore()
     }, Math.max(0, current.until - Date.now()))
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      restore()
+      for (const event of events) document.removeEventListener(event, takeOwnership, true)
+    }
   }, [state.flash])
-  return <section className="decisions" aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision} onPointerDown={() => interaction.current++} onKeyDown={() => interaction.current++} onWheel={() => interaction.current++}>
+  return <section className="decisions" aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
     <header><span className="cockpit-eyebrow">SHARED QUEUE</span><h1>Decisions</h1><p>Browse requests and prerequisites. Select a card to work on it together from Your desk.</p></header>
     {bridgeError && <p role="status">MCP connection delayed. Local browsing remains available.</p>}
     {unavailable && <p role="status">{queueError ?? error} Shared card focus is unavailable until sources recover.</p>}
