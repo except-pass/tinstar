@@ -12,3 +12,5 @@
 .swipe-rail-inspect p{color:#c5e4ff}
 .swipe-rail-still .swipe-rail-thumb{transition:none}
 @media(prefers-reduced-motion:reduce){.swipe-rail-thumb{transition:none}}
+
+@keyframes swipe-rail-return{to{transform:translateX(0)}}

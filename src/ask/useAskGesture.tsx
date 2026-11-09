@@ -15,7 +15,7 @@ function blockingModal(element: Element) {
   const dialog = document.querySelector('dialog[open]')
   return !!dialog && !dialog.contains(element)
 }
-type Rail = { x: number; y: number; pointer: GesturePointer; dx: number; phase: 'neutral' | 'ask' | 'inspect' }
+type Rail = { x: number; y: number; pointer: GesturePointer; dx: number; phase: 'neutral' | 'ask' | 'inspect' | 'returning' }
 export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonElement>(open: (() => void) | undefined, ignoreControls = false, inspect?: () => void) {
   const ref = useRef<T>(null)
   const openRef = useRef(open); openRef.current = open
@@ -26,13 +26,27 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
     if (!element || !openRef.current && !inspectRef.current) return
     element.dataset.askGestureSurface = ''
     let gesture: Gesture | null = null, pointerId: number | null = null, suppressUntil = 0, pointer: GesturePointer = 'mouse', ignoreLoss = false, alive = true
+    let returnTimer: ReturnType<typeof setTimeout> | undefined
     const shown = (value: Rail | null) => { if (alive) setRail(value) }
+    const dismiss = () => {
+      const current = gesture
+      gesture = null
+      pointerId = null
+      clearTimeout(returnTimer)
+      if (!current || current.phase === 'tracking' || current.phase === 'native' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        shown(null)
+        return
+      }
+      shown({ x: current.x, y: current.y, pointer, dx: current.dx, phase: 'returning' })
+      returnTimer = setTimeout(() => shown(null), 220)
+    }
     const publish = () => {
       if (!gesture || gesture.phase === 'tracking' || gesture.phase === 'native') { shown(null); return }
       shown({ x: gesture.x, y: gesture.y, pointer, dx: gesture.dx, phase: gesture.phase })
     }
     const start = (x: number, y: number, kind: GesturePointer) => {
       if (blockingModal(element)) return
+      clearTimeout(returnTimer)
       const room = scrollRoom(element)
       pointer = kind
       ignoreLoss = false
@@ -56,16 +70,14 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       if (!gesture) return
       const action = hasSelection() || blockingModal(element) ? null : releaseAskGesture(gesture)
       if (gesture.phase !== 'tracking' && gesture.phase !== 'native') suppressUntil = Date.now() + 700
-      gesture = null
-      shown(null)
+      if (action) { gesture = null; shown(null) }
+      else dismiss()
       if (action === 'ask') openRef.current?.()
       else if (action === 'inspect') inspectRef.current?.()
     }
     const cancel = () => {
       if (gesture && gesture.phase !== 'tracking' && gesture.phase !== 'native') suppressUntil = Date.now() + 700
-      gesture = null
-      pointerId = null
-      shown(null)
+      if (gesture) dismiss()
     }
     const elementAsk = () => { cancel(); suppressUntil = Date.now() + 1000 }
     const ignored = (event: Event) => event.target instanceof Element && (event.target.closest('[data-ask-gesture-surface]') !== element || ignoreControls && event.target !== element && !!event.target.closest('a,button,input,select,textarea'))
@@ -110,6 +122,7 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       event.stopPropagation()
       cancel()
     }
+    const visibility = () => { if (document.hidden) cancel() }
     const scrolled = () => { if (gesture) cancel() }
     const click = (event: MouseEvent) => { if (event.target instanceof Element && event.target.closest('.ask-composer')) return; if (Date.now() < suppressUntil) { event.preventDefault(); event.stopImmediatePropagation() } }
     const pointerCancel = (event: PointerEvent) => { if (event.pointerId === pointerId) cancel() }
@@ -132,8 +145,11 @@ export function useAskGesture<T extends HTMLElement | SVGElement = HTMLButtonEle
       bind(element, 'click', click, true),
       bind(window, 'keydown', key, true),
       bind(window, 'scroll', scrolled, true),
+      bind(window, 'blur', cancel),
+      bind(document, 'visibilitychange', visibility),
     ]
     return () => {
+      clearTimeout(returnTimer)
       alive = false
       delete element.dataset.askGestureSurface
       unbind.forEach(remove => remove())

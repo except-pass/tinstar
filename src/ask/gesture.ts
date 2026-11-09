@@ -45,14 +45,15 @@ export const releaseAskGesture = (state: Gesture | null): GestureRelease =>
   state?.phase === 'ask' || state?.phase === 'inspect' ? state.phase : null
 
 /** Touch sits above the contact point. Mouse sits beside it and never covers the hotspot. */
-export function placeSwipeRail(origin: { x: number; y: number }, pointer: GesturePointer, viewport: { width: number; height: number }) {
-  const margin = 8, width = SWIPE_RAIL_WIDTH, height = SWIPE_RAIL_HEIGHT, touch = pointer !== 'mouse'
+export function placeSwipeRail(origin: { x: number; y: number }, pointer: GesturePointer, viewport: { width: number; height: number; left?: number; top?: number }) {
+  const x = viewport.left ?? 0, y = viewport.top ?? 0
+  const margin = 8, width = Math.max(0, Math.min(SWIPE_RAIL_WIDTH, viewport.width - margin * 2)), height = SWIPE_RAIL_HEIGHT, touch = pointer !== 'mouse'
   let left = touch ? origin.x - width / 2 : origin.x + 18
   let top = touch ? origin.y - height - 56 : origin.y + 20
-  if (left + width > viewport.width - margin) left = origin.x - width - 18
-  if (top + height > viewport.height - margin) top = origin.y - height - 20
-  if (top < margin) top = touch ? origin.y + 56 : margin
-  left = Math.max(margin, Math.min(left, Math.max(margin, viewport.width - width - margin)))
-  top = Math.max(margin, Math.min(top, Math.max(margin, viewport.height - height - margin)))
-  return { left, top }
+  if (left + width > x + viewport.width - margin) left = origin.x - width - 18
+  if (top + height > y + viewport.height - margin) top = origin.y - height - 20
+  if (top < y + margin) top = touch ? origin.y + 56 : y + margin
+  left = Math.max(x + margin, Math.min(left, Math.max(x + margin, x + viewport.width - width - margin)))
+  top = Math.max(y + margin, Math.min(top, Math.max(y + margin, y + viewport.height - height - margin)))
+  return { left, top, width }
 }

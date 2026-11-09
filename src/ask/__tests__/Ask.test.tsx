@@ -698,7 +698,7 @@ describe('spring-loaded Ask and Inspector rail', () => {
     touch(task, 'touchEnd', 130, 100)
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(screen.queryByLabelText('Inspector')).toBeNull()
-    expect(document.querySelector('.swipe-rail')).toBeNull()
+    expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
   })
 
   it('opens one composer from a left release and does not send', () => {
@@ -780,7 +780,7 @@ describe('spring-loaded Ask and Inspector rail', () => {
   it('removes the rail without an action on cancel, Escape, scroll, and an open modal', () => {
     const { container } = mount(), task = card(container)
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100); touch(task, 'touchCancel')
-    expect(document.querySelector('.swipe-rail')).toBeNull()
+    expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
     fireEvent.keyDown(task, { key: 'Escape' })
     touch(task, 'touchEnd', 20, 100)
@@ -796,6 +796,30 @@ describe('spring-loaded Ask and Inspector rail', () => {
     modal.remove()
     expect(screen.queryByLabelText('Inspector')).toBeNull()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it.each([20, 180])('cancels context departure without dispatch at %s', x => {
+    vi.useFakeTimers()
+    try {
+      const { container } = mount(), task = card(container)
+      for (const departure of ['blur', 'visibilitychange']) {
+        fireEvent(task, new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientX: 100, clientY: 100, pointerType: 'mouse' }))
+        fireEvent(window, new PointerEvent('pointermove', { pointerId: 1, clientX: x, clientY: 100 }))
+        if (departure === 'blur') fireEvent.blur(window)
+        else {
+          vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+          fireEvent(document, new Event('visibilitychange'))
+        }
+        expect(screen.queryByText('Release to compose')).toBeNull()
+        expect(screen.queryByText('Release to open Inspector')).toBeNull()
+        expect(document.querySelector('.swipe-rail')).toHaveAttribute('data-phase', 'returning')
+        fireEvent(window, new PointerEvent('pointerup', { pointerId: 1, clientX: x, clientY: 100 }))
+        act(() => vi.advanceTimersByTime(220))
+        expect(document.querySelector('.swipe-rail')).toBeNull()
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(screen.queryByLabelText('Inspector')).toBeNull()
+      }
+    } finally { vi.useRealTimers(); vi.restoreAllMocks() }
   })
 
   it('leaves a text-selection drag on either side closed', () => {
@@ -830,12 +854,29 @@ describe('spring-loaded Ask and Inspector rail', () => {
     expect(screen.queryByText('Release to open Inspector')).toBeNull()
   })
 
+  it('repositions the active rail when the visual viewport pans or resizes', () => {
+    const visual = Object.assign(new EventTarget(), { width: 390, height: 700, offsetLeft: 0, offsetTop: 0 })
+    vi.stubGlobal('visualViewport', visual)
+    const { container } = mount(), task = card(container)
+    touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
+    const overlay = document.querySelector<HTMLElement>('.swipe-rail')!
+    visual.offsetLeft = 200; visual.offsetTop = 300; visual.width = 180
+    fireEvent(visual, new Event('scroll'))
+    expect(Number.parseFloat(overlay.style.left)).toBeGreaterThanOrEqual(208)
+    expect(Number.parseFloat(overlay.style.top)).toBeGreaterThanOrEqual(308)
+    expect(Number.parseFloat(overlay.style.width)).toBe(164)
+    visual.width = 390
+    fireEvent(visual, new Event('resize'))
+    expect(Number.parseFloat(overlay.style.width)).toBe(220)
+  })
+
   it('marks the rail still when reduced motion is requested', () => {
     const { container } = mount(), task = card(container)
     const query = '(prefers-reduced-motion: reduce)'
     vi.stubGlobal('matchMedia', (value: string) => ({ matches: value === query, media: value, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false } }))
     touch(task, 'touchStart'); touch(task, 'touchMove', 20, 100)
     expect(document.querySelector('.swipe-rail')).toHaveClass('swipe-rail-still')
-    touch(task, 'touchEnd', 20, 100)
+    touch(task, 'touchCancel')
+    expect(document.querySelector('.swipe-rail')).toBeNull()
   })
 })

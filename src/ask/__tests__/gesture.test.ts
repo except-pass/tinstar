@@ -93,6 +93,18 @@ describe('swipe rail placement', () => {
     expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThanOrEqual(692)
   })
 
+  it('clamps both axes within a panned visual viewport for every pointer', () => {
+    for (const pointer of ['mouse', 'touch', 'pen'] as const) {
+      for (const origin of [{ x: 10, y: 10 }, { x: 900, y: 900 }]) {
+        const placed = placeSwipeRail(origin, pointer, { left: 100, top: 200, width: 180, height: 240 })
+        expect(placed.left).toBeGreaterThanOrEqual(108)
+        expect(placed.top).toBeGreaterThanOrEqual(208)
+        expect(placed.left + placed.width).toBeLessThanOrEqual(272)
+        expect(placed.top + SWIPE_RAIL_HEIGHT).toBeLessThanOrEqual(432)
+      }
+    }
+  })
+
   it('offsets the mouse rail off the pointer, including at the desktop edge', () => {
     for (const origin of [{ x: 400, y: 300 }, { x: 1420, y: 860 }]) {
       const placed = placeSwipeRail(origin, 'mouse', { width: 1440, height: 900 })
