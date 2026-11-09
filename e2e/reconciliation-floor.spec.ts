@@ -710,8 +710,9 @@ test('single-row toolbar Smart Search exact identifiers, named entities and expl
   const center = page.locator('.ov-pattern-selected')
   await center.focus(); await center.press('ArrowRight'); await center.press('ArrowRight'); await center.press('ArrowRight')
   await expect(center).toContainText('Needs me')
-  await expect(page.locator('.ov-card:not(.ov-pattern-unknown)')).toHaveCount(1)
-  await expect(page.locator('.ov-card.ov-pattern-unknown')).toHaveCount(1)
+  await expect(page.locator('.ov-card')).toHaveCount(2)
+  await expect(page.locator('.ov-pattern-summary')).toHaveCount(1)
+  await expect(page.locator('.ov-card')).not.toContainText(["Can't tell", "Can't tell"])
   await screenshot(page, 'smart-search-explicit-decision')
   // Deliver disposable source snapshots through the running browser's normal refresh.
   const text = '  PR #29201; PR #2920 then oﬃce release'
@@ -943,4 +944,46 @@ test('mobile successive search results release history ownership without leaving
   expect(page.url()).toBe(originalUrl)
   expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))).toEqual(beforeCards)
   await screenshot(page, 'smart-search-mobile-history-restored')
+})
+
+
+for (const density of ['compact', 'detailed']) test(`card worker facts and one unchecked summary preserve unknown accountability in ${density}`, async ({ page }) => {
+  await page.addInitScript(density => localStorage.setItem('tinstar.overview.density', density), density)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  const now = Date.parse('2026-11-09T21:00:00Z')
+  await page.clock.install({ time: now })
+  const sources = fixtureSources({ now })
+  let scene = new SceneReconciler().reconcile(sources, now)
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  const card = (n: number) => page.locator(`.ov-card[data-entity-id="${fixtureId(n)}"]`)
+  await expect(card(1)).toContainText('2 workers running')
+  await expect(card(2)).toContainText('No worker')
+  const center = page.locator('.ov-pattern-selected')
+  await center.press('ArrowRight')
+  await expect(page.locator('.ov-pattern-summary')).toHaveCount(1)
+  await expect(page.locator('.ov')).not.toContainText("Can't tell")
+  await expect(card(2)).toBeVisible()
+  await screenshot(page, `in-progress-after-${density}`)
+  await center.press('ArrowLeft')
+  for (const home of sources.fleet) home.observation.data!.backlog = []
+  scene = new SceneReconciler().reconcile(sources, now)
+  await page.reload()
+  await expect(card(2)).toBeVisible()
+  await expect(card(2)).not.toContainText('No worker')
+  await expect(card(1)).toContainText('2 workers running')
+  const helper = sources.fleet.flatMap(home => home.observation.data!.tasks).find(task => task.id === 'helper-worker')!
+  helper.current_state.state = 'unknown'
+  scene = new SceneReconciler().reconcile(sources, now)
+  await page.reload()
+  await expect(card(1)).toContainText('Worker running · Worker state unknown (codex pane)')
+  await screenshot(page, `unknown-accountability-after-${density}`)
+  helper.current_state.state = 'paused'; helper.last_event.state = 'paused'; helper.last_event.age_seconds = 10800
+  scene = new SceneReconciler().reconcile(sources, now)
+  await page.reload()
+  await expect(card(1)).toContainText('Worker waiting · reported 3h ago')
+  await card(1).click()
+  await expect(card(1)).toContainText('Worker waiting · reported 3h ago')
+  await screenshot(page, `worker-facts-expanded-after-${density}`)
 })

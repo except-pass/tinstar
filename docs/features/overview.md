@@ -258,6 +258,9 @@ visible. One line above the list counts unchecked cards and names the missing
 evidence. Cards show known worker facts in their existing metadata, such as
 Worker running or Worker state unknown (codex pane); a wait's report age is
 shown only when the published event reports that same state.
+No worker requires a supported per-card execution-gap finding and fresh source
+coverage. Fresh configured homes alone do not establish absence on an unknown
+home; when absence remains unknown, the card omits that fact.
 An empty result names the selected pattern, for example No blocked work. See the
 [shared execution-health contract](#shared-execution-health-contract) for pattern
 evidence requirements.
