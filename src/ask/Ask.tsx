@@ -32,9 +32,9 @@ interface AskControls {
 }
 const Controls = createContext<AskControls | null>(null)
 export const useAskControls = () => useContext(Controls)
-export function useCardAsk(cardId: string | null) {
+export function useCardAsk(seed: AskSeed | null, inspect?: () => void) {
   const controls = useContext(Controls)
-  return useAskGesture(controls && cardId ? () => controls.open({ cardId }) : undefined)
+  return useAskGesture(controls && seed ? () => controls.open(seed) : undefined, false, inspect)
 }
 export function useSemanticAsk(subject: AskSubject) {
   const controls = useContext(Controls)
@@ -117,9 +117,11 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
 
   </Controls.Provider>
 }
-export function AskRelationshipHit({ claimId, d }: { claimId: string; d: string }) {
+export function AskRelationshipHit({ claimId, d, onInspect }: { claimId: string; d: string; onInspect?: () => void }) {
+  const controls = useAskControls()
   const ask = useSemanticAsk({ target: { kind: 'claim', id: claimId } })
-  return <path className="ov-relationship-hit" data-claim-id={claimId} d={d} role="button" tabIndex={0} aria-label="Ask about this relationship" onContextMenu={event => ask(event, 'relationship', claimId)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') ask(event, 'relationship', claimId) }} />
+  const gesture = useAskGesture<SVGPathElement>(controls ? () => controls.open({ target: { kind: 'claim', id: claimId }, field_key: 'relationship', field_value: claimId }) : undefined, false, onInspect)
+  return <><path ref={gesture.ref} className="ov-relationship-hit" data-claim-id={claimId} d={d} role="button" tabIndex={0} aria-label="Ask about this relationship" onContextMenu={event => ask(event, 'relationship', claimId)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') ask(event, 'relationship', claimId) }} />{gesture.overlay}</>
 }
 function useDialogFocus(enabled: boolean) {
   const ref = useRef<HTMLDialogElement>(null)

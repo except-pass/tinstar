@@ -6,8 +6,8 @@ import { stale } from './overviewModel'
 interface Path { id: string; worker: string; card: string; d: string; uncertain: boolean }
 /** One measured layer spans groups, so deduplicated cross-group references can
  * connect to their canonical endpoint without inventing a local copy. */
-export function CompactConnections({ canvas, scene, layout, expanded, collapsed, now, readFailed, flash, focus }: {
-  canvas: RefObject<HTMLDivElement>; scene: FloorScene; layout: unknown; expanded: ReadonlySet<string>; collapsed: string[]; now: number; readFailed: boolean; flash: PresentationState['flash']; focus: Target | null
+export function CompactConnections({ canvas, scene, layout, expanded, collapsed, now, readFailed, flash, focus, onInspect }: {
+  canvas: RefObject<HTMLDivElement>; scene: FloorScene; layout: unknown; expanded: ReadonlySet<string>; collapsed: string[]; now: number; readFailed: boolean; flash: PresentationState['flash']; focus: Target | null; onInspect?: (claimId: string) => void
 }) {
   const [paths, setPaths] = useState<Path[]>([])
   useLayoutEffect(() => {
@@ -47,5 +47,5 @@ export function CompactConnections({ canvas, scene, layout, expanded, collapsed,
     return () => { cancelAnimationFrame(frame); observer.disconnect(); window.removeEventListener('resize', schedule); window.removeEventListener('scroll', schedule, true) }
   }, [canvas, scene, layout, expanded, collapsed, now, readFailed])
   return <svg className="ov-connections ov-compact-connections">{paths.map(path => <g key={path.id}><path data-worker-id={path.worker} data-card-id={path.card} d={path.d}
-    className={`ov-line ov-${path.uncertain ? 'uncertain' : 'linked'}${flash && flash.until > now && flash.ids.includes(`claim:${path.id}`) ? ' flashed' : ''}${focus ? focus.kind === 'claim' && focus.id === path.id || focus.kind === 'execution' && focus.id === path.worker || focus.kind === 'card' && focus.id === path.card ? ' hot' : ' dim' : ''}`} /><AskRelationshipHit claimId={path.id} d={path.d} /></g>)}</svg>
+    className={`ov-line ov-${path.uncertain ? 'uncertain' : 'linked'}${flash && flash.until > now && flash.ids.includes(`claim:${path.id}`) ? ' flashed' : ''}${focus ? focus.kind === 'claim' && focus.id === path.id || focus.kind === 'execution' && focus.id === path.worker || focus.kind === 'card' && focus.id === path.card ? ' hot' : ' dim' : ''}`} /><AskRelationshipHit claimId={path.id} d={path.d} onInspect={onInspect ? () => onInspect(path.id) : undefined} /></g>)}</svg>
 }

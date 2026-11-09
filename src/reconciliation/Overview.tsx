@@ -105,7 +105,8 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const ask = useSemanticAsk(subject)
   const askRoot = useRef<HTMLDivElement>(null), askControls = useAskControls()
   const elementAffordance = useElementAsk(askRoot, subject, askControls?.open)
-  const askGesture = useCardAsk(kind === 'card' ? entity.id : null)
+  const openInInspector = () => send({ type: 'focus', target: item })
+  const askGesture = useCardAsk(subject, openInInspector)
   const tone = entityTone(scene, kind, entity.id, now, readFailed)
   const worker = kind === 'execution' ? entity as Execution : null, card = kind === 'card' ? entity as SceneCard : null
   const title = worker ? workerTitle(worker) : cardTitle(card!)
@@ -124,10 +125,6 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
   const nextCheckIn = card ? askElement('next_check_in', `${compactCheckIn(card, now)} · Next check-in ${checkIn(card, now).label.replace(/^Overdue · /, '')}${propertyDate(card, 'Next check-in')?.includes('T') ? ' ET' : ''}`, propertyDate(card, 'Next check-in') ?? '', checkIn(card, now).state === 'overdue' ? 'overdue' : 'check-in') : null
   const lastKnown = worker && (readFailed || stale(worker.observation, now))
   const deskRelated = state.navigation && (card ? card.id === state.navigation.cardId : scene.claims.some(c => c.cardId === state.navigation?.cardId && c.executionId === worker?.id && c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current'))
-  const openInInspector = (event: { stopPropagation(): void }) => {
-    event.stopPropagation()
-    send({ type: 'focus', target: item })
-  }
   return <div ref={askRoot} className="ov-item-frame" onContextMenu={event => ask(event)}><button ref={askGesture.ref} type="button" className={`ov-item ov-${kind} ov-${tone}${view.searchMatches && !view.searchMatches.has(semanticId(item)) ? ' ov-search-context' : view.searchMatches ? ' ov-search-match' : ''}${cantTell ? ' ov-pattern-unknown' : ''}${same(state.selection, item) ? ' selected' : ''}${focus && related(view, focus, item) ? ' related' : ''}${deskRelated ? ' desk-target' : ''}${flashed ? ' flashed' : ''}${expanded ? compact ? ' ov-inline-expanded' : '' : ' ov-collapsed'}`}
     data-semantic-id={semanticId(item)} data-entity-id={entity.id} data-tone={tone} data-open-root={compact ? !!openRoot : undefined} aria-expanded={expanded} aria-label={`${title}. ${status}. ${(compact ? openRoot : expanded) ? 'Collapse' : 'Expand'} ${compact ? 'relationship' : 'card'}${compact && linkLabel ? `. ${linkLabel}` : ''}${lastKnown ? '. Last known observation' : ''}${references.length ? `. Also in ${references.join(', ')}` : ''}`} title={cantTell ? `${title}. Can't tell: ${patternResult.reason}` : title}
     onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle() } }}
@@ -149,10 +146,10 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     {cantTell && <span className="ov-pattern-unknown-marker" title={patternResult.reason} aria-label={`Can't tell: ${patternResult.reason}`}>? Can't tell</span>}
     {compact && expanded && <span {...askElement('relationship', 'Relationship view')} className="ov-expansion-hint">{openRoot ? '− Collapse this relationship' : '+ Expand this relationship'}</span>}
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
-    {askGesture.hint && <span className="ask-gesture-hint" aria-hidden="true">← Ask in text · release to compose</span>}
+    {askGesture.overlay}
     <span className="ov-port" aria-hidden="true" />
   </button>
-    {elementAffordance}<span className="ov-header-actions"><AskCardAction subject={subject} icon />{card && <OpenInChatGPT target={{ kind: 'work', card, scene, readFailed }} />}<button type="button" className="ov-open-inspector ov-header-icon" aria-label="Open in Inspector" title="Open in Inspector" onClick={openInInspector} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); openInInspector(event) }}>
+    {elementAffordance}<span className="ov-header-actions"><AskCardAction subject={subject} icon />{card && <OpenInChatGPT target={{ kind: 'work', card, scene, readFailed }} />}<button type="button" className="ov-open-inspector ov-header-icon" aria-label="Open in Inspector" title="Open in Inspector" onClick={event => { event.stopPropagation(); openInInspector() }} onKeyDown={event => { if (event.key !== 'Enter' && event.key !== ' ') return; event.preventDefault(); event.stopPropagation(); openInInspector() }}>
       <svg aria-hidden="true" viewBox="0 0 20 20"><rect x="2" y="3" width="16" height="14" rx="1" /><path d="M12 3v14" /></svg>
     </button></span>
   </div>
@@ -253,7 +250,7 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
           <div className="ov-card-stack">{row.cards.map(card => <Entity key={card.id} view={localView} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!row.cards.length && !hasVisibleTask && <div className="ov-empty-col">{rightEmpty}</div>}</div>
         </div>
       })}
-      {!view.compact && state.linksVisible !== false && <svg className="ov-connections">{paths.map(p => <g key={p.id}><path d={p.d} className={`ov-line ov-${p.tone}${(!state.navigation || state.navigation.cardId !== p.card || p.tone === 'linked') && state.flash && state.flash.until > now && (state.searchReveal?.kind === 'claim' ? state.flash.ids.includes(semanticId(target('claim', p.id))) : state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} /><AskRelationshipHit claimId={p.id} d={p.d} /></g>)}</svg>}
+      {!view.compact && state.linksVisible !== false && <svg className="ov-connections">{paths.map(p => <g key={p.id}><path d={p.d} className={`ov-line ov-${p.tone}${(!state.navigation || state.navigation.cardId !== p.card || p.tone === 'linked') && state.flash && state.flash.until > now && (state.searchReveal?.kind === 'claim' ? state.flash.ids.includes(semanticId(target('claim', p.id))) : state.flash.ids.includes(semanticId(target('claim', p.id))) || !!p.worker && flashRelated(view, target('execution', p.worker)) || !!p.card && flashRelated(view, target('card', p.card))) ? ' flashed' : ''}${state.navigation?.cardId === p.card && p.tone === 'linked' ? ' desk-target' : ''}${focus ? (focus.kind === 'card' ? p.card === focus.id : focus.kind === 'execution' ? p.worker === focus.id : focus.kind === 'claim' ? p.id === focus.id : !!p.worker && related(view, focus, target('execution', p.worker))) ? ' hot' : ' dim' : ''}`} /><AskRelationshipHit claimId={p.id} d={p.d} onInspect={() => send({ type: 'focus', target: target('claim', p.id) })} /></g>)}</svg>}
     </div>}
   </section>
 }
@@ -391,7 +388,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
             {!collapsed && <div className="ov-inner">{children.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}</div>}
           </section>
         })}
-        {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} />}
+        {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} onInspect={id => send({ type: 'focus', target: target('claim', id) })} />}
         {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? patternEmptyText[state.search.patterns[0]!] : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
         {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>

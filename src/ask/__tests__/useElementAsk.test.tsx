@@ -118,7 +118,7 @@ it('leaves a mouse text-selection drag native while retaining touch item swipes'
   expect(itemAsk).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'Ask about this' })).toBeInTheDocument()
   window.getSelection()!.removeAllRanges()
-  hold(field, 'touchStart'); hold(field, 'touchMove', 40); hold(field, 'touchEnd', 40)
+  hold(field, 'touchStart'); hold(field, 'touchMove', 20); hold(field, 'touchEnd', 20)
   expect(itemAsk).toHaveBeenCalledOnce()
 })
 
@@ -150,9 +150,9 @@ it.each(['touch', 'mouse'])('assigns a nested %s swipe only to its nearest surfa
   render(<Nested />)
   const swipe = (node: HTMLElement) => {
     if (kind === 'touch') {
-      hold(node, 'touchStart'); hold(node, 'touchMove', 30); hold(node, 'touchEnd', 30)
+      hold(node, 'touchStart'); hold(node, 'touchMove', 20); hold(node, 'touchEnd', 20)
     } else {
-      for (const [type, x] of [['pointerdown', 100], ['pointermove', 30], ['pointerup', 30]] as const) {
+      for (const [type, x] of [['pointerdown', 100], ['pointermove', 20], ['pointerup', 20]] as const) {
         const event = new Event(type, { bubbles: true, cancelable: true })
         Object.assign(event, { pointerType: 'mouse', pointerId: 1, button: 0, clientX: x, clientY: 100 })
         fireEvent(node, event)
