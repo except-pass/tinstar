@@ -254,3 +254,23 @@ it.each(['same time', 'newest first', 'oldest first'])('updates an expanded inli
   expect(screen.getByRole('button', { name: /New answer.*Independent answer 1/ })).toBeVisible()
   expect(read.mock.calls.filter(([url]) => url === '/api/ask/requests')).toHaveLength(2)
 })
+
+it('retains the expanded three-turn thread and inline draft through Overview, PRs and Releases', async () => {
+  const first = items[0]!
+  items = [first, ...['Can it proceed?', 'Who reviews it?'].map((question, index) => ({ ...record(), conversation_id: first.conversation_id, question, created_at: `2099-01-0${index + 1}T00:00:00Z` }))]
+  const view = render(<Shell />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Sent.*Where is the evidence/ }))
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
+  fireEvent.change(field, { target: { value: 'What about that review?' } })
+  for (const page of ['pulls', 'releases', 'overview']) {
+    view.rerender(<Shell page={page} />)
+    expect(screen.getByRole('region', { name: /Answer thread/ })).toBe(thread)
+    expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(field)
+    expect(field).toHaveValue('What about that review?')
+    for (const item of items) expect(thread).toHaveTextContent(item.question)
+  }
+  fireEvent.keyDown(field, { key: 'Escape' })
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toHaveFocus()
+  expect(field).toHaveValue('What about that review?')
+})

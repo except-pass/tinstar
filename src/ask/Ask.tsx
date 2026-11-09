@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useId, type MouseEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { apiFetch } from '../apiClient'
 import { askItemsSchema, askReturn, isArtifactTarget, type AskItem, type AskReturn } from '../shared/ask'
@@ -19,7 +19,8 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result.data as T
 }
 interface AskControls {
-  scene: FloorScene | null; expanded: string | null; collapse: () => void; followUp: (item: AskItem) => void; canBack?: boolean; onBack?: () => void
+  scene: FloorScene | null; expanded: string | null; collapse: () => void; state: PresentationState; submit: (body: unknown) => Promise<void>; canBack?: boolean; onBack?: () => void
+  replySeed: { conversationId: string; seed: AskSeed; key: string } | null;
   items: AskItem[]; error: string | null; open: (subject?: AskSeed, parent?: AskItem) => void
   returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss') => void
 }
@@ -47,6 +48,7 @@ export function AskCardAction({ cardId, subject, icon = false }: { cardId?: stri
 export function AskProvider({ scene, state, onReturn, canBack, onBack, children }: { canBack?: boolean; onBack?: () => void; scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: (origin: AskReturn) => void; children: ReactNode }) {
   const [items, setItems] = useState<AskItem[]>([]), [error, setError] = useState<string | null>(null)
   const [composer, setComposer] = useState<{ seed: AskSeed; parent?: AskItem; key: string } | null>(null)
+  const [replySeed, setReplySeed] = useState<AskControls['replySeed']>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const localRevision = useRef(0), refreshRevision = useRef(0)
   const refresh = useCallback(async () => {
@@ -60,7 +62,16 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     catch (reason) { if (revision === refreshRevision.current) setError((reason as Error).message) }
   }, [])
   useEffect(() => { void refresh(); const timer = setInterval(() => { void refresh() }, 5000); return () => { clearInterval(timer); refreshRevision.current++ } }, [refresh])
-  const open = (seed: AskSeed = {}, parent?: AskItem) => { if (!scene && !isArtifactTarget(seed.target)) { setError('Source context is unavailable. Try again when sources connect.'); return } setComposer({ seed, parent, key: crypto.randomUUID() }) }
+  const open = (seed: AskSeed = {}, parent?: AskItem) => {
+    parent ??= items.find(item => item.request_id === seed.followUpTo)
+    if (parent) {
+      setExpanded(parent.conversation_id)
+      setReplySeed({ conversationId: parent.conversation_id, seed, key: crypto.randomUUID() })
+      return
+    }
+    if (!scene && !isArtifactTarget(seed.target)) { setError('Source context is unavailable. Try again when sources connect.'); return }
+    setComposer({ seed, key: crypto.randomUUID() })
+  }
   const action = (item: AskItem, value: 'retry' | 'dismiss') => {
     void request(`requests/${item.request_id}/${value}`, {}).then(refresh).catch(reason => setError((reason as Error).message))
   }
@@ -70,13 +81,15 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
     const unread = items.filter(turn => turn.conversation_id === item.conversation_id && turn.reply && !turn.read_at)
     if (unread.length) void Promise.all(unread.map(turn => request(`requests/${turn.request_id}/read`, {}))).then(refresh).catch(reason => setError((reason as Error).message))
   }
-  const followUp = (item: AskItem) => open(item.context.target ? { target: item.context.target, view: item.context.view, label: item.context.anchor.label } : { cardId: item.context.anchor.page_id }, item)
-  return <Controls.Provider value={{ scene, expanded, collapse: () => setExpanded(null), followUp, canBack, onBack, items, error, open, returnTo, action }}>{children}
+  const submit = async (body: unknown) => {
+    const item = await request<AskItem>('requests', body)
+    localRevision.current++
+    setItems(previous => previous.some(old => old.request_id === item.request_id) ? previous.map(old => old.request_id === item.request_id ? item : old) : [...previous, item])
+    setExpanded(item.conversation_id)
+  }
+  return <Controls.Provider value={{ scene, state, submit, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, action }}>{children}
     {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
-      const item = await request<AskItem>('requests', body)
-      localRevision.current++
-      setItems(previous => [item, ...previous.filter(old => old.request_id !== item.request_id)])
-      setExpanded(item.conversation_id)
+      await submit(body)
       setComposer(null)
     }} />, document.body)}
 
@@ -86,9 +99,10 @@ export function AskRelationshipHit({ claimId, d }: { claimId: string; d: string 
   const ask = useSemanticAsk({ target: { kind: 'claim', id: claimId } })
   return <path className="ov-relationship-hit" data-claim-id={claimId} d={d} role="button" tabIndex={0} aria-label="Ask about this relationship" onContextMenu={event => ask(event, 'relationship', claimId)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') ask(event, 'relationship', claimId) }} />
 }
-function useDialogFocus() {
+function useDialogFocus(enabled: boolean) {
   const ref = useRef<HTMLDialogElement>(null)
   useLayoutEffect(() => {
+    if (!enabled) return
     const previous = document.activeElement as HTMLElement | null
     const dialog = ref.current
     dialog?.showModal()
@@ -97,41 +111,45 @@ function useDialogFocus() {
       dialog?.close()
       if (previous?.isConnected) previous.focus({ preventScroll: true })
     }
-  }, [])
+  }, [enabled])
   return ref
 }
-function AskComposer({ scene, state, seed, parent, clientKey, submit, close }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void }) {
+/** The same text form serves every contextual entry and the inline thread.
+ * Future voice capture can supply editable text through this component's draft. */
+function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inline = false }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void; inline?: boolean }) {
   const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.question ?? (seed.target?.kind === 'pull' && seed.target.action_receipt_id ? 'What does this action receipt establish?' : seed.field_key ? fieldDrafts[seed.field_key] : '')), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
-  const ref = useDialogFocus(), locked = useRef(false)
+  const ref = useDialogFocus(!inline), locked = useRef(false), titleId = useId()
   const card = scene?.cards.find(card => card.id === chosen)
   const worker = seed.target?.kind === 'execution' ? scene?.executions.find(worker => worker.id === seed.target!.id) : null
   const claim = seed.target?.kind === 'claim' ? scene?.claims.find(claim => claim.id === seed.target!.id) : null
   const linkedCard = claim && scene?.cards.find(card => card.id === claim.cardId)
   const label = parent?.context.anchor.label ?? seed.label ?? (isArtifactTarget(seed.target) ? seed.target.id : worker ? workerTitle(worker) : linkedCard ? `Relationship · ${cardTitle(linkedCard)}` : card ? cardTitle(card) : chosen)
-  const bound = !!seed.target || !!chosen
+  const bound = !!parent || !!seed.target || !!chosen
   const element = parent?.context.element ?? (seed.target || chosen === seed.cardId ? seed.element : undefined)
-  // Keep the retry envelope unchanged after an uncertain response; editing begins
-  // a fresh idempotency key so a lost response cannot bind two different texts.
-  const key = useRef(clientKey), attempted = useRef(false)
-  return <dialog ref={ref} className="ask-dialog" aria-labelledby="ask-title" onKeyDown={event => {
+  // Freeze the whole uncertain envelope, including its exact parent. A refresh
+  // may discover another turn before a lost acknowledgment is retried.
+  const key = useRef(inline ? crypto.randomUUID() : clientKey), retryBody = useRef<unknown>(null)
+  const edited = () => { if (retryBody.current) { key.current = crypto.randomUUID(); retryBody.current = null } }
+  const form = <form className="ask-composer" aria-label={inline ? 'Reply to First Mate' : 'New question'} onKeyDown={event => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); if (!busy) close() }
-  }} onCancel={event => { event.preventDefault(); if (!busy) close() }}>
-    <form onSubmit={event => {
-      event.preventDefault()
-      if (locked.current || !bound || !question.trim()) return
-      locked.current = true; setBusy(true); setError(null); attempted.current = true
-      void submit({ client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) })
-        .catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
-    }}>
-      <header><h2 id="ask-title">Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
+  }} onSubmit={event => {
+    event.preventDefault()
+    if (locked.current || !bound || !question.trim()) return
+    locked.current = true; setBusy(true); setError(null)
+    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
+    void submit(retryBody.current).then(() => {
+      if (inline) { setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
+    }).catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
+  }}>
+    {!inline && <><header><h2 id={titleId}>Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
       <p>{seed.element ? 'Ask about this element. Send the suggested question or edit it.' : 'Swipe left on an item to ask; right-click or long-press a field to ask about it.'}</p>
-      {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); if (attempted.current) key.current = crypto.randomUUID() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); if (attempted.current) key.current = crypto.randomUUID() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
-      {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
-      <label>Question<textarea autoFocus required maxLength={4000} value={question} disabled={busy} onChange={event => { setQuestion(event.target.value); if (attempted.current) key.current = crypto.randomUUID() }} placeholder="What would you like to know?" enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
-      {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
-      <footer><button type="button" disabled={busy} onClick={close}>Cancel</button><button type="submit" disabled={busy || !bound || !question.trim()}>{busy ? 'Sending…' : 'Send question'}</button></footer>
-    </form>
-  </dialog>
+      {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); edited() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); edited() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
+      {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}</>}
+    <label>{inline ? 'Reply to First Mate' : 'Question'}<textarea autoFocus={!inline || !!seed.question} required maxLength={4000} value={question} aria-busy={busy} readOnly={busy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Ask a follow-up in this conversation…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
+    {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
+    <footer>{!inline && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" disabled={busy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send reply' : 'Send question'}</button></footer>
+  </form>
+  return inline ? form : <dialog ref={ref} className="ask-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!busy) close() }}>{form}</dialog>
 }
 function sourceAvailable(item: AskItem, scene: FloorScene | null) {
   const target = item.context.target
@@ -149,6 +167,7 @@ function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskCont
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
   const latest = turns.at(-1)!
+  const seed = controls.replySeed?.conversationId === latest.conversation_id ? controls.replySeed : null
   return <section className="ask-thread" id={`ask-thread-${latest.conversation_id}`} aria-label={`Answer thread: ${turns[0]!.question}`}>
     <header><strong>Conversation</strong><button type="button" onClick={event => { controls.collapse(); event.currentTarget.closest('[data-ask-id]')?.querySelector<HTMLElement>('.ask-preview')?.focus({ preventScroll: true }) }}>Collapse answer</button></header>
     {!sourceAvailable(latest, controls.scene) && <p role="status">The original task is no longer on the floor.</p>}
@@ -160,7 +179,13 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
         {!!turn.reply.suggested_actions.length && <><h4>Suggested next actions</h4><ul>{turn.reply.suggested_actions.map((action, index) => <li key={index}>{action}</li>)}</ul><p>Suggestions require their existing approvals before execution.</p></>}
       </> : <AskDelivery item={turn} controls={controls} now={now} />}
     </section>)}
-    <footer><button type="button" onClick={() => controls.returnTo(latest)}>Return to source</button>{controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}<button type="button" onClick={() => controls.followUp(latest)}>Follow up</button></footer>
+    <footer><button type="button" onClick={() => controls.returnTo(latest)}>Return to source</button>{controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}</footer>
+    <AskComposer key={seed?.key ?? latest.conversation_id} inline scene={controls.scene} state={controls.state} parent={latest}
+      seed={{ ...(latest.context.target ? { target: latest.context.target, view: latest.context.view } : { cardId: latest.context.anchor.page_id }), ...seed?.seed }}
+      clientKey={latest.conversation_id} submit={controls.submit} close={() => {
+        const thread = document.getElementById(`ask-thread-${latest.conversation_id}`)
+        thread?.querySelector<HTMLButtonElement>('header button')?.focus()
+      }} />
   </section>
 }
 export function AskDesk({ now }: { now: number }) {
@@ -180,7 +205,7 @@ export function AskDesk({ now }: { now: number }) {
       const turns = controls.items.filter(turn => turn.conversation_id === item.conversation_id).sort((a,b) => a.created_at.localeCompare(b.created_at))
       const failed = turns.filter(turn => !turn.reply && turn.status === 'failed').length
       const pending = turns.filter(turn => !turn.reply && turn.status !== 'failed').length
-      return <AskSurface as="article" subject={item.context.target ? { target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
+      return <AskSurface as="article" subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
           <small {...askElement('status', 'Question delivery')}>{unread ? 'New answer' : ({ sent: 'Sent', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[item.status])}{failed > 0 && ` · ${failed} failed`}{pending > 0 && ` · ${pending} pending`} · {ageLabel(Date.parse(item.updated_at), now)}</small>
           <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && item.reply && <p {...askElement('answer', 'First Mate answer')}>{item.reply.summary}</p>}<span className="ask-open">{expanded ? 'Conversation open' : item.reply ? 'Open answer →' : 'Open question →'}</span>

@@ -1,6 +1,6 @@
 import type { AskElement, AskField, AskTarget, AskView } from '../shared/ask'
 
-export interface AskSubject { cardId?: string; target?: AskTarget; label?: string; view?: AskView }
+export interface AskSubject { followUpTo?: string; cardId?: string; target?: AskTarget; label?: string; view?: AskView }
 export interface AskSeed extends AskSubject { element?: AskElement; field_key?: AskField; field_value?: string; question?: string }
 export const fieldDrafts: Record<AskField, string> = {
   next_check_in: 'Why is this overdue?',
