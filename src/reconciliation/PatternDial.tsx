@@ -13,10 +13,20 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
   const health = sceneWorkHealth(scene, now).filter(item => ids.has(item.cardId))
   const sourceUnknown = !!scene.searchReadFailed || !freshObservation(scene.coverage.intentions, now)
   const workersUnknown = !scene.coverage.homes.length || scene.coverage.homes.some(home => !freshObservation(home.observation, now))
-  return Object.fromEntries(dialPatterns.map(pattern => [pattern, {
-    count: pattern === 'all' ? ids.size : health.filter(item => item.patterns[pattern].outcome === 'match').length,
-    unknown: sourceUnknown || (pattern === 'all' ? !!state.donutFilter?.workers.length && workersUnknown : health.some(item => item.patterns[pattern].outcome === 'unavailable')),
-  }])) as Record<DialPattern, { count: number; unknown: boolean }>
+  return Object.fromEntries(dialPatterns.map(pattern => {
+    const unavailable = pattern === 'all' ? [] : health.filter(item => item.patterns[pattern].outcome === 'unavailable')
+    const needsHomes = pattern === 'active' || pattern === 'stalled' || (pattern === 'all' && !!state.donutFilter?.workers.length)
+    const reasons = [...new Set([
+      ...(sourceUnknown ? [scene.searchReadFailed ? 'Source read failed; showing last known work' : 'Notion source is unavailable, stale or incomplete'] : []),
+      ...unavailable.map(item => item.patterns[pattern as Exclude<DialPattern, 'all'>].reason),
+      ...(needsHomes ? scene.coverage.homes.filter(home => !freshObservation(home.observation, now)).map(home => `Home snapshot stale or unreadable: ${home.source.home}`) : []),
+      ...(needsHomes && !scene.coverage.homes.length ? ['Home snapshot unavailable: no configured home'] : []),
+    ])]
+    return [pattern, {
+      count: pattern === 'all' ? ids.size : health.filter(item => item.patterns[pattern].outcome === 'match').length,
+      unknown: sourceUnknown || unavailable.length > 0 || (needsHomes && workersUnknown), reasons,
+    }]
+  })) as Record<DialPattern, { count: number; unknown: boolean; reasons: string[] }>
 }
 
 export function PatternDial({ scene, state, send, now }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; now: number }) {
@@ -78,7 +88,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(previous)}`} onClick={() => choose(previous)}><span>{dialNames[previous]}</span><small>{count(previous)}</small></button>
     <button ref={center} type="button" className="ov-pattern-selected" aria-label={`${label(selected)}. Show explanation`} aria-describedby="ov-pattern-description" aria-expanded={shown} onMouseEnter={showLater} onMouseLeave={() => { stopTimer(); if (!pinned) setShown(false) }} onFocus={showLater} onBlur={() => { stopTimer(); if (!pinned) setShown(false) }} onClick={() => { stopTimer(); setPinned(!pinned); setShown(!pinned) }}><strong>{dialNames[selected]}</strong><small>{count(selected)}</small><span aria-hidden="true">ⓘ</span></button>
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(next)}`} onClick={() => choose(next)}><span>{dialNames[next]}</span><small>{count(next)}</small></button>
-    <span id="ov-pattern-description" className="ov-sr-only">{patternReminders[selected]}{counts[selected].unknown ? ' Some source evidence is unavailable; ? means unknown, + means confirmed matches with incomplete coverage.' : ''} Swipe sideways or use Left and Right arrow keys to change pattern.</span>
-    {shown && createPortal(<div ref={tip} role="tooltip" className="ov-pattern-tooltip" style={position}><strong>{dialNames[selected]} · {count(selected)} matching tasks</strong><p>{patternReminders[selected]}</p>{counts[selected].unknown && <small>Some evidence is unavailable. ? means unknown; + means confirmed matches with incomplete coverage.</small>}</div>, document.body)}
+    <span id="ov-pattern-description" className="ov-sr-only">{patternReminders[selected]}{counts[selected].unknown ? ` ${counts[selected].reasons.join('; ')}. ? means unknown, + means confirmed matches with incomplete coverage.` : ''} Swipe sideways or use Left and Right arrow keys to change pattern.</span>
+    {shown && createPortal(<div ref={tip} role="tooltip" className="ov-pattern-tooltip" style={position}><strong>{dialNames[selected]} · {count(selected)} matching tasks</strong><p>{patternReminders[selected]}</p>{counts[selected].unknown && <small>{counts[selected].reasons.join("; ")}. ? means unknown; + means confirmed matches with incomplete coverage.</small>}</div>, document.body)}
   </div>
 }

@@ -76,3 +76,26 @@ export function fixtureQueue(now = Date.now()) {
   }
   return buildQueue(sources, new Map(), now)
 }
+
+/** Complete readiness census for the compact dial: one Active, one Stalled.
+ * Every task has an explicit blocker list; the stale variant retains the payload
+ * while withdrawing freshness, just as a failed home read does. */
+export function fixtureReadinessScene({ now = Date.now(), stale = false }: { now?: number; stale?: boolean } = {}) {
+  const sources = fixtureSources({ now })
+  sources.intentions.data!.cards = sources.intentions.data!.cards.filter(card => [fixtureId(1), fixtureId(4)].includes(card.id))
+  for (const card of sources.intentions.data!.cards) {
+    card.properties['Parent item']!.value = []
+    card.properties.Status!.value = 'In Progress'
+    if (card.properties['Waiting For']) card.properties['Waiting For']!.value = ''
+  }
+  for (const home of sources.fleet) {
+    const data = home.observation.data!
+    data.backlog = data.tasks.map(task => ({ id: task.identity.task_id, title: String(task.id), state: 'in_flight', kind: 'ship', repo: null,
+      hold_reason: null, hold_until: null, blocked_by: null, captain_actionable: false, pr_url: null, unresolved_blocker_ids: [], blocked_by_ids: [], cardReferences: [] }))
+    for (const task of data.tasks) if (task.id === 'blocked-worker') {
+      task.current_state.state = 'paused'; task.last_event.state = 'paused'
+    }
+  }
+  if (stale) sources.fleet[1]!.observation = { ...sources.fleet[1]!.observation, status: 'stale', coverage: 'unknown', error: 'Fixture: readiness publication unavailable' }
+  return new SceneReconciler().reconcile(sources, now)
+}

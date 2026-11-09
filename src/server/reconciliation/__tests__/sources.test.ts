@@ -19,7 +19,7 @@ afterEach(async () => { vi.useRealTimers(); resetOriginAllowlistForTests(); awai
 const id = '40d50ce6d422814aa741c102cd00aaae'
 const timestamp = '2026-11-03T18:32:18Z'
 const snapshot = (home = '/farm/hulk') => ({
-  schema: 'fm-fleet-snapshot.v1', generated: timestamp, fm_home: home, backlog: { records: [] },
+  schema: 'fm-fleet-snapshot.v1', generated: timestamp, fm_home: home, backlog: { present: true, records: [] }, main_inventory: { valid: true },
   tasks: [{ id: 'same-task', spawn_gen: 'attempt-1', branch: 'fm/example', current_state: { state: 'unknown', freshness: 'fresh' },
     remote: { host: 'bandit', root: '/farm/kdf' }, raw_transcript: 'private' }],
 })
@@ -72,6 +72,38 @@ describe('fleet collection', () => {
       vi.setSystemTime(now + 21_000)
       expect((await sources.snapshot()).fleet[0]!.observation.status).toBe('stale')
     }
+  })
+
+  it('preserves readiness lists including explicit empties and never fills absent or malformed lists', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'readiness.json')
+    await writeFile(file, JSON.stringify({ ...snapshot(), main_inventory: { valid: true }, backlog: { present: true, records: [
+      { id: 'same-task', state: 'in_flight', unresolved_blocker_ids: ['one', 'two'], blocked_by_ids: ['one'], current_role: 'crewmate', hold_bucket: 'captain' },
+      { id: 'empty', state: 'queued', unresolved_blocker_ids: [], blocked_by_ids: [] },
+      { id: 'absent', state: 'queued' },
+      { id: 'malformed', state: 'queued', unresolved_blocker_ids: [null] },
+    ] } }))
+    const observation = await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()
+    expect(observation).toMatchObject({ status: 'fresh', coverage: 'complete' })
+    const rows = observation.data!.backlog!
+    expect(rows[0]).toMatchObject({ unresolved_blocker_ids: ['one', 'two'], blocked_by_ids: ['one'], current_role: 'crewmate', hold_bucket: 'captain' })
+    expect(rows[1]).toMatchObject({ unresolved_blocker_ids: [], blocked_by_ids: [] })
+    expect(rows[2]).not.toHaveProperty('unresolved_blocker_ids')
+    expect(rows[2]).not.toHaveProperty('blocked_by_ids')
+    expect(rows[3]).not.toHaveProperty('unresolved_blocker_ids')
+    expect(reconcileScene({ generatedAt: timestamp, scope: 'configured-homes-only', warnings: [], intentions: {
+      data: null, status: 'unknown', coverage: 'unknown', observedAt: null, attemptedAt: timestamp, expiresAt: null, error: null,
+    }, fleet: [{ source: { home: '/farm/hulk', machineBasis: 'configured' }, observation }] }, Date.parse(timestamp)).backlog[0]!.source.unresolved_blocker_ids).toEqual(['one', 'two'])
+  })
+
+  it.each(['inventory', 'backlog'] as const)('does not certify missing %s completeness metadata', async missing => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'incomplete.json')
+    const raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw,
+      ...(missing === 'inventory' ? { main_inventory: undefined } : { backlog: { records: [] } }),
+    }))
+    expect(await fleetObservation({ home: '/farm/hulk', snapshotFile: file }).get()).toMatchObject({ coverage: 'partial', status: 'partial' })
   })
 
   it('keeps the local-exec default at 60 seconds', async () => {

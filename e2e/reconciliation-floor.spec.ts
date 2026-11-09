@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fixtureId, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureReadinessScene, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
 import type { FloorScene } from '../src/shared/reconciliationPresentation'
 
@@ -726,6 +726,42 @@ test('single-row toolbar Smart Search exact identifiers, named entities and expl
     await input.fill('0143'); await expect(results.getByRole('option')).toHaveCount(1)
     if (field !== 'identifier') { await input.fill('office'); await expect(results.getByRole('option')).toHaveCount(1) }
   }
+})
+
+for (const width of [1440, 390]) test(`single-row toolbar Pattern Dial readiness counts and stale home explanations at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const proofNow = Date.parse('2026-11-09T16:00:00Z')
+  await page.clock.install({ time: proofNow })
+  let scene = fixtureReadinessScene({ now: proofNow })
+  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  const center = page.locator('.ov-pattern-selected')
+  await expect(center).toHaveAccessibleName('All, 2 matching tasks. Show explanation')
+  await center.press('ArrowLeft')
+  await expect(center).toHaveAccessibleName('Active, 1 matching tasks. Show explanation')
+  await screenshot(page, `readiness-active-${width}`)
+  await center.press('ArrowRight'); await center.press('ArrowRight')
+  await expect(center).toHaveAccessibleName('Stalled, 1 matching tasks. Show explanation')
+  await center.click()
+  await expect(page.getByRole('tooltip')).toContainText('Stalled · 1 matching tasks')
+  await screenshot(page, `readiness-stalled-${width}`)
+  scene = fixtureReadinessScene({ now: proofNow, stale: true })
+  await page.reload()
+  await expect(center).toHaveAccessibleName('Stalled, ? matching tasks, incomplete evidence. Show explanation')
+  await center.click()
+  const tooltip = page.getByRole('tooltip')
+  await expect(tooltip).toContainText('Home snapshot stale or unreadable: /fixture/hulk')
+  await expect(tooltip).toContainText('Runnable coverage incomplete for /fixture/hulk')
+  const bounds = await tooltip.boundingBox()
+  expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+  await screenshot(page, `readiness-unknown-${width}`)
+  await center.press('Escape'); await center.press('ArrowLeft'); await center.press('ArrowLeft')
+  await expect(center).toHaveAccessibleName('Active, 1+ matching tasks, incomplete evidence. Show explanation')
+  await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
+  await expect(page.locator('.ov-donut')).toHaveCount(2)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
 })
 
 test('single-row toolbar Pattern Dial and compact palette support touch, keyboard, tooltip and narrow widths', async ({ page }) => {
