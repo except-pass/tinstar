@@ -102,8 +102,8 @@ These visibility changes persist across reloads and devices; they do not cancel 
 Notion, send instructions, execute suggestions, approve work, merge or deploy.
 A genuine new reply clears that turn's archived state and resurfaces its
 conversation as **New answer**, leaving unrelated archived conversations alone.
-Source response receipts remain available in the request
-inspector's **Response delivery details**; the retired receipt panel is removed.
+For source response receipt inspection and retry, see the
+[queue contract](reconciliation-queue.md).
 
 Collapsed cards show status/time, question, source name and an available answer
 snippet; expand inline for the full thread. An unopened answer has a teal left

@@ -124,10 +124,10 @@ describe('Overview shell and retained terminal navigation', () => {
     expect(await screen.findByText('Check deployment', { selector: 'p' })).toBeTruthy()
     expect(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).queryByText('Other home note', { selector: 'p' })).toBeNull()
     fireEvent.click(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).getByText('Delivery details', { selector: 'summary' }))
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })) })
+    await act(async () => { fireEvent.click(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).getByRole('button', { name: 'Retry delivery' })) })
     expect(posts).toEqual([{ requestId: 'note-id', kind: 'message', text: 'Check deployment' }])
-    expect(await screen.findByText('Deployment checked', { selector: 'p' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Retry delivery' })).toBeNull()
+    expect(await within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).findByText('Deployment checked', { selector: 'p' })).toBeTruthy()
+    expect(within(screen.getByText('Tell First Mate about this', { selector: 'summary' }).parentElement!).queryByRole('button', { name: 'Retry delivery' })).toBeNull()
   })
   it('keeps retained notes recoverable after their worker disappears and navigation', async () => {
     window.history.replaceState(null, '', '/?worker=alpha&home=firstmate')

@@ -10,6 +10,8 @@ Each First Mate source has its own inspector, Answer/Dismiss controls (only whil
 
 Answer uses the existing `/api/fleet/messages` inbox/receipt path, with a source anchor resolved against the current explicit request inventory. Dismiss uses the existing `/api/fleet/dismiss` route, resolving either one worker decision key or one captain hold. Neither uses the legacy attention title/key fallback. A failed fleet read removes response routes while retaining last-known display data. Outbox records retain the exact source anchor, and both initial submission and retry include it in the First Mate inbox note, preserving home, task, request ID and source kind even when a decision and hold share an ID and summary. Receipts track that request rather than another request sharing a key; pending/saved responses remain visible on returning to the source. Reading and Next never submit a response.
 
+Expand **Response delivery details** in the source inspector to inspect the retained response receipt. Failed saves and confirmed wake failures offer **Retry delivery** with the existing request ID; a successfully delivered response awaiting an answer does not.
+
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
 | Readiness | Required interpretation |

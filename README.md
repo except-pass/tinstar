@@ -49,7 +49,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-A Desk request's expanded **Response delivery details** shows whether its answer was saved, acknowledged or resolved; saving a message does not claim First Mate has acted on it. The retained inbox and dismissal APIs are described in the [integration reference](docs/features/firstmate-observer.md).
+For Desk response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, open **Retained worker notes** in Desk. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
 
 ## Quick start
 
