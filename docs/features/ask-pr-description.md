@@ -10,13 +10,8 @@ capture failures remain visible and retryable.
 The [feature contract](ask.md) owns the current inbox layout and ordering.
 Existing Inspector actions and card click semantics are preserved.
 
-Follow-up slices cover Worker and verified Link contexts with actual endpoints,
-right-drag voice with permission/transcription review and text fallback,
-additional context chips, Queued/Investigating/Needs input lifecycle and unified
-inbox priorities, Worker/Link semantic return and stale-context handling, and
-remaining parent-card accessibility/failure proof. Physical iPhone Safari and
-Android Chrome touch/microphone verification remains an explicit review gate
-when devices are available. See [the feature contract](ask.md) for details.
+See the [feature contract's follow-up slices](ask.md#follow-up-slices) for
+remaining scope and physical-device verification requirements.
 
 Reviewable PR only; no auto-merge or deploy is authorized. The outer pipeline
 supplies authoritative validation and CI results.

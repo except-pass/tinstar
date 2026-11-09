@@ -145,7 +145,8 @@ link. “Show all PRs in this view” removes only the temporary reveal.
 Answers expand inline in the persistent Desk, with neighboring conversation
 previews still available in one click. Correlated follow-ups share one thread;
 collapse, history, unread status, dismiss, references and suggested actions retain
-the existing request/permission boundaries. New questions use the shared dialog; expanded conversations use its inline reply form.
+the existing request/permission boundaries. See [continuous text conversations](#continuous-text-conversations)
+for the shared composer and inline reply behavior.
 On mobile, opening a conversation keeps the Desk sheet open; close it to see
 the revealed origin in the main workspace.
 
@@ -304,8 +305,9 @@ The remaining parent-card items are follow-up slices:
 - Worker context enriched with observed attempt/home beyond the execution ID
   anchor; removable additional context chips beyond the single originating
   Work, Worker or Link context.
-- Right-drag voice entry, activation-only microphone permission, transcription
-  review/edit, text fallback and discoverable accessible voice controls.
+- Discoverable microphone controls with press-and-hold and accessible tap-toggle
+  recording, local transcription, cancellation and text fallback. Voice remains
+  a separate slice; right-drag is not the primary entry path.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery; unified priority for decisions, unread answers,
   investigations and failures.
@@ -358,6 +360,12 @@ and any operator action selections. Each history turn retains its request ID,
 timestamp and provenance. Legacy answers without a recorded reply timestamp use
 the request timestamp, explicitly marked `timestamp_basis: legacy_request`.
 History is quoted prior conversation, never fresh evidence or authorization.
+
+Semantic replies retain the selected element and field hints separately as
+`captured_selection`, without replacing the original source context. The
+selection accompanies the current dispatch and its persisted user history turn.
+A successful send consumes the suggested draft and selection; an uncertain
+retry retains the original submission envelope.
 
 The existing `tinstar.ask.v1` inbox JSON adds
 `conversation: {schema: "tinstar.ask-conversation.v1", turns, omitted, retrieval}`.
