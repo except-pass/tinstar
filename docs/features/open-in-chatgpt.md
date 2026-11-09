@@ -23,7 +23,7 @@ be suitable for sharing. Source URLs are reconstructed canonically, and Tin Star
 links discard current query parameters, fragments and URL credentials. Prompts
 are capped at 1,800 characters and encoded URLs at 6,000 characters.
 
-`openInChatGPT` in `src/ask/openInChatGPT.ts` is a pure typed context builder.
+`openInChatGPT` in `src/ask/chatgptContext.ts` is a pure typed context builder.
 `OpenInChatGPT.tsx` owns the browser navigation and copy recovery. Neither invokes
 First Mate nor writes Tin Star source state. Existing Ask, Inspector, row selection,
 expansion and swipe controls keep their behavior. Movement on the new action

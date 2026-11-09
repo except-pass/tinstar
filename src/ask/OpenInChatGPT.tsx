@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { openInChatGPT, type ChatGPTTarget } from './openInChatGPT'
+import { openInChatGPT, type ChatGPTTarget } from './chatgptContext'
 import './openInChatGPT.css'
 
 function PromptFallback({ launch, close }: { launch: ReturnType<typeof openInChatGPT>; close: () => void }) {

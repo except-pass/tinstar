@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { readOverviewSearch } from '../../cockpit/overviewQuery'
 import type { PullDetail, PullSummary } from '../../shared/pulls'
-import { MAX_CHATGPT_PROMPT, MAX_CHATGPT_URL, openInChatGPT } from '../openInChatGPT'
+import { MAX_CHATGPT_PROMPT, MAX_CHATGPT_URL, openInChatGPT } from '../chatgptContext'
 
 const at = '2026-11-09T16:00:00.000Z'
 const pull: PullSummary = { id: 'except-pass/tinstar#123', repository: 'except-pass/tinstar', number: 123, url: 'https://github.com/except-pass/tinstar/pull/123?token=do-not-copy#fragment', title: 'A useful PR', author: 'owner', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [{ cardId: fixtureId(1), active: true, sources: ['card-property'], events: [] }] }
