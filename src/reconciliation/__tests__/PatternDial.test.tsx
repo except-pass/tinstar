@@ -56,16 +56,65 @@ describe('Pattern Dial', () => {
     fireEvent.keyDown(selected(), { key: 'ArrowRight' })
     expect(selected()).toHaveTextContent('All')
   })
-  it('coalesces a horizontal wheel burst and lets ordinary vertical scrolling through', () => {
+  it('steps one pattern per wheel notch in either direction and keeps the page still', () => {
     vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
     const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
-    expect(fireEvent.wheel(dial, { deltaX: 0, deltaY: 80 })).toBe(true)
+    const outside = screen.getByRole('button', { name: 'Outside' })
+    const turn = (deltaY: number, deltaMode = 0) => { time += 100; return fireEvent.wheel(dial, { deltaX: 0, deltaY, deltaMode }) }
+    expect(turn(12)).toBe(false)
     expect(selected()).toHaveTextContent('All')
-    expect(fireEvent.wheel(dial, { deltaX: 40, deltaY: 1 })).toBe(false)
-    for (let i = 0; i < 8; i++) { time += 30; fireEvent.wheel(dial, { deltaX: 25, deltaY: 0 }) }
+    expect(turn(100)).toBe(false)
     expect(selected()).toHaveTextContent('Stalled')
-    time += 250; fireEvent.wheel(dial, { deltaX: 30, deltaY: 0 })
-    expect(selected()).toHaveTextContent('Blocked')
+    expect(turn(-100)).toBe(false)
+    expect(selected()).toHaveTextContent('All')
+    expect(turn(-100)).toBe(false)
+    expect(selected()).toHaveTextContent('Active')
+    expect(turn(3, 1)).toBe(false)
+    expect(selected()).toHaveTextContent('All')
+    expect(fireEvent.wheel(outside, { deltaX: 0, deltaY: 100, deltaMode: 0 })).toBe(true)
+    expect(selected()).toHaveTextContent('All')
+  })
+  it.each(['deltaX', 'deltaY'] as const)('preserves rapid notches on %s in both directions and every delta mode', axis => {
+    vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    for (const [deltaMode, magnitude] of [[0, 100], [0, 120], [1, 3], [2, 1]] as const) {
+      for (const direction of [1, -1]) {
+        for (let step = 1; step <= 3; step++) {
+          expect(fireEvent.wheel(dial, { [axis]: direction * magnitude * (deltaMode === 0 ? 1 : 4 - step), deltaMode })).toBe(false)
+          const index = direction === 1 ? step : 3 - step
+          expect(state().search?.patterns ?? []).toEqual(index === 0 ? [] : [dialPatterns[index]])
+          time += 50
+        }
+      }
+    }
+  })
+  it.each(['deltaX', 'deltaY'] as const)('suppresses decaying momentum on %s and resets on silence or reversal', axis => {
+    for (const direction of [1, -1]) {
+      vi.useFakeTimers(); let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+      const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+      const expected = direction === 1 ? 'stalled' : 'active'
+      for (const magnitude of [120, 100, 80, 60]) {
+        expect(fireEvent.wheel(dial, { [axis]: direction * magnitude, deltaMode: 0 })).toBe(false)
+        expect(state().search?.patterns).toEqual([expected])
+        time += 16
+      }
+      time += 200
+      expect(fireEvent.wheel(dial, { [axis]: direction * 40, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns).toEqual([direction === 1 ? 'blocked' : 'stale'])
+      time += 16
+      expect(fireEvent.wheel(dial, { [axis]: -direction * 40, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns).toEqual([expected])
+      cleanup(); vi.restoreAllMocks()
+    }
+  })
+  it('accumulates small pixel deltas before the first step', () => {
+    let time = 0; vi.spyOn(performance, 'now').mockImplementation(() => time); mount()
+    const dial = screen.getByRole('group', { name: 'Operational pattern dial' })
+    for (const magnitude of [12, 28, 20, 10]) {
+      expect(fireEvent.wheel(dial, { deltaY: magnitude, deltaMode: 0 })).toBe(false)
+      expect(state().search?.patterns ?? []).toEqual(magnitude === 12 ? [] : ['stalled'])
+      time += 16
+    }
   })
   it('handles horizontal touch swipes once and does not turn vertical gestures into filters', () => {
     mount()

@@ -238,8 +238,12 @@ session. Focus is not saved across reloads.
 The horizontal Pattern Dial shares the toolbar between Search and the two
 Workers/Cards status donuts. Its circular order is All → Stalled → Blocked →
 Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
-scroll horizontally or use Left/Right on the dial to move one detent. Vertical
-scroll is unaffected and trackpad momentum cannot race through several patterns.
+scroll the wheel or trackpad, or use Left/Right on the dial to move one detent.
+With the pattern list closed, the page does not scroll while the pointer is over
+the dial. One notch or scroll step moves one pattern; small trackpad movements
+accumulate before the first step. Within a pixel-scroll burst, decreasing deltas
+are suppressed after that step, while equal or increasing deltas keep turning
+the dial. A direction change or about 200 ms of silence starts a new burst.
 Hold the dial for about half a second, or press Enter or Alt+Down, to open every
 pattern in that order with the same counts and reminders. Arrows move in the list,
 Enter selects one, and Escape closes it and returns focus to the dial. Moving more
