@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createServer, type Server } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { publishedPullerContract } from '../../../../test-fixtures/published-puller/contract'
 import type { AskArtifactSources } from '../artifacts'
 import { releaseAssociations } from '../../../shared/releases'
@@ -48,6 +48,52 @@ async function setup(artifacts?: AskArtifactSources) {
   return { call, bridge, reload, base }
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
+
+describe('versioned bridge negotiation', () => {
+  it('advertises the contract and accepts released unversioned and current clients', async () => {
+    const { base } = await setup()
+    for (const version of [undefined, '6.0.0', '6.0.1', '7.0.0']) {
+      const response = await fetch(base + '/api/ask/bridge', { headers: {
+        Authorization: `Bearer ${token}`, ...(version ? { 'X-Tinstar-Puller-Version': version } : {}),
+      } })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Tinstar-Bridge-Contract')).toBe('1')
+      expect(response.headers.get('X-Tinstar-Minimum-Puller-Version')).toBe('6.0.0')
+      expect((await response.json()).data).toMatchObject({ contract_version: 1, minimum_puller_version: '6.0.0', pending: [], tracked: [] })
+    }
+  })
+
+  it('rejects an obsolete or invalid client before GET or POST work', async () => {
+    const { base, call } = await setup()
+    const id = (await call('requests', input())).data.data.request_id
+    for (const version of ['5.9.9', 'invalid']) {
+      for (const method of ['GET', 'POST']) {
+        const response = await fetch(base + '/api/ask/bridge', { method, headers: {
+          Authorization: `Bearer ${token}`, 'X-Tinstar-Puller-Version': version, 'Content-Type': 'application/json',
+        }, ...(method === 'POST' ? { body: JSON.stringify({ request_id: id, note: note(id) }) } : {}) })
+        expect(response.status).toBe(426)
+        expect((await response.json()).error).toMatchObject({ code: 'puller-upgrade-required', details: { minimum_puller_version: '6.0.0', contract_version: 1 } })
+      }
+    }
+    expect((await call('requests')).data.data[0].status).toBe('sent')
+  })
+
+  it('serves packaged code and its digest only to authenticated pullers, including obsolete ones', async () => {
+    const { base } = await setup()
+    expect((await fetch(base + '/api/ask/bridge/puller')).status).toBe(401)
+    const response = await fetch(base + '/api/ask/bridge/puller', { headers: {
+      Authorization: `Bearer ${token}`, 'X-Tinstar-Puller-Version': '5.0.0',
+    } })
+    expect(response.status).toBe(200)
+    const release = (await response.json()).data
+    expect(release).toMatchObject({ version: JSON.parse(await readFile(resolve('package.json'), 'utf8')).version, bootstrap_api: 1 })
+    expect(createHash('sha256').update(release.source).digest('hex')).toBe(release.sha256)
+    expect(release.source).toBe(await readFile(resolve('scripts/ask-puller.py'), 'utf8'))
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    const browser = await fetch(base + '/api/ask/bridge/puller', { headers: { Authorization: `Bearer ${token}`, Origin: base } })
+    expect(browser.status).toBe(401)
+  })
+})
 
 describe('6.0.0 bridge content compatibility', () => {
   const action = { id: 'continue', label: 'Continue', instruction: 'Investigate the outage' }
@@ -802,7 +848,7 @@ describe('deploy smoke partition', () => {
     expect((await call('requests')).data.data.map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
     expect((await bridge()).data.data.pending.map((r: { request_id: string }) => r.request_id)).toEqual([regular.request_id])
     expect((await scoped()).data.data.pending.map((r: { request_id: string }) => r.request_id)).toEqual([row.request_id])
-    expect((await scoped(secondId)).data.data).toEqual({ pending: [], tracked: [] })
+    expect((await scoped(secondId)).data.data).toMatchObject({ pending: [], tracked: [] })
     expect((await bridge({ request_id: row.request_id, note: note(row.request_id) })).status).toBe(404)
     expect((await scoped(syntheticId, { request_id: regular.request_id, note: note(regular.request_id) })).status).toBe(404)
     expect((await scoped(syntheticId, { request_id: row.request_id, note: note(row.request_id) })).status).toBe(200)

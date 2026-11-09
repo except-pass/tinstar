@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import types
 import urllib.parse
 
 SPEC = importlib.util.spec_from_file_location('ask_puller', Path(__file__).with_name('ask-puller.py'))
@@ -22,6 +24,62 @@ PACKAGE = Path(__file__).resolve().parent.parent
 INTERVAL = 60
 MAX_BACKOFF = 900
 PASS_TIMEOUT = 50
+
+
+def verified_adapter(release):
+    """Verify before compile/exec; SHA protects against partial/corrupt downloads.
+
+    HTTPS authenticates the server supplying both digest and executable bytes.
+    bootstrap_api prevents a future adapter calling a different loader API.
+    """
+    if release['bootstrap_api'] != 1:
+        raise ValueError('Unsupported bootstrap API')
+    source = release['source']
+    if hashlib.sha256(source.encode()).hexdigest() != release['sha256']:
+        raise ValueError('Puller digest mismatch')
+    module = types.ModuleType('updated_ask_puller')
+    exec(compile(source, '<verified-tinstar-puller>', 'exec'), module.__dict__)
+    if module.VERSION != release['version'] or not callable(module.pull_once) or not issubclass(module.PullerError, Exception):
+        raise ValueError('Invalid puller release')
+    return module
+
+
+def update_adapter(root, settings, token, health):
+    """One optional update per scheduled pass; retain working code on failure.
+
+    A single private JSON file atomically stores source, digest and version so
+    a killed swap cannot leave mismatched metadata. Never mutate npm's package.
+    """
+    current = puller
+    cached = None
+    cache_path = root / 'ask-puller-release.json'
+    try:
+        cached = read_json(cache_path)
+        if cached and cached.get('origin') == settings['url']:
+            current = verified_adapter(cached)
+    except PassDeadlineError:
+        raise
+    except Exception:
+        cached = None
+        health['last_update_error_class'] = 'update-cache'
+    try:
+        # Never send the credential or download executable code over plaintext.
+        if urllib.parse.urlsplit(settings['url']).scheme != 'https':
+            raise ValueError('Updates require HTTPS')
+        release = puller.api(settings['url'], token, path='/api/ask/bridge/puller', timeout=5)
+        if not cached or cached.get('origin') != settings['url'] or release != {key: value for key, value in cached.items() if key != 'origin'}:
+            candidate = verified_adapter(release)
+            write_json(cache_path, {**release, 'origin': settings['url']})
+            current = candidate
+        health['last_update_error_class'] = None
+    except PassDeadlineError:
+        raise
+    except Exception:
+        # Errors are deliberately value-free: response and loader exceptions can
+        # contain credentials or executable source. Poll with the current code.
+        health['last_update_error_class'] = 'update-failed'
+    health['puller_version'] = current.VERSION
+    return current
 
 
 def read_json(path, default=None):
@@ -84,10 +142,12 @@ def tick(root, now=None):
         # Persist the deadline before I/O, so a killed process remains visible.
         health['in_progress'] = True
         write_json(health_path, health)
+        adapter = puller
         try:
             with deadline(PASS_TIMEOUT):
                 token = puller.read_token(settings['token_key'], settings['clavis'])
-                result = puller.pull_once(settings['url'], token, Path(settings['home']))
+                adapter = update_adapter(root, settings, token, health)
+                result = adapter.pull_once(settings['url'], token, Path(settings['home']))
             worked = bool(result['captured'] or result['replied'] or result.get('failed'))
             key = 'work_polls' if worked else 'noop_polls'
             health[key] = health.get(key, 0) + 1
@@ -95,6 +155,7 @@ def tick(root, now=None):
                 health[key] = health.get(key, 0) + result[key]
             health.update(last_success_at=time.time() if now is None else now,
                           last_error_class=None, consecutive_failures=0,
+                          minimum_puller_version=None,
                           queued=result['queued'], next_poll_at=started + INTERVAL)
             outcome = 'work' if worked else 'noop'
         except Exception as error:
@@ -103,7 +164,8 @@ def tick(root, now=None):
             failures = health.get('consecutive_failures', 0) + 1
             delay = min(MAX_BACKOFF, INTERVAL * 2 ** min(failures - 1, 4))
             health.update(last_error_at=time.time() if now is None else now,
-                          last_error_class='timeout' if isinstance(error, PassDeadlineError) else error.code if isinstance(error, puller.PullerError) else 'local-state',
+                          last_error_class='timeout' if isinstance(error, PassDeadlineError) else error.code if isinstance(error, (puller.PullerError, adapter.PullerError)) else 'local-state',
+                          minimum_puller_version=error.minimum_version if isinstance(error, (puller.PullerError, adapter.PullerError)) else None,
                           consecutive_failures=failures, next_poll_at=started + delay)
             health['error_polls'] = health.get('error_polls', 0) + 1
             outcome = 'error'
@@ -200,6 +262,7 @@ def manage(command, root, options):
             'network': 'Check tailnet and bridge reachability; retries are automatic.',
             'inbox': 'Check the configured First Mate home and inbox readiness.',
             'timeout': 'Check bridge/inbox latency; the 50-second pass deadline was reached.',
+            'puller-upgrade-required': 'Upgrade required: minimum puller ' + (health.get('minimum_puller_version') or 'see server') + '. Install the current Tin Star tarball and rerun tinstar ask-puller install; see the runbook.',
         }.get(health.get('last_error_class'), 'Use restart if the agent is missing or stale; check configuration and inbox readiness on errors.')
         print(json.dumps({'state': state, 'enabled': settings.get('enabled', False),
                           'loaded': loaded, 'health': health,

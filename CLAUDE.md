@@ -35,7 +35,7 @@ The two highest-leverage rules, restated here because they're rarely-violated-bu
 
 ## Releasing
 
-Cutting a release (tag `main` → npm) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)**. The V5 plugin host is gone; `@tinstar/plugin-api` remains a separate published package with no host in 6.0.0. Its npm deprecation requires a separate explicit publish decision.
+Cutting a release (tag `main` → release tarball) is documented step-by-step in **[docs/releasing.md](docs/releasing.md)**. The V5 plugin host is gone; `@tinstar/plugin-api` remains a separate published package with no host in 6.0.0. Its npm deprecation requires a separate explicit publish decision.
 
 ## Maintaining this file
 

@@ -12,6 +12,7 @@ const HTTP_STATUS: Record<ErrorCode, number> = {
   NOT_FOUND: 404,
   SESSION_NOT_FOUND: 404,
   CONFLICT: 409,
+  'puller-upgrade-required': 426,
   PATH_OUTSIDE_WORKSPACE: 403,
   FORBIDDEN: 403,
   OVERRIDE_MODEL_NOT_CONFIGURED: 403,

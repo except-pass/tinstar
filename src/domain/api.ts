@@ -13,6 +13,7 @@ export type ErrorCode =
   | 'NOT_FOUND'               // entity by id not found
   | 'SESSION_NOT_FOUND'       // session lookup miss — kept distinct; frontend treats it differently
   | 'CONFLICT'                // would violate uniqueness / state precondition
+  | 'puller-upgrade-required' // bridge client cannot safely use the current contract
   | 'PATH_OUTSIDE_WORKSPACE'  // path-traversal guard hit
   | 'FORBIDDEN'               // permission/safety guard
   // Switchboard per-session override guard (fail-closed launch-time checks)

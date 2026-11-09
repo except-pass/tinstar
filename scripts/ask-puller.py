@@ -7,6 +7,7 @@ subprocess output, request content or credentials. See docs/features/ask.md.
 import argparse
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,11 +17,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+VERSION = '6.0.1'
+
 
 class PullerError(Exception):
-    def __init__(self, message, code='bridge-error'):
+    def __init__(self, message, code='bridge-error', minimum_version=None):
         super().__init__(message)
         self.code = code
+        self.minimum_version = minimum_version
 
 
 @contextmanager
@@ -57,13 +61,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def api(base, token, payload=None):
+def api(base, token, payload=None, path='/api/ask/bridge', timeout=20):
     data = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(base + '/api/ask/bridge', data=data, headers={
+    req = urllib.request.Request(base + path, data=data, headers={
         'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
+        'X-Tinstar-Puller-Version': VERSION,
     })
     try:
-        with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as response:
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=timeout) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
             raise PullerError('Bridge response exceeded the read bound')
@@ -72,6 +77,12 @@ def api(base, token, payload=None):
             raise PullerError('Bridge rejected the operation')
         return result['data']
     except urllib.error.HTTPError as error:
+        if error.code == 426:
+            minimum = error.headers.get('X-Tinstar-Minimum-Puller-Version', '')
+            # Only a version, never an arbitrary server string, reaches status.
+            if not minimum or len(minimum) > 32 or not all(part.isdigit() for part in minimum.split('.')) or len(minimum.split('.')) != 3:
+                minimum = None
+            raise PullerError('Upgrade the Tin Star Ask puller', 'puller-upgrade-required', minimum) from None
         raise PullerError('Bridge rejected the operation', 'credential-expired' if error.code in (401, 403) else 'bridge-http') from None
     except (urllib.error.URLError, TimeoutError):
         raise PullerError('Bridge unavailable', 'network') from None
@@ -92,7 +103,52 @@ def inbox(home, args, body=None):
         raise PullerError('Inbox unavailable or returned an invalid response', 'inbox') from None
 
 
+def save_receipt(path, record):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.tmp')
+    with open(temporary, 'w', opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+        json.dump(record, stream)
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def deliver_receipt(base, token, home, path, record):
+    # Journal before POST: after an uncertain HTTP response the server's
+    # idempotent reply replay recovers the same warnings, even after untracking.
+    # A retargeted service must not send a previous server's private reply to
+    # its new origin. Keep it visible as incomplete until the operator restores
+    # that origin or removes the obsolete receipt journal.
+    if record['origin'] != base:
+        raise PullerError('Receipt belongs to a different bridge', 'configuration')
+    if 'response' not in record:
+        record['response'] = api(base, token, record['payload'])
+        save_receipt(path, record)
+    warnings = record['response'].get('reply_warnings')
+    if warnings:
+        request_id = 'tinstar-ask-receipt-' + path.stem
+        body = ('Tin Star Ask reply receipt\n' + json.dumps({
+            'request_id': record['payload']['request_id'],
+            'note_id': record['payload']['reply']['id'],
+            'reply_warnings': warnings,
+        }, ensure_ascii=False) + '\nRejected suggested actions were not offered to the owner. Review these warnings before suggesting a replacement.')
+        note, code = inbox(home, ['note', '--request-id', request_id, '--json', '-'], body)
+        if code or note.get('saved') is not True or note.get('request_id') != request_id:
+            raise PullerError('Reply warning receipt delivery is incomplete', 'inbox')
+    path.unlink()
+
+
 def pull_once(base, token, home):
+    receipts_path = home / 'state' / 'tinstar-ask-reply-receipts'
+    attempted = set()
+    incomplete = False
+    for path in sorted(receipts_path.glob('*.json')):
+        attempted.add(path)
+        try:
+            deliver_receipt(base, token, home, path, json.loads(path.read_text()))
+        except PullerError as error:
+            if error.code == 'puller-upgrade-required':
+                raise
+            incomplete = True
     work = api(base, token)
     tracked = {row['note_id']: row['request_id'] for row in work['tracked']}
     captured = 0
@@ -120,7 +176,7 @@ def pull_once(base, token, home):
         receipts, _ = inbox(home, ['receipts', '--all-pending', '--all-handled', '--all-replies'])
         if receipts.get('schema') != 'fm-inbox-receipts.v1':
             raise PullerError('Inbox receipt read is incomplete')
-        incomplete = bool(receipts.get('omitted'))
+        incomplete = incomplete or bool(receipts.get('omitted'))
         for receipt in receipts.get('pending', []) + receipts.get('handled', []):
             note_id = receipt.get('id')
             request_id = tracked.get(note_id)
@@ -129,13 +185,24 @@ def pull_once(base, token, home):
             try:
                 if receipt.get('request_id') != 'tinstar-ask-' + request_id:
                     raise PullerError('Inbox receipt correlation failed')
-                api(base, token, {'request_id': request_id, 'reply': receipt['reply']})
+                payload = {'request_id': request_id, 'reply': receipt['reply']}
+                # A hash of the immutable reply gives a filesystem-safe stable
+                # inbox ID, so uncertain delivery never creates duplicate notes.
+                key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                path = receipts_path / (key + '.json')
+                if path in attempted:
+                    continue
+                record = {'origin': base, 'payload': payload}
+                save_receipt(path, record)
+                deliver_receipt(base, token, home, path, record)
                 replied += 1
                 queued.discard(request_id)
-            except PullerError:
+            except PullerError as error:
+                if error.code == 'puller-upgrade-required':
+                    raise
                 incomplete = True
-        if incomplete:
-            raise PullerError('Inbox receipt delivery is incomplete')
+    if incomplete:
+        raise PullerError('Inbox receipt delivery is incomplete', 'inbox')
     return {'captured': captured, 'replied': replied, 'failed': failed, 'queued': len(queued)}
 
 
@@ -157,8 +224,11 @@ def main():
             result = pull_once(args.url.rstrip('/'), read_token(args.token_key), args.home)
         print(json.dumps(result))
         return 0
-    except (PullerError, OSError, subprocess.TimeoutExpired):
-        print('Ask puller did not complete; check bridge access, clavis and inbox readiness.', file=sys.stderr)
+    except (PullerError, OSError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, PullerError) and error.code == 'puller-upgrade-required':
+            print('Ask puller upgrade required; minimum version: ' + (error.minimum_version or 'see server') + '. Install the current release and rerun tinstar ask-puller install.', file=sys.stderr)
+        else:
+            print('Ask puller did not complete; check bridge access, clavis and inbox readiness.', file=sys.stderr)
         return 1
 
 

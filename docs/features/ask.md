@@ -219,7 +219,8 @@ for installation, lifecycle commands, upgrades, health and whole-pass deadline b
 The adapter reads the token using `clavis get <reference>` into process memory. It never
 passes the value in subprocess argv or prints it. Redirects are refused so the
 bearer cannot be forwarded to another host. It makes one pass and prints only
-capture/reply/failure/queued counts, or a generic error. Inbox stderr, other primary notes and
+capture/reply/failure/queued counts, or a fixed error with upgrade guidance when
+required (see the [bridge contract](ask-puller-service.md#bridge-contract-and-automatic-adapter-updates)). Inbox stderr, other primary notes and
 API payloads are not logged. A failed run can be run again; errors do not lose
 Tin Star's retained request or the inbox's durable note. Direct adapter invocations
 report their exit status; managed service health is described in the runbook.

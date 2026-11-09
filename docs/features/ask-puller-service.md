@@ -45,7 +45,8 @@ config root, default `~/.config/tinstar`. This is the **Mac** configuration, not
 the remote Tin Star server config. Install persists only origin, home, key
 reference, executable search path, clavis path and enabled state in mode-0600
 `ask-puller.json`. The LaunchAgent uses the installed package's Python service
-path and interpreter, never a copied worktree script. Its PATH is captured at
+path and interpreter, never a copied worktree script. That service loads the
+server-matched adapter as described below. Its PATH is captured at
 install so clavis and the inbox work without an interactive shell.
 
 Confirm the service:
@@ -74,6 +75,103 @@ TINSTAR_ASK_URL=https://your-tinstar.example.ts.net:8450 TINSTAR_ASK_HOME="$HOME
 If status is not healthy, follow the canonical procedure in
 [Install on the Mac](#install-on-the-mac), including its disabled-installation
 guidance.
+
+## One-time update to 6.0.1 on the existing Mac
+
+Copy the `tinstar-6.0.1.tgz` release tarball to the Mac, then run these exact
+commands from its directory as the same login that owns the existing service:
+
+```sh
+npm install -g ./tinstar-6.0.1.tgz
+tinstar ask-puller install
+tinstar ask-puller status
+```
+
+The install command reuses the saved URL, First Mate home and clavis key
+reference. Use the same `TINSTAR_CONFIG_HOME` if the original install used an
+override. It re-enables and reloads the agent, including when npm skips
+postinstall. If this is a first install, use the full `--url`, `--home` and
+`--token-key` command above. No token values belong in these commands.
+The 6.0.0 service cannot bootstrap automatic updates itself; this one package
+update and service install is required. Mac installation and login proof remain
+operator steps; Linux tests do not establish them.
+
+## Bridge contract and automatic adapter updates
+
+The authenticated bridge advertises `contract_version: 1` and
+`minimum_puller_version: "6.0.0"` in GET work data, and
+`X-Tinstar-Bridge-Contract` / `X-Tinstar-Minimum-Puller-Version` headers on
+bridge responses. New pullers send `X-Tinstar-Puller-Version`. A missing header
+means **6.0.0**, which remains supported. Versions below the minimum (or
+malformed versions) receive HTTP **426**, with envelope error code
+`puller-upgrade-required` and the minimum and contract version in `error.details`.
+The server rejects these clients before reading or changing work. Raising the
+minimum is an explicit retirement; additive changes must keep the 6.0.0 CI
+fixture passing. Conversation responses keep their existing shape and carry
+the version headers.
+
+Starting with 6.0.1, each eligible LaunchAgent pass uses its existing lock,
+credential and deadline to GET `/api/ask/bridge/puller` before reconciling. The
+endpoint requires the same bridge bearer, rejects browser Origins, and remains
+available to obsolete pullers so they can update. It serves the server package's
+standalone `ask-puller.py`, package version, SHA-256 and `bootstrap_api: 1` in the
+normal data envelope. It never serves an arbitrary filesystem path.
+
+The installed service is a small stable bootstrap. It checks SHA-256 **before
+compiling or executing** downloaded code, validates the bootstrap API and version,
+and atomically replaces a mode-0600 `ask-puller-release.json` under the Mac config
+root. Source, digest, version and server origin are in that one file: a partial
+swap cannot pair code with the wrong metadata. The service verifies cached bytes
+again before loading them. Code runs in the existing Python pass; there is no
+new daemon, shell evaluation, package manager invocation or package mutation.
+The standalone adapter API is `VERSION`, `PullerError`, and
+`pull_once(base, token, home)`, using only Python's standard library. Changing
+that bootstrap interface requires a package update through the same install path.
+
+HTTPS certificate verification authenticates the server supplying executable
+code; the digest detects corrupt/incomplete code, and is not an independent
+signature. The configured server is trusted to distribute puller code. Redirects
+are refused so the bearer cannot be forwarded to a different host. Downloads
+have a five-second network timeout, a 2 MiB response bound, and share the
+50-second pass deadline. A failed download, verification, load or atomic write
+keeps the prior verified cached adapter, or the packaged one on first use, and
+still polls. Status exposes `health.puller_version` and a value-free
+`health.last_update_error_class`. A valid server rollback also replaces the
+adapter, even at a lower version: it matches that server's contract rather than
+an unrelated package registry. Removing a broken cache is unnecessary; a later
+successful download repairs it.
+
+If polling receives the upgrade error, status records
+`last_error_class: "puller-upgrade-required"`, `minimum_puller_version`, and an
+explicit install action. An incompatible server bootstrap API leaves the current
+adapter running; if the server has retired that adapter, install its current
+release tarball and rerun `tinstar ask-puller install`. Installing an older
+package and rerunning install restores that package's service, but a service
+with automatic updates still loads the configured server's adapter. To roll
+back that adapter, roll back the server package supplying it. Disabled services
+perform no download or poll.
+
+## Rejected-action receipts for First Mate
+
+After posting a reply, the updated adapter forwards nonempty `reply_warnings`
+from the POST data into a follow-up inbox note containing `request_id`,
+`note_id`, and the warnings verbatim as JSON. It uses the installed inbox's
+supported `note --request-id <stable-id> --json -` command, not an invented
+receipt mutation command. This makes rejected suggestions visible to First Mate
+through its normal durable inbox and wake path.
+
+Before POST, the adapter journals the outgoing reply in mode-0600 files under
+`<First Mate home>/state/tinstar-ask-reply-receipts/`. It saves the POST result
+before writing the warning note. A lost POST response retries the identical
+reply (the server replays the stored rejection warnings); a saved note with a
+failed wake retries its same request ID. A later pass drains this journal even
+when the server has already stopped tracking the answered request. Only a
+successful receipt removes its journal entry. Independent replies still proceed
+when one delivery fails; status reports the incomplete inbox delivery. Empty
+warnings create no follow-up note. No credentials are persisted in this journal. Entries are bound to the server
+origin: retargeting a service leaves old entries incomplete rather than sending
+private replies to the new server. Restore the original origin to drain them,
+or remove obsolete journal entries deliberately.
 
 ## Verify and operate
 
@@ -125,9 +223,12 @@ browser-only installs do not designate a Mac puller.
 Every launchd tick is a plain Python process. It obtains the nonblocking kernel
 lock shared with the single-pass adapter, reads persisted backoff, reads the
 credential from clavis, and calls the existing authenticated bridge. Empty work
-never invokes the inbox. Delivered questions with no reply only read stored
-receipts. Only pending questions call `note --request-id tinstar-ask-<UUID>`;
-only mapped replies are posted. The inbox's durable same-ID replay prevents
+with no outstanding warning journal never invokes the inbox. Delivered questions
+with no reply only read stored receipts. Pending questions call
+`note --request-id tinstar-ask-<UUID>`; mapped replies are posted. Warning journals
+also trigger the follow-up inbox delivery described in
+[Rejected-action receipts for First Mate](#rejected-action-receipts-for-first-mate).
+The inbox's durable same-ID replay prevents
 new notes/wakes after uncertain HTTP delivery or restart. There is no model,
 reasoning session, worker spawn or model retry/investigation on these paths.
 Actual new user questions can wake First Mate through its ordinary inbox.
