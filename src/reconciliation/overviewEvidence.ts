@@ -1,0 +1,58 @@
+import { freshObservation, verifiedLink, type PatternResult } from '../shared/workHealth'
+import type { FloorScene } from './presentation'
+import { ageLabel } from './recordFields'
+import { observedAt } from './overviewModel'
+
+/** Facts about verified assignments, independent of the selected pattern. */
+export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, readFailed = false): string | null {
+  const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
+  const ids = new Set(links.filter(verifiedLink).map(link => link.executionId))
+  const workers = scene.executions.filter(worker => ids.has(worker.id))
+  if (!workers.length) {
+    return !links.length && !readFailed && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
+      freshObservation(scene.coverage.intentions, now) && scene.coverage.homes.length > 0 &&
+      scene.coverage.homes.every(home => freshObservation(home.observation, now)) ? 'No worker' : null
+  }
+  const facts = new Map<string, number>()
+  for (const worker of workers) {
+    const state = worker.source.current_state
+    const home = scene.coverage.homes.find(home => home.source.home === worker.home)
+    let fact: string
+    if (readFailed || !home || !freshObservation(home.observation, now) || !freshObservation(worker.observation, now) || state.freshness !== 'fresh') {
+      const age = ageLabel(Date.parse(worker.observation.observedAt ?? ''), now)
+      fact = `state unknown${age === 'Unknown' ? '' : ` · last seen ${age}`}`
+    } else if (['run-step', 'pane'].includes(String(state.source)) && state.state === 'working') fact = 'running'
+    else if (['run-step', 'pane'].includes(String(state.source)) && ['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'].includes(String(state.state))) {
+      // Only a matching state report supplies an age; snapshot time is not the
+      // start of a wait, and an old working report cannot date a newer pause.
+      const age = worker.source.last_event.state === state.state ? ageLabel(observedAt(worker), now) : 'Unknown'
+      fact = `waiting${age === 'Unknown' ? '' : ` · reported ${age}`}`
+    } else if (['run-step', 'pane'].includes(String(state.source)) && ['done', 'failed'].includes(String(state.state))) fact = String(state.state)
+    else fact = `state unknown${state.source === 'pane' ? ` (${worker.source.harness ? `${worker.source.harness} ` : ''}pane)` : ''}`
+    facts.set(fact, (facts.get(fact) ?? 0) + 1)
+  }
+  if (workers.length !== ids.size || links.some(link => !verifiedLink(link))) facts.set('link unverified', 1)
+  return [...facts].map(([fact, count]) => `${count > 1 ? `${count} workers` : 'Worker'} ${fact}`).join(' · ')
+}
+
+/** One explanation for the unique visible cards a pattern could not check. */
+export function patternCheckSummary(results: Iterable<PatternResult | undefined>): string | null {
+  const unknown = [...results].filter((result): result is PatternResult => result?.outcome === 'unavailable')
+  if (!unknown.length) return null
+  const reasons = new Set(unknown.flatMap(result => result.reason.split('; ').map(reason => {
+    if (/source read failed/i.test(reason)) return 'source read failed'
+    if (/Notion source/i.test(reason)) return 'Notion source unavailable or stale'
+    if (/Work status is not published/i.test(reason)) return 'work status unknown'
+    if (/last reported|observation |liveness not observed/i.test(reason)) return 'worker observations incomplete or stale'
+    if (/Home snapshot/i.test(reason)) return 'worker snapshots unavailable or stale'
+    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'worker state unknown'
+    if (/Worker decision requests/i.test(reason)) return 'worker decisions or links unknown'
+    if (/accountability|source, link|assignment coverage/i.test(reason)) return 'worker links incomplete'
+    if (/Runnable.*(?:coverage|unknown|availability)/i.test(reason)) return 'runnable work unknown'
+    if (/resolver.*(?:coverage|unknown)/i.test(reason)) return 'resolver coverage incomplete'
+    if (/Tracked continuation/i.test(reason)) return 'continuations not checked'
+    if (/Meaningful progress|heartbeat\/check-in age|no threshold can/i.test(reason)) return 'progress time unknown'
+    return reason
+  }).filter(Boolean)))
+  return `${unknown.length} ${unknown.length === 1 ? 'card' : 'cards'} not checked: ${[...reasons].join('; ')}`
+}

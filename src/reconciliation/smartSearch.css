@@ -58,5 +58,7 @@
   .ov-search-panel { top:12px; padding-top:0; }
 }
 
-.ov .ov-item.ov-pattern-unknown { border-color:#d9b96c; box-shadow:inset 2px 0 #d9b96c; }
-.ov-pattern-unknown-marker { color:#edcf87; border:1px dashed #9b864e; border-radius:3px; padding:1px 4px; font-size:10px; flex-shrink:0; }
+
+.ov-pattern-summary { margin:0; padding:6px 12px; color:#c8b98e; font-size:11px; border-bottom:1px solid #343d47; }
+
+.ov-worker-fact { max-width:180px; }

@@ -242,7 +242,7 @@ describe('compact search palette and temporary graph focus', () => {
 
 
 describe('shared dial filtering contract', () => {
-  const patterns = health.dialPatterns.filter(pattern => pattern !== 'all')
+  const patterns = health.patterns
   // Exercise the consumer with all three evaluator outcomes, including future
   // evidence-backed matches for patterns whose current adapters report unknown.
   function outcomes(pattern: health.Pattern, matched: boolean) {
@@ -252,7 +252,7 @@ describe('shared dial filtering contract', () => {
     } }))
     vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
   }
-  it.each(patterns)('%s hides non-matches, retains one-hop counterparts as secondary, and labels unknown evidence', pattern => {
+  it.each(patterns)('%s hides non-matches, retains one-hop counterparts as secondary, and summarizes unknown evidence once', pattern => {
     const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
     scene.claims.push({ ...claim, id: 'second-hop', cardId: fixtureId(6) })
     outcomes(pattern, true)
@@ -266,8 +266,10 @@ describe('shared dial filtering contract', () => {
     const untracked = scene.executions.find(worker => worker.identity.task_id === 'untracked-worker')!
     expect([...container.querySelectorAll<HTMLElement>('[data-entity-id]')].find(element => element.dataset.entityId === untracked.id) ?? null).toBeNull()
     const unknown = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
-    expect(unknown).toHaveClass('ov-pattern-unknown')
-    expect(within(unknown as HTMLElement).getByLabelText("Can't tell: Worker last reported 3d ago")).toHaveAttribute('title', 'Worker last reported 3d ago')
+    expect(unknown).toHaveTextContent('No worker')
+    expect(container).not.toHaveTextContent("Can't tell")
+    expect(container.querySelectorAll('.ov-pattern-summary')).toHaveLength(1)
+    expect(screen.getByText('1 card not checked: worker observations incomplete or stale')).toBeVisible()
     fireEvent.click(counterpart)
     expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
   })
@@ -277,6 +279,7 @@ describe('shared dial filtering contract', () => {
     act(() => { observed.send!({ type: 'set-pattern', pattern }) })
     expect(container.querySelectorAll('.ov-item')).toHaveLength(0)
     expect(screen.getByText(health.patternEmptyText[pattern])).toBeVisible()
+    expect(container.querySelector('.ov-pattern-summary')).toBeNull()
   })
   it('replaces an earlier search focus when choosing a dial pattern', () => {
     scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
@@ -336,4 +339,24 @@ it('choosing All exits the palette focus session without Escape restoring the pr
   expect(container.querySelector('.ov-pattern-selected')).toHaveTextContent('All')
   expect(cardIds(container)).toEqual(all)
   expect(container.querySelectorAll('.ov-search-context, .ov-search-match')).toHaveLength(0)
+})
+
+
+describe('worker facts in existing card metadata', () => {
+  it.each(['compact', 'detailed'] as const)('renders concrete facts without an extra card row in %s', density => {
+    const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
+    scene.claims = scene.claims.filter(link => link.cardId !== fixtureId(1) || link.executionId === claim.executionId)
+    const worker = scene.executions.find(worker => worker.id === claim.executionId)!
+    worker.source.harness = 'codex'
+    worker.source.current_state.state = 'unknown'
+    const { container } = mount()
+    if (density === 'detailed') {
+      fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+      fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
+    }
+    const card = container.querySelector<HTMLElement>(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
+    expect(within(card).getByText('Worker state unknown (codex pane)')).toHaveClass('ov-link-label')
+    expect(container.querySelector('.ov-pattern-summary')).toBeNull()
+    expect(card).not.toHaveTextContent("Can't tell")
+  })
 })
