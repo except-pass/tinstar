@@ -19,7 +19,10 @@
     "scripts/ask-puller-service.py",
     "services/ask-puller/",
     "docs/features/ask-puller-service.md",
-    "README.md"
+    "README.md",
+    "scripts/collectors/codex-activity.py",
+    "services/codex-activity/",
+    "docs/features/codex-activity.md"
   ],
   "keywords": [
     "claude",
@@ -57,7 +60,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:debug": "tauri build --debug",
-    "prepublishOnly": "npm run build:all"
+    "prepublishOnly": "npm run build:all",
+    "test:codex-collector": "python3 -B -m unittest discover -s scripts/collectors/tests"
   },
   "dependencies": {
     "@a2ui/web_core": "0.10.4",

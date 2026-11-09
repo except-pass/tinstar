@@ -168,6 +168,24 @@ describe('fleet collection', () => {
     expect(scene.findings.some(f => f.kind === 'untracked-worker' || f.kind === 'task-execution-gap')).toBe(false)
   })
 
+  it('projects additive Codex facts into live counts and ignores private payload fields', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'codex.json'), raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw, tasks: [true, false, null].map((turn, index) => ({
+      ...raw.tasks[0], id: `codex-${index}`, harness: 'codex', endpoint: { exists: true },
+      hints: { last_event_text: 'paused [at=1]: historical wait' },
+      codex: turn === null ? null : { turn_open: turn, observed_at: timestamp, last_activity_at: '2026-11-02T00:00:00Z', session_file: 'rollout-test.jsonl', prompt: 'PRIVATE' },
+      codex_reason: turn === null ? 'no_matching_session_today_or_yesterday' : null,
+    })) }))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const result = await sources.snapshot(), scene = reconcileScene(result, Date.parse(timestamp))
+    expect(scene.executions.map(worker => worker.liveness)).toEqual(['running', 'waiting', 'liveness-not-observed'])
+    expect(scene.counts).toMatchObject({ running: 1, waiting: 1, 'liveness-not-observed': 1 })
+    expect(scene.executions[0]!.source.codex).toMatchObject({ turn_open: true, observed_at: timestamp, last_activity_at: '2026-11-02T00:00:00Z' })
+    expect(JSON.stringify(result)).not.toContain('PRIVATE')
+    expect(scene.executions[2]!.source.codex_reason).toBe('no_matching_session_today_or_yesterday')
+  })
+
   it('preserves structured child outcome provenance through fleet normalization', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
     const dir = await temp(); const file = join(dir, 'manager.json')

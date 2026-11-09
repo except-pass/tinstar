@@ -1,0 +1,9 @@
+[Unit]
+Description=Publish First Mate snapshots with Codex turn facts
+
+[Service]
+Type=oneshot
+# Three homes can each spend up to 45 seconds generating a snapshot.
+TimeoutStartSec=180
+EnvironmentFile=-%h/.config/tinstar/codex-activity.env
+ExecStart=/usr/bin/python3 %h/.local/share/tinstar/codex-activity.py --config %h/.config/tinstar/codex-activity.json

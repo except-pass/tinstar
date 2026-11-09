@@ -1,3 +1,4 @@
+import { codexTurn } from '../shared/codexActivity'
 import { homeLabel } from '../shared/reconciliationLabels'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import { activeWorker, organizedGroups, type FloorGroup } from '../shared/floorOrganization'
@@ -63,12 +64,14 @@ export function unreadableWorkerHomes<T extends { observation: { status: string;
 }
 /** A stale feed cannot make a recorded final report into a current worker.
  * This preserves history placement only; it does not certify present liveness. */
-export const historyRecord = (worker: Execution) => ['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
+export const historyRecord = (worker: Execution) => codexTurn(worker.source, Date.now()) === null && (['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
   /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
-  ['done', 'landed'].includes(String(worker.source.last_event.state))
+  ['done', 'landed'].includes(String(worker.source.last_event.state)))
 export { floorWorkerStatus as workerState } from '../shared/floorStatus'
 
 export const observedAt = (worker: Execution) => {
+  const activity = Date.parse(worker.source.codex?.last_activity_at ?? '')
+  if (Number.isFinite(activity)) return activity
   const time = Date.parse(worker.observation.observedAt ?? '')
   const age = worker.source.last_event.age_seconds
   return typeof age === 'number' && Number.isFinite(time) ? time - age * 1000 : 0

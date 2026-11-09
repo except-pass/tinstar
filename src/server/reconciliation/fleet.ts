@@ -7,6 +7,7 @@ import { record, text } from './values'
 import { cardReferences } from './references'
 import { queueSignals } from './queueInputs'
 import { collectedDispatch } from './dispatchProvenance'
+import type { CodexActivity } from '../../shared/codexActivity'
 
 const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string | number | boolean | null> => Object.fromEntries(keys.map(key => {
   const item = record(value)[key]
@@ -45,6 +46,14 @@ const secondMateRow = (task: unknown, mates: ReadonlySet<string>) => {
   return text(row.kind) === 'secondmate' || text(row.role) === 'secondmate' || (id !== null && mates.has(id))
 }
 
+const codexFields = (task: Record<string, unknown>): { codex?: CodexActivity | null; codex_reason?: string | null } => {
+  const value = record(task.codex)
+  return { codex: task.codex ? {
+    last_activity_at: text(value.last_activity_at), observed_at: text(value.observed_at),
+    session_file: text(value.session_file), turn_open: typeof value.turn_open === 'boolean' ? value.turn_open : null,
+  } : null, codex_reason: text(task.codex_reason) }
+}
+
 export function fleetObservation(source: FleetSource) {
   // File publication includes snapshot generation and transport between homes.
   const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
@@ -62,6 +71,7 @@ export function fleetObservation(source: FleetSource) {
     const mates = secondMateIds(snapshot)
     const tasks = snapshot.tasks.map(task => ({
       ...queueSignals(task),
+      ...codexFields(task),
       ...collectedDispatch(record(task.backlog), 'task.backlog.body_lines'),
       ...fields(task, ['id', 'kind', 'harness', 'model', 'branch', 'project', 'spawn_gen', 'backend']),
       kind: secondMateRow(task, mates) ? 'secondmate' : fields(task, ['kind']).kind,
