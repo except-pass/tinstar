@@ -18,6 +18,7 @@ async function main() {
       console.log('Usage: tinstar [--port PORT] [--host ADDRESS] [--no-open] [--no-setup] [--no-reach]')
       console.log('Commands: doctor, status, reach, ask-puller, install-service, uninstall-service, start, stop, restart, logs')
       console.log('Ask: tinstar ask-puller install|uninstall|enable|disable|status|restart')
+      console.log('Ask journal: tinstar ask-puller journal retire|resume --origin URL --reason TEXT')
       return
     }
     if (command === 'doctor') return (await import('./doctor.js')).doctor()

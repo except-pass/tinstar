@@ -112,20 +112,44 @@ def save_receipt(path, record):
     temporary.replace(path)
 
 
+def origin_identity(value):
+    """Compare the endpoint, not URL spelling or a trailing slash."""
+    url = urllib.parse.urlsplit(value)
+    if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ('', '/'):
+        raise ValueError('Invalid bridge origin')
+    host = url.hostname.lower()
+    if ':' in host:
+        host = '[' + host + ']'
+    port = url.port
+    suffix = '' if port is None or port == (443 if url.scheme == 'https' else 80) else ':' + str(port)
+    return url.scheme + '://' + host + suffix
+
+
+def receipt_identity(origin, payload):
+    # fm-inbox publishes one immutable answer per note. Its mapped IDs and
+    # sequence identify that answer; timestamps and body formatting do not.
+    reply = payload['reply']
+    cursor = reply.get('cursor')
+    identity = [origin_identity(origin), payload['request_id'], reply.get('id'),
+                None if cursor is None else int(cursor)]
+    return hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+
+
 def deliver_receipt(base, token, home, path, record):
     # Journal before POST: after an uncertain HTTP response the server's
     # idempotent reply replay recovers the same warnings, even after untracking.
     # A retargeted service must not send a previous server's private reply to
     # its new origin. Keep it visible as incomplete until the operator restores
-    # that origin or removes the obsolete receipt journal.
-    if record['origin'] != base:
+    # that origin or explicitly retires it through the audited journal command.
+    if origin_identity(record['origin']) != origin_identity(base):
         raise PullerError('Receipt belongs to a different bridge', 'configuration')
     if 'response' not in record:
         record['response'] = api(base, token, record['payload'])
         save_receipt(path, record)
     warnings = record['response'].get('reply_warnings')
     if warnings:
-        request_id = 'tinstar-ask-receipt-' + path.stem
+        # Old journals retain their original ID, including after retire/resume.
+        request_id = record.get('inbox_request_id', 'tinstar-ask-receipt-' + path.stem)
         body = ('Tin Star Ask reply receipt\n' + json.dumps({
             'request_id': record['payload']['request_id'],
             'note_id': record['payload']['reply']['id'],
@@ -139,15 +163,36 @@ def deliver_receipt(base, token, home, path, record):
 
 def pull_once(base, token, home):
     receipts_path = home / 'state' / 'tinstar-ask-reply-receipts'
-    attempted = set()
+    retired = set()
+    for path in (home / 'state' / 'tinstar-ask-reply-receipts-retired').glob('*/*.json'):
+        try:
+            record = json.loads(path.read_text())
+            retired.add(receipt_identity(record['origin'], record['payload']))
+        except (OSError, ValueError, KeyError, TypeError):
+            # Explicitly retired unreadable entries stay retired; status still
+            # lists them and provides the audited resume command.
+            continue
+    attempted = {}
     incomplete = False
     for path in sorted(receipts_path.glob('*.json')):
-        attempted.add(path)
         try:
-            deliver_receipt(base, token, home, path, json.loads(path.read_text()))
+            record = json.loads(path.read_text())
+            identity = receipt_identity(record['origin'], record['payload'])
+            existing_id = record.get('inbox_request_id', 'tinstar-ask-receipt-' + path.stem)
+            request_id = attempted.setdefault(identity, existing_id)
+            if request_id != existing_id:
+                # If legacy files describe the same answer, converge on one
+                # inbox ID before retrying; a failed wake must not create notes.
+                record['inbox_request_id'] = request_id
+                save_receipt(path, record)
+            deliver_receipt(base, token, home, path, record)
         except PullerError as error:
             if error.code == 'puller-upgrade-required':
                 raise
+            incomplete = True
+        except (OSError, ValueError, KeyError, TypeError):
+            # Keep unreadable journals visible for audited retirement while
+            # independent questions continue through the normal bridge path.
             incomplete = True
     work = api(base, token)
     tracked = {row['note_id']: row['request_id'] for row in work['tracked']}
@@ -186,13 +231,12 @@ def pull_once(base, token, home):
                 if receipt.get('request_id') != 'tinstar-ask-' + request_id:
                     raise PullerError('Inbox receipt correlation failed')
                 payload = {'request_id': request_id, 'reply': receipt['reply']}
-                # A hash of the immutable reply gives a filesystem-safe stable
-                # inbox ID, so uncertain delivery never creates duplicate notes.
-                key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                key = receipt_identity(base, payload)
                 path = receipts_path / (key + '.json')
-                if path in attempted:
+                if key in attempted or key in retired:
                     continue
-                record = {'origin': base, 'payload': payload}
+                record = {'origin': base, 'payload': payload,
+                          'inbox_request_id': 'tinstar-ask-receipt-' + key}
                 save_receipt(path, record)
                 deliver_receipt(base, token, home, path, record)
                 replied += 1
@@ -200,6 +244,8 @@ def pull_once(base, token, home):
             except PullerError as error:
                 if error.code == 'puller-upgrade-required':
                     raise
+                incomplete = True
+            except (ValueError, KeyError, TypeError):
                 incomplete = True
     if incomplete:
         raise PullerError('Inbox receipt delivery is incomplete', 'inbox')

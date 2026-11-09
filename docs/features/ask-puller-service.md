@@ -171,7 +171,52 @@ when one delivery fails; status reports the incomplete inbox delivery. Empty
 warnings create no follow-up note. No credentials are persisted in this journal. Entries are bound to the server
 origin: retargeting a service leaves old entries incomplete rather than sending
 private replies to the new server. Restore the original origin to drain them,
-or remove obsolete journal entries deliberately.
+or use the audited journal retirement command below.
+
+## Retire or resume receipt journals
+
+Receipt identity uses the bridge origin, mapped request/note identity and reply
+sequence. It excludes reply timestamps, body formatting and JSON key order.
+Equivalent URL spellings and zero-padded sequences compare by meaning. Existing
+journals remain readable at their original names, preserving their durable inbox
+request IDs through retries, retirement and resume.
+
+Status lists pending and retired journal counts grouped by origin. Pending
+entries for a different origin are marked `stuck`; unreadable entries use
+`unknown`. Each group includes its exact recovery command with the config root
+and shell quoting already supplied. Fill in an operator reason:
+
+```sh
+tinstar ask-puller journal retire --origin https://old-tinstar.example.ts.net:8450 --reason "Old bridge retired; preserve its unsent receipts"
+tinstar ask-puller status
+tinstar ask-puller journal resume --origin https://old-tinstar.example.ts.net:8450 --reason "Original bridge restored; resume its receipts"
+```
+
+These filesystem commands are available on macOS and Linux and do not call
+launchd, clavis, the bridge or the inbox. They validate the origin and required
+reason before attempting the same nonblocking lock as a poll. A busy poll produces
+a visible warning and an audit entry; retry the same command afterward.
+
+Retire atomically moves matching entries into private operation directories under
+`<home>/state/tinstar-ask-reply-receipts-retired/`. Retired answers are skipped by
+automatic polling until resumed, including if the server still tracks the answer.
+Resume restores the original filenames and inbox IDs, allowing ordinary same-ID
+replay without a second warning note. It retains an existing active filename and
+reports a visible warning instead of overwriting progressed state. Status provides
+the active entry's retirement command if replacement is intended. Cross-origin
+sending stays refused; resume an old origin after restoring its service URL/key
+configuration, or leave its entries retired.
+
+Both commands append time, OS user/UID, origin, action, operation ID, count and
+operator reason to mode-0600 `<home>/state/tinstar-ask-reply-journal-audit.jsonl`.
+A started record is flushed before any move and a completed/partial record reports
+how many moved. Replies, warning bodies and credentials are excluded from the
+audit; keep credentials out of the operator reason too. An audit write failure
+moves no entries before the initial record. Interrupted or partial moves leave
+entries in their original or retired directories; status lists both and the same
+command can be retried. No hand-edited records or deleted lock files are needed.
+`--origin unknown` supplies the same audited close/resume path for unreadable
+entries. Retired files are retained for deliberate recovery, not deleted.
 
 ## Verify and operate
 

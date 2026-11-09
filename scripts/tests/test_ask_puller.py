@@ -181,6 +181,68 @@ except m.PullerError:
                 self.assertTrue(all(key == attempts[0] for key in attempts))
                 self.assertFalse(list((home / 'state' / 'tinstar-ask-reply-receipts').glob('*.json')))
 
+    def test_receipt_identity_ignores_timestamp_body_format_and_cursor_padding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            reply = {'id': 'note-1', 'cursor': '0001', 'at': '2026-11-09T00:00:00Z', 'body': '{"summary":"Answer"}'}
+            receipt = {'id': 'note-1', 'request_id': 'tinstar-ask-request-1', 'reply': reply}
+            note_ids, notes = [], set()
+            def api(base, token, payload=None):
+                if payload is None:
+                    return {'pending': [], 'tracked': [{'request_id': 'request-1', 'note_id': 'note-1'}]}
+                return {'accepted': True, 'reply_warnings': [{'reason': 'rejected'}]}
+            def inbox(home, args, body=None):
+                if args[0] == 'receipts':
+                    return {'schema': 'fm-inbox-receipts.v1', 'pending': [receipt], 'handled': [], 'omitted': []}, 0
+                note_ids.append(args[2])
+                notes.add(args[2])
+                return {'saved': True, 'request_id': args[2]}, 0
+            with patch.object(puller, 'api', side_effect=api), patch.object(puller, 'inbox', side_effect=inbox):
+                puller.pull_once('https://example.test', 'fixture', home)
+                reply.update(at='2027-01-01T00:00:00Z', body='{ "summary": "Answer" }', cursor='1')
+                puller.pull_once('https://EXAMPLE.test:443/', 'fixture', home)
+            self.assertEqual(len(notes), 1)
+            self.assertEqual(note_ids[0], note_ids[1])
+            payload = {'request_id': 'request-1', 'reply': reply}
+            key = puller.receipt_identity('https://example.test', payload)
+            for origin, changed in [('https://different.test', payload),
+                                    ('https://example.test', {**payload, 'request_id': 'other'}),
+                                    ('https://example.test', {**payload, 'reply': {**reply, 'id': 'other'}}),
+                                    ('https://example.test', {**payload, 'reply': {**reply, 'cursor': '2'}})]:
+                self.assertNotEqual(key, puller.receipt_identity(origin, changed))
+
+    def test_legacy_pending_journal_keeps_its_inbox_id_and_skips_same_answer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            reply = {'id': 'note-1', 'cursor': '1', 'at': 'old timestamp', 'body': 'Answer'}
+            payload = {'request_id': 'request-1', 'reply': reply}
+            old_key = puller.hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            path = home / 'state' / 'tinstar-ask-reply-receipts' / (old_key + '.json')
+            puller.save_receipt(path, {'origin': 'https://example.test', 'payload': payload,
+                                     'response': {'reply_warnings': [{'reason': 'rejected'}]}})
+            legacy_id = 'tinstar-ask-receipt-' + old_key
+            saved_notes = {legacy_id}
+            calls, posts = [], []
+            def api(base, token, data=None):
+                if data is not None:
+                    posts.append(data)
+                    return {}
+                return {'pending': [], 'tracked': [{'request_id': 'request-1', 'note_id': 'note-1'}]}
+            def inbox(home, args, body=None):
+                if args[0] == 'receipts':
+                    return {'schema': 'fm-inbox-receipts.v1', 'pending': [
+                        {'id': 'note-1', 'request_id': 'tinstar-ask-request-1', 'reply': {**reply, 'at': 'new timestamp'}}],
+                            'handled': [], 'omitted': []}, 0
+                calls.append(args[2])
+                saved_notes.add(args[2])
+                return {'saved': True, 'request_id': args[2]}, 0
+            with patch.object(puller, 'api', side_effect=api), patch.object(puller, 'inbox', side_effect=inbox):
+                puller.pull_once('https://example.test', 'fixture', home)
+            self.assertEqual(calls, [legacy_id])
+            self.assertEqual(saved_notes, {legacy_id})
+            self.assertEqual(posts, [])
+            self.assertFalse(path.exists())
+
     def test_post_warning_response_reaches_executable_inbox_over_http(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

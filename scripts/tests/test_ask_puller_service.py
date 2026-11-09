@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -324,6 +325,163 @@ else:
         result = subprocess.run([shutil.which('node'), str(package / 'bin' / 'ask-puller-postinstall.js')], env={**os.environ, 'PATH': '/nonexistent'}, text=True, capture_output=True)
         # node is already located by the caller; test with an absolute node path.
         self.assertEqual(result.returncode, 0)
+
+
+class JournalTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.home = self.root / 'First Mate home'
+        self.active = self.home / 'state' / 'tinstar-ask-reply-receipts'
+        self.active.mkdir(parents=True)
+        self.settings = {'home': str(self.home), 'url': 'https://current.example.test', 'enabled': False}
+        service.write_json(self.root / 'ask-puller.json', self.settings)
+        self.origin = 'https://obsolete.example.test'
+        for name, origin in [('legacy-1', self.origin), ('legacy-2', self.origin), ('current', self.settings['url'])]:
+            service.write_json(self.active / (name + '.json'), {
+                'origin': origin, 'payload': {'request_id': name, 'reply': {'id': name, 'cursor': '1', 'body': 'private-body'}},
+                'response': {'reply_warnings': [{'reason': 'private-warning'}]},
+            })
+        (self.active / 'corrupt.json').write_text('{bad JSON')
+
+    def command(self, action, origin=None, reason='Owner retired old bridge'):
+        options = argparse.Namespace(journal_action=action, origin=origin or self.origin, reason=reason)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            service.manage('journal', self.root, options)
+        return json.loads(output.getvalue())
+
+    def audit(self):
+        path = self.home / 'state' / 'tinstar-ask-reply-journal-audit.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def test_status_command_executes_retire_and_resume_through_installed_cli(self):
+        # Invoke the public CLI, with a private PATH resolving its printed
+        # recovery command to this checkout and an isolated config/home.
+        bin_path = self.root / 'bin'
+        bin_path.mkdir()
+        (bin_path / 'tinstar').symlink_to(service.PACKAGE / 'bin' / 'tinstar.js')
+        env = {**os.environ, 'TINSTAR_CONFIG_HOME': str(self.root), 'PATH': str(bin_path) + os.pathsep + os.environ['PATH']}
+        def status():
+            result = subprocess.run(['node', str(service.PACKAGE / 'bin/tinstar.js'), 'ask-puller', 'status'], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('private-body', result.stdout)
+            return json.loads(result.stdout)['journal']
+        def execute(command):
+            args = shlex.split(command)
+            args[args.index('--reason') + 1] = 'Operator approved transition'
+            result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+        before = {path.name: path.read_bytes() for path in self.active.glob('*.json')}
+        observed = status()
+        self.assertEqual(observed['stuck_count'], 3)  # old origin plus corrupt
+        row = next(row for row in observed['pending'] if row['origin'] == self.origin)
+        self.assertEqual(execute(row['command'])['count'], 2)
+        self.assertTrue((self.active / 'current.json').exists())
+        self.assertEqual(status()['stuck_count'], 1)
+        self.assertEqual(execute(row['command'])['count'], 0)  # idempotent
+        archived = status()['retired'][0]
+        self.assertEqual(execute(archived['command'])['count'], 2)
+        self.assertEqual({path.name: path.read_bytes() for path in self.active.glob('*.json')}, before)
+        final = self.audit()[-1]
+        self.assertEqual(final['action'], 'resume')
+        self.assertEqual(final['count'], 2)
+        self.assertEqual(final['origin'], self.origin)
+        self.assertEqual(final['reason'], 'Operator approved transition')
+        self.assertTrue(final['user'])
+        self.assertEqual(final['uid'], os.getuid())
+        self.assertIsInstance(final['at'], float)
+        audit_path = Path(status()['audit_log'])
+        self.assertEqual(audit_path.stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('private-body', audit_path.read_text())
+        self.assertNotIn('private-warning', audit_path.read_text())
+
+    def test_retire_suppresses_recreation_and_resume_keeps_legacy_inbox_id(self):
+        for path in self.active.glob('*.json'):
+            path.unlink()
+        reply = {'id': 'note-1', 'cursor': '1', 'at': 'old timestamp', 'body': 'Answer'}
+        payload = {'request_id': 'request-1', 'reply': reply}
+        old_key = service.hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        path = self.active / (old_key + '.json')
+        service.write_json(path, {'origin': self.origin, 'payload': payload,
+                                 'response': {'reply_warnings': [{'reason': 'rejected'}]}})
+        expected = 'tinstar-ask-receipt-' + old_key
+        notes = {expected}
+        attempts, posts = [], []
+        def api(base, token, data=None):
+            if data is not None:
+                posts.append(data)
+                return {}
+            return {'pending': [], 'tracked': [{'request_id': 'request-1', 'note_id': 'note-1'}]}
+        def inbox(home, args, body=None):
+            if args[0] == 'receipts':
+                return {'schema': 'fm-inbox-receipts.v1', 'pending': [
+                    {'id': 'note-1', 'request_id': 'tinstar-ask-request-1', 'reply': {**reply, 'at': 'new timestamp'}}],
+                        'handled': [], 'omitted': []}, 0
+            attempts.append(args[2])
+            notes.add(args[2])
+            return {'saved': True, 'request_id': args[2]}, 0
+        self.assertEqual(self.command('retire')['count'], 1)
+        with patch.object(service.puller, 'api', side_effect=api), patch.object(service.puller, 'inbox', side_effect=inbox):
+            service.puller.pull_once(self.origin, 'fixture', self.home)
+            self.assertEqual(attempts, [])
+            self.assertEqual(posts, [])
+            self.assertFalse(path.exists())
+            self.assertEqual(self.command('resume')['count'], 1)
+            service.puller.pull_once(self.origin, 'fixture', self.home)
+        self.assertEqual(attempts, [expected])
+        self.assertEqual(notes, {expected})
+        self.assertEqual(posts, [])
+        self.assertFalse(path.exists())
+
+    def test_reason_is_checked_before_lock_and_audit_failure_moves_nothing(self):
+        with patch.object(service.puller, 'single_flight') as lock:
+            with self.assertRaises(service.puller.PullerError):
+                self.command('retire', reason=' ')
+            lock.assert_not_called()
+        with patch.object(service, 'journal_audit', side_effect=OSError('audit unavailable')):
+            with self.assertRaises(OSError):
+                self.command('retire')
+        self.assertEqual(len(list(self.active.glob('*.json'))), 4)
+
+    def test_busy_poll_warns_and_same_command_can_be_retried(self):
+        with service.puller.single_flight(self.home) as acquired:
+            self.assertTrue(acquired)
+            result = self.command('retire')
+        self.assertEqual(result['outcome'], 'busy')
+        self.assertEqual(self.audit()[-1]['outcome'], 'busy')
+        self.assertEqual(self.command('retire')['count'], 2)
+
+    def test_partial_retirement_retries_and_corrupt_journals_have_a_close_path(self):
+        replace = Path.replace
+        moved = []
+        def move(source, target):
+            if source.name == 'legacy-2.json' and not moved:
+                moved.append('injected failure')
+                raise OSError('fixture')
+            return replace(source, target)
+        with patch.object(Path, 'replace', move):
+            first = self.command('retire')
+        self.assertEqual(first['outcome'], 'partial')
+        self.assertEqual(first['count'], 1)
+        self.assertEqual(self.audit()[-1]['count'], 1)
+        self.assertEqual(self.command('retire')['count'], 1)
+        self.assertEqual(self.command('retire', origin='unknown')['count'], 1)
+        self.assertFalse((self.active / 'corrupt.json').exists())
+        self.assertEqual(self.command('resume', origin='unknown')['count'], 1)
+        self.assertEqual((self.active / 'corrupt.json').read_text(), '{bad JSON')
+
+    def test_resume_never_overwrites_an_active_journal(self):
+        self.command('retire')
+        original = b'{"origin":"https://current.example.test","progress":"new"}'
+        (self.active / 'legacy-1.json').write_bytes(original)
+        result = self.command('resume')
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['skipped'], 1)
+        self.assertEqual((self.active / 'legacy-1.json').read_bytes(), original)
+        self.assertEqual(service.journal_status(self.root, self.settings)['retired_count'], 1)
 
 
 class UpdateTests(unittest.TestCase):
