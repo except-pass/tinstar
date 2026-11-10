@@ -29,8 +29,16 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
   const decisions = useRef(decisionsActive), queueFailure = useRef(queueReadFailed)
   decisions.current = decisionsActive; queueFailure.current = queueReadFailed
   const current = useRef(state), latestScene = useRef(scene), latestQueue = useRef(queue)
-  const pending = useRef<CommandResult[]>([]), ready = useRef<CommandResult[]>([])
+  const pending = useRef<CommandResult[]>([]), ready = useRef(new Map<string, CommandResult>())
   const seen = useRef(new Map<string, CommandResult>())
+  const queueAck = useCallback((ack: CommandResult, restoring = false) => {
+    const prior = ready.current.get(ack.command_id) ?? seen.current.get(ack.command_id)
+    const latest = prior && (prior.delivery?.pending === false || restoring) ? prior : ack
+    const merged = { ...latest, ...(prior?.applied_at !== undefined || ack.applied_at !== undefined ? { applied_at: prior?.applied_at ?? ack.applied_at } : {}) }
+    ready.current.set(ack.command_id, merged)
+    seen.current.set(ack.command_id, merged)
+    return merged
+  }, [])
   latestScene.current = scene
   const previousQueue = useRef(queue)
   latestQueue.current = queue
@@ -38,7 +46,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     if (!latestScene.current) return
     if (action.origin !== 'assistant' && visual.current) {
       const ack = { ...visual.current.ack, delivery: { ...visual.current.ack.delivery!, stage: 'not-visible' as const, reason: 'Superseded by user interaction.', pending: false } }
-      ready.current.push(ack); seen.current.set(ack.command_id, ack); visual.current = null; setPendingFocus(false)
+      queueAck(ack); visual.current = null; setPendingFocus(false)
     }
     // A Decisions acknowledgment must correspond to a row this view can reveal.
     // The scene reducer still checks the card exists in the underlying source.
@@ -54,19 +62,18 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     // Repeated commands also reopen a previously browsed canonical item.
     if (action.origin !== 'assistant' && applied.outcome === 'applied' && ['open-queue', 'navigate-queue', 'navigate-card', 'reveal-search'].includes(action.type)) navigate.current?.(action)
     return applied
-  }, [])
+  }, [queueAck])
   useEffect(() => {
     current.current = state
     savePresentationPreferences(state)
     committed.current = { rendered_at: new Date().toISOString(), revision: state.revision }
-    ready.current.push(...pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).map(ack => {
+    pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).forEach(ack => {
       const committedAck = { ...ack, applied_at: ack.applied_at ?? Date.now(), delivery: ack.delivery?.targets?.length ? ack.delivery : { stage: 'rendered' as const, pending: false } }
-      seen.current.set(ack.command_id, committedAck)
-      if (visual.current?.ack.command_id === ack.command_id) visual.current.ack = committedAck
-      return committedAck
-    }))
+      const queued = queueAck(committedAck)
+      if (visual.current?.ack.command_id === ack.command_id) visual.current.ack = queued
+    })
     pending.current = pending.current.filter(ack => (ack.revision ?? 0) > state.revision)
-  }, [state, scene, active, decisionsActive])
+  }, [state, scene, active, decisionsActive, queueAck])
   useEffect(() => {
     if (queue) {
       const queueItemId = retainedQueueItemId(previousQueue.current, queue, current.current.queueItemId ?? null)
@@ -82,7 +89,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     if (!active) {
       // A later Overview registration has a new scene identity. Never replay
       // acknowledgments for the view that was hidden by manual navigation.
-      pending.current = []; ready.current = []; seen.current.clear()
+      pending.current = []; ready.current.clear(); seen.current.clear()
       setConnection(null)
       return
     }
@@ -104,7 +111,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     function receive(command: ViewCommand) {
       if (!credentials || command.scene_id !== credentials.scene_id) return
       const previous = seen.current.get(command.command_id)
-      if (previous) { ready.current.push(previous); return }
+      if (previous) { queueAck(previous); return }
       const applied = Date.now() >= command.expires_at ? { outcome: 'expired' as const, state: current.current } : send(command.action)
       if (!applied) return
       const ack: CommandResult = { scene_id: credentials.scene_id, command_id: command.command_id, outcome: applied.outcome, revision: applied.state.revision, state: applied.state }
@@ -115,7 +122,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
         if (visual.current) {
           const previous = visual.current.ack
           const superseded = { ...previous, delivery: { ...previous.delivery!, stage: 'not-visible' as const, reason: 'Superseded by a newer assistant command.', pending: false } }
-          ready.current.push(superseded); seen.current.set(previous.command_id, superseded)
+          queueAck(superseded)
           visual.current = null; setPendingFocus(false)
         }
         const targets = presentationTargets(command.action).map(semanticId)
@@ -127,7 +134,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
         }
         assistantPresent.current?.(command.action)
       }
-      else ready.current.push(ack)
+      else queueAck(ack)
     }
     function observation(): RenderedObservation {
       return { scene_generated_at: latestScene.current?.generatedAt ?? null, scene_read_failed: readFailure.current,
@@ -152,13 +159,14 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
       } else waiting.needsReplay = true
       const delivery = observeTargets(waiting.targets, surface.current)
       const ack = { ...waiting.ack, delivery }
-      waiting.ack = ack; seen.current.set(ack.command_id, ack)
-      ready.current.push(ack)
+      waiting.ack = queueAck(ack)
       if (!delivery.pending) { visual.current = null; setPendingFocus(false) }
     }
     async function tick() {
       inspect()
-      const batch = ready.current.splice(0, 1)
+      const next = ready.current.values().next().value as CommandResult | undefined
+      const batch = next ? [next] : []
+      if (next) ready.current.delete(next.command_id)
       try {
         if (!credentials) {
           credentials = await post({ type: 'register', state: current.current, rendered_scene: observation() })
@@ -174,7 +182,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
           if (!stopped) { setBridgeError(false); setConnection(previous => previous && previous.designated !== data.designated ? { ...previous, designated: data.designated } : previous); for (const command of data.commands as ViewCommand[]) receive(command) }
         }
       } catch (error) {
-        ready.current.unshift(...batch)
+        for (const ack of batch) queueAck(ack, true)
         if (!stopped) setBridgeError(true)
         // Server restarts discard window identities; a denied old key is never
         // reused. Other failures retain it and retry with bounded polling.
@@ -190,7 +198,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
       const waiting = visual.current
       if (!waiting) return
       const ack = { ...waiting.ack, delivery: { ...waiting.ack.delivery!, stage: 'not-visible' as const, reason: 'Superseded by user interaction.', pending: false } }
-      ready.current.push(ack); seen.current.set(ack.command_id, ack)
+      queueAck(ack)
       visual.current = null; setPendingFocus(false)
     }
     const inputEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
@@ -199,6 +207,6 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     document.addEventListener('visibilitychange', foreground)
     window.addEventListener('pagehide', disconnect)
     return () => { for (const event of inputEvents) document.removeEventListener(event, takeOwnership, true); stopped = true; clearTimeout(timer); controller?.abort(); window.removeEventListener('pagehide', disconnect); window.removeEventListener('focus', foreground); document.removeEventListener('visibilitychange', foreground); visual.current = null; disconnect() }
-  }, [send, active])
+  }, [send, active, queueAck])
   return { state, send, connection, bridgeError, useThisTab, pendingFocus }
 }

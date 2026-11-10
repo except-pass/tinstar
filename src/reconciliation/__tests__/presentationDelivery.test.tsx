@@ -119,6 +119,70 @@ describe('browser delivery and replay', () => {
     expect(broker.result(tab.scene_id, 'mixed').delivery).toMatchObject({ stage: 'not-supported', targets: [`card:${cardId}`, `claim:${claim.id}`], visible_targets: [`card:${cardId}`], pending: false })
     expect(latest.pendingFocus).toBe(false)
   })
+  it('coalesces failed background delivery polls so the next short-lived command is acknowledged promptly', async () => {
+    hidden = true; focused = false
+    const transport = vi.mocked(fetch).getMockImplementation()!
+    let failures = 0
+    const sent: Array<{ command_id: string; applied_at?: number; delivery?: { pending?: boolean; reason?: string } }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url, request) => {
+      const payload = JSON.parse(String(request!.body))
+      if (payload.type === 'sync') {
+        expect(payload.acknowledgments.length).toBeLessThanOrEqual(1)
+        sent.push(...payload.acknowledgments)
+        if (failures > 0) { failures--; throw new Error('Temporary sync failure') }
+      }
+      return transport(url, request)
+    }))
+    render(<Browser />); await tick()
+    const first = enqueue('background'); await tick(); await tick()
+    const firstCommit = broker.result(first.scene_id, first.command_id).applied_at
+    expect(firstCommit).toBeDefined()
+    failures = 30
+    await tick(30_000)
+    expect(failures).toBe(0)
+    expect(latest.bridgeError).toBe(true)
+    await tick()
+    expect(latest.bridgeError).toBe(false)
+    const second = { scene_id: first.scene_id, command_id: 'short-lived', expected_revision: latest.state.revision, ttl_ms: 1500, action: { type: 'navigate-card' as const, cardId } }
+    expect(broker.enqueue(second, scene).outcome).toBe('queued')
+    await tick()
+    expect(latest.state.revision).toBe(second.expected_revision + 1)
+    await tick(); await tick()
+    const result = broker.result(second.scene_id, second.command_id)
+    expect(result).toMatchObject({ outcome: 'applied', revision: second.expected_revision + 1 })
+    expect(result.applied_at).toBe(sent.find(ack => ack.command_id === second.command_id)!.applied_at)
+    expect(broker.result(first.scene_id, first.command_id)).toMatchObject({ applied_at: firstCommit, delivery: { pending: false, reason: 'Superseded by a newer assistant command.' } })
+  })
+  it.each(['manual', 'foreground'] as const)('keeps the newer %s terminal observation when an older in-flight batch fails', async finish => {
+    hidden = true; focused = false
+    render(<Browser />); await tick()
+    const input = enqueue('in-flight'); await tick(); await tick()
+    const appliedAt = broker.result(input.scene_id, input.command_id).applied_at
+    const transport = vi.mocked(fetch).getMockImplementation()!
+    let rejectRequest!: (error: Error) => void, holding = true
+    vi.stubGlobal('fetch', vi.fn(async (url, request) => {
+      const payload = JSON.parse(String(request!.body))
+      if (payload.type === 'sync' && holding) {
+        holding = false
+        return new Promise<Response>((_resolve, reject) => { rejectRequest = reject })
+      }
+      return transport(url, request)
+    }))
+    await tick()
+    expect(rejectRequest).toBeDefined()
+    if (finish === 'manual') fireEvent.keyDown(document.body, { key: 'ArrowLeft' })
+    else {
+      hidden = false; focused = true
+      act(() => window.dispatchEvent(new Event('focus')))
+      act(() => window.dispatchEvent(new Event('focus')))
+    }
+    await act(async () => { rejectRequest(new Error('Lost response')); await Promise.resolve() })
+    await tick()
+    const receipt = broker.result(input.scene_id, input.command_id)
+    expect(receipt.applied_at).toBe(appliedAt)
+    expect(receipt.delivery).toMatchObject({ stage: finish === 'manual' ? 'not-visible' : 'foreground-visible', pending: false })
+    if (finish === 'manual') expect(receipt.delivery?.reason).toBe('Superseded by user interaction.')
+  })
   it('lets manual interaction cancel background replay', async () => {
     hidden = true; focused = false
     render(<Browser />); await tick()
