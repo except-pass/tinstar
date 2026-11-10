@@ -2,6 +2,7 @@ import type { FloorScene } from './reconciliationPresentation'
 import { operationalStatuses } from './floorOrganization'
 import type { PullDeployment, ReleaseDryRun } from './releaseReconciliation'
 import type { ReleaseAutomationPlan } from './releaseAutomation'
+import type { AcceptanceRecord } from './releaseAcceptance'
 import type { ReleaseObject } from './releaseObjects'
 import type { SceneCard } from '../server/reconciliation/scene'
 
@@ -41,6 +42,7 @@ export interface ReleasePull extends PullIdentity {
   deployment?: PullDeployment
 }
 export interface ReleasesRead {
+  acceptanceRecords?: AcceptanceRecord[]
   releases?: ReleaseObject[]
   generatedAt: string; pulls: ReleasePull[]
   unassociatedCards: Array<{ id: string; title: string; reason: string }>

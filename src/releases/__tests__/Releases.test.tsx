@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { Releases, ReleaseCanvas } from '../Releases'
+import { Releases, ReleaseCanvas, ReleaseDetail } from '../Releases'
 import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
 import { releaseFixture } from './fixtures'
 import { changeFixture, objectFixture } from '../../../test-fixtures/releases/objects'
@@ -141,4 +141,25 @@ describe('release-first V3 surfaces', () => {
     expect(screen.getByText('Fixture improvement 1.')).toBeTruthy()
     expect(screen.queryByText('Fixture improvement 3.')).toBeNull()
   })
+})
+
+it('shows latest failed evidence first and keeps the earlier failed/manual history explicit', () => {
+  const release = objectFixture('production')
+  const change = changeFixture(0, 'Failed')
+  change.checks = [{ id: 'specific', method: 'workflow', ref: 'feature.prod', successCondition: change.successCondition!, fixture: 'safe fixture', key: 'bound', outcome: 'failed', record: {
+    key: 'bound', releaseId: release.id, changeId: change.id, checkId: 'specific', events: [
+      { at: '2026-11-10T12:00:00Z', actor: 'operator', outcome: 'inconclusive', reason: 'Dispatch intent', evidence: null, runId: null, runUrl: null },
+      { at: '2026-11-10T12:01:00Z', actor: 'operator', outcome: 'failed', reason: 'Two of six feature assertions failed', evidence: 'https://example.com/results', runId: 42, runUrl: 'https://github.com/owner/repo/actions/runs/42' },
+    ],
+  } }]
+  render(<ReleaseDetail release={release} change={change} close={vi.fn()} />)
+  const drawer = screen.getByRole('dialog')
+  expect(within(drawer).getByText('Deployed · Failed')).toBeTruthy()
+  expect(within(drawer).getByText('Two of six feature assertions failed')).toBeTruthy()
+  expect(within(drawer).getByRole('link', { name: 'Workflow run 42 ↗' })).toHaveAttribute('href', 'https://github.com/owner/repo/actions/runs/42')
+  const history = within(drawer).getByText('Earlier check evidence (1)')
+  expect(history.closest('details')).not.toHaveAttribute('open')
+  fireEvent.click(history)
+  expect(history.closest('details')).toHaveAttribute('open')
+  expect(within(drawer).getByText(/Dispatch intent/)).toBeTruthy()
 })

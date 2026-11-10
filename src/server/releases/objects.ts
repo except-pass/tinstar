@@ -4,6 +4,7 @@ import { activeReleaseLinks, type ReleasesRead } from '../../shared/releases'
 import type { EvidenceRead } from './evidence'
 import { cmsandboxReceipts, receiptHash } from './cmsandbox'
 import { ReleaseMembershipReader } from './membership'
+import { releaseChanges } from '../../shared/releaseChanges'
 import { ReleaseReconciler } from './reconcile'
 
 /** Frozen coordinator objects and committed observations only. No tag creates a release. */
@@ -108,6 +109,8 @@ export class ReleaseObjectReader {
         receipts: release.kind === 'production' ? release.targets.flatMap(target => target.receipt ? [target.receipt] : []) : [] })
       release.pulls = scoped.pulls.filter(pull => memberIds.has(pull.id))
       release.supportingPulls = scoped.pulls.filter(pull => !memberIds.has(pull.id))
+      const changes = releaseChanges(release, data, scene)
+      if (release.kind === 'production' && release.state === 'Needs review' && changes.length && changes.every(change => change.delivery === 'Deployed' && change.acceptance === 'Passed')) release.state = 'Accepted'
       if (range.membership.reason) release.gaps.unshift(range.membership.reason)
       if (!data.associationsComplete) release.gaps.push('Notion PR/card association sources are incomplete; known explicit links are retained')
     }

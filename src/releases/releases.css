@@ -238,3 +238,6 @@
 .rel-v3 dialog.drawer{border:0;border-left:1px solid #36515a}
 /* The tabpanel wrapper makes the first acceptance group first-of-type; keep the reference gap. */
 .rel-v3 .group-label:first-of-type{padding-top:16px}
+.rel-v3 .acceptance-check{border-top:1px solid var(--border);margin-top:15px;padding-top:10px}
+.rel-v3 .check-evidence{border-left:2px solid var(--border);padding-left:10px;margin-top:12px}
+.rel-v3 .check-history{font-size:11px;color:var(--secondary);margin-top:12px}
