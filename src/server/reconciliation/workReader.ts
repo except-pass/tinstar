@@ -7,9 +7,12 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   const value = (name: string) => card.properties[name]?.value
   const has = (name: string, expected?: string) => !expected || (Array.isArray(value(name)) ? (value(name) as unknown[]).includes(expected) : value(name) === expected)
   const date = value('Next check-in') as { start?: string; time_zone?: string } | null
-  return !card.archived && !card.in_trash && has('Owner', scope.owner) && has('Initiative', scope.initiative) && has('Epic', scope.epic) &&
+  const classifications = ([['Initiative', scope.initiative], ['Epic', scope.epic]] as const).map(([name, expected]) =>
+    has(name, expected) ? true : card.properties[name]?.type === 'relation' && card.properties[name]?.hasMore ? undefined : false)
+  const matches = !card.archived && !card.in_trash && has('Owner', scope.owner) &&
     (scope.statuses ? scope.statuses.includes(String(value('Status'))) : scope.history || !['Done', 'Archived'].includes(String(value('Status')))) &&
     (!scope.checkpoint_before || !!date?.start && checkInTime(date.start, date.time_zone) <= Date.parse(scope.checkpoint_before))
+  return !matches || classifications.includes(false) ? false : classifications.includes(undefined) ? undefined : true
 }
 export class WorkReader {
   private queries = new Map<string, { scope: WorkScope; observation: ReturnType<typeof notionObservation> }>()
@@ -41,7 +44,10 @@ export class WorkReader {
   confirm(card: WorkCard) {
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })
     this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card) })
-    for (const { scope, observation } of this.queries.values()) observation.updateData(data => ({ ...data,
-      cards: [...data.cards.filter(item => item.id !== card.id), ...(scopeMatches(card, scope) ? [card] : [])] }))
+    for (const { scope, observation } of this.queries.values()) observation.updateData(data => {
+      const matches = scopeMatches(card, scope)
+      const retain = matches === true || matches === undefined && data.cards.some(item => item.id === card.id)
+      return { ...data, cards: [...data.cards.filter(item => item.id !== card.id), ...(retain ? [card] : [])] }
+    })
   }
 }

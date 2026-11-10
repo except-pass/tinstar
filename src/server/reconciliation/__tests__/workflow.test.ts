@@ -17,7 +17,7 @@ import { workerLinkRecord } from '../workerLinks'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 const id = 'a'.repeat(32), dataSourceId = 'b'.repeat(32)
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
-function fixture() {
+function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evidence note' }) {
   let raw = { object: 'page', id, parent: { data_source_id: dataSourceId }, url: `https://www.notion.so/${id}`, last_edited_time: new Date().toISOString(),
     properties: { Name: { type: 'title', title: [{ plain_text: 'Fixture start' }] }, Status: { type: 'status', status: { name: 'Queued' } },
       Owner: { type: 'select', select: { name: 'Firstmate' } }, Area: { type: 'select', select: { name: 'Engineering' } },
@@ -51,6 +51,7 @@ function fixture() {
         const prop = raw.properties[filter.property], type = prop.type, test = filter[type]
         // Date values are objects, not rich-text arrays. Handle the supported
         // date filter before attempting the scalar/rich-text projection.
+        if (type === 'relation') return [...prop.relation, ...(prop.hiddenRelations ?? [])].some((v: any) => v.id === test.contains)
         if (type === 'date') return Date.parse(prop.date.start) <= Date.parse(test.on_or_before)
         const value = prop[type]?.name ?? prop[type]?.map((v: any) => v.plain_text).join('')
         if (test?.equals !== undefined) return value === test.equals
@@ -59,8 +60,8 @@ function fixture() {
       }
       return json({ results: matches(body.filter) ? [raw] : [], has_more: false })
     }
-    if (path === '/v1/comments') return json({ has_more: false, results: [{ id: 'comment-1', created_by: { id: 'author-1' }, created_time: '2026-11-10T00:00:00Z', rich_text: [{ plain_text: 'Evidence note' }] }] })
-    if (path.includes('/blocks/')) return json({ has_more: false, results: [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Acceptance: retain provenance' }] } }] })
+    if (path === '/v1/comments') return json({ has_more: false, results: [{ id: 'comment-1', created_by: { id: 'author-1' }, created_time: '2026-11-10T00:00:00Z', rich_text: [{ plain_text: prose.comment }] }] })
+    if (path.includes('/blocks/')) return json({ has_more: false, results: [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: prose.body }] } }] })
     return json({}, 404)
   })
   const api = new NotionApi(fetcher, 0), reader = new WorkReader({ token: 'fixture-token-only', dataSourceId }, api)
@@ -171,6 +172,44 @@ describe('shared status-aware work reads', () => {
     expect(f.requests.filter(request => request.url.endsWith(`/data_sources/${dataSourceId}`))).toHaveLength(1)
     expect(f.api.diagnostics.cacheHits).toBeGreaterThan(0)
   })
+  it.each(['Initiative', 'Epic'])('retains unknown %s membership after a start while removing definite nonmatches', async classification => {
+    const f = fixture(), target = 'c'.repeat(32), other = 'd'.repeat(32)
+    f.raw.properties[classification] = { id: classification, type: 'relation', relation: [{ id: other }], has_more: true, hiddenRelations: [{ id: target }] }
+    const scope = { [classification.toLowerCase()]: target }
+    expect((await f.reader.query(scope)).data!.cards).toHaveLength(1)
+    expect((await f.reader.query({ ...scope, statuses: ['Queued'] })).data!.cards).toHaveLength(1)
+    expect((await f.reader.query({ ...scope, statuses: ['In Progress'] })).data!.cards).toHaveLength(0)
+    expect(await f.workflow.start(f.native, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    const retained = (await f.reader.query(scope)).data!.cards
+    expect(retained).toMatchObject([{ id, properties: { Status: { value: 'In Progress' } } }])
+    expect((await f.reader.query({ ...scope, statuses: ['Queued'] })).data!.cards).toHaveLength(0)
+    expect((await f.reader.query({ ...scope, statuses: ['In Progress'] })).data!.cards).toHaveLength(0)
+    f.raw.properties[classification].has_more = false
+    f.reader.confirm(await f.reader.card(id, true))
+    expect((await f.reader.query(scope)).data!.cards).toHaveLength(0)
+    f.raw.properties[classification].relation.push({ id: target })
+    f.reader.confirm(await f.reader.card(id, true))
+    expect((await f.reader.query(scope)).data!.cards).toHaveLength(1)
+    expect((await f.reader.query({ ...scope, statuses: ['In Progress'] })).data!.cards).toHaveLength(1)
+  })
+  it('redacts complete detail readbacks and cached prose without mutating authoritative properties', async () => {
+    const secret = 'token=abcdefgh12345678', github = 'ghp_abcdefghijklmnopqrstuvwx'
+    const f = fixture({ body: `Acceptance ${secret} ${github}`, comment: `Evidence ${secret} ${github}` }), sources = f.sources()
+    f.raw.properties['Delegated To'].rich_text = [{ plain_text: `Keep exact ${secret} ${github}` }]
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await sources.getWork({ card_id: id })
+      expect(result).toMatchObject({ outcome: 'available', context: { blocks: [
+        expect.objectContaining({ id: 'body-1', text: 'Acceptance token=[credential omitted] [credential omitted]' }),
+        expect.objectContaining({ id: 'comment-1', text: 'Evidence token=[credential omitted] [credential omitted]' }),
+      ] } })
+      expect(JSON.stringify(result)).not.toContain('abcdefgh12345678')
+      expect(JSON.stringify(result)).not.toContain(github)
+    }
+    expect(f.requests.filter(request => request.url.includes('/comments'))).toHaveLength(1)
+    expect(await sources.startWork(f.external, 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await sources.currentCard(id)).properties['Delegated To']!.value).toContain(`Keep exact ${secret} ${github}`)
+    expect(JSON.stringify(f.raw.properties['Delegated To'])).toContain(secret)
+  })
   it('shares Smart Search Blocked semantics with the UI, reads exact history outside active scope, and caches body/comments without duplication', async () => {
     const f = fixture(), sources = f.sources()
     f.raw.properties.Status.status.name = 'Waiting For'
@@ -200,7 +239,7 @@ it('honors Retry-After across all operations and measures request counts and lat
 
 it('uses one policy through authenticated UI, MCP and the existing tunnel, without a browser or scene', async () => {
   vi.useFakeTimers({ toFake: ['Date'] })
-  const f = fixture(), sources = f.sources()
+  const f = fixture({ body: 'Acceptance token=abcdefgh12345678', comment: 'Evidence ghp_abcdefghijklmnopqrstuvwx' }), sources = f.sources()
   const root = await mkdtemp(join(tmpdir(), 'workflow-mcp-')); roots.push(root)
   const mcp = new ReconciliationMcp(sources, root)
   const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
@@ -227,6 +266,10 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
   await facade.listen(0)
   const remote = new Client({ name: 'facade-workflow-test', version: '1' }); clients.push(remote)
   await remote.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${'test-facade-token-'.repeat(3)}` } } }))
+  const detailMcp = parse(await remote.callTool({ name: 'get_work', arguments: { card_id: id } }))
+  const detailUi = await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'get', input: { card_id: id } }) })
+  expect((await detailUi.json()).data).toEqual(detailMcp)
+  expect(detailMcp.context.blocks.map((block: any) => block.text)).toEqual(['Acceptance token=[credential omitted]', 'Evidence [credential omitted]'])
   expect((await remote.listTools()).tools.map(tool => tool.name)).toContain('start_work')
   expect((await remote.listTools()).tools.map(tool => tool.name)).not.toContain('present_view')
   expect(parse(await remote.callTool({ name: 'start_work', arguments: { ...f.external, operation_id: 'tunnel-start' } })).outcome).toBe('saved')
