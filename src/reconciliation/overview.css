@@ -187,4 +187,4 @@
 .ov-toolbar .ov-source-indicator{margin-left:auto}
 @media(max-width:1366px){.ov-filter-shelf{grid-template-columns:225px minmax(0,1fr)}.ov-legend-group{grid-template-columns:105px minmax(0,1fr)}}
 @media(max-width:1050px){.ov-filter-shelf{grid-template-columns:1fr}.ov-active-panel{border-right:0;border-bottom:1px solid #23404a}.ov-active-panel .ov-filter-chips{min-height:27px}}
-@media(max-width:600px){.ov-legend-group{grid-template-columns:1fr;gap:6px;padding:8px 10px}.ov-active-panel{padding:9px 10px}.ov-status-list{gap:5px}.ov-status-chip,.ov-active-panel .ov-filter-chips button{min-height:44px}.ov-active-panel .ov-clear-filters{min-height:44px;padding:0 5px}}
+@media(max-width:600px){.ov-legend-group{grid-template-columns:1fr;gap:6px;padding:8px 10px}.ov-active-panel{padding:9px 10px}.ov-status-list{gap:5px}.ov-status-list .ov-status-chip,.ov-active-panel .ov-filter-chips button{min-height:44px}.ov-active-panel .ov-clear-filters{min-height:44px;padding:0 5px}}

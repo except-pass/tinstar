@@ -1277,6 +1277,12 @@ for (const width of [1440, 1180, 390]) test(`filter shelf labelled Waiting For l
   await page.goto(base)
   const legend = page.getByRole('group', { name: 'Filter by card status' })
   const waiting = legend.getByRole('button', { name: /^Filter Cards: Waiting For,/ })
+  for (const chip of await legend.getByRole('button').all()) {
+    const box = (await chip.boundingBox())!
+    expect(box.height).toBeGreaterThanOrEqual(width === 390 ? 44 : 27)
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(width)
+  }
   await waiting.click()
   await expect(waiting).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('region', { name: 'Waiting For work' })).toBeVisible()
