@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { updateWorkSchema } from '../../shared/workflow'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -58,6 +59,7 @@ it('retains edit preconditions and identity across refreshed props until intent 
   }
   await submit(1)
   const original = JSON.parse(String(fetcher.mock.calls[0]![1]!.body))
+  expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
   card.source.properties.Priority!.value = 'High'
   view.rerender(<WorkActions card={card} onSaved={saved} />)
   await submit(2)
@@ -96,4 +98,39 @@ it.each(['Waiting For', 'In Progress', 'external', 'Done', 'Archived'])('answers
   else if (state === 'In Progress') expect(input.next.worker).toEqual({ kind: 'firstmate', fm_home: '/fixture/home', task_id: 'native-task', first_observed_spawn_gen: 'exact-generation' })
   else if (state === 'external') expect(input.next.worker).toMatchObject({ kind: 'external', card_id: card.id, run_id: 'run-one', state: 'running' })
   else expect(input.next).toMatchObject({ disposition: 'Owner accepted the supported outcome', evidence: 'Owner acceptance receipt' })
+})
+
+it('refreshes a definite conflict and saves explicit re-issue with a new ID and current preconditions', async () => {
+  const original = structuredClone(fixtureScene().cards[0]!)
+  original.source.properties.Priority = { type: 'select', value: 'Low' } as any
+  const refreshed = structuredClone(original)
+  refreshed.source.properties.Priority!.value = 'Medium'
+  const refresh = vi.fn(async () => {})
+  function Editor() {
+    const [card, setCard] = useState(original)
+    return <><p>Current priority: {String(card.source.properties.Priority!.value)}</p><WorkActions card={card} onSaved={async result => {
+      if (!result) { await refresh(); setCard(refreshed) }
+    }} /></>
+  }
+  const fetcher = vi.mocked(apiFetch)
+  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'not-saved', code: 'conflict', message: 'Priority changed; refresh and retry', saved_fields: [] } })))
+  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', code: 'saved', message: 'Priority saved', saved_fields: ['Priority'] } })))
+  render(<Editor />)
+  fireEvent.click(screen.getByLabelText('Change an ordinary property'))
+  fill('Property', 'Priority'); fill('New value (relation IDs separated by commas)', 'High')
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not saved. Priority changed'))
+  const first = JSON.parse(String(fetcher.mock.calls[0]![1]!.body))
+  expect(first.input.expected).toEqual({ Priority: 'Low' })
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh card' }))
+  await waitFor(() => expect(screen.getByText('Current priority: Medium')).toBeInTheDocument())
+  expect(refresh).toHaveBeenCalledTimes(1)
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Re-issue with refreshed card' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved. Priority saved'))
+  const second = JSON.parse(String(fetcher.mock.calls[1]![1]!.body))
+  expect(second.input.operation_id).not.toBe(first.input.operation_id)
+  expect(second.input.expected).toEqual({ Priority: 'Medium' })
+  expect(second.input.properties).toEqual({ Priority: 'High' })
+  expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
 })

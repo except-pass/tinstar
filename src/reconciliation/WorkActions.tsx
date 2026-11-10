@@ -24,7 +24,7 @@ function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
     } catch { setResult({ outcome: 'partially-saved', code: 'response-unavailable', operation_id: attempt.current.id, saved_fields: [], message: 'Save unconfirmed. Refresh, then retry; this attempt will be reused.' }) }
     finally { setBusy(false) }
   }
-  return { busy, result, save }
+  return { busy, result, save, canReissue: result?.outcome === 'not-saved' && result.code === 'conflict', newAttempt: () => { attempt.current = undefined } }
 }
 const field = (label: string, value: string, set: (value: string) => void, required = true, multiline = false) => <label>{label}{multiline ? <textarea required={required} maxLength={12000} value={value} onChange={e => set(e.target.value)} /> : <input required={required} value={value} onChange={e => set(e.target.value)} />}</label>
 
@@ -41,7 +41,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const [disposition, setDisposition] = useState(''), [workerKind, setWorkerKind] = useState('firstmate')
   const [home, setHome] = useState(''), [task, setTask] = useState(''), [generation, setGeneration] = useState('')
   const [system, setSystem] = useState(''), [run, setRun] = useState(''), [reference, setReference] = useState(''), [observed, setObserved] = useState(''), [running, setRunning] = useState(false)
-  const { save, busy, result } = useWorkSave(onSaved)
+  const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }
@@ -93,6 +93,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     {kind === 'park' && <label>Park status<select value={status === 'Archived' ? 'Archived' : 'Backlog'} onChange={e => setStatus(e.target.value)}><option>Backlog</option><option>Archived</option></select></label>}
     {field(kind === 'request_decision' ? 'Question' : kind === 'answer_decision' ? 'Answer' : kind === 'checkpoint' ? 'Assessment' : kind === 'complete' || kind === 'park' ? 'Supported disposition' : 'Note', note, setNote, !['edit', 'assign', 'wait'].includes(kind), true)}
     <button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save update'}</button>
+    {canReissue && <><button type="button" disabled={busy} onClick={() => void onSaved().catch(() => {})}>Refresh card</button><button type="submit" disabled={busy} onClick={newAttempt}>Re-issue with refreshed card</button></>}
     {result && <p role="status" data-save-outcome={result.outcome}>{saveMessage(result)}</p>}
   </form></details>
 }
