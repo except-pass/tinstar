@@ -27,8 +27,11 @@ Truncated text has a full title tooltip and a visible keyboard-focus tooltip;
 expanded titles and metadata wrap. Connectors follow measured anchors after
 expansion, sorting, filtering, group collapse, scrolling and resizing.
 Nested groups use an outer field label and deduplicated worker/task counts,
-with compact worker/task counts on each violet inner band. One 48px toolbar
-starts the floor immediately below it, without a separate title or controls row.
+with compact worker/task counts on each violet inner band. One 48px primary
+toolbar sits above a compact filter shelf, followed by the floor without a
+separate title. The shelf places Active filters beside stacked Workers and
+Cards legends on desktop; its zones stack on narrower screens. Tokens and
+status buttons wrap with full labels rather than clipping or scrolling horizontally.
 
 | Preset | Outer | Inner | Order |
 | --- | --- | --- | --- |
@@ -65,8 +68,10 @@ Workers precede cards in the status donuts, selected-status chips, Inspector
 group summaries and connection pairs,
 matching the floor's left-to-right column order.
 The two labelled status donuts use unique canonical current endpoints from the
-base scope. Activate a slice with click, Enter or Space to toggle it; text status
-menus expose the same choices and counts. Multiple selections within one donut
+base scope. Activate a slice with click, Enter or Space to toggle it; always-visible
+legend buttons expose every populated status with its full label and count.
+The buttons toggle the same selection and show a checkmark and pressed state.
+Each legend starts with **All**, which clears only that group's status selections. Multiple selections within one donut
 are OR; selections across donuts are AND. Except for [Waiting For grouping](#waiting-for-dependency-groups), a card selection shows matching cards
 and only their confirmed linked workers; a worker selection shows matching
 workers and only their confirmed linked cards. With both selected, only matching
@@ -77,12 +82,24 @@ Each donut's eligible distribution ignores its own selections and applies the
 opposite donut's selections, so other eligible statuses stay selectable. The
 labels show visible/eligible unique counts; column counts show the filtered
 unique nodes, independent of repeated group memberships. Selected statuses with
-zero candidates remain removable in the menu and inline chips. Clear is always
-in the toolbar and clears only these explicit selections, restoring the saved
-base scope and organizer. No filter-summary row is added. Empty results are
-labelled, and source health remains available from the toolbar indicator.
+zero candidates remain visible in the legend and removable in Active filters.
+Empty results are labelled, and source health remains available from the toolbar indicator.
 Counts retain partial/last-known labels; an unavailable or uncertain empty worker
 scope displays unknown rather than asserting a verified zero.
+
+The always-present **Active filters** panel counts and labels applied facets
+(for example, **Initiative: Tin Star**), patterns, Workers/Cards status selections
+and Gaps only. Each removable token clears only its own term. Organizer presets
+are grouping preferences, so selecting By Initiative does not create an Initiative
+token. Global Search text and temporary focus are not shelf terms.
+A non-default base scope appears as one counted **Status scope: All** or
+**Status scope: Custom - …** token, including its selected status labels.
+Activating that token opens Customize's Filters controls to edit the scope;
+it has no remove action. **Clear all** clears facets, patterns, donut selections
+and Gaps only while preserving the base scope and its statuses, organizer,
+density, selection, navigation and temporary Search focus and restoration state.
+It is disabled when only the scope token remains. With no terms or non-default
+scope, the panel shows **No active filters**.
 
 Without explicit donut or search predicates, Operational retains independent and
 unmatched endpoints and its intentional hidden-task labels. Opening a relationship can
@@ -225,7 +242,7 @@ controls are reachable with Tab and activate with Enter or Space; in the pattern
 list, use arrow keys and Enter to select the entry. These entries select only
 Waiting For in the card status filter while preserving worker status choices.
 The chip shows its pressed state and keeps the view open when clicked again.
-Selecting only **Waiting For** in the card status donut/menu, or as the sole
+Selecting only **Waiting For** in the card status donut or legend, or as the sole
 Custom status, also replaces the Work organizer with dependency groups.
 The Workers pane retains its organizer, worker status choices and
 relationship context instead of narrowing to workers linked to Waiting For cards.
@@ -295,8 +312,8 @@ returning restores Overview without navigating back to another section. Search
 rewinds browser history only while the current entry belongs to that search
 session. Focus is not saved across reloads.
 
-The horizontal Pattern Dial shares the toolbar between Search and the two
-Workers/Cards status donuts. Its circular order is All → Stalled → Blocked →
+The horizontal Pattern Dial shares the primary toolbar with Search and the
+Waiting For entry above the filter shelf. Its circular order is All → Stalled → Blocked →
 Needs me → Unstaffed → Mismatch → Stale → Active. Click a neighbor, swipe sideways,
 scroll the wheel or trackpad, or use Left/Right on the dial to move one detent.
 With the pattern list closed, the page does not scroll while the pointer is over
