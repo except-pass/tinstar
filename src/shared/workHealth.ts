@@ -78,7 +78,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const activeResolverCount = readFailed ? null : readiness.activeResolverCount
   const runningKnown = linksKnown && workers.length > 0 && workers.every(worker => activity(worker) !== 'unknown')
   const readinessComplete = sourceFresh && scene.coverage.absenceConclusions === 'sufficient-configured-sources' && context.readiness.allHomesFresh && runningKnown
-  const readinessReasons = [...readiness.reasons, ...workers.filter(worker => activity(worker) === 'unknown').map(worker => `Running state unknown for ${worker.home}: ${worker.identity.task_id} (${worker.source.current_state.source ?? 'none'})`)]
+  const readinessReasons = [...readiness.reasons, ...workers.filter(worker => activity(worker) === 'unknown').map(worker => `Running state unknown for ${worker.home}: ${worker.identity.task_id} (${worker.source.current_state.source ?? 'none'}${worker.source.harness === 'codex' ? `; Codex ${worker.source.codex_reason ?? (worker.source.codex ? 'turn observation unavailable or expired' : 'not observed')}` : ''})`)]
   const activePath = running > 0 || (!readFailed && readiness.hasRunnable)
   const waiting = workers.filter(worker => activity(worker) === 'waiting').length
   const terminal = workers.filter(worker => activity(worker) === 'terminal').length
@@ -91,7 +91,7 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const evidence = [`Work status: ${status || 'unknown'}`, `${workers.length} verified workers: ${running} running, ${waiting} waiting, ${terminal} terminal, ${unknown} unknown`,
     `Notion observation: ${scene.coverage.intentions.observedAt ?? 'unknown'} (${scene.coverage.intentions.status}/${scene.coverage.intentions.coverage})`,
     ...readiness.evidence,
-    ...workers.map(worker => `${worker.home}/${worker.identity.task_id}: current_state ${worker.source.current_state.state ?? 'unknown'} from ${worker.source.current_state.source ?? 'none'} (${worker.source.current_state.freshness ?? 'unknown'}); ${worker.liveness}; observed ${worker.observation.observedAt ?? 'unknown'} (${worker.observation.status}/${worker.observation.coverage})`),
+    ...workers.map(worker => `${worker.home}/${worker.identity.task_id}: current_state ${worker.source.current_state.state ?? 'unknown'} from ${worker.source.current_state.source ?? 'none'} (${worker.source.current_state.freshness ?? 'unknown'}); ${worker.source.codex ? `Codex turn ${worker.source.codex.turn_open === true ? 'open' : worker.source.codex.turn_open === false ? 'closed' : 'unknown'}, observed ${worker.source.codex.observed_at ?? 'unknown'}, last activity ${worker.source.codex.last_activity_at ?? 'unknown'}; ` : ''}${worker.liveness}; observed ${worker.observation.observedAt ?? 'unknown'} (${worker.observation.status}/${worker.observation.coverage})`),
     ...links.filter(verifiedLink).map(link => `Verified link: ${link.sources.join(', ') || 'explicit source'}; observed ${link.observedAt ?? 'unknown'}`),
     ...blockers.map(blocker => `Published blocker: ${blocker}`)]
   const result = (outcome: PatternResult['outcome'], reason: string): PatternResult => ({ outcome, evidence: [...evidence, reason], reason })

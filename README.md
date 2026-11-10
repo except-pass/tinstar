@@ -8,6 +8,9 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in a single-row toolbar with linked status donuts and relationships between the columns. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
 
+For Codex worker-state collection and machine-local setup, see the
+[Codex activity reference](docs/features/codex-activity.md).
+
 **Your desk** stays available across Overview, Decisions, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Desk button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
 
 For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.

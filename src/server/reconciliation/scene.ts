@@ -116,8 +116,8 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
   return { ...common, expectation: 'unknown', expectationReason: `Status ${word(card, 'Status')} has no execution expectation rule` }
 }
 
-function executionLiveness(task: SourceTask, observation: Observation<unknown>): ExecutionLiveness {
-  return fresh(observation) ? retainedExecutionLiveness(task) : 'liveness-not-observed'
+function executionLiveness(task: SourceTask, observation: Observation<unknown>, now: number): ExecutionLiveness {
+  return fresh(observation) ? retainedExecutionLiveness(task, now) : 'liveness-not-observed'
 }
 
 /** Pure projection of observations. No source edits, scheduler, or title-confirmed links. */
@@ -187,7 +187,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         add('unverified-conflicting', [], [id], 'Duplicate execution identity in source snapshot', [home.source.home], fresh(observation) ? ['duplicate-execution'] : []); continue
       }
       const observedMachine = text(task.remote?.host)
-      const liveness = executionLiveness(task, observation)
+      const liveness = executionLiveness(task, observation, now)
       const execution: Execution = { id, identity: task.identity, home: home.source.home, parentHome: home.source.parentHome ?? null,
         kind: text(task.kind), placement: { machine: observedMachine ?? home.source.machine ?? null,
           basis: observedMachine ? 'observed' : home.source.machine ? 'configured' : 'unknown', configuredMachine: home.source.machine ?? null },

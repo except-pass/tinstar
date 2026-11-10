@@ -1,3 +1,4 @@
+import { codexTurn } from './codexActivity'
 import type { Execution } from '../server/reconciliation/scene'
 import type { FloorScene } from './reconciliationPresentation'
 
@@ -7,11 +8,15 @@ const key = (home: string, task: string | null) => JSON.stringify([home, task])
 const fresh = (observation: Observation, now: number) => observation.status === 'fresh' && observation.coverage === 'complete' &&
   (!observation.expiresAt || Date.parse(observation.expiresAt) > now)
 
-/** Crew-state is current authority. Endpoint existence and historical status verbs
- * cannot establish either working or its absence. */
+/** Crew-state is current authority, with fresh Codex turns filling unknown state.
+ * Endpoint existence and historical status verbs cannot establish either working
+ * or its absence. */
 export function currentActivity(worker: Execution, now: number): 'working' | 'waiting' | 'terminal' | 'unknown' {
   const state = worker.source.current_state
-  if (!fresh(worker.observation, now) || state.freshness !== 'fresh' || !['run-step', 'pane'].includes(String(state.source))) return 'unknown'
+  if (!fresh(worker.observation, now)) return 'unknown'
+  const turn = codexTurn(worker.source, now)
+  if (turn !== null) return turn ? 'working' : 'waiting'
+  if (state.freshness !== 'fresh' || !['run-step', 'pane'].includes(String(state.source))) return 'unknown'
   if (state.state === 'working') return 'working'
   if (['parked', 'paused', 'blocked'].includes(String(state.state))) return 'waiting'
   if (['done', 'failed'].includes(String(state.state))) return 'terminal'

@@ -8,6 +8,8 @@ import { reconcileScene } from '../scene'
 import { CachedObservation } from '../observation'
 import { loadReconciliationConfig } from '../config'
 import { fleetObservation } from '../fleet'
+import { executionStatus, retainedExecutionLiveness } from '../../../shared/executionLiveness'
+import { floorWorkerStatus } from '../../../shared/floorStatus'
 import { notionObservation } from '../notion'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
@@ -166,6 +168,57 @@ describe('fleet collection', () => {
     expect(scene.executions.map(e => e.liveness)).toEqual(['waiting', 'liveness-not-observed', 'finished'])
     expect(scene.counts).toMatchObject({ running: 0, waiting: 1, finished: 1, absent: 0, 'liveness-not-observed': 1, attempts: 3 })
     expect(scene.findings.some(f => f.kind === 'untracked-worker' || f.kind === 'task-execution-gap')).toBe(false)
+  })
+
+  it('projects additive Codex facts into live counts and ignores private payload fields', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'codex.json'), raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw, tasks: [true, false, null].map((turn, index) => ({
+      ...raw.tasks[0], id: `codex-${index}`, harness: 'codex', endpoint: { exists: true },
+      hints: { last_event_text: 'paused [at=1]: historical wait' },
+      codex: turn === null ? null : { turn_open: turn, observed_at: timestamp, last_activity_at: '2026-11-02T00:00:00Z', session_file: 'rollout-test.jsonl', prompt: 'PRIVATE' },
+      codex_reason: turn === null ? 'no_matching_session_today_or_yesterday' : null,
+    })) }))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const result = await sources.snapshot(), scene = reconcileScene(result, Date.parse(timestamp))
+    expect(scene.executions.map(worker => worker.liveness)).toEqual(['running', 'waiting', 'liveness-not-observed'])
+    expect(scene.counts).toMatchObject({ running: 1, waiting: 1, 'liveness-not-observed': 1 })
+    expect(scene.executions[0]!.source.codex).toMatchObject({ turn_open: true, observed_at: timestamp, last_activity_at: '2026-11-02T00:00:00Z' })
+    expect(JSON.stringify(result)).not.toContain('PRIVATE')
+    expect(scene.executions[2]!.source.codex_reason).toBe('no_matching_session_today_or_yesterday')
+  })
+
+  it.each(['paused', 'done'])('distinguishes absent Codex facts from explicit null for %s reports', async report => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'legacy-codex.json'), raw = snapshot()
+    await writeFile(file, JSON.stringify({ ...raw, tasks: [false, true].flatMap(published =>
+      ['unknown', 'working'].map(state => ({
+        ...raw.tasks[0], id: `${published}-${state}`, harness: 'codex', endpoint: { exists: true },
+        current_state: { state, source: 'pane', freshness: 'fresh' },
+        hints: { last_event_text: `${report} [at=1]: historical report` },
+        ...(published ? { codex: null, codex_reason: 'no_matching_session_modified_within_7_days' } : {}),
+      }))) }))
+    const sources = new ReconciliationSources({ fleet: [{ home: '/farm/hulk', snapshotFile: file }], warnings: [] })
+    const result = await sources.snapshot(), scene = reconcileScene(result, Date.parse(timestamp))
+    const legacyLiveness = report === 'done' ? 'finished' : 'waiting'
+    const legacyStatus = report === 'done' ? 'Finished' : 'Waiting'
+    for (const worker of scene.executions) {
+      const published = worker.identity.task_id!.startsWith('true-')
+      const unknownCrew = worker.source.current_state.state === 'unknown'
+      const missingSignal = published && unknownCrew
+      expect(worker.liveness).toBe(missingSignal ? 'liveness-not-observed' : legacyLiveness)
+      expect(retainedExecutionLiveness(worker.source, Date.parse(timestamp))).toBe(worker.liveness)
+      expect(executionStatus(worker)).toBe(missingSignal ? 'Unknown' : legacyStatus)
+      expect(floorWorkerStatus(worker)).toBe(missingSignal ? 'Unknown' : legacyStatus)
+      const normalized = result.fleet[0]!.observation.data!.tasks.find(task => task.id === worker.identity.task_id)!
+      if (published) {
+        expect(normalized).toHaveProperty('codex', null)
+        expect(worker.source).toHaveProperty('codex', null)
+      } else {
+        expect(normalized).not.toHaveProperty('codex')
+        expect(worker.source).not.toHaveProperty('codex')
+      }
+    }
   })
 
   it('preserves structured child outcome provenance through fleet normalization', async () => {

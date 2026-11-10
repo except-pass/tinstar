@@ -274,3 +274,23 @@ it('keeps operational requests before Ask inbox records in the shared Desk', () 
   expect(screen.getByRole('button', { name: /Open Your desk/, hidden: true })).toHaveAttribute('aria-expanded', 'true')
   expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
+
+it.each(['done', 'landed'])('shows resumed Codex activity after a historical %s report', (report) => {
+  const sources = fixtureSources(), task = sources.fleet[1]!.observation.data!.tasks[0]!
+  const now = Date.now()
+  // Keep the home fresh independently of the quiet log's mtime.
+  Object.assign(sources.fleet[1]!.observation, { observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 300_000).toISOString() })
+  task.harness = 'codex'; task.current_state.state = 'unknown'
+  task.lastEventText = `${report}: historical report`
+  task.last_event.state = report
+  task.codex = { turn_open: true, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - 12 * 60_000).toISOString(), session_file: 'rollout-test.jsonl' }
+  const scene = new SceneReconciler().reconcile(sources)
+  observed.scene = scene
+  const { container } = mount()
+  const worker = scene.executions.find(value => value.identity.task_id === task.id)!
+  const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)!
+  expect(element.textContent).toContain('Running')
+  expect(element.textContent).toContain('Last activity 12m ago')
+  fireEvent.click(within(element.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
+  expect(screen.getByLabelText('Inspector').textContent).toContain('Last activity 12m ago')
+})

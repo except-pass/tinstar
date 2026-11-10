@@ -84,6 +84,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Codex collector tests
+        run: npm run test:codex-collector
+
       - name: Unit tests
         # Fails rather than skips if ttyd went missing from the runner image.
         env:

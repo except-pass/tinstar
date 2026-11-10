@@ -40,7 +40,7 @@ describe('read-only task readiness projection', () => {
     helper.source.current_state.state = 'unknown'
     expect(health(scene, 1).patterns.active.outcome).toBe('match')
   })
-  it.each(['unknown', 'waiting', null])('never proves zero running from current_state %s', state => {
+  it.each(['unknown', null, 'waiting', 'held', 'needs-decision'])('never proves zero running from current_state %s', state => {
     const scene = sceneFor(); assigned(scene).source.current_state.state = state
     expect(health(scene).patterns.active.outcome).toBe('unavailable')
     expect(health(scene).patterns.stalled.outcome).toBe('unavailable')
@@ -192,5 +192,40 @@ describe('read-only task readiness projection', () => {
     expect(rowFor(scene).source.unresolved_blocker_ids).toEqual([])
     expect(health(scene).runnable).toBeNull()
     expect(health(scene).patterns.stalled.reason).toContain('Home snapshot stale or unreadable: /fixture/hulk')
+  })
+})
+
+describe('Codex turn readiness', () => {
+  function codex(scene: Scene, turn: boolean | null = true, observedAt = new Date(now).toISOString()) {
+    const worker = assigned(scene)
+    worker.source.harness = 'codex'
+    worker.source.current_state.state = 'unknown'
+    worker.source.codex = { turn_open: turn, observed_at: observedAt, last_activity_at: '2026-11-08T00:00:00Z', session_file: 'rollout-test.jsonl' }
+    return worker
+  }
+  it('uses open/closed turns for Active and Stalled without an activity timeout', () => {
+    const scene = sceneFor(), worker = codex(scene)
+    expect(health(scene)).toMatchObject({ running: 1, waiting: 0, unknown: 0, patterns: { active: { outcome: 'match' }, stalled: { outcome: 'no-match' } } })
+    worker.source.codex!.turn_open = false
+    expect(health(scene)).toMatchObject({ running: 0, waiting: 1, unknown: 0, patterns: { active: { outcome: 'no-match' }, stalled: { outcome: 'match' } } })
+  })
+  it.each([null, 'expired', 'future', 'invalid', 'missing', 'wrong-harness', 'stale-home'] as const)('leaves %s evidence honestly unknown', condition => {
+    const scene = sceneFor(), worker = codex(scene)
+    if (condition === null) worker.source.codex!.turn_open = null
+    if (condition === 'expired') worker.source.codex!.observed_at = new Date(now - 300_000).toISOString()
+    if (condition === 'future') worker.source.codex!.observed_at = new Date(now + 60_000).toISOString()
+    if (condition === 'invalid') worker.source.codex!.observed_at = 'invalid'
+    if (condition === 'missing') worker.source.codex = null
+    if (condition === 'wrong-harness') worker.source.harness = 'claude'
+    if (condition === 'stale-home') worker.observation.status = 'stale'
+    expect(health(scene)).toMatchObject({ running: 0, waiting: 0, unknown: 1, patterns: { active: { outcome: 'unavailable' }, stalled: { outcome: 'unavailable' } } })
+  })
+  it('keeps known crew state authoritative', () => {
+    const scene = sceneFor(), worker = codex(scene)
+    worker.source.current_state.state = 'parked'
+    expect(health(scene)).toMatchObject({ running: 0, waiting: 1 })
+    worker.source.codex!.turn_open = false
+    worker.source.current_state.state = 'working'
+    expect(health(scene)).toMatchObject({ running: 1, waiting: 0 })
   })
 })

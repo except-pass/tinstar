@@ -129,7 +129,7 @@ describe('card worker facts', () => {
     expect(fact()).toBe('Worker running')
     expect(cardWorkerFact(fixtureScene({ now }), fixtureId(1), now)).toBe('2 workers running')
   })
-  it.each(['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'])('shows %s as waiting, with only the matching report age', state => {
+  it.each(['parked', 'paused', 'blocked'])('shows %s as waiting, with only the matching report age', state => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = state
     worker.source.last_event.state = state
@@ -137,6 +137,40 @@ describe('card worker facts', () => {
     expect(fact()).toBe('Worker waiting · reported 3h ago')
     worker.source.last_event.state = 'working'
     expect(fact()).toBe('Worker waiting')
+  })
+  it.each(['waiting', 'held', 'needs-decision'])('keeps unsupported crew-state %s unknown', state => {
+    const { worker, fact } = singleWorker()
+    worker.source.current_state.state = state
+    worker.source.last_event.state = state
+    expect(fact()).toContain('Worker state unknown')
+  })
+  it.each([true, false])('uses a fresh Codex turn (%s) without dating it from an old report', turn => {
+    const { scene, worker, fact } = singleWorker()
+    worker.source.harness = 'codex'
+    worker.source.current_state.state = 'unknown'
+    worker.source.current_state.freshness = 'unknown'
+    worker.source.last_event.state = 'unknown'
+    worker.source.last_event.age_seconds = 2 * 86400
+    worker.source.codex = { turn_open: turn, observed_at: new Date(now).toISOString(),
+      last_activity_at: new Date(now - 1000).toISOString(), session_file: 'rollout-test.jsonl' }
+    expect(fact()).toBe(turn ? 'Worker running' : 'Worker waiting')
+    worker.source.codex.observed_at = new Date(now - 300_000).toISOString()
+    expect(fact()).toContain('state unknown')
+    worker.source.codex.observed_at = new Date(now).toISOString()
+    worker.observation.status = 'stale'
+    expect(fact()).toContain('state unknown')
+    worker.observation.status = 'fresh'
+    scene.coverage.homes.find(home => home.source.home === worker.home)!.observation.status = 'stale'
+    expect(fact()).toContain('state unknown')
+  })
+  it('dates waiting reports independently of recent log activity', () => {
+    const { worker, fact } = singleWorker()
+    worker.source.current_state.state = 'parked'
+    worker.source.last_event.state = 'parked'
+    worker.source.last_event.age_seconds = 2 * 86400
+    worker.source.codex = { turn_open: false, observed_at: new Date(now).toISOString(),
+      last_activity_at: new Date(now - 1000).toISOString(), session_file: 'rollout-test.jsonl' }
+    expect(fact()).toBe('Worker waiting · reported 2d ago')
   })
   it('names the unknown pane source and harness without treating a working history event as current', () => {
     const { worker, fact } = singleWorker()
