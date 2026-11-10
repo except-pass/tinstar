@@ -82,7 +82,9 @@ presentation permission remain; all authenticated consumers get the same workflo
 tools. No shell, dispatch, merge, deployment or production permission is granted.
 
 Readback confirms each saved property and updates exact-card/scoped-query caches,
-including membership changes. Results are `saved`, `not-saved` or
+including membership changes. For truncated Initiative/Epic relations, an absent
+inline match leaves membership unknown: existing membership is retained, while
+queries without the card are invalidated for a fresh scoped read. Results are `saved`, `not-saved` or
 `partially-saved`, with a code, explanation, confirmed `saved_fields` and available
 card readback. An ambiguous network failure after submitting PATCH is partially
 saved with no fields confirmed. Refresh/retry the same `operation_id` and input;
