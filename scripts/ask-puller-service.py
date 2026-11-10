@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
+import shlex
 import shutil
 import signal
 import subprocess
@@ -15,6 +17,7 @@ import sys
 import time
 import types
 import urllib.parse
+import uuid
 
 SPEC = importlib.util.spec_from_file_location('ask_puller', Path(__file__).with_name('ask-puller.py'))
 puller = importlib.util.module_from_spec(SPEC)
@@ -243,9 +246,116 @@ def validate_settings(settings):
     return settings
 
 
+def journal_entries(home, retired=False):
+    directory = home / 'state' / ('tinstar-ask-reply-receipts-retired' if retired else 'tinstar-ask-reply-receipts')
+    for path in sorted(directory.glob('*/*.json' if retired else '*.json')):
+        try:
+            origin = puller.origin_identity(read_json(path)['origin'])
+        except (OSError, ValueError, KeyError, TypeError):
+            origin = 'unknown'
+        yield path, origin
+
+
+def journal_command(root, action, origin):
+    return shlex.join(['env', 'TINSTAR_CONFIG_HOME=' + str(root), 'tinstar', 'ask-puller',
+                       'journal', action, '--origin', origin, '--reason', '<operator reason>'])
+
+
+def journal_status(root, settings):
+    if not settings.get('home'):
+        return {'pending_count': 0, 'stuck_count': 0, 'pending': [], 'retired_count': 0, 'retired': []}
+    home = Path(settings['home'])
+    try:
+        current = puller.origin_identity(settings.get('url', ''))
+    except ValueError:
+        current = None
+    result = {'stuck_count': 0, 'audit_log': str(home / 'state' / 'tinstar-ask-reply-journal-audit.jsonl')}
+    for retired, label in ((False, 'pending'), (True, 'retired')):
+        groups = {}
+        for _, origin in journal_entries(home, retired):
+            groups[origin] = groups.get(origin, 0) + 1
+        result[label + '_count'] = sum(groups.values())
+        result[label] = []
+        for origin, count in sorted(groups.items()):
+            row = {'origin': origin, 'count': count,
+                   'command': journal_command(root, 'resume' if retired else 'retire', origin)}
+            if not retired:
+                row['stuck'] = origin != current
+                if row['stuck']:
+                    result['stuck_count'] += count
+            result[label].append(row)
+    return result
+
+
+def journal_audit(home, event):
+    # Log the explicit owner action before moving any private journal. An audit
+    # write failure leaves the entries in place; retrying this command is safe.
+    path = home / 'state' / 'tinstar-ask-reply-journal-audit.jsonl'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a', opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+        os.chmod(path, 0o600)
+        stream.write(json.dumps({**event, 'at': time.time()}) + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def manage_journal(root, settings, options):
+    # Validate operator inputs before taking the nonblocking poll lock.
+    if not settings.get('home') or not Path(settings['home']).is_absolute():
+        raise puller.PullerError('Install needs a configured home', 'configuration')
+    if not options.reason or not options.reason.strip() or not options.origin:
+        raise puller.PullerError('Journal command needs --origin and --reason', 'configuration')
+    try:
+        origin = 'unknown' if options.origin == 'unknown' else puller.origin_identity(options.origin)
+    except ValueError:
+        raise puller.PullerError('Use a bridge origin or unknown', 'configuration') from None
+    home = Path(settings['home'])
+    event = {'operation': uuid.uuid4().hex, 'action': options.journal_action,
+             'user': pwd.getpwuid(os.getuid()).pw_name, 'uid': os.getuid(),
+             'origin': origin, 'reason': options.reason, 'count': 0}
+    with puller.single_flight(home) as acquired:
+        if not acquired:
+            journal_audit(home, {**event, 'outcome': 'busy'})
+            print(json.dumps({'outcome': 'busy', 'count': 0, 'warning': 'An active poll owns the journal; retry the same command.'}))
+            return
+        retiring = options.journal_action == 'retire'
+        selected = [path for path, recorded_origin in journal_entries(home, retired=not retiring) if recorded_origin == origin]
+        journal_audit(home, {**event, 'outcome': 'started', 'requested_count': len(selected)})
+        target = home / 'state' / ('tinstar-ask-reply-receipts-retired' if retiring else 'tinstar-ask-reply-receipts')
+        if retiring and selected:
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            target = target / event['operation']
+        moved, skipped = 0, 0
+        try:
+            if selected:
+                target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for source in selected:
+                destination = target / source.name
+                if destination.exists():
+                    # A resumed active entry wins; never overwrite a poll's
+                    # progressed response or change its durable inbox ID.
+                    skipped += 1
+                    continue
+                source.chmod(0o600)
+                source.replace(destination)
+                moved += 1
+        except OSError:
+            journal_audit(home, {**event, 'outcome': 'partial', 'count': moved, 'skipped': skipped})
+            print(json.dumps({'outcome': 'partial', 'count': moved, 'warning': 'Some entries remain; check filesystem access and retry the same command.'}))
+            return
+        journal_audit(home, {**event, 'outcome': 'completed', 'count': moved, 'skipped': skipped})
+        print(json.dumps({'outcome': 'completed', 'action': options.journal_action, 'count': moved,
+                          'skipped': skipped,
+                          'warning': 'Active entries were kept; use status to retire them before retrying resume if needed.' if skipped else None,
+                          'next_action': 'Use tinstar ask-puller status for pending/retired entries and recovery commands.'}))
+
+
 def manage(command, root, options):
     if command == 'tick':
         tick(root)
+        return
+    if command == 'journal':
+        manage_journal(root, read_json(root / 'ask-puller.json'), options)
         return
     if command == 'status':
         settings = read_json(root / 'ask-puller.json')
@@ -265,7 +375,7 @@ def manage(command, root, options):
             'puller-upgrade-required': 'Upgrade required: minimum puller ' + (health.get('minimum_puller_version') or 'see server') + '. Install the current Tin Star tarball and rerun tinstar ask-puller install; see the runbook.',
         }.get(health.get('last_error_class'), 'Use restart if the agent is missing or stale; check configuration and inbox readiness on errors.')
         print(json.dumps({'state': state, 'enabled': settings.get('enabled', False),
-                          'loaded': loaded, 'health': health,
+                          'loaded': loaded, 'health': health, 'journal': journal_status(root, settings),
                           'last_success_age_seconds': None if last is None else round(now - last),
                           'next_action': advice}, indent=2))
         return
@@ -325,12 +435,17 @@ def manage(command, root, options):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['install', 'uninstall', 'enable', 'disable', 'status', 'restart', 'upgrade', 'tick'])
+    parser.add_argument('command', choices=['install', 'uninstall', 'enable', 'disable', 'status', 'restart', 'upgrade', 'tick', 'journal'])
+    parser.add_argument('journal_action', nargs='?', choices=['retire', 'resume'])
     parser.add_argument('--config-root', type=Path, required=True)
     parser.add_argument('--url')
     parser.add_argument('--home')
     parser.add_argument('--token-key')
+    parser.add_argument('--origin')
+    parser.add_argument('--reason')
     options = parser.parse_args()
+    if options.command == 'journal' and not options.journal_action:
+        parser.error('journal requires retire or resume')
     try:
         manage(options.command, options.config_root.resolve(), options)
         return 0
@@ -338,6 +453,8 @@ def main():
         # No tracebacks: inputs and subprocess failures can contain secrets.
         code = error.code if isinstance(error, puller.PullerError) else 'local-state'
         advice = 'Use the installed Tin Star CLI; see the runbook.' if code == 'source-checkout' else 'Check configuration, bridge access, clavis and launchd; see the runbook.'
+        if options.command == 'journal':
+            advice = 'Use journal retire|resume --origin URL --reason TEXT; status lists entries and recovery commands. Check audit-file/filesystem access and retry the same command.'
         print('Ask puller: ' + code + '. ' + advice, file=sys.stderr)
         return 1
 

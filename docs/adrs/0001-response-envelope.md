@@ -44,31 +44,14 @@ type Response<T> = Ok<T> | Err
 
 ### Error codes
 
-A flat string union, owned in `src/domain/api.ts`:
-
-```ts
-export type ErrorCode =
-  // Client errors (4xx)
-  | 'BAD_REQUEST'           // malformed JSON, missing required field, wrong type
-  | 'INVALID_PARAMS'        // semantic validation failed (range, format)
-  | 'NOT_FOUND'             // entity by id not found
-  | 'SESSION_NOT_FOUND'     // specifically a session lookup miss (kept distinct; frontend treats it differently)
-  | 'CONFLICT'              // would violate uniqueness / state precondition
-  | 'PATH_OUTSIDE_WORKSPACE'  // path-traversal guard hit
-  | 'FORBIDDEN'             // permission/safety guard
-  // Server errors (5xx)
-  | 'INTERNAL'              // unexpected throw, last-resort catch-all
-  | 'BACKEND_UNAVAILABLE'   // tmux/NATS/external service not reachable
-  | 'BRIDGE_UNAVAILABLE'    // NATS bridge specifically (already in use)
-  | 'CONFIG_UNAVAILABLE'    // sessionConfig hasn't loaded yet
-  | 'LIST_FAILED'           // a list/enumerate operation failed mid-flight
-```
+The closed `ErrorCode` string union in
+[`src/domain/api.ts`](../../src/domain/api.ts) owns the complete list of codes.
+New error categories need an ADR amendment; the union enforces membership at
+compile time.
 
 The Ask bridge additionally uses the lowercase wire code
 `puller-upgrade-required`. Its version negotiation and upgrade response are
 documented in the [Ask puller runbook](../features/ask-puller-service.md#bridge-contract-and-automatic-adapter-updates).
-
-This list is **closed** — every error must map to one of these. New error categories need an ADR amendment. The TS string union enforces it at compile time.
 
 ALL_CAPS_WITH_UNDERSCORES matches the existing majority pattern in routes.ts; no renames needed for the 30+ sites that already use these names.
 

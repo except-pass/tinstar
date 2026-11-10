@@ -13,7 +13,7 @@ export function run(args = process.argv.slice(3)) {
       return execute(args)
     })
   }
-  if (process.platform !== 'darwin' && args[0] !== 'status') {
+  if (process.platform !== 'darwin' && !['status', 'journal'].includes(args[0])) {
     console.error('Ask puller LaunchAgent commands require macOS.')
     process.exitCode = 1
     return
