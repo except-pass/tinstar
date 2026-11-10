@@ -17,6 +17,7 @@ export interface ReleaseObject {
   evidenceUrl: string | null
   membership: { status: 'pending' | 'complete' | 'partial' | 'unknown'; baseline: string | null; baselineSha: string | null; observedAt: string | null; reason: string | null }
   pulls: ReleasePull[]
+  supportingPulls?: ReleasePull[]
   gaps: string[]
 }
 export interface ReleaseChange {

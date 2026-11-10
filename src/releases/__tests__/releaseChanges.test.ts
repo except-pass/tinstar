@@ -27,6 +27,26 @@ describe('release-scoped work outcomes', () => {
     const unlinked = releaseChanges(release, data, scene)
     expect(unlinked).toHaveLength(1); expect(unlinked[0]?.cardId).toBeNull()
   })
+  it('evaluates older required PRs without adding them to release membership', () => {
+    const scene = releaseFixture(), data = releaseAssociations(scene), release = objectFixture('production')
+    const member = data.pulls[0]!, older = data.pulls[1]!
+    older.links = structuredClone(member.links)
+    const receipt = { id: 'selected-receipt', repository: member.repository, component: 'api', target: 'prod', environment: 'production', deployedSha: 'a'.repeat(40), artifactDigest: null, version: release.version, deployedAt: release.provenance.asOf, receiptUrl: 'https://example.com/receipt', workflowUrl: 'https://example.com/workflow', outcome: 'succeeded' as const, exceptions: [] }
+    for (const pull of [member, older]) pull.deployment = { state: 'shipped', targets: [{ component: 'api', target: 'prod', state: 'live', ancestry: 'ancestor', reason: 'Selected receipt proves merge', receipt }] }
+    release.pulls = [member]; release.supportingPulls = [older]
+    release.targets = [{ component: 'api', target: 'prod', readiness: 'ready', readinessEvidence: [], receipt }]
+    const changes = releaseChanges(release, data, scene)
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ delivery: 'Deployed', requiredPulls: [member.url, older.url], pulls: [member, older] })
+    expect(release.pulls).toEqual([member])
+    older.deployment!.targets[0]!.state = 'absent'
+    expect(releaseChanges(release, data, scene)[0]!.delivery).toBe('Not deployed')
+    older.deployment!.targets[0]!.state = 'unknown'
+    expect(releaseChanges(release, data, scene)[0]!.delivery).toBe('Unknown')
+    older.deployment!.targets[0]!.state = 'live'
+    older.deployment!.targets[0]!.receipt = { ...receipt, id: 'other-release' }
+    expect(releaseChanges(release, data, scene)[0]!.delivery).toBe('Unknown')
+  })
   it.each(['partial', 'skipped', 'rollback', 'failed'] as const)('never makes %s delivery eligible, even if UI acceptance was passed', outcome => {
     const scene = releaseFixture(), data = releaseAssociations(scene), release = objectFixture('production')
     const pull = data.pulls[0]!

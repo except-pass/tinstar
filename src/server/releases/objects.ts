@@ -1,6 +1,6 @@
 import type { ReleaseObject, ReleaseTarget } from '../../shared/releaseObjects'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
-import type { ReleasesRead } from '../../shared/releases'
+import { activeReleaseLinks, type ReleasesRead } from '../../shared/releases'
 import type { EvidenceRead } from './evidence'
 import { cmsandboxReceipts, receiptHash } from './cmsandbox'
 import { ReleaseMembershipReader } from './membership'
@@ -97,9 +97,13 @@ export class ReleaseObjectReader {
       if (!range) { range = await this.memberships.get(release.repository, release.sourceSha, release.version); ranges.set(key, range) }
       release.membership = { ...range.membership }
       const pulls = [...range.pulls.values()].map(pull => ({ ...pull, links: data.pulls.find(existing => existing.id === pull.id)?.links ?? [], exceptions: [] }))
-      const scoped = await this.reconciler.get({ ...data, pulls }, scene, { ...evidence,
+      const memberIds = new Set(pulls.map(pull => pull.id))
+      const cardIds = new Set(pulls.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
+      const supporting = data.pulls.filter(pull => !memberIds.has(pull.id) && activeReleaseLinks(pull).some(link => cardIds.has(link.cardId)))
+      const scoped = await this.reconciler.get({ ...data, pulls: [...pulls, ...supporting] }, scene, { ...evidence,
         receipts: release.kind === 'production' ? release.targets.flatMap(target => target.receipt ? [target.receipt] : []) : [] })
-      release.pulls = scoped.pulls
+      release.pulls = scoped.pulls.filter(pull => memberIds.has(pull.id))
+      release.supportingPulls = scoped.pulls.filter(pull => !memberIds.has(pull.id))
       if (range.membership.reason) release.gaps.unshift(range.membership.reason)
       if (!data.associationsComplete) release.gaps.push('Notion PR/card association sources are incomplete; known explicit links are retained')
     }
