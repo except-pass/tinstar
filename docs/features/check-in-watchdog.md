@@ -12,19 +12,20 @@ Date-only appointments mean **9 AM America/New_York**, including DST changes.
 Timestamp offsets and Notion's explicit date timezone are respected. At the
 exact appointment instant a card is not yet overdue.
 
-Eligibility uses a separate Notion query filtered to `Owner: Firstmate` and
-`Status: In Progress` or `Waiting For`. Its cached census must be complete and
-fresh; it does not inherit the full board's pagination or unrelated relation
-coverage. The [source reference](reconciliation-floor.md#run-and-configure)
-owns the full-board reader's bounds, caching and coverage rules. The worker
-identity graph retains that truthful full-board coverage: if incomplete,
-requests go to First Mate for
-reconciliation rather than selecting an unverified worker. Before delivery,
-the existing uncached exact-page read rechecks scope, status and appointment.
+Eligibility uses the shared reader/cache with a Notion query filtered to
+`Owner: Firstmate` and `Status: In Progress` or `Waiting For`. Its census must
+be complete and fresh; it does not inherit broader queries’ pagination or
+unrelated relation coverage. See the [workflow read contracts](workflow.md#read-contracts)
+for caching and coverage. The worker identity graph reuses the cached default
+operational declarations when available, without fetching historical cards or
+requiring a broader scan. Incomplete or unavailable declaration coverage routes
+requests to First Mate for reconciliation rather than selecting an unverified
+worker. Before delivery, the existing uncached exact-page read rechecks scope,
+status and appointment.
 
 The report's `source` describes the scoped eligibility census; `boardSource`
-separately reports full-board coverage. Saved snapshots can include `checkIns`
-alongside `intentions` to reproduce this distinction offline. Legacy snapshots
+separately reports the supplied declaration coverage. Saved snapshots can include
+`checkIns` alongside `intentions` to reproduce this distinction offline. Legacy snapshots
 without the scoped observation remain conservative about board completeness.
 
 Pagination fixture timing (300 ms simulated latency per schema/page response,
@@ -166,9 +167,9 @@ Waiting For may be later. Done/Archived can use `closed`, `none`, `n/a`, or
 `done` (case-insensitive, with trailing notes/punctuation) with a dated
 evidence-backed closing checkpoint.
 
-The system never writes a property or comment, moves a card, or overwrites a
-newer edit. A reply, commit, status move, or date change alone does not resolve
-the old appointment. Its quiet card line retains the original timestamp;
+The watchdog never writes a property or comment, moves a card, or overwrites a
+newer edit. Consumer-requested writes use the [shared workflow operations](workflow.md).
+A reply, commit, status move, or date change alone does not resolve the old appointment. Its quiet card line retains the original timestamp;
 replies say **Answered; Notion update pending** until verification succeeds.
 
 A partial read can establish a complete matching checkpoint that it actually

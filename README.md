@@ -13,7 +13,7 @@ For Codex worker-state collection and machine-local setup, see the
 
 **Your desk** stays available across Overview, Decisions, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Desk button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
 
-To record an executing worker on a card, open its Inspector and expand **Start work**. Authenticated agents use the same operation through MCP; see [shared workflow reads and start work](docs/features/workflow.md) for requirements, readback and retained dependencies.
+Use **Create work** in Overview or **Update work** in a card’s Inspector to record assignments, checkpoints, waits, decisions and completion. Use **Start work** to link an executing worker. Authenticated agents use the same operations through MCP; see [shared workflow operations](docs/features/workflow.md) for requirements, readback and retained dependencies.
 
 For worker-to-card associations, see [Notion-owned worker links](docs/notion-worker-links.md) for setup, verification and the First Mate workflow.
 
