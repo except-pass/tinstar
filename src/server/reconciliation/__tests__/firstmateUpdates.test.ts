@@ -58,6 +58,66 @@ describe('Firstmate current-state pickup/update bridge', () => {
     expect(requeued[0]!.request_id).not.toBe(first[0]!.request_id)
     expect(payload(requeued[0]!.body).changes[0].kind).toBe('pickup')
   })
+  it.each(['confirmed', 'scan', 'departure', 'preflight'] as const)('retires failed offered pickups on assignment end through %s', async path => {
+    const f = await fixture()
+    await f.feed.sweep(true); f.advance()
+    const original = (await f.feed.bridgeWork()).pending[0]!
+    await f.feed.ingest({ request_id: original.request_id, error: 'wake-failed' })
+    f.sources.currentCard.mockRejectedValueOnce(new Error('Notion unavailable'))
+    expect((await f.feed.bridgeWork()).pending).toEqual([])
+    expect((await f.restarted().bridgeWork()).pending).toEqual([original])
+    const before = structuredClone(f.card)
+    f.card.properties.Status!.value = 'In Progress'
+    f.card.last_edited_time = new Date(f.now()).toISOString()
+    if (path === 'confirmed') await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Firstmate', properties: { Status: 'In Progress' }, operationId: 'start' })
+    if (path === 'scan') await f.feed.sweep(true)
+    if (path === 'departure') {
+      f.observation.data!.cards = []
+      await f.feed.sweep(true)
+    }
+    const ended = (await f.feed.bridgeWork()).pending
+    expect(ended.flatMap(notice => payload(notice.body).changes).filter(item => item.kind === 'pickup')).toEqual([])
+    for (const notice of ended) await delivered(f.feed, notice)
+    f.observation.data!.cards = [f.card]
+    f.card.properties.Status!.value = 'Queued'
+    f.advance(); f.card.last_edited_time = new Date(f.now()).toISOString()
+    await f.feed.sweep(true); f.advance()
+    const requeued = (await f.feed.bridgeWork()).pending
+    expect(requeued).toHaveLength(1)
+    expect(requeued[0]!.request_id).not.toBe(original.request_id)
+    expect(payload(requeued[0]!.body).changes.filter((item: { kind: string }) => item.kind === 'pickup')).toHaveLength(1)
+    expect((await f.feed.bridgeWork()).pending).toEqual(requeued)
+  })
+  it('keeps a coalesced sibling pickup retry identity when another assignment ends', async () => {
+    const f = await fixture()
+    const sibling = structuredClone(f.card); sibling.id = 'e'.repeat(32)
+    f.observation.data!.cards.push(sibling)
+    await f.feed.sweep(true); f.advance()
+    const original = (await f.feed.bridgeWork()).pending[0]!
+    expect(payload(original.body).changes).toHaveLength(2)
+    await f.feed.ingest({ request_id: original.request_id, error: 'wake-failed' })
+    const before = structuredClone(f.card)
+    f.card.properties.Status!.value = 'In Progress'
+    await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Firstmate', properties: { Status: 'In Progress' }, operationId: 'start-one' })
+    const remaining = (await f.feed.bridgeWork()).pending
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]!.request_id).toBe(original.request_id)
+    expect(payload(remaining[0]!.body).changes.map((item: { card_id: string }) => item.card_id)).toEqual([sibling.id])
+  })
+  it('retires an unoffered pickup before an immediate confirmed requeue', async () => {
+    const f = await fixture()
+    await f.feed.sweep(true)
+    const before = structuredClone(f.card)
+    f.card.properties.Owner!.value = 'Other'
+    await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Owner', properties: { Owner: 'Other' }, operationId: 'handoff' })
+    f.card.properties.Owner!.value = 'Firstmate'
+    await f.feed.confirmed({ card: structuredClone(f.card), actor: 'Owner', properties: { Owner: 'Firstmate' }, operationId: 'return' })
+    f.advance()
+    const notices = (await f.feed.bridgeWork()).pending
+    expect(notices).toHaveLength(1)
+    expect(payload(notices[0]!.body).changes).toHaveLength(1)
+    expect(payload(notices[0]!.body).changes[0].kind).toBe('pickup')
+  })
   it('coalesces actor batches, includes available property/comment/body changes, and suppresses authenticated Firstmate self-edits', async () => {
     const f = await fixture()
     f.card.properties.Status!.value = 'In Progress'
@@ -126,7 +186,7 @@ describe('Firstmate current-state pickup/update bridge', () => {
     await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Consumer', properties: { Status: 'Waiting For' }, operationId: 'wait', notes: ['Dependency not yet accepted'] })
     f.advance()
     const notices = (await f.feed.bridgeWork()).pending
-    expect(notices).toHaveLength(1); expect(payload(notices[0]!.body).changes.map((item: { kind: string }) => item.kind)).toEqual(['update'])
+    expect(notices.flatMap(notice => payload(notice.body).changes).map((item: { kind: string }) => item.kind)).toEqual(['update', 'update'])
   })
   it('disables preview delivery and preserves failed wakes for the same request retry', async () => {
     const f = await fixture(); await f.feed.sweep(true); f.advance()
