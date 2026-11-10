@@ -93,7 +93,7 @@ export class FirstmateUpdates {
       const newPickup = queued(card) && !old?.queued
       const enrichPickup = queued(card) && own && !contentSeen && (own.notes?.length || own.sections?.length) && state.batches.some(batch => batch.actor === actor && !batch.offered && batch.items.some(item => item.card_id === card.id && item.kind === 'pickup'))
       const newUpdate = !newPickup && (active(card) || !!own?.before && active(own.before)) && !firstmateActor(actor) &&
-        (!!own && (Object.keys(changes).length > 0 || !contentSeen && (!!own.notes?.length || !!own.sections?.length)) || !!old && old.edited !== card.last_edited_time)
+        (!!own && (Object.keys(changes).length > 0 || !contentSeen && (!!own.notes?.length || !!own.sections?.length)) || !!old && (old.edited !== card.last_edited_time || Object.keys(changes).length > 0))
       if (newPickup || newUpdate || enrichPickup) {
         const comments = (contentSeen ? [] : own?.notes)?.map(text => ({ text, author: actor })) ?? (context?.blocks ?? []).filter(block => block.type === 'comment' &&
           (baseline?.details ? !baseline.details.some(previous => previous.id === block.id) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old?.observed ?? '')))
@@ -124,8 +124,8 @@ export class FirstmateUpdates {
         if ((this.mutations.get(card.id) ?? 0) > startVersion) continue
         const old = state.cards[card.id]
         if (old && old.edited === card.last_edited_time && JSON.stringify(this.baselines.get(card.id)?.properties) === JSON.stringify(values(card))) continue
-        const actor = scalar(card, 'Last touched by') || 'Notion actor unknown'
-        const details = old && active(card) && !firstmateActor(actor) ? await this.sources.updateContext(card.id).catch(() => undefined) : undefined
+        const actor = 'Notion actor unknown'
+        const details = old && active(card) ? await this.sources.updateContext(card.id).catch(() => undefined) : undefined
         if ((this.mutations.get(card.id) ?? 0) <= startVersion) await this.observe(card, actor, details)
       }
       await this.change(state => {

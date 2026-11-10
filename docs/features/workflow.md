@@ -199,8 +199,9 @@ upgrade it. Worker and request history survives completion/parking.
 `FirstmateUpdates` joins the existing source-refresh callback, shared targeted
 Notion reader, and **existing Ask bearer bridge**. It does not invoke First Mate
 source/scripts, dispatch workers, add a scheduler, or create another inbox.
-Authenticated operation actors drive self-edit suppression; direct Notion edits
-use Last touched by as the existing convention. A Firstmate-owned Queued card
+Authenticated operation actors drive self-edit suppression for confirmed writes;
+matching edit times and property readbacks prevent duplicate scan notices. Direct
+Notion edits carry unknown attribution. Last touched by never suppresses them. A Firstmate-owned Queued card
 gets one pickup per observed outstanding assignment. Leaving that assignment
 clears its latch, so a later requeue is actionable. Active In Progress/Waiting For
 changes become contextual updates. Nearby changes by one actor coalesce for ten

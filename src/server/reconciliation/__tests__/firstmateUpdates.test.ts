@@ -232,3 +232,28 @@ it('delivers healthy siblings from a twenty-card batch and rotates past an inacc
   expect(payload(recovered[0]!.body).changes[0].card_id).toBe(cards[0]!.id)
   expect((await f.restarted().bridgeWork()).pending).toEqual(recovered)
 })
+
+it.each(['dependency', 'body'])('delivers a direct human %s edit after a confirmed self-edit despite retained Last touched by', async edit => {
+  const f = await fixture(); f.card.properties.Status!.value = 'In Progress'
+  await f.feed.sweep(true)
+  const before = structuredClone(f.card)
+  f.advance()
+  f.card.last_edited_time = new Date(f.now()).toISOString()
+  f.card.properties['Last touched by']!.value = 'Firstmate'
+  await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Firstmate', operationId: 'confirmed-self', notes: ['Self update'] })
+  await f.feed.sweep(true); f.advance()
+  expect((await f.feed.bridgeWork()).pending).toEqual([])
+  expect(f.sources.updateContext).not.toHaveBeenCalled()
+  f.card.last_edited_time = new Date(f.now()).toISOString()
+  if (edit === 'dependency') f.card.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: 'Human supplied dependency', hasMore: false }
+  else f.context.blocks.push({ id: 'human-body', type: 'paragraph', text: 'Human revised acceptance' })
+  await f.feed.sweep(true); f.advance()
+  const notices = (await f.feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  expect(payload(notices[0]!.body)).toMatchObject({ actor: 'Notion actor unknown', changes: [{ kind: 'update', current: { 'Last touched by': 'Firstmate' } }] })
+  if (edit === 'dependency') expect(payload(notices[0]!.body).changes[0].properties['Waiting For'].after).toBe('Human supplied dependency')
+  expect(f.sources.updateContext).toHaveBeenCalledTimes(1)
+  await delivered(f.feed, notices[0]!)
+  await f.feed.sweep(true); f.advance()
+  expect((await f.feed.bridgeWork()).pending).toEqual([])
+})

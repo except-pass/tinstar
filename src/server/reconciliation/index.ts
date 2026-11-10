@@ -66,7 +66,7 @@ export class ReconciliationSources {
     }
   }
 
-  async card(id: string) { return this.context.details(id) }
+  async card(id: string) { return workReadback(await this.context.details(id)) }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */

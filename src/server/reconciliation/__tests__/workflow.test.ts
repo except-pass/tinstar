@@ -11,6 +11,7 @@ import { WorkflowOperations } from '../workflow'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
+import { initialPresentation } from '../../../shared/reconciliationPresentation'
 import { externalWorkers, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { workerLinkRecord } from '../workerLinks'
@@ -278,6 +279,10 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
   const client = new Client({ name: 'workflow-test', version: '1' }); clients.push(client)
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}`, 'X-Tinstar-Caller': 'Tin Star UI' } } }))
   const parse = (result: any) => JSON.parse(result.content[0].text)
+  const window = mcp.sessions.register(initialPresentation())
+  const context = parse(await client.callTool({ name: 'get_card_context', arguments: { scene_id: window.scene_id, card_id: id } })).context
+  expect(context.blocks).toContainEqual(expect.objectContaining({ id: 'comment-1', text: 'Evidence [credential omitted]' }))
+  expect(JSON.stringify(context)).not.toContain('ghp_abcdefghijklmnopqrstuvwx')
   expect(parse(await client.callTool({ name: 'search_work', arguments: { owner: 'Firstmate' } })).records[0].card.id).toBe(id)
   expect(parse(await client.callTool({ name: 'get_workflow_rules', arguments: {} })).enforced).toEqual(expect.arrayContaining([expect.stringContaining('External runs')]))
   const request = { operation: 'start', input: f.external }
@@ -343,7 +348,8 @@ it('keeps UI history explicit while ordinary work queries retain their own opera
 })
 
 it.each(['Queued', 'Done', 'Archived'])('authorizes Inspector body reads by configured board for %s cards', async status => {
-  const f = fixture(), sources = f.sources()
+  const credential = 'ghp_abcdefghijklmnopqrstuvwx'
+  const f = fixture({ body: 'Acceptance: retain provenance', comment: `Evidence ${credential}` }), sources = f.sources()
   f.raw.properties.Status.status.name = status
   const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -352,7 +358,11 @@ it.each(['Queued', 'Done', 'Archived'])('authorizes Inspector body reads by conf
   const url = `http://127.0.0.1:${port}/api/reconciliation/card-context?id=${id}`
   const allowed = await fetch(url)
   expect(allowed.status).toBe(200)
-  expect((await allowed.json()).data.blocks).toContainEqual(expect.objectContaining({ id: 'body-1', text: 'Acceptance: retain provenance' }))
+  const context = (await allowed.json()).data
+  expect(context.blocks).toContainEqual(expect.objectContaining({ id: 'body-1', text: 'Acceptance: retain provenance' }))
+  expect(context.blocks).toContainEqual(expect.objectContaining({ id: 'comment-1', text: 'Evidence [credential omitted]' }))
+  expect(JSON.stringify(context)).not.toContain(credential)
+  expect(f.comments[0].rich_text[0].plain_text).toContain(credential)
   expect(f.requests.some(request => request.method === 'POST')).toBe(false)
   expect((await fetch(url, { headers: { Origin: 'https://evil.example' } })).status).toBe(403)
   f.raw.parent.data_source_id = 'c'.repeat(32)
