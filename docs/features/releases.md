@@ -10,9 +10,9 @@ card prose. Card links open the real card in Tin Star (`?card=<page-id>`).
 
 ## Associations
 
-The reader imports explicit GitHub PR URLs in active cards' `Link`, `GitHub`,
+The reader imports explicit GitHub PR URLs in operational and Done cards' `Link`, `GitHub`,
 `GitHub PRs` and `Pull requests` properties. It does not guess links from titles,
-similar worker assignments or prose. The shared join also accepts confirmed, current, explicit Notion First Mate tasks claims for exact worker executions with registered PRs; unverified, conflicting and historical claims do not create active edges. PR Operations uses this same association projection (see `src/shared/releases.ts`). Done/archived historical cards are not mass imported.
+similar worker assignments or prose. The shared join also accepts confirmed, current, explicit Notion First Mate tasks claims for exact worker executions with registered PRs; unverified, conflicting and historical claims do not create active edges. PR Operations uses this same association projection (see `src/shared/releases.ts`). Done cards retain their explicit associations for Shipped history; archived and trashed cards are excluded. This read does not backfill or modify cards.
 A missing PR declaration on a Waiting for Prod Release card appears under
 Exceptions, outside the PR table.
 
@@ -91,16 +91,18 @@ A card is eligible to **would-complete** only in `Waiting for Prod Release`, wit
 complete association sources and *all* linked PR/target requirements proven live.
 The optional existing Notion checkbox named exactly `Requires production
 verification`, when true, instead produces **would-verify**, including the owner.
-It appears in Verify in Prod and the drawer but performs no Desk or status action.
+The read-only proposal appears in Verify in Prod and the drawer; generating it performs no Desk or status action.
 Missing checkbox means no opt-in verification requirement; the reader does not
-create it. Other Notion statuses stay unrelated and cannot be completed by this
-report. The writer requires the checkbox schema and fresh current production evidence;
+create it. Other Notion statuses cannot be completed by this report; a confirmed
+unresolved verification route can remain visible after transition to In Progress.
+The writer requires the checkbox schema and fresh current production evidence;
 rollout requires coordinated board-guide/PM Bot updates.
 
 ### Default-OFF transition and Desk review
 
 `GET /api/releases/automation` and `automation` on the Releases collection return
-a pure, deterministic **review-only** plan. It proposes `Waiting for Prod Release`
+a pure, deterministic plan reporting the configured mode (`review-only` or
+`automatic`). Reading the plan never executes it. It proposes `Waiting for Prod Release`
 → `Done` for eligible unflagged cards. An opted-in card instead proposes
 `Waiting for Prod Release` → `In Progress` with explicit production-check context
 and a draft for its current responsible owner. It never proposes completion of
@@ -130,7 +132,7 @@ card immediately before each write. It requires an actual readable boolean
 `Requires production verification` checkbox even for an unflagged card. It
 comments the evidence, revalidates, then changes Status. It preserves owner,
 unrelated asks and other properties. Opted-in cards route to In Progress with an
-explicit production-check request; unflagged cards go to Done. A missing owner,
+explicit production-check request; unflagged cards go to Done. A missing verification owner,
 unknown source, stale export, wrong target, disabled flag, rollback, revert,
 partial deployment or changed precondition holds the affected operation.
 
@@ -139,29 +141,31 @@ tracks pending/done/skipped operations. Stable IDs include card, owner, required
 PRs and deployment evidence. Comment markers deduplicate retries through the
 shared Notion content transport. A lost PATCH response is recovered by reading
 current Status and the exact comment marker; completed operations never replay
-or flap status. Notion offers no conditional PATCH, so a direct edit can still
-race the final read/write; evidence and receipts make that window auditable.
+or flap status. See the [activation packet](../releases-activation.md#retry-audit-and-rollback)
+for the concurrent-edit limitation and recovery procedure.
 
 Confirmed verification routes are published through the existing shared Desk
-queue with the current card owner and direct card/PR/deployment links. Only open
-In Progress cards with the explicit checkbox remain actionable. Reads do not
-record verification; the responsible owner records the result on the card and
-uses the existing workflow to finish it. No second queue service or Ask transport
-is introduced. Turning automation OFF stops new transitions; outstanding human
-verification requests remain visible until resolved.
+queue with the current card owner and direct card/PR/deployment links. Desk and
+Verify in Prod use the latest completed, unresolved verification operation for
+each card, together with its current In Progress status and checked checkbox.
+Status and checkbox alone never resurrect a retired check. Checked waiting cards
+still propose verification normally. The owner records the result on the card
+and uses the existing workflow to finish it.
+
+Desk publication and scheduled retirement acquire fresh exact-card observations
+inside the writer's serialized boundary. Leaving In Progress, clearing the
+checkbox, archiving or trashing the card retires its verification operation;
+a newer completed route supersedes older routes. Retirement is durable, so
+reopening a completed card does not restore its old check. These observations
+do not themselves record a successful verification. Turning automation OFF stops
+new transitions; outstanding human verification requests remain visible until
+resolved. No second queue service or Ask transport is introduced.
 
 Inspect/dry-run with `npx tsx scripts/releases-automation.ts --config-root <root>
---passes 32 --output /tmp/releases.json`. This command uses a read-only Notion
+--passes 32 --output <output-path>`. This command uses a read-only Notion
 transport even if the runtime switch is ON. Each pass retains the existing
-four-PR/eight-ancestry budget. Inspect local writer receipts or use its audited
-`--skip <proposal-id>` / `--resume <proposal-id>` options with `--actor` and
-`--reason`. To recover corrupt receipt storage, first disable automation and run
-`--recover-receipts --actor <owner> --reason <reason>`: the original file is
-preserved and the new journal records who recovered it and why. Inspect affected
-cards before resuming; recovery resets local deduplication, while existing
-comments and unrelated Status boundaries still apply. Existing audited card
-operations remain the manual path for an owner disposition; automation never
-invents deployment proof to override an exception.
+four-PR/eight-ancestry budget. For audited skip/resume, receipt recovery and
+rollback, see the [activation packet](../releases-activation.md#retry-audit-and-rollback).
 
 GitHub read failures are separate from pending reads. In default CLI mode, a missing `gh-axi` displays
 `Sync error: gh-axi unavailable on server PATH`; access/CLI/read failures display
@@ -326,13 +330,6 @@ proposals even if enabled. The snapshot has no freshness extension pretending it
 is current PROD. A later current-state export can use the existing normalized
 `receiptFiles` contract; this slice builds no AWS poller or release service.
 
-The first real proof consumed the completed v1.24.0 coordinator chain and frozen
-objects from the November 10 export, including the final
-[resume run](https://github.com/fortresspower/cmsandbox/actions/runs/42855184812).
-Six exact component identities were obtained: manager-analysis and its Alloy
-container, ra-workflow and its Alloy container, web-fmp portal, and runtime JSON.
-The runtime JSON key is part of its target identity. Other services remain
-unmapped; a monorepo source/tag cannot certify them. Explicit PR/target mappings
-are trusted operator configuration, with the actual GitHub changed paths and
-frozen component identities retained in the activation proof. No title-based or
-repository-wide association is created.
+The [activation packet](../releases-activation.md#evidence-and-limits-of-this-slice)
+owns the captured v1.24.0 proof, exact component mapping and remaining activation
+prerequisites.

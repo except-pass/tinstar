@@ -140,7 +140,9 @@ npx tsx scripts/releases-automation.ts --config-root /path/to/config \
 Both dispositions retain their audit history. They do not bypass production
 proof. For corrupt local receipts disable automation, inspect affected cards,
 then run `--recover-receipts --actor owner --reason 'Recovery reason'`. It keeps
-the original file and records the recovery in a new journal. Completed operations
+the original file and records the recovery in a new journal. Recovery resets local
+deduplication; inspect affected cards before resuming. Existing comments and
+unrelated Status boundaries still apply. Completed operations
 cannot be replayed through resume. The existing explicit owner card workflow is
 the audited manual disposition when automation cannot prove a change.
 

@@ -10,7 +10,7 @@ export const rolloutGate = 'Automatic transitions are OFF. Owner activation requ
 export type AutomationSettings = Pick<ReleaseAutomationPlan, 'requestedEnabled' | 'configuration' | 'warnings'>
 const schema = z.object({ version: z.literal(1), enabled: z.boolean().default(false) })
 
-/** A requested switch cannot activate writes before the coordinated rollout gate.
+/** Read the operator switch; schema and policy approval are rollout prerequisites.
  * Reading this separate optional file does not invalidate deployment evidence. */
 export async function readAutomationSettings(root: string): Promise<AutomationSettings> {
   try {
