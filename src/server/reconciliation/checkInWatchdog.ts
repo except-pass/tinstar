@@ -231,7 +231,7 @@ export class CheckInWatchdog {
           }
           if (correction) {
             row.verification = correction
-            if (!row.followUp) row.state = 'answered-needs-correction'
+            if (!row.followUp?.offeredAt) row.state = 'answered-needs-correction'
             return
           }
           if (row.state === 'answered-needs-correction') return
@@ -263,7 +263,7 @@ export class CheckInWatchdog {
         const next = checkInTime(reportedNext(report['Next check-in']), text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
         let failure: string | undefined
-        if (!Number.isFinite(at) || at < Date.parse(row.createdAt) || at > this.now()) {
+        if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
           failure = 'Checkpoint time: must be at or after the request and at or before now'
         } else if (word(card, 'Last touched by').toLowerCase() !== report.By.trim().toLowerCase()) {
           failure = 'By: must match Last touched by'
@@ -271,7 +271,7 @@ export class CheckInWatchdog {
           if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
           else if (next !== appointment(card)) failure = 'Next check-in: does not match the current property'
           else if (next <= at) failure = 'Next check-in: must be after the checkpoint'
-          else if (word(card, 'Status').toLowerCase() === 'in progress' && next > checkInCeiling(at)) failure = 'Next check-in: exceeds the In Progress ceiling'
+          else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
         }
         if (failure) { correction = failure; continue }
         row.state = 'resolved'; row.verifiedAt = new Date(this.now()).toISOString()
