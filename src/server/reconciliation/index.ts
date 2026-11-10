@@ -137,11 +137,12 @@ export class ReconciliationSources {
   async getWork(input: unknown) {
     const args = getWorkSchema.parse(input)
     try {
-      const [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
+      let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
       if (args.refresh) {
         this.context.invalidate(args.card_id)
         await this.onWorkRefresh?.([card])
         await this.workflow.reconcileDecisions(card.id, fleet)
+        card = await this.workReader.card(card.id, true)
       }
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }

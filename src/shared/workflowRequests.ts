@@ -2,16 +2,28 @@ import { decisionOptionsSchema } from './workflow'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
 export interface RequestNote { id: string; text: string; createdAt?: string | null; created_time?: string }
+export const decisionRecordRows = (notes: { text: string }[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
+  const lines = note.text.split('\n'), operation = lines.find(line => line.startsWith('Operation: '))
+  if (prefix === 'Tin Star request: ' && operation === 'Operation: answer_decision') {
+    const data = lines.filter(line => line.startsWith('Tin Star answer data: ')).at(-1)
+    try { const row = data && JSON.parse(data.slice('Tin Star answer data: '.length)); return row?.binding ? [row.binding] : [] } catch { return [] }
+  }
+  const kind = prefix === 'Tin Star request: ' ? 'request_decision' : prefix === 'Tin Star answer: ' || prefix === 'Tin Star answer data: ' ? 'answer_decision' : null
+  // Quoted protocol examples in an edit/comment are not a new owner decision.
+  if (kind && (operation ? operation !== `Operation: ${kind}` : !lines[0]?.startsWith(prefix === 'Tin Star answer data: ' ? 'Tin Star answer: ' : prefix))) return []
+  if (!kind && !lines[0]?.startsWith(prefix)) return []
+  if (prefix === 'Tin Star answer: ') {
+    const data = decisionRecordRows([note], 'Tin Star answer data: ')[0]
+    if (data) return typeof data.request_id === 'string' ? [data.request_id] : []
+  }
+  const records = lines.filter(line => line.startsWith(prefix))
+  return (kind === 'answer_decision' && prefix === 'Tin Star answer: ' ? records.slice(0, 1) : records.slice(-1)).flatMap(line => { try { return [JSON.parse(line.slice(prefix.length))] } catch { return [] } })
+})
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()
-  for (const note of notes) for (const line of note.text.split('\n')) {
-    if (!line.startsWith('Tin Star answer: ')) continue
-    try { const id = JSON.parse(line.slice('Tin Star answer: '.length)); if (typeof id === 'string') answered.add(id) } catch { /* legacy prose remains source context */ }
-  }
-  return notes.flatMap(note => note.text.split('\n').flatMap(line => {
-    if (!line.startsWith('Tin Star request: ')) return []
+  for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)
+  return notes.flatMap(note => decisionRecordRows([note], 'Tin Star request: ').flatMap(row => {
     try {
-      const row = JSON.parse(line.slice('Tin Star request: '.length))
       if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
       const options = decisionOptionsSchema.safeParse(row.options)
       const lines = note.text.split('\n')

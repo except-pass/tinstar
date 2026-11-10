@@ -1,3 +1,4 @@
+import { decisionRecordRows } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
 import type { StartWorkResult } from '../../shared/workflow'
@@ -50,19 +51,7 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
   if (!binding) throw new DecisionSourceError('request is no longer open')
   return binding
 }
-export const decisionRecordRows = (notes: WorkflowNote[], prefix: string) => notes.flatMap(note => {
-  const lines = note.text.split('\n'), operation = lines.find(line => line.startsWith('Operation: '))
-  if (prefix === 'Tin Star request: ' && operation === 'Operation: answer_decision') {
-    const data = lines.filter(line => line.startsWith('Tin Star answer data: ')).at(-1)
-    try { const row = data && JSON.parse(data.slice('Tin Star answer data: '.length)); return row?.binding ? [row.binding] : [] } catch { return [] }
-  }
-  const kind = prefix === 'Tin Star request: ' ? 'request_decision' : prefix === 'Tin Star answer: ' || prefix === 'Tin Star answer data: ' ? 'answer_decision' : null
-  // Quoted protocol examples in an edit/comment are not a new owner decision.
-  if (kind && (operation ? operation !== `Operation: ${kind}` : !lines[0]?.startsWith(prefix === 'Tin Star answer data: ' ? 'Tin Star answer: ' : prefix))) return []
-  if (!kind && !lines[0]?.startsWith(prefix)) return []
-  const records = lines.filter(line => line.startsWith(prefix))
-  return records.slice(-1).flatMap(line => { try { return [JSON.parse(line.slice(prefix.length))] } catch { return [] } })
-})
+export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
 export const decisionAnswerText = (note: WorkflowNote) => {
   const data = rows([note], 'Tin Star answer data: ')[0]
