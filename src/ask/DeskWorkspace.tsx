@@ -42,6 +42,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const floor = useFloorScene(overviewActive || decisionsActive, history), { queue, error: queueError } = useDeskQueue()
   const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError, action => {
     if (action.type === 'open-queue' || action.type === 'navigate-queue') {
+      if (action.origin === 'assistant') setCloseRequest(value => value + 1)
       if (!decisionsActive) onDecisions?.()
       return
     }
