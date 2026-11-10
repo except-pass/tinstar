@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
-import { ReconciliationSources, type SourceSnapshot } from '../src/server/reconciliation'
+import { ReconciliationSources, type CheckInSnapshot } from '../src/server/reconciliation'
 import { loadReconciliationConfig } from '../src/server/reconciliation/config'
 import { getConfigRoot } from '../src/server/configRoot'
 import { checkInDecisions } from '../src/server/reconciliation/checkInWatchdog'
@@ -17,10 +17,12 @@ async function main() {
   }
   const now = values.at ? Date.parse(values.at) : Date.now()
   if (!Number.isFinite(now)) throw new Error('Invalid clock')
-  const snapshot: SourceSnapshot = values.snapshot ? JSON.parse(await readFile(values.snapshot, 'utf8')) :
-    await new ReconciliationSources(loadReconciliationConfig(values['config-home'] ?? getConfigRoot())).snapshot(true)
+  const snapshot: CheckInSnapshot = values.snapshot ? JSON.parse(await readFile(values.snapshot, 'utf8')) :
+    await new ReconciliationSources(loadReconciliationConfig(values['config-home'] ?? getConfigRoot())).checkInSnapshot(true)
+  const census = snapshot.checkIns ?? snapshot.intentions
   console.log(JSON.stringify({ generatedAt: new Date(now).toISOString(), delivery: 'report-only',
-    source: { observedAt: snapshot.intentions.observedAt, status: snapshot.intentions.status, coverage: snapshot.intentions.coverage },
+    source: { scope: census.data?.scope, observedAt: census.observedAt, status: census.status, coverage: census.coverage, hasMore: census.data?.hasMore },
+    boardSource: { status: snapshot.intentions.status, coverage: snapshot.intentions.coverage, hasMore: snapshot.intentions.data?.hasMore },
     decisions: checkInDecisions(snapshot, now) }, null, 2))
 }
 main().catch(() => { console.error('Check-in report unavailable; check arguments and read-only source access. No delivery attempted.'); process.exitCode = 1 })

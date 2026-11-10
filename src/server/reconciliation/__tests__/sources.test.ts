@@ -10,7 +10,7 @@ import { loadReconciliationConfig } from '../config'
 import { fleetObservation } from '../fleet'
 import { executionStatus, retainedExecutionLiveness } from '../../../shared/executionLiveness'
 import { floorWorkerStatus } from '../../../shared/floorStatus'
-import { notionObservation } from '../notion'
+import { notionObservation, NOTION_QUERY_PAGE_LIMIT } from '../notion'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 import { readFleetSnapshot, MAX_SNAPSHOT_BYTES } from '../../fleet/snapshot'
@@ -388,7 +388,7 @@ describe('Notion reader', () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => init?.method === 'GET' ? response(schema)
       : response({ results: [{ ...page, properties: { ...page.properties, 'Parent item': { type: 'relation', relation: [], has_more: true } } }], has_more: true, next_cursor: `cursor-${fetcher.mock.calls.length}` }))
     const result = await notionObservation({ token: 'secret', dataSourceId: id }, fetcher).get()
-    expect(fetcher).toHaveBeenCalledTimes(11)
+    expect(fetcher).toHaveBeenCalledTimes(NOTION_QUERY_PAGE_LIMIT + 1)
     expect(result).toMatchObject({ status: 'partial', coverage: 'partial', data: { hasMore: true } })
   })
 
