@@ -1244,7 +1244,8 @@ for (const width of [1440, 1180, 390]) for (const entry of ['dropdown', 'chip'] 
   await expect(control).toBeVisible()
   await expect(page.getByRole('group', { name: 'Waiting For Type', exact: true })).toHaveCount(0)
   if (keyboard) {
-    // Traverse the native tab order from a fresh page, including narrow toolbar scrolling.
+    // Start from a known toolbar control, then traverse the native tab order.
+    await page.getByRole('button', { name: 'By Initiative', exact: true }).focus()
     for (let i = 0; i < 40; i++) {
       await page.keyboard.press('Tab')
       if (await control.evaluate(element => element === document.activeElement)) break

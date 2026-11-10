@@ -224,7 +224,8 @@ and select **Waiting For**, to show dependency groups in either density. Both
 controls are reachable with Tab and activate with Enter or Space; in the pattern
 list, use arrow keys and Enter to select the entry. These entries select only
 Waiting For in the card status filter while preserving worker status choices.
-The chip shows its pressed state and keeps the view open when clicked again. Selecting only **Waiting For** in the card status donut/menu, or as the sole
+The chip shows its pressed state and keeps the view open when clicked again.
+Selecting only **Waiting For** in the card status donut/menu, or as the sole
 Custom status, also replaces the Work organizer with dependency groups.
 The Workers pane retains its organizer, worker status choices and
 relationship context instead of narrowing to workers linked to Waiting For cards.
@@ -249,7 +250,9 @@ open, favoring Will and the largest groups. Expansion survives source refresh
 and reload within the browser session. Search matches dependency names/IDs and
 child titles, reveals matching groups temporarily, and restores prior expansion
 when cleared. A temporary search reveal outside Waiting For uses the ordinary
-floor until search exit.
+floor until search exit or entry through the Waiting For chip or dropdown.
+Those entry controls clear temporary search focus and reveal while retaining
+the Search filters.
 
 Click an affected card or press Enter/Space to open the existing Inspector and
 reveal its confirmed worker relationships. Dependency headings toggle only their
