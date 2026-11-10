@@ -394,7 +394,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const visibleCardIds = new Set(groups.flatMap(g => g.cards.map(c => c.id)))
   const visibleCards = visibleCardIds.size
   const linkHealth = workerLinkSourceHealth(scene, visibleCardIds, now, !!error)
-  const patternCoverage = patternResults ? patternCheckSummary(visibleCardIds, patternResults) : null
+  const patternCoverage = patternResults ? patternCheckSummary(groups.flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)), patternResults) : null
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
