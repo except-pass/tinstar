@@ -269,21 +269,40 @@ describe('durable lifecycle on the existing bridge', () => {
     expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', followUp: null })
     expect((await h.watchdog.bridgeWork()).pending).toEqual([])
   })
-  it('notes an appointment beyond the four-hour checkpoint minute without blocking', async () => {
+  it.each(['paragraph', 'comment'])('rejects a property beyond the four-hour checkpoint minute for a %s', async type => {
     const h = await harness(); h.advance(20_000)
     await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
     h.advance(25_000)
     h.publish(id, '2026-11-10T19:01:00Z')
-    h.setContext({ outcome: 'available', blocks: [{ id: 'over-ceiling', type: 'paragraph',
+    h.setContext({ outcome: 'available', blocks: [{ id: 'over-ceiling', type,
       last_edited_time: '2026-11-10T15:00:00Z', text: h.report(id, '2026-11-10T19:01:00Z') }] })
     await h.watchdog.sweep(true)
     const row = (await h.watchdog.rows())[0]!
-    expect(row).toMatchObject({ state: 'resolved', verifiedAt: new Date(h.time()).toISOString(), followUp: null })
-    expect(row.verification).toContain('Next check-in: exceeds the In Progress ceiling')
+    expect(row).toMatchObject({ state: 'answered-needs-correction', verifiedAt: null, followUp: null })
+    expect(row.verification).toBe('Next check-in: exceeds the In Progress ceiling')
     expect(row.verification).not.toContain('answer says')
     expect(h.card.properties['Next check-in']!.value).toEqual({ start: '2026-11-10T19:01:00Z' })
-    expect((await h.watchdog.indicators()).size).toBe(0)
+    expect((await h.watchdog.indicators()).size).toBe(1)
+  })
+  it.each([
+    ['2026-11-10T19:01:00Z', '2026-11-10T17:00:00Z', 'answered-needs-correction'],
+    ['2026-11-10T17:00:00Z', '2026-11-10T19:01:00Z', 'resolved'],
+  ])('enforces the ceiling on property %s when the answer is %s', async (property, answer, state) => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.publish(id, answer)
+    h.card.properties['Next check-in']!.value = { start: property }
+    await h.watchdog.sweep(true)
+    const row = (await h.watchdog.rows())[0]!
+    expect(row.state).toBe(state)
+    if (state === 'resolved') {
+      expect(row.verifiedAt).toBe(new Date(h.time()).toISOString())
+      expect(row.verification).toContain(`answer says ${answer}; card property says ${property}`)
+    } else {
+      expect(row.verifiedAt).toBeNull()
+      expect(row.verification).toBe('Next check-in: exceeds the In Progress ceiling')
+    }
   })
   it('accepts a self-reported Date in a later minute than the checkpoint metadata', async () => {
     const h = await harness(); await h.watchdog.sweep()

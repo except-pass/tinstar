@@ -263,22 +263,19 @@ export class CheckInWatchdog {
         const next = checkInTime(reportedNext(report['Next check-in']), text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
         let failure: string | undefined
-        // The card property stays the appointment and the next epoch. A parsed
-        // answer that means a different instant is a note, as is an In Progress
-        // answer past the board ceiling. Neither blocks, and neither rolls the property.
         const notes: string[] = []
         if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
           failure = 'Checkpoint time: must be at or after the request and at or before now'
         } else if (!(closed && /^(?:closed|none|n\/a|done)(?=$|\s|[().,;!])/i.test(report['Next check-in']))) {
           if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
           else if (next <= at) failure = 'Next check-in: must be after the checkpoint'
+          else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(appointment(card) / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
           else {
             if (next !== appointment(card)) {
               const start = text(date(card).start)
               const zone = text(date(card).time_zone)
               notes.push(`answer says ${report['Next check-in']}; card property says ${start ? (zone ? `${start} (${zone})` : start) : 'none'}`)
             }
-            if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) notes.push('Next check-in: exceeds the In Progress ceiling')
           }
         }
         if (failure) { correction = failure; continue }

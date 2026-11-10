@@ -155,10 +155,11 @@ author's Date only has to parse, including ISO timestamps with or without second
 and `YYYY-MM-DD HH:MM UTC`; clock guesses do not invalidate a real checkpoint.
 Next check-in reads the leading date/time and ignores trailing notes such as
 `(10 AM ET)`. Date-only values still mean 9 AM America/New_York.
-An In Progress answer past the board ceiling (four hours during
-business-day 8 AM–8 PM ET working hours, otherwise 10 AM the next business
-morning) is a note on the verified row. The answer and the ceiling compare
-at minute precision, and the property, not the answer, is the next epoch.
+An In Progress card’s Next check-in property must fit the board ceiling
+(four hours during business-day 8 AM–8 PM ET working hours, otherwise
+10 AM the next business morning), comparing the property appointment and
+ceiling at minute precision. A property beyond that ceiling fails verification
+even when the answer differs; the property remains the next appointment.
 A real dependency date on
 Waiting For may be later. Done/Archived can use `closed`, `none`, `n/a`, or
 `done` (case-insensitive, with trailing notes/punctuation) with a dated
