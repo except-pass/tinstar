@@ -7,7 +7,7 @@ export const CONNECTED_MS = 10_000
 const RETENTION_MS = 10 * 60_000
 import type { RenderedObservation } from '../../shared/presentationObservation'
 export type { RenderedObservation } from '../../shared/presentationObservation'
-interface Session { session_code: string; designated: boolean; rendered_scene?: RenderedObservation; scene_id: string; key: string; lastSeen: number; state: PresentationState; commands: Map<string, { command: ViewCommand; fingerprint: string; result: CommandResult; created: number }> }
+interface Session { session_code: string; designated: boolean; rendered_scene?: RenderedObservation; scene_id: string; key: string; lastSeen: number; state: PresentationState; commands: Map<string, { command: ViewCommand; fingerprint: string; implicit: boolean; result: CommandResult; created: number }> }
 export const secretEquals = (a: string, b: string) => {
   const left = Buffer.from(a), right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
@@ -60,6 +60,15 @@ export class SceneSessions {
     const chosen = connected.find(s => s.designated) ?? (connected.length === 1 ? connected[0] : undefined)
     return chosen ? { scene_id: chosen.scene_id } : { outcome: 'ambiguous-session', message: 'Choose the code shown in the intended tab or click Use this tab with ChatGPT.' }
   }
+  resolveCommand(id: string | undefined, code: string | undefined, commandId: string) {
+    this.sweep()
+    if (!id && !code) {
+      for (const session of this.sessions.values()) {
+        if (session.commands.get(commandId)?.implicit) return { scene_id: session.scene_id }
+      }
+    }
+    return this.resolve(id, code)
+  }
   disconnect(id: string) { const s = this.sessions.get(id); if (s) s.lastSeen = this.clock() - CONNECTED_MS }
   sync(id: string, state: PresentationState, acknowledgments: CommandResult[], rendered_scene?: RenderedObservation) {
     this.sweep()
@@ -85,7 +94,7 @@ export class SceneSessions {
     }
     return [...session.commands.values()].filter(row => row.result.outcome === 'queued').map(row => row.command).slice(0, 1)
   }
-  enqueue(input: { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }, scene: FloorScene, queue?: QueueRead): CommandResult {
+  enqueue(input: { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }, scene: FloorScene, queue?: QueueRead, implicit = false): CommandResult {
     this.sweep()
     const { scene_id, command_id } = input
     const base = { scene_id, command_id }
@@ -105,7 +114,7 @@ export class SceneSessions {
     }
     const command: ViewCommand = { scene_id, command_id, expected_revision: input.expected_revision, action: { ...input.action, origin: 'assistant', expectedRevision: input.expected_revision }, expires_at: this.clock() + input.ttl_ms }
     const result: CommandResult = { ...base, outcome, revision: session.state.revision, ...(outcome === 'queued' ? { delivery: { stage: 'accepted' as const, pending: true } } : {}) }
-    session.commands.set(command_id, { command, fingerprint, result, created: this.clock() })
+    session.commands.set(command_id, { command, fingerprint, implicit, result, created: this.clock() })
     return result
   }
   result(sceneId: string, commandId: string): CommandResult {

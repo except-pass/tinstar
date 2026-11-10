@@ -15,14 +15,14 @@ export const deliverySchema = z.object({
   stage: z.enum(['accepted', 'applied-to-state', 'rendered', 'foreground-visible', 'not-visible', 'not-supported']),
   reason: z.string().max(256).optional(), observed_at: z.string().datetime().optional(),
   surface: z.enum(['overview', 'decisions', 'other']).optional(), route: z.string().max(2048).optional(),
-  targets: z.array(z.string().max(2048)).max(100).optional(),
-  rendered_targets: z.array(z.string().max(2048)).max(100).optional(),
-  visible_targets: z.array(z.string().max(2048)).max(100).optional(), pending: z.boolean().optional(),
+  targets: z.array(z.string().max(2060)).max(4097).optional(),
+  rendered_targets: z.array(z.string().max(2060)).max(4097).optional(),
+  visible_targets: z.array(z.string().max(2060)).max(4097).optional(), pending: z.boolean().optional(),
 }).strict()
 export type PresentationDelivery = z.infer<typeof deliverySchema>
 export function presentationTargets(action: PresentationAction): Target[] {
   if (action.type === 'navigate-card') return [{ kind: 'card', id: action.cardId }]
-  if (action.type === 'reveal-search') return [action.target, ...(action.targets ?? [])]
+  if (action.type === 'reveal-search') return [...new Map([action.target, ...(action.targets ?? [])].map(target => [`${target.kind}:${target.id}`, target])).values()]
   if (action.type === 'focus') return [action.target]
-  return action.type === 'flash' ? action.targets : []
+  return action.type === 'flash' ? [...new Map(action.targets.map(target => [`${target.kind}:${target.id}`, target])).values()] : []
 }

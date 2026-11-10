@@ -3,6 +3,7 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { useFloorScene } from '../reconciliation/useFloorScene'
 import { useDeskQueue } from '../reconciliation/useDeskQueue'
 import { usePresentation } from '../reconciliation/usePresentation'
+import { presentationTargets } from '../shared/presentationObservation'
 import { AskDesk, AskProvider, useAskControls } from './Ask'
 import { deskConversations, type DeskView } from './deskInbox'
 import { DeskRail } from './DeskRail'
@@ -48,7 +49,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
       if (!overviewActive) onOverview()
       return
     }
-    const targets = action.type === 'navigate-card' ? [{ kind: 'card', id: action.cardId }] : action.type === 'reveal-search' || action.type === 'focus' ? [action.target] : action.type === 'flash' ? action.targets : []
+    const targets = presentationTargets(action)
     if (!targets.length) return
     setCloseRequest(value => value + 1)
     const inDecisions = targets.every(target => target.kind === 'card' && (queue?.needsWill ?? queue?.items ?? []).some(item => item.cardIds.includes(target.id)))

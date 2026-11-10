@@ -394,3 +394,26 @@ it('routes an MCP navigate-card in the same App tab and closes an already-open m
   expect(screen.getByLabelText('Discuss').closest('.desk-host')).not.toHaveClass('is-open')
   expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-scene-id', 'test')
 })
+
+
+it.each(['card', 'execution'] as const)('routes a mixed reveal with an additional %s from Decisions to Overview', async kind => {
+  vi.useFakeTimers()
+  window.history.replaceState(null, '', '/?view=decisions')
+  source.queue = fixtureQueue()
+  const scene = fixtureScene(), cardId = source.queue.items[0]!.cardIds[0]!
+  const extra = kind === 'execution' ? scene.executions[0]!.id : scene.cards.find(card => !source.queue!.items.some(item => item.cardIds.includes(card.id)))!.id
+  const fallback = read.getMockImplementation()!
+  let sent = false
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    const data = body.type === 'register' ? { scene_id: 'test', key: 'secret' }
+      : body.type === 'sync' && !sent ? { commands: [{ scene_id: 'test', command_id: 'mixed', expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { type: 'reveal-search', target: { kind: 'card', id: cardId }, targets: [{ kind, id: extra }], origin: 'assistant', expectedRevision: body.state.revision } }] } : { commands: [] }
+    if (body.type === 'sync') sent = true
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  expect(location.search).toContain('view=overview')
+  expect(document.querySelector(`[data-semantic-id="${kind}:${extra}"]`)).toBeTruthy()
+})

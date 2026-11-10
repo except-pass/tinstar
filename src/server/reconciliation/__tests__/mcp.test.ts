@@ -88,7 +88,7 @@ describe('authenticated real MCP transport', () => {
     mcp.sessions.disconnect(identity.scene_id)
     expect(parse(await client.callTool({ name: 'present_view', arguments: { scene_id: identity.scene_id, command_id: 'disconnected', expected_revision: 0, action: { type: 'set-arrangement', arrangement: 'machine' } } })).outcome).toBe('disconnected')
   })
-  it('reports exact queue sources over real MCP and retains acknowledged next navigation', async () => {
+  it.each(['present_view', 'next_queue_item'])('retains implicit %s retries on their original tab after designation changes', async name => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-desk-mcp-'))
     const sources = fixtureSources(), home = sources.fleet[1]!, task = home.observation.data!.tasks[0]!
     task.queue = queueSignals({ hints: { open_decisions: [{ key: 'choose', verb: 'needs-decision', summary: 'Choose A or B' }] } }).queue
@@ -111,8 +111,10 @@ describe('authenticated real MCP transport', () => {
       { home: home.source.home, taskId: task.id, id: 'choose', kind: 'hold' },
     ]))
     expect(ready.sources.filter((source: { request?: unknown }) => source.request).every((source: { readiness: string; responseAnchor?: string }) => source.readiness === 'ready-now' && source.responseAnchor)).toBe(true)
-    const args = { scene_id: identity.scene_id, command_id: 'next-exact-sources', expected_revision: 0 }
-    const pending = client.callTool({ name: 'next_queue_item', arguments: args })
+    const second = mcp.sessions.register(state)
+    mcp.sessions.designate(identity.scene_id)
+    const args = { command_id: 'next-exact-sources', expected_revision: 0, ...(name === 'present_view' ? { action: { type: 'navigate-queue', direction: 'next' } } : {}) }
+    const pending = client.callTool({ name, arguments: args })
     let commands = mcp.sessions.sync(identity.scene_id, state, [])
     for (let i = 0; i < 20 && !commands.length; i++) {
       await new Promise(resolve => setTimeout(resolve, 10))
@@ -122,7 +124,11 @@ describe('authenticated real MCP transport', () => {
     const applied = applyPresentationAction(state, commands[0]!.action, scene, Date.now(), queue)
     mcp.sessions.sync(identity.scene_id, applied.state, [{ scene_id: identity.scene_id, command_id: args.command_id, outcome: applied.outcome, state: applied.state, revision: applied.state.revision, applied_at: Date.now() }])
     expect(parse(await pending).outcome).toBe('applied')
-    expect(parse(await client.callTool({ name: 'next_queue_item', arguments: args })).outcome).toBe('applied')
+    mcp.sessions.designate(second.scene_id)
+    expect(parse(await client.callTool({ name, arguments: args }))).toMatchObject({ outcome: 'applied', scene_id: identity.scene_id, revision: 1 })
+    expect(mcp.sessions.sync(second.scene_id, state, [])).toEqual([])
+    expect(mcp.sessions.read(second.scene_id).state?.revision).toBe(0)
+    expect(mcp.sessions.enqueue({ scene_id: second.scene_id, command_id: args.command_id, expected_revision: 0, ttl_ms: 8000, action: { type: 'navigate-queue', direction: 'next' } }, scene, queue).outcome).toBe('queued')
     expect(JSON.stringify(queue)).toBe(original)
   })
   it('restricts peers to loopback and tailnet ranges', () => {

@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { SceneSessions } from '../../server/reconciliation/sessions'
 import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { usePresentation } from '../usePresentation'
+import { actionSchema } from '../../shared/reconciliationCommands'
+import { deliverySchema, presentationTargets } from '../../shared/presentationObservation'
 import { observeTargets, revealTargets } from '../presentationVisibility'
 
 const scene = fixtureScene(), queue = fixtureQueue(), cardId = queue.items[0]!.cardIds[0]!
@@ -98,4 +100,15 @@ describe('browser delivery and replay', () => {
     expect(observeTargets([`card:${cardId}`], 'overview')).toMatchObject({ stage: 'rendered', rendered_targets: [`card:${cardId}`], visible_targets: [], pending: true })
     expect(observeTargets(['you:root'], 'overview')).toMatchObject({ stage: 'not-supported', pending: false })
   })
+})
+
+it('serializes every accepted reveal target and deduplicates semantic identities', () => {
+  const target = { kind: 'card' as const, id: 'primary' }
+  const targets = Array.from({ length: 4096 }, (_, i) => ({ kind: 'execution' as const, id: String(i).padEnd(2048, 'x') }))
+  const action = { type: 'reveal-search' as const, target, targets }
+  expect(actionSchema.safeParse(action).success).toBe(true)
+  const ids = presentationTargets(action).map(target => `${target.kind}:${target.id}`)
+  expect(ids).toHaveLength(4097)
+  expect(deliverySchema.safeParse({ stage: 'foreground-visible', targets: ids, rendered_targets: ids, visible_targets: ids }).success).toBe(true)
+  expect(presentationTargets({ ...action, targets: [target, targets[0]!, target, targets[0]!] })).toEqual([target, targets[0]])
 })

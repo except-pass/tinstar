@@ -134,13 +134,13 @@ export class ReconciliationMcp {
     return this.readers.scene(false, filter === 'all' || filter === 'custom' ? { history: true } : {})
   }
   private async submitAndWait(request: Omit<Parameters<SceneSessions['enqueue']>[0], 'scene_id'> & { scene_id?: string; session_code?: string }) {
-    const selected = this.sessions.resolve(request.scene_id, request.session_code)
+    const selected = this.sessions.resolveCommand(request.scene_id, request.session_code, request.command_id)
     if (!('scene_id' in selected)) return result(selected)
     const { session_code: _code, ...rest } = request
     const input = { ...rest, scene_id: selected.scene_id }
     const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
     const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
-    const queued = this.sessions.enqueue(input, await this.sceneForWindow(input.scene_id), queue)
+    const queued = this.sessions.enqueue(input, await this.sceneForWindow(input.scene_id), queue, !request.scene_id && !request.session_code)
     if (queued.outcome !== 'queued') return result(queued)
     for (let i = 0; i < 20; i++) {
       await new Promise(resolve => setTimeout(resolve, 100))
