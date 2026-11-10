@@ -242,6 +242,36 @@ describe('durable lifecycle on the existing bridge', () => {
     await h.watchdog.sweep(true)
     expect((await h.watchdog.rows())[0]!.verifiedAt).toBeNull()
   })
+  it('accepts a comment dated later in the same minute as minute-truncated last_edited_time', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id); await h.reply(id, 'Updating Notion now')
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'responded', verifiedAt: null })
+    h.advance(42_000)
+    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', text: h.report(id) }] })
+    h.card.last_edited_time = '2026-11-10T15:00:00.000Z'
+    h.card.properties['Last touched by'] = { id: 'by', type: 'select', value: 'Firstmate', hasMore: false }
+    h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00Z' }
+    expect(h.report(id)).toContain('Date: 2026-11-10T15:00:42.000Z')
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({
+      state: 'resolved', verifiedAt: new Date(h.time()).toISOString(),
+      verification: expect.stringContaining('checkpoint live-comment; attributed to Firstmate; dated 2026-11-10T15:00:42.000Z'),
+    })
+  })
+  it('rejects a comment dated in a later minute than last_edited_time', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id); await h.reply(id, 'Updating Notion now')
+    h.advance(65_000)
+    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', text: h.report(id) }] })
+    h.card.last_edited_time = '2026-11-10T15:00:00.000Z'
+    h.card.properties['Last touched by'] = { id: 'by', type: 'select', value: 'Firstmate', hasMore: false }
+    h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00Z' }
+    expect(h.report(id)).toContain('Date: 2026-11-10T15:01:05.000Z')
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'responded', verifiedAt: null })
+  })
   it('creates a new epoch only after its new appointment passes', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
