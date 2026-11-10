@@ -7,7 +7,7 @@ import { CallToolRequestSchema, JSONRPCRequestSchema, ListToolsRequestSchema, Re
 import { z } from 'zod/v4'
 import { secretEquals } from './sessions'
 
-const reads = ['search_work', 'get_work', 'get_workflow_rules', 'start_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
+const commonTools = ['search_work', 'get_work', 'get_workflow_rules', 'start_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
 const views = ['present_view', 'next_queue_item']
 const modernVersion = '2026-07-28'
 const supportedVersions = [modernVersion, ...SUPPORTED_PROTOCOL_VERSIONS]
@@ -26,7 +26,7 @@ export function createTunnelFacade(options: TunnelOptions) {
   // ambient authority for an Internet tunnel or another local HTTP proxy.
   if (!/^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,99}$/.test(caller.id) || caller.token.length < 32 || /\s/.test(caller.token) || !installToken || secretEquals(caller.token, installToken) || typeof caller.allowView !== 'boolean') throw new Error('Explicit separate caller credential and scope required')
   if (!Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535) throw new Error('Invalid local upstream port')
-  const allowed = new Set([...reads, ...(caller.allowView ? views : [])])
+  const allowed = new Set([...commonTools, ...(caller.allowView ? views : [])])
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader('Cache-Control', 'no-store')
     if (req.url !== '/mcp') { res.writeHead(404); res.end(); return }

@@ -8,7 +8,7 @@ const refreshInterval = 30_000
 const readFailure = 'Scene read unavailable. Last-known records are retained; absence conclusions are suspended.'
 /** One sequential read for polling, focus, manual refresh and acknowledged card
  * mutations. Publish the entire scene at once; classifications/counts derive from it. */
-export function useFloorScene(active = true) {
+export function useFloorScene(active = true, history = false) {
   const search = useRef<SmartSearchIndex>()
   if (!search.current) search.current = new SmartSearchIndex()
   const activeView = useRef(active)
@@ -44,7 +44,7 @@ export function useFloorScene(active = true) {
           controller = new AbortController()
           const deadline = setTimeout(() => controller?.abort(), 60_000)
           try {
-            const response = await apiFetch(`/api/reconciliation/scene${force ? '?refresh=1' : ''}`, { signal: controller.signal })
+            const response = await apiFetch(`/api/reconciliation/scene${force || history ? `?${new URLSearchParams({ ...(force ? { refresh: '1' } : {}), ...(history ? { history: '1' } : {}) })}` : ''}`, { signal: controller.signal })
             if (!response.ok) throw new Error('read failed')
             const body = await response.json() as { ok: boolean; data?: FloorScene }
             if (!body.ok || !body.data) throw new Error('scene missing')
@@ -74,6 +74,6 @@ export function useFloorScene(active = true) {
     void readScene(false)
     const clock = setInterval(() => setNow(Date.now()), 1000)
     return () => { stopped = true; reader.current = undefined; clearTimeout(timer); clearInterval(clock); controller?.abort(); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus) }
-  }, [])
+  }, [history])
   return { ...read, now, refresh, refreshAfterMutation }
 }

@@ -55,7 +55,7 @@ export interface PresentationReaders {
   searchWork?(input: unknown): Promise<unknown>
   getWork?(input: unknown): Promise<unknown>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
-  scene(): Promise<FloorScene>
+  scene(force?: boolean, scope?: { history?: boolean }): Promise<FloorScene>
   card(id: string): Promise<unknown>
   queue(): Promise<QueueRead>
   workerLinkReport(): Promise<WorkerLinkReport>
@@ -82,12 +82,12 @@ export class ReconciliationMcp {
     server.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => {
       const window = this.sessions.read(scene_id)
       if (window.outcome === 'unknown-id') return result(window)
-      const scene = await this.readers.scene()
+      const scene = await this.sceneForWindow(scene_id)
       return result({ ...window, freshness: scene.coverage, counts: scene.counts, warnings: scene.warnings, records: { cards: scene.cards.map(c => ({ id: c.id, title: c.source.properties.Name?.value, expectation: c.expectation })), actors: scene.executions.map(e => ({ id: e.id, identity: e.identity, activity: e.activity, placement: e.placement })), claims: scene.claims.map(c => ({ id: c.id, cardId: c.cardId, executionId: c.executionId, verification: c.verification })), arrangements: scene.arrangements, groups: window.state ? organizedGroups(scene, window.state, Date.now()) : [] } })
     })
     server.registerTool('read_record', { description: 'Read an actor (execution/manager), card, claim, group or evidence and its source identity. Evidence is the claim’s bounded source references, never a terminal transcript.', inputSchema: { scene_id: z.string().uuid(), target: targetSchema, evidence: z.boolean().default(false) }, annotations: readAnnotations }, async ({ scene_id, target, evidence }) => {
       if (this.sessions.read(scene_id).outcome === 'unknown-id') return result({ outcome: 'unknown-id' })
-      const scene = await this.readers.scene()
+      const scene = await this.sceneForWindow(scene_id)
       let record: unknown
       switch (target.kind) {
         case 'card': record = scene.cards.find(x => x.id === target.id); break
@@ -106,7 +106,7 @@ export class ReconciliationMcp {
     })
     server.registerTool('get_card_context', { description: 'Read a card from the authorized configured board, including bounded prose, properties, coverage and omissions. No code/transcripts or credentials.', inputSchema: { scene_id: z.string().uuid(), card_id: z.string().regex(/^[a-f0-9]{32}$/) }, annotations: readAnnotations }, async ({ scene_id, card_id }) => {
       if (this.sessions.read(scene_id).outcome === 'unknown-id') return result({ outcome: 'unknown-id' })
-      const scene = await this.readers.scene(), card = scene.cards.find(c => c.id === card_id)
+      const scene = await this.sceneForWindow(scene_id), card = scene.cards.find(c => c.id === card_id)
       return result(card ? { card, context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
     })
     server.registerTool('get_queue', { description: 'Read ordered Desk readiness and each exact source (home, task, request id/kind), per-source readiness and bound response identity. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Queue source read failed' }))))
@@ -116,10 +116,14 @@ export class ReconciliationMcp {
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
     return server
   }
+  private sceneForWindow(sceneId: string) {
+    const filter = this.sessions.read(sceneId).state?.statusFilter?.preset
+    return this.readers.scene(false, filter === 'all' || filter === 'custom' ? { history: true } : {})
+  }
   private async submitAndWait(input: Parameters<SceneSessions['enqueue']>[0]) {
     const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
     const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
-    const queued = this.sessions.enqueue(input, await this.readers.scene(), queue)
+    const queued = this.sessions.enqueue(input, await this.sceneForWindow(input.scene_id), queue)
     if (queued.outcome !== 'queued') return result(queued)
     for (let i = 0; i < 20; i++) {
       await new Promise(resolve => setTimeout(resolve, 100))

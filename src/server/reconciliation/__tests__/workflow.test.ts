@@ -231,3 +231,13 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
   const errorUi = await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'start', input: invalid }) })
   expect((await errorUi.json()).data).toEqual(errorMcp)
 })
+
+it('keeps UI history explicit while ordinary work queries retain their own operational scope', async () => {
+  const f = fixture(), sources = f.sources()
+  f.raw.properties.Status.status.name = 'Done'
+  expect((await sources.scene()).cards).toHaveLength(0)
+  expect((await sources.scene(false, { history: true })).cards[0]!.id).toBe(id)
+  expect((await sources.searchWork({})).records).toHaveLength(0)
+  expect((await sources.searchWork({ history: true })).records[0]!.card!.id).toBe(id)
+  expect(f.requests.filter(request => request.method === 'POST').map(request => !!request.body.filter)).toEqual([true, false])
+})

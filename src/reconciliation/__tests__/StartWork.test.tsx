@@ -21,3 +21,14 @@ it('shows shared policy errors and preserves an attempt for a retry, then refres
   expect(attempts[0]).toEqual(attempts[1]); expect(attempts[0].worker).toEqual({ kind: 'firstmate', fm_home: worker.home, task_id: worker.identity.task_id, first_observed_spawn_gen: worker.identity.spawn_gen })
   expect(screen.getByRole('status')).toHaveTextContent('Saved. Start work saved and confirmed')
 })
+
+it('labels an unconfirmed response and retries the same attempt without claiming success', async () => {
+  const scene = fixtureScene(), worker = scene.executions[0]!, saved = vi.fn(async () => {})
+  vi.mocked(apiFetch).mockRejectedValue(new Error('network unavailable'))
+  render(<StartWork scene={scene} cardId={scene.cards[0]!.id} onSaved={saved} />)
+  fireEvent.click(screen.getByText('Start work', { selector: 'summary' }))
+  fireEvent.change(screen.getByLabelText('Tracked worker'), { target: { value: worker.id } })
+  fireEvent.click(screen.getByRole('button', { name: 'Start work' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not confirmed saved'))
+  expect(saved).not.toHaveBeenCalled()
+})

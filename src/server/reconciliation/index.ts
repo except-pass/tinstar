@@ -4,7 +4,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource } from './config'
 import { fleetObservation } from './fleet'
-import { notionObservation } from './notion'
+import { notionObservation, type WorkScope } from './notion'
 import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
@@ -57,8 +57,8 @@ export class ReconciliationSources {
     return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
   }
 
-  async snapshot(force = false) {
-    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({}, force)])
+  async snapshot(force = false, scope: WorkScope = {}) {
+    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force)])
     return {
       generatedAt: new Date().toISOString(), scope: 'configured-homes-only',
       warnings: [...this.config.warnings, ...(!fleet.length ? ['No First Mate homes configured; fleet coverage is unknown'] : [])],
@@ -79,8 +79,8 @@ export class ReconciliationSources {
   async currentCard(id: string) { return this.workReader.card(id, true) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
 
-  async scene(force = false) {
-    const scene = this.reconciler.reconcile(await this.snapshot(force))
+  async scene(force = false, scope: WorkScope = {}) {
+    const scene = this.reconciler.reconcile(await this.snapshot(force, scope))
     if (this.checkInIndicators) {
       const indicators = await this.checkInIndicators()
       for (const card of scene.cards) card.checkInRequest = indicators.get(card.id)
@@ -160,5 +160,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     if (!id || !scene.cards.some(c => c.id === id)) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

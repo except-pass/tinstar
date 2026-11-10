@@ -38,8 +38,12 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
-  const floor = useFloorScene(overviewActive || decisionsActive), { queue, error: queueError } = useDeskQueue()
+  const [history, setHistory] = useState(false)
+  const floor = useFloorScene(overviewActive || decisionsActive, history), { queue, error: queueError } = useDeskQueue()
   const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError)
+  // All/custom are explicit requests for records outside the operational scope.
+  // MCP work queries choose their own scope and never inherit this UI state.
+  useEffect(() => { setHistory(presentation.state.statusFilter?.preset === 'all' || presentation.state.statusFilter?.preset === 'custom') }, [presentation.state.statusFilter?.preset])
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
   const openDesk = useCallback(() => setOpenRequest(value => value + 1), [])
