@@ -234,6 +234,19 @@ describe('card worker facts', () => {
       expect(fact()).toBeNull()
     }
   })
+  it('counts a newer open turn after a done report and stale run-step', () => {
+    const { scene, worker, fact } = singleWorker()
+    worker.source.last_event = { state: 'done', raw: 'done: old completion', note: null, age_seconds: 86400 }
+    worker.liveness = 'finished'
+    worker.source.current_state = { ...worker.source.current_state, state: 'done', source: 'run-step', freshness: 'stale' }
+    worker.source.codex = { turn_open: true, observed_at: new Date(now).toISOString(),
+      last_activity_at: new Date(now - 1000).toISOString(), session_file: 'resumed.jsonl' }
+    expect(fact()).toBe('1 worker running')
+    expect(activeWorker(worker, now)).toBe(true)
+    expect(workHealth(scene, fixtureId(1), now)).toMatchObject({ workerCount: 1, running: 1 })
+    expect(organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers).some(value => value.id === worker.id)).toBe(true)
+    expect(workerFact(worker, now, worker.observation)).toBe('running')
+  })
   it('counts only observed unfinished workers across headers, relationships and pattern health', () => {
     const sources = fixtureSources({ now })
     const home = sources.fleet[1]!

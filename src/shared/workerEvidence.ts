@@ -31,10 +31,9 @@ export function recordedState(worker: Execution, now: number): string | null {
  * update; a historical working event never claims that work is still running. */
 function recordedActivity(worker: Execution, now: number): 'working' | 'waiting' | 'unknown' {
   if (!fresh(worker.observation, now)) return 'unknown'
-  const state = worker.source.current_state
-  const turn = codexTurn(state.source === 'pane' ? { ...worker.source, current_state: { state: 'unknown' } } : worker.source, now)
-  if (turn !== null) return turn ? 'working' : 'waiting'
   const recorded = recordedState(worker, now)
+  const turn = codexTurn(recorded === null ? { ...worker.source, current_state: { state: 'unknown' } } : worker.source, now)
+  if (turn !== null) return turn ? 'working' : 'waiting'
   if (recorded === 'working' || recorded === 'running') return 'working'
   if (['parked', 'paused', 'blocked'].includes(String(recorded))) return 'waiting'
   return 'unknown'
