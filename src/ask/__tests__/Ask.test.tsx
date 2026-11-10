@@ -168,8 +168,7 @@ describe('one-card text Ask and Desk', () => {
     const { container } = mount()
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toBeTruthy())
     if (filter === 'donut') {
-      fireEvent.click(screen.getByRole('button', { name: /^Cards statuses:/ }))
-      fireEvent.click(within(screen.getByRole('region', { name: 'Cards statuses' })).getByRole('button', { name: /Waiting For/ }))
+      fireEvent.click(within(screen.getByRole('group', { name: 'Filter by card status' })).getByRole('button', { name: /Waiting For/ }))
     }
     expect(card(container)).toBeNull()
     const before = JSON.parse(localStorage.getItem(preferencesKey)!)

@@ -571,19 +571,19 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   const toolbar = page.getByRole('toolbar', { name: 'Arrange work' })
   await expect(toolbar).toBeVisible()
   expect((await toolbar.boundingBox())!.height).toBe(48)
-  const createWork = page.locator('.ov-create-work')
-  await expect(createWork).toBeVisible()
-  const toolbarBox = (await toolbar.boundingBox())!, createBox = (await createWork.boundingBox())!
-  expect(createBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
-  expect((await page.locator('.ov-headings').boundingBox())!.y).toBeGreaterThanOrEqual(createBox.y + createBox.height)
+  const shelf = page.locator('.ov-filter-shelf')
+  await expect(shelf).toBeVisible()
+  const toolbarBox = (await toolbar.boundingBox())!, shelfBox = (await shelf.boundingBox())!
+  expect(shelfBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
+  expect((await page.locator('.ov-headings').boundingBox())!.y).toBeGreaterThanOrEqual(shelfBox.y + shelfBox.height)
   await expect(page.locator('.ov-top,.ov-intro')).toHaveCount(0)
   await expect(page.getByLabel('Outer grouping')).toHaveCount(0)
   const cardIds = () => page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')).sort())
-  const counts = async (cards: number, workers: number) => {
+  const counts = async (cards: number, workers: number, waiting = false) => {
     await expect(page.locator('.ov-card')).toHaveCount(cards)
     await expect(page.locator('.ov-execution')).toHaveCount(workers)
-    await expect(page.locator('.ov-headings')).toContainText(`WORKERS · ${workers}`)
-    await expect(page.locator('.ov-headings')).toContainText(`NOTION TASKS · ${cards}`)
+    await expect(page.locator(waiting ? '.ov-waiting-worker-head' : '.ov-headings')).toContainText(`WORKERS · ${workers}`)
+    await expect(page.locator(waiting ? '.ov-waiting-head' : '.ov-headings')).toContainText(waiting ? `Waiting For · ${cards}` : `NOTION TASKS · ${cards}`)
   }
   await counts(5, 5)
   for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'manager']]) {
@@ -594,13 +594,13 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   }
   const slice = (name: string) => page.getByRole('button', { name, exact: true })
   await clickStatusSlice(page, 'Cards: Waiting For, 1')
-  await counts(1, 1)
+  await counts(1, 5, true) // Dependency groups change Work only; Workers remain visible.
   await (await tabToStatusSlice(page, 'Cards: Waiting For, 1')).press('Space')
   await counts(5, 5)
   await slice('Cards: Waiting For, 1').press('Enter')
-  await counts(1, 1)
+  await counts(1, 5, true)
   expect(await cardIds()).toEqual([fixtureId(4)])
-  await expect(page.getByRole('button', { name: 'Workers statuses: 1 visible, 1 eligible' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Workers statuses' })).toBeVisible()
   await clickStatusSlice(page, 'Cards: In Progress, 4')
   await counts(5, 3) // OR in the card donut; independent workers disappear.
   await clickStatusSlice(page, 'Workers: Running, 2')
@@ -618,7 +618,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await counts(2, 2)
   await expect(page.getByRole('button', { name: 'By Machine', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(slice('Cards: In Progress, 2')).toHaveAttribute('aria-pressed', 'true')
-  const clear = page.getByRole('button', { name: 'Clear all status selections' })
+  const clear = page.getByRole('complementary', { name: 'Applied filters' }).getByRole('button', { name: 'Clear all', exact: true })
   await clear.scrollIntoViewIfNeeded()
   const clearBox = (await clear.boundingBox())!
   expect(clearBox.x).toBeGreaterThanOrEqual(0)
@@ -1224,9 +1224,9 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   await page.reload()
   await center.press('ArrowLeft')
   await clickStatusSlice(page, 'Cards: Waiting For, 1')
-  const waiting = page.getByRole('button', { name: 'Remove cards: Waiting For', exact: true })
+  const waiting = page.getByRole('button', { name: 'Remove Cards: Waiting For', exact: true })
   await waiting.scrollIntoViewIfNeeded()
-  await expect(waiting).toHaveText('▤ Waiting For ×')
+  await expect(waiting).toHaveText(/^Cards:\s*Waiting For\s*×$/)
   expect(await waiting.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
 })
 
@@ -1265,5 +1265,37 @@ for (const width of [1440, 1180, 390]) for (const entry of ['dropdown', 'chip'] 
   for (const name of ['All', 'Actor', 'Event', 'Work']) await expect(types.getByRole('button', { name, exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Actor dependencies', exact: true })).toContainText('Reviewer')
   await expect(page.getByRole('button', { name: 'Waiting For', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+})
+
+for (const width of [1440, 1180, 390]) test(`filter shelf labelled Waiting For legend opens dependency groups at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const scene = fixtureScene(), card = scene.cards.find(card => card.id === fixtureId(4))!
+  card.source.properties['Waiting For Type'] = { id: 'type', type: 'select', value: 'Actor', hasMore: false }
+  card.source.properties['Waiting For ID'] = { id: 'dependency', type: 'rich_text', value: 'Review team', hasMore: false }
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  const legend = page.getByRole('group', { name: 'Filter by card status' })
+  const waiting = legend.getByRole('button', { name: /^Filter Cards: Waiting For,/ })
+  for (const chip of await legend.getByRole('button').all()) {
+    const box = (await chip.boundingBox())!
+    expect(box.height).toBeGreaterThanOrEqual(width === 390 ? 44 : 27)
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(width)
+  }
+  await waiting.click()
+  await expect(waiting).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toBeVisible()
+  const types = page.getByRole('group', { name: 'Waiting For Type' })
+  for (const name of ['All', 'Actor', 'Event', 'Work']) await expect(types.getByRole('button', { name, exact: true })).toBeVisible()
+  await types.getByRole('button', { name: 'Actor', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toContainText('Review team')
+  await page.getByRole('button', { name: 'Remove Cards: Waiting For', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toHaveCount(0)
+  await waiting.focus()
+  await waiting.press('Space')
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toBeVisible()
+  await legend.getByRole('button', { name: 'All cards statuses' }).click()
+  await expect(waiting).toHaveAttribute('aria-pressed', 'false')
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
 })

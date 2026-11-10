@@ -24,7 +24,7 @@ const mount = () => render(<Overview workers={[]} messages={[]} submit={vi.fn()}
 const slice = (name: string) => screen.getByRole('button', { name })
 const cardIds = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.ov-card')].map(el => el.dataset.entityId).sort()
 
-describe('single-row Overview toolbar', () => {
+describe('Overview toolbar and filter shelf', () => {
   it('starts with friendly presets, collapsed Customize, labelled donuts and reachable clear', () => {
     const { container } = mount()
     expect(screen.queryByRole('heading', { name: 'Overview' })).toBeNull()
@@ -32,13 +32,35 @@ describe('single-row Overview toolbar', () => {
     expect(container.querySelector('.ov-intro')).toBeNull()
     expect(screen.getByRole('button', { name: 'By Initiative' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByLabelText('Outer grouping')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Clear all status selections' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Cards statuses: 5 visible, 5 eligible' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Workers statuses: 5 visible, 5 eligible' })).toBeTruthy()
-    expect([...container.querySelectorAll('.ov-donut-trigger')].map(el => el.getAttribute('aria-label'))).toEqual([
-      'Workers statuses: 5 visible, 5 eligible',
-      'Cards statuses: 5 visible, 5 eligible',
-    ])
+    expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
+    expect(screen.getByRole('region', { name: 'Cards statuses' })).toHaveTextContent('5 / 5')
+    expect(screen.getByRole('region', { name: 'Workers statuses' })).toHaveTextContent('5 / 5')
+
+  })
+  it('shows Custom scope chosen through Filters and opens those controls from its scope token', () => {
+    scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
+    const { container } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
+    for (const checkbox of screen.getAllByRole('checkbox')) {
+      if ((checkbox as HTMLInputElement).checked) fireEvent.click(checkbox)
+    }
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done' }))
+    expect(screen.getByLabelText('Status preset')).toHaveValue('custom')
+    const shelf = screen.getByRole('complementary', { name: 'Applied filters' })
+    expect(shelf).toHaveTextContent('Active filters 1')
+    expect(within(shelf).queryByText('No active filters')).toBeNull()
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+    fireEvent.click(screen.getByRole('button', { name: 'Close Customize' }))
+    const scope = screen.getByRole('button', { name: 'Edit Status scope: Custom - Done' })
+    fireEvent.click(scope)
+    expect(screen.getByRole('region', { name: 'Filters' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked()
+    expect(screen.getByLabelText('Status preset')).toHaveValue('custom')
+    fireEvent.keyDown(screen.getByRole('checkbox', { name: 'Done' }), { key: 'Escape' })
+    expect(scope).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
+    expect(cardIds(container)).toEqual([fixtureId(1)])
   })
   it('offers Operational status only in Order and rejects grouping drops', () => {
     mount()
@@ -100,10 +122,9 @@ describe('single-row Overview toolbar', () => {
     expect(container.textContent).not.toContain('No linked worker')
     fireEvent.click(container.querySelector('.ov-execution')!)
     expect(cardIds(container)).toEqual([fixtureId(1), fixtureId(6)])
-    fireEvent.click(screen.getByRole('button', { name: /^Cards statuses:/ }))
     const menu = screen.getByRole('region', { name: 'Cards statuses' })
     expect(within(menu).getByRole('button', { name: /Waiting For.*0/ })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all status selections' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     expect(cardIds(container)).toHaveLength(5)
     expect(container.querySelectorAll('.ov-execution')).toHaveLength(5)
   })
@@ -121,7 +142,7 @@ describe('single-row Overview toolbar', () => {
     scene.cards.find(c => c.id === fixtureId(1))!.source.properties.Status!.value = 'Waiting For'
     second.rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
     expect(cardIds(second.container)).toEqual([fixtureId(6)])
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all status selections' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     expect(cardIds(second.container)).toHaveLength(7)
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
     expect(screen.getByLabelText('Status preset')).toHaveValue('all')
@@ -131,20 +152,20 @@ describe('single-row Overview toolbar', () => {
     const { container } = mount()
     expect(cardIds(container)).toEqual([])
     expect(container.querySelectorAll('.ov-execution')).toHaveLength(4)
-    expect([...container.querySelectorAll('.ov-filter-chips button')].map(el => el.getAttribute('aria-label'))).toEqual(['Remove workers: Running', 'Remove cards: Waiting For'])
+    expect([...container.querySelectorAll('.ov-filter-chips button')].map(el => el.getAttribute('aria-label'))).toEqual(['Remove Workers: Running', 'Remove Cards: Waiting For'])
     expect(screen.getByText('Nothing is Waiting For right now')).toBeTruthy()
     expect(slice('Workers: Blocked, 1')).toHaveAttribute('aria-pressed', 'false')
     expect(slice('Cards: In Progress, 2')).toHaveAttribute('aria-pressed', 'false')
-    fireEvent.click(screen.getByRole('button', { name: 'Remove cards: Waiting For' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cards: Waiting For' }))
     expect(cardIds(container)).toEqual([fixtureId(1), fixtureId(6)])
-    fireEvent.click(screen.getByRole('button', { name: 'Clear all status selections' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
     expect(cardIds(container)).toHaveLength(5)
   })
   it('labels unavailable source counts as unknown instead of asserting a verified zero', () => {
     scene.executions = []
     for (const home of scene.coverage.homes) home.observation.status = 'unknown'
     const { container } = mount()
-    expect(screen.getByRole('button', { name: 'Workers statuses: unavailable' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Workers statuses' })).toBeTruthy()
     expect(container.querySelector('.ov-headings')).toHaveTextContent('WORKERS · unavailable')
     expect(container.querySelector('.ov-headings')).not.toHaveTextContent('WORKERS · 0')
   })
