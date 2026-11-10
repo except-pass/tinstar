@@ -69,7 +69,9 @@ export class ReconciliationSources {
 
   async snapshot(force = false, scope: WorkScope = {}) {
     const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force)])
-    if (force && intentions.status === 'fresh' && intentions.data) await this.onWorkRefresh?.(intentions.data.cards)
+    // Scene refreshes read source properties only. Awaiting per-card comments
+    // here makes a large board exceed the source deadline. Comment updates use
+    // the existing rotating sweep and targeted search_work/get_work refreshes.
     return {
       generatedAt: new Date().toISOString(), scope: 'configured-homes-only',
       warnings: [...this.config.warnings, ...(!fleet.length ? ['No First Mate homes configured; fleet coverage is unknown'] : [])],
