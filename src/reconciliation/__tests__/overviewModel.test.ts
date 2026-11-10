@@ -106,6 +106,7 @@ it('distinguishes dead endpoints from completed reports', () => {
   expect(status(now)).toBe('No update')
   expect(status(now + 61_000)).toBe('No update')
   task.lastEventText = 'done: Completed'
+  task.current_state.state = 'done'
   expect(status(now)).toBe('Finished')
   expect(status(now + 61_000)).toBe('Finished')
 })

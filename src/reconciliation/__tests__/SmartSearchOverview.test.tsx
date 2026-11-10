@@ -360,6 +360,7 @@ describe('worker facts in existing card metadata', () => {
   it.each(['compact', 'detailed'] as const)('renders concrete facts without an extra card row in %s', density => {
     const finished = scene.executions.find(worker => worker.identity.task_id === 'helper-worker')!
     finished.source.last_event.state = 'done'
+    finished.source.current_state.state = 'done'
     finished.liveness = 'finished'
     const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
     scene.claims.push({ ...claim, id: 'declared-absent', executionId: 'not-observed', verification: 'unverified', state: 'last-known' })
