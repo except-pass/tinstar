@@ -185,6 +185,29 @@ describe('suggested action rejection receipts', () => {
   })
 })
 
+describe('suggested merge targets', () => {
+  it('stores a canonical pull URL, reports a malformed merge, and still selects an ordinary action', async () => {
+    const { call, bridge, reload } = await setup()
+    const first = (await call('requests', input())).data.data
+    const merge = { id: 'merge-pr-7', label: 'Merge PR 7', instruction: 'Merge this pull request', merge: { pr_url: 'https://github.com/Owner/Repo/pull/7/' } }
+    const bad = { id: 'merge-bad', label: 'Merge elsewhere', instruction: 'Merge the other pull request', merge: { pr_url: 'https://example.test/pull/1', head: 'a'.repeat(40) } }
+    const keep = { id: 'keep-open', label: 'Keep open', instruction: 'Leave the pull request open' }
+    const reply = { summary: 'Ready to merge', detail: 'One pull request is open.', references: [], suggested_actions: [bad, merge, keep] }
+    expect((await bridge({ request_id: first.request_id, note: note(first.request_id) })).status).toBe(200)
+    const receipt = await bridge({ request_id: first.request_id, reply: { id: 'note-1', at: new Date().toISOString(), cursor: '1', body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: first.request_id, ...reply }) } })
+    expect(receipt.status).toBe(200)
+    expect(receipt.data.data.reply_warnings).toEqual([expect.objectContaining({ index: 0, id: 'merge-bad' })])
+    reload()
+    const saved = (await call('requests')).data.data[0]
+    expect(saved.reply.suggested_actions).toEqual([{ ...merge, merge: { pr_url: 'https://github.com/owner/repo/pull/7' } }, keep])
+    expect(saved.reply.rejected_actions).toEqual(receipt.data.data.reply_warnings)
+    const selected = await call('selections', { answer_id: first.request_id, action_id: keep.id, client_key: randomUUID() })
+    expect(selected.status).toBe(200)
+    expect(selected.data.data).toMatchObject({ question: keep.instruction, action_selection: { action_id: keep.id, instruction: keep.instruction } })
+    expect(JSON.stringify(selected.data.data.action_selection)).not.toContain('pr_url')
+  })
+})
+
 describe('authenticated recommendation selections over the existing Ask bridge', () => {
   const close: AskAction = { id: 'close-done', label: 'Close as Done', instruction: 'Post the #3194 Feed verdict and set the linked Notion card Done' }
   const keep: AskAction = { id: 'keep-open', label: 'Keep open', instruction: 'Retain card until a real DEV stall exhibits Feed recovery.' }
@@ -217,7 +240,9 @@ describe('authenticated recommendation selections over the existing Ask bridge',
     const envelope = payload(dispatched[0].body)
     expect(envelope).toMatchObject({ schema: 'tinstar.ask.v1', request_id: selected.request_id, question: close.instruction, requesting_principal: owner, context: first.context, action_selection: selected.action_selection,
       conversation: { turns: [{ role: 'user', text: first.question }, { role: 'assistant', reply }] } })
-    expect(dispatched[0].body).toContain('suggested_actions=[{id,label,instruction}]')
+    expect(dispatched[0].body).toContain('suggested_actions=[{id,label,instruction,merge?}]')
+    expect(dispatched[0].body).toContain('Optional merge is exactly {"pr_url":"https://github.com/owner/repo/pull/1"}')
+    expect(dispatched[0].body).toContain('no head SHA')
     for (const rule of ['at most 10', 'unique per-answer IDs of 1–64 ASCII letters/digits/underscore/hyphen starting with a letter/digit',
       'labels (1–64 characters)', 'instructions (1–2000 characters)', 'same text rules for both',
       `Normal punctuation is allowed: ( ) ' " = , : ; & + / # % ! ? and version numbers`, 'Instructions are never executed',

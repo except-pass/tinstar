@@ -256,4 +256,10 @@ it('requires the PR owner principal and UI intent before reading heads or creati
   const red = await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: ownerHeaders, body })
   expect(red.status).toBe(409)
   expect((await red.json()).error.message).toContain('Required CI is red')
+  for (const code of ['create-unconfirmed', 'operation-conflict'] as const) {
+    create.mockResolvedValueOnce({ outcome: code === 'create-unconfirmed' ? 'partially-saved' : 'not-saved', code, message: 'Workflow result', operation_id: JSON.parse(body).operation_id, saved_fields: [] })
+    const response = await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: ownerHeaders, body })
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ ok: false, error: { code: 'CONFLICT', details: { code } } })
+  }
 })

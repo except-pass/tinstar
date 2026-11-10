@@ -69,6 +69,19 @@ describe('Ask recommendations', () => {
     expect(askActionSchema.safeParse({ ...close, instruction: "Recheck the PR head (including CI) before changing the card's status." }).success).toBe(true)
   })
 
+  it('accepts one optional GitHub pull URL and rejects a head or any other merge shape', () => {
+    const merge = { ...close, id: 'merge-pr-7', label: 'Merge PR 7', instruction: 'Merge this pull request', merge: { pr_url: 'https://github.com/Owner/Repo/pull/7/' } }
+    expect(askActionSchema.parse(merge)).toEqual({ ...merge, merge: { pr_url: 'https://github.com/owner/repo/pull/7' } })
+    expect(askActionSchema.parse(close)).toEqual(close)
+    for (const target of [
+      { pr_url: 'https://example.test/pull/1' },
+      { pr_url: 'https://github.com/owner/repo/pull/7', head: 'a'.repeat(40) },
+      { url: 'https://github.com/owner/repo/pull/7' },
+      'https://github.com/owner/repo/pull/7',
+      null,
+    ]) expect(askActionSchema.safeParse({ ...merge, merge: target }).success).toBe(false)
+  })
+
   it('bounds the mixed array and rejects ambiguous duplicate action IDs', () => {
     expect(askSuggestionsSchema.safeParse(Array(11).fill('legacy')).success).toBe(false)
     expect(askSuggestionsSchema.safeParse(['x'.repeat(2001)]).success).toBe(false)

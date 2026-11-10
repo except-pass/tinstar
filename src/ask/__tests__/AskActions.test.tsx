@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { AskActions, AskSelectionRejected, type AskActionsProps, type AskActionDelivery } from '../AskActions'
 import type { AskAction } from '../../shared/ask-actions'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 const close: AskAction = { id: 'close-done', label: 'Close as Done', instruction: 'Post the #3194 Feed verdict and set the linked Notion card Done' }
 const keep: AskAction = { id: 'keep-open', label: 'Keep open', instruction: 'Retain card until a real DEV stall exhibits Feed recovery.' }
 const answerId = '12d6fbba-a3ec-4aab-a020-7c543b56d34e'
@@ -132,6 +132,96 @@ describe('Ask recommendation buttons', () => {
     view.rerender(<AskActions {...options} answerId="268503d5-57a5-439e-a29c-b19510a234b1" />)
     expect(screen.getByRole('button', { name: closeName })).toBeEnabled()
     expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('sends one Clawson card for a merge action using the head read at click', async () => {
+    const head = 'c'.repeat(40)
+    const pr = 'https://github.com/owner/repo/pull/7'
+    const merge = { id: 'merge-pr-7', label: 'Merge PR 7', instruction: 'Merge this pull request', merge: { pr_url: pr } }
+    let finish!: (value: Response) => void
+    const sent = new Promise<Response>(resolve => { finish = resolve })
+    const read = vi.fn((input: string, _init?: RequestInit) => String(input).includes('/origin')
+      ? Promise.resolve(new Response(JSON.stringify({ ok: true, data: { head, url: pr } })))
+      : sent)
+    vi.stubGlobal('fetch', read)
+    const onSelect = vi.fn()
+    render(<AskActions {...props({ suggestions: [merge, keep], onSelect })} />)
+    const button = screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await waitFor(() => expect(read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge'))).toHaveLength(1))
+    expect(read.mock.calls.filter(([path]) => String(path).includes('/origin'))).toHaveLength(1)
+    const payload = JSON.parse(String(read.mock.calls.find(([path]) => String(path).includes('/clawson-merge'))![1]!.body))
+    expect(payload.targets).toEqual([{ url: pr, head }])
+    expect(payload.operation_id).toMatch(/^[a-f0-9-]{36}$/)
+    expect(onSelect).not.toHaveBeenCalled()
+    finish(new Response(JSON.stringify({ ok: true, data: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc', message: 'Sent to Clawson for admin merge.' } })))
+    expect(await screen.findByRole('link', { name: 'Open Clawson card ↗' })).toHaveAttribute('href', 'https://www.notion.so/cccccccccccccccccccccccccccccccc')
+    fireEvent.click(screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` }))
+    expect(read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge'))).toHaveLength(1)
+  })
+
+  it('shows a merge refusal with no card and retries the same operation', async () => {
+    let head = 'd'.repeat(40)
+    const pr = 'https://github.com/owner/repo/pull/8'
+    const merge = { id: 'merge-pr-8', label: 'Merge PR 8', instruction: 'Merge this pull request', merge: { pr_url: pr } }
+    const refusal = 'Nothing sent to Clawson. https://github.com/owner/repo/pull/8: CI is pending.'
+    const read = vi.fn((input: string, _init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(String(input).includes('/origin')
+      ? { ok: true, data: { head } }
+      : { ok: false, error: { message: refusal } }), { status: String(input).includes('/origin') ? 200 : 409 })))
+    vi.stubGlobal('fetch', read)
+    render(<AskActions {...props({ suggestions: [merge, keep], onSelect: vi.fn() })} />)
+    fireEvent.click(screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(refusal)
+    expect(screen.queryByRole('link', { name: 'Open Clawson card ↗' })).toBeNull()
+    expect(screen.getByRole('button', { name: `${keep.label}: ${keep.instruction}` })).toBeEnabled()
+    head = 'e'.repeat(40)
+    fireEvent.click(screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` }))
+    await waitFor(() => expect(read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge'))).toHaveLength(2))
+    const bodies = read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge')).map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies[1].operation_id).toBe(bodies[0].operation_id)
+    expect(bodies[0].targets).toEqual([{ url: pr, head: 'd'.repeat(40) }])
+    expect(bodies[1].targets).toEqual([{ url: pr, head }])
+    expect(read.mock.calls.filter(([path]) => String(path).includes('/origin'))).toHaveLength(2)
+  })
+
+  it.each(['lost', 'unreadable', 'incomplete', 'create-unconfirmed'])('replays the posted payload after a %s response without reading GitHub', async failure => {
+    const pr = 'https://github.com/owner/repo/pull/8'
+    const merge = { id: 'merge-pr-8', label: 'Merge PR 8', instruction: 'Merge this pull request', merge: { pr_url: pr } }
+    let posts = 0, origins = 0
+    const read = vi.fn(async (input: string, _init?: RequestInit) => {
+      if (String(input).includes('/origin')) {
+        if (++origins > 1) throw new Error('GitHub unavailable after head advanced')
+        return new Response(JSON.stringify({ ok: true, data: { head: 'a'.repeat(40) } }))
+      }
+      if (++posts === 1) {
+        if (failure === 'lost') throw new Error('Response lost')
+        if (failure === 'create-unconfirmed') return new Response(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: 'Creation unconfirmed', details: { code: 'create-unconfirmed' } } }), { status: 409 })
+        return new Response(failure === 'unreadable' ? 'unreadable' : JSON.stringify({ ok: true, data: {} }))
+      }
+      return new Response(JSON.stringify({ ok: true, data: { url: 'https://www.notion.so/card', message: 'Sent to Clawson.' } }))
+    })
+    vi.stubGlobal('fetch', read)
+    render(<AskActions {...props({ suggestions: [merge] })} />)
+    const button = screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` })
+    fireEvent.click(button)
+    await screen.findByRole('alert')
+    fireEvent.click(button)
+    await screen.findByRole('link', { name: 'Open Clawson card ↗' })
+    const bodies = read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge')).map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]).toEqual(bodies[0])
+    expect(origins).toBe(1)
+  })
+
+  it('leaves a recommendation that only says merge on the ordinary selection path', async () => {
+    const plain = { id: 'merge-pr-9', label: 'Merge PR 9', instruction: 'Ask for another look at pull request 9' }
+    const onSelect = vi.fn(async () => ({ status: 'sent' as const }))
+    vi.stubGlobal('fetch', vi.fn())
+    render(<AskActions {...props({ suggestions: [plain], onSelect })} />)
+    fireEvent.click(screen.getByRole('button', { name: `${plain.label}: ${plain.instruction}` }))
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1))
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('renders nothing for an answer without suggestions', () => {

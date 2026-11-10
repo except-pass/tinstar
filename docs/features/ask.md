@@ -327,6 +327,13 @@ nonblank single-line text. Both fields allow ordinary punctuation, parentheses, 
 semicolons and version numbers. They reject control/line-separator characters,
 backticks/code fences, HTML tags and URLs/link syntax; URLs belong in references.
 Instructions are inert text and are never executed by Tin Star.
+A recommendation may also carry one optional `merge` object, exactly
+`{ "pr_url": "https://github.com/owner/repo/pull/1" }`. No head SHA and no other
+fields. The installed puller forwards that object inside the reply body unchanged.
+For click behavior, head binding, refusals and retries, see
+[Send selected PRs to Clawson](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
+A malformed `merge` value is omitted like any other invalid suggestion and
+returned in `reply_warnings`; the owner does not see the rejection text.
 Historical string suggestions still display as inert text.
 Malformed structured reply content is accepted with `reply.degraded: true`.
 String summaries and details are truncated to their schema limits; a missing or
@@ -476,6 +483,9 @@ be retrieved, ask for it before relying on the missing content. Pending batches
 account for outer JSON escaping and stay below the installed puller's 2 MiB read
 bound. The store remains the only persisted conversation source; private frozen
 bodies and retry-key aliases never enter browser records.
+
+Recommendations without `merge` use the operator-request flow below; merge
+recommendations use the [Clawson handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
 
 The shared selected-action seam is
 `AskStore.createActionSelection(owner, {answer_id, action_id, client_key}, lookupAction)`.
