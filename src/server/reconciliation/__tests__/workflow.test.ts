@@ -101,7 +101,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
     sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
-    controls: { failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: () => { failedPatch = true }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
+    controls: { failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 afterEach(async () => {
@@ -501,4 +501,40 @@ describe('remaining shared workflow operations', () => {
     expect(f.pages.size).toBe(2)
     expect(await restarted.create({ ...create, owner: '' }, 'Owner')).toMatchObject({ code: 'invalid-input' })
   })
+})
+
+it('revalidates missing execution and appointments on retry but permits confirmed note repair', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T12:00:00Z'))
+  for (const native of [false, true]) {
+    const f = fixture()
+    const answer = { card_id: id, operation_id: 'retry-answer', kind: 'answer_decision', request_id: 'body-1', answer: 'Continue this run', next: { owner: 'Firstmate', status: 'In Progress', worker: native ? f.native.worker : f.external.worker } } as UpdateWorkInput
+    f.controls.failPatch()
+    await f.workflow.update(answer, 'Owner')
+    f.controls.failPatch(false)
+    if (native) f.task.endpoint.agent_alive = 'dead'
+    else vi.setSystemTime(new Date(Date.now() + 300_000))
+    const count = f.requests.filter(r => r.method === 'PATCH').length
+    expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ code: native ? 'worker-not-executing' : 'external-evidence-stale' })
+    expect(f.requests.filter(r => r.method === 'PATCH')).toHaveLength(count)
+  }
+  const f = fixture()
+  const checkpoint = { card_id: id, operation_id: 'retry-checkpoint', kind: 'checkpoint', checkpoint: { assessment: 'Checked output', evidence: 'Fixture evidence', next_action: 'Review', confirmation: 'provisional', next_check_in: new Date(Date.now() + 60_000).toISOString() } } as UpdateWorkInput
+  f.controls.failPatch(); await f.workflow.update(checkpoint, 'Owner'); f.controls.failPatch(false)
+  vi.setSystemTime(new Date(Date.now() + 120_000))
+  expect(await f.workflow.update(checkpoint, 'Owner')).toMatchObject({ code: 'invalid-checkpoint' })
+  const repair = fixture()
+  const answer = { card_id: id, operation_id: 'repair-answer', kind: 'answer_decision', request_id: 'body-1', answer: 'Continue this run', next: { owner: 'Firstmate', status: 'In Progress', worker: repair.external.worker } } as UpdateWorkInput
+  repair.controls.failNote(); expect(await repair.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved' })
+  repair.controls.failNote(false); vi.setSystemTime(new Date(Date.now() + 300_000))
+  const patches = repair.requests.filter(r => r.method === 'PATCH').length
+  expect(await repair.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect(repair.requests.filter(r => r.method === 'PATCH')).toHaveLength(patches)
+})
+it('rejects partial wait cleanup and removes only the complete selected entry', async () => {
+  const f = fixture()
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Wait for security approval\nWait for legal approval' }]
+  const answer = { card_id: id, operation_id: 'wait-partial', kind: 'answer_decision', request_id: 'body-1', answer: 'Security approved', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: 'security approval' } as UpdateWorkInput
+  expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ code: 'wait-conflict' })
+  expect(await f.workflow.update({ ...answer, operation_id: 'wait-full', resolve_wait: 'Wait for security approval' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Wait for legal approval')
 })

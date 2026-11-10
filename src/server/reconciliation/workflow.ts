@@ -175,6 +175,12 @@ export class WorkflowOperations {
     const area = card.properties.Area?.value
     if (typeof owner !== 'string' || !owner.trim() || !area || Array.isArray(area) && !area.length) throw new WorkflowError('required-fields', 'This transition requires a declared Owner and Area')
   }
+  private validateCheckpoint(card: WorkCard, appointment: string) {
+    const next = checkInTime(appointment), now = Date.now()
+    if (!Number.isFinite(next) || next <= now) throw new WorkflowError('invalid-checkpoint', 'Next check-in must be a future appointment; date-only means 9 AM America/New_York')
+    if (card.properties.Status?.value === 'In Progress' && next > checkInCeiling(now)) throw new WorkflowError('checkpoint-ceiling', `Next check-in exceeds the board ceiling (${new Date(checkInCeiling(now)).toISOString()})`)
+    return next
+  }
   private async updatePlan(card: WorkCard, input: UpdateWorkInput, actor: string, notes: Awaited<ReturnType<WorkflowContent['notes']>>) {
     const desired: Record<string, unknown> = {}, properties: Record<string, unknown> = {}, sections: Record<string, string> = {}
     const reads = new Set<string>(), at = new Date().toISOString()
@@ -204,10 +210,8 @@ export class WorkflowOperations {
       wait(input)
       if (input.note) note += `\n${input.note}`
     } else if (input.kind === 'checkpoint') {
-      const cp = input.checkpoint, next = checkInTime(cp.next_check_in), now = Date.parse(at)
+      const cp = input.checkpoint, next = this.validateCheckpoint(card, cp.next_check_in)
       reads.add('Status')
-      if (!Number.isFinite(next) || next <= now) throw new WorkflowError('invalid-checkpoint', 'Next check-in must be a future appointment; date-only means 9 AM America/New_York')
-      if (card.properties.Status?.value === 'In Progress' && next > checkInCeiling(now)) throw new WorkflowError('checkpoint-ceiling', `Next check-in exceeds the board ceiling (${new Date(checkInCeiling(now)).toISOString()})`)
       // Normalize meaning so Notion timezone/format rendering cannot reject a save.
       set('Next check-in', new Date(next).toISOString())
       if (card.properties['Next action']) set('Next action', cp.next_action)
@@ -258,8 +262,9 @@ export class WorkflowOperations {
         set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== request.action))
         if (input.resolve_wait) {
           const old = String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
-          if (!old.includes(input.resolve_wait) || old.indexOf(input.resolve_wait) !== old.lastIndexOf(input.resolve_wait)) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry')
-          set('Waiting For', old.replace(input.resolve_wait, '').trim())
+          const entries = old.split('\n'), resolved = input.resolve_wait
+          if (entries.filter(entry => entry === resolved).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry')
+          set('Waiting For', entries.filter(entry => entry !== resolved).join('\n'))
         }
         note += `\n${decisionMarker(input.request_id)}\nTin Star answer: ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}`
       }
@@ -311,13 +316,20 @@ export class WorkflowOperations {
       }
       const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
       card = current
+      saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
       if (Object.keys(missing).length) {
+        if (input.kind === 'checkpoint' && 'Next check-in' in missing) this.validateCheckpoint(card, input.checkpoint.next_check_in)
+        if (input.kind === 'answer_decision' && input.next.status === 'In Progress' &&
+          ['Status', FIRST_MATE_TASKS, 'Delegated To'].some(name => name in missing)) {
+          if (!input.next.worker) throw new WorkflowError('worker-required', 'Returning to In Progress requires current tracked worker evidence')
+          await this.startPlan(card, { card_id: card.id, operation_id: input.operation_id, worker: input.next.worker }, actor)
+        }
         attempted = true
         await this.content.request(`pages/${card.id}`, 'PATCH', { properties: missing })
         card = await this.reader.card(card.id, true)
       }
       this.reader.confirm(card)
-      saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
+      saved.splice(0, saved.length, ...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
       await this.changed({ before, card, actor, operationId: input.operation_id })
       if (saved.length !== Object.keys(plan.desired).length) return result('partially-saved', 'readback-mismatch', 'Only listed properties are confirmed; retry the same operation to repair missing steps')
       for (const [name, text] of Object.entries(plan.sections)) {
