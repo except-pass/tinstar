@@ -81,7 +81,7 @@ it('navigates a canonical Desk task without changing queue position or saved fil
 })
 
 
-it('retains event precedence across expiry and shares status with grouping', () => {
+it('uses recorded crew-state over historical intent and withdraws it on expiry', () => {
   const now = Date.now(), sources = fixtureSources({ now })
   const task = sources.fleet[1]!.observation.data!.tasks[0]!
   task.current_state.state = 'working'
@@ -90,9 +90,9 @@ it('retains event precedence across expiry and shares status with grouping', () 
   for (const time of [now, now + 61_000]) {
     const scene = reconciler.reconcile(sources, time)
     const worker = scene.executions.find(e => e.identity.task_id === task.identity.task_id)!
-    expect(workerState(worker)).toBe('Waiting')
+    expect(workerState(worker)).toBe(time === now ? 'Running' : 'No update')
     const groups = overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'workerStatus', inner: 'none', order: 'checkIn', direction: 'asc' } }, time)
-    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe('Waiting')
+    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe(time === now ? 'Running' : 'No update')
   }
 })
 
@@ -103,8 +103,8 @@ it('distinguishes dead endpoints from completed reports', () => {
   task.lastEventText = 'working: Still working'
   const reconciler = new SceneReconciler()
   const status = (time: number) => workerState(reconciler.reconcile(sources, time).executions.find(e => e.identity.task_id === task.identity.task_id)!)
-  expect(status(now)).toBe('Unknown')
-  expect(status(now + 61_000)).toBe('Unknown')
+  expect(status(now)).toBe('No update')
+  expect(status(now + 61_000)).toBe('No update')
   task.lastEventText = 'done: Completed'
   expect(status(now)).toBe('Finished')
   expect(status(now + 61_000)).toBe('Finished')
@@ -112,10 +112,10 @@ it('distinguishes dead endpoints from completed reports', () => {
 
 
 it.each([
-  ['blocked', 'paused: Awaiting input', 'Waiting'],
-  ['working', 'blocked: Needs intervention', 'Blocked'],
-  ['blocked', 'working: Resumed', 'Running'],
-  ['blocked', 'resolved: Cleared', 'Running'],
+  ['blocked', 'paused: Awaiting input', 'Blocked'],
+  ['working', 'blocked: Needs intervention', 'Running'],
+  ['blocked', 'working: Resumed', 'Blocked'],
+  ['blocked', 'resolved: Cleared', 'Blocked'],
   ['blocked', 'unrecognized: Latest note', 'Blocked'],
 ])('uses effective status for state %s and event %s', (state, event, expected) => {
   const now = Date.now(), sources = fixtureSources({ now })
@@ -125,9 +125,9 @@ it.each([
   for (const time of [now, now + 61_000]) {
     const scene = new SceneReconciler().reconcile(sources, time)
     const worker = scene.executions.find(e => e.identity.task_id === task.identity.task_id)!
-    expect(workerState(worker)).toBe(expected)
+    expect(workerState(worker)).toBe(time === now ? expected : 'No update')
     const groups = overviewGroups(scene, { ...initialPresentation(), organizer: { outer: 'workerStatus', inner: 'none', order: 'workerStatus', direction: 'asc' } }, time)
-    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe(expected)
+    expect(groups.find(g => g.executionIds.includes(worker.id))?.label).toBe(time === now ? expected : 'No update')
   }
 })
 

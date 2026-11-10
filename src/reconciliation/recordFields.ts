@@ -2,6 +2,7 @@ import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene } from './presentation'
 import { cardStatus, cardTitle } from './overviewModel'
 import { dateBucket, dateTimestamp } from '../shared/floorOrganization'
+import { ageLabel } from '../shared/workerTimestamps'
 import { checkInTime } from '../shared/checkIn'
 
 export function propertyText(card: SceneCard, name: string): string {
@@ -26,14 +27,7 @@ export function workBreadcrumb(scene: FloorScene, card: SceneCard): string {
     return ids.map(id => scene.cards.find(c => c.id === id)).map(c => c ? cardTitle(c) : 'Unassigned').join(', ')
   }).filter(Boolean).join(' / ') || 'Unassigned'
 }
-export function ageLabel(time: number, now: number): string {
-  if (!Number.isFinite(time) || time <= 0) return 'Unknown'
-  const seconds = Math.max(0, Math.floor((now - time) / 1000))
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
+export { ageLabel } from '../shared/workerTimestamps'
 export function dateLabel(value: string | null, time = value ? dateTimestamp(value) : NaN): string {
   if (!value) return 'Not set'
   if (!Number.isFinite(time)) return 'Unknown'

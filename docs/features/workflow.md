@@ -55,7 +55,7 @@ transaction or complete protection against a simultaneous direct Notion edit.
 
 For First Mate, `worker` contains `kind: "firstmate"`, `fm_home`, `task_id`, and
 `first_observed_spawn_gen`. The configured source must currently track this exact
-worker/generation and publish fresh pane/run-step or Codex turn execution evidence.
+worker/generation and publish fresh recorded run-step or session-log Codex turn execution evidence.
 Owner names, old status-log messages, bare endpoint existence and historical links
 do not authorize a new start. Stale, partial or missing source evidence stays
 unknown; no existing card is silently flipped or repaired. Exact native identity

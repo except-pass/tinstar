@@ -1,6 +1,7 @@
 import { activityTimestamp } from './workerTimestamps'
 import { checkInTime } from './checkIn'
-import { codexTurn } from './codexActivity'
+import { activeWorker } from './workerEvidence'
+export { historyRecord, activeWorker } from './workerEvidence'
 import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene, PresentationState } from './reconciliationPresentation'
@@ -42,10 +43,6 @@ export const statusName = (card: SceneCard) => String(card.source.properties.Sta
 export const cardStatusName = (card: SceneCard) => statusName(card) || unknownStatus
 export const matchesStatus = (card: SceneCard, filter: StatusFilter) => filter.preset === 'all' || (filter.preset === 'operational' ? operationalStatuses : filter.statuses).includes(statusName(card))
 export const currentStatusOptions = (scene: FloorScene) => [...new Set([...(scene.statusOptions ?? []), ...scene.cards.map(statusName)].filter(Boolean))].sort((a, b) => a.localeCompare(b))
-export const historyRecord = (worker: Execution) => codexTurn(worker.source, Date.now()) === null && (['finished', 'absent'].includes(worker.liveness) || worker.source.endpoint.exists === false ||
-  /^(?:done|landed)(?=\s|:|$)/i.test(String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')) ||
-  ['done', 'landed'].includes(String(worker.source.last_event.state)))
-export const activeWorker = (worker: Execution) => worker.kind !== 'secondmate' && !historyRecord(worker)
 
 const field = (id: FloorField) => floorFields.find(f => f.id === id)!
 const ny = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric' })
@@ -73,13 +70,13 @@ export function dateBucket(value: string | null, now: number, checkIn = false) {
   return diff <= 7 - (weekday || 7) ? 'This week' : 'Later'
 }
 type Pair = { worker?: Execution; card?: SceneCard }
-export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField): string[] {
+export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField, now = Date.now()): string[] {
   const { worker: w, card: c } = pair
   let raw: unknown
   switch (id) {
     case 'manager': raw = w ? homeLabel(scene.coverage.homes.find(h => h.source.home === w.home)?.source ?? { home: w.home }) : null; break
     case 'machine': raw = w?.placement.machine; break
-    case 'workerStatus': raw = w ? floorWorkerStatus(w) : null; break
+    case 'workerStatus': raw = w ? floorWorkerStatus(w, now) : null; break
     case 'activity': {
       const activity = w ? activityTimestamp(w) : NaN
       raw = Number.isFinite(activity) ? new Date(activity).toISOString() : null; break
@@ -131,7 +128,7 @@ export function statusProjection(scene: FloorScene, state: PresentationState, no
   )).map(c => [c.id, c])).values()]
   const workerIds = new Set(workers.map(w => w.id)), cardIds = new Set(cards.map(c => c.id))
   const links = scene.claims.filter(c => c.basis === 'explicit' && c.verification === 'confirmed' && c.state === 'current' && workerIds.has(c.executionId) && cardIds.has(c.cardId))
-  const selectedWorkers = new Set(workers.filter(w => !selection.workers.length || selection.workers.includes(floorWorkerStatus(w))).map(w => w.id))
+  const selectedWorkers = new Set(workers.filter(w => !selection.workers.length || selection.workers.includes(floorWorkerStatus(w, now))).map(w => w.id))
   const selectedCards = new Set(cards.filter(c => !selection.cards.length || selection.cards.includes(statusName(c) || unknownStatus)).map(c => c.id))
   const linkedWorkers = new Set(links.filter(c => selectedCards.has(c.cardId)).map(c => c.executionId))
   const linkedCards = new Set(links.filter(c => selectedWorkers.has(c.executionId)).map(c => c.cardId))
@@ -160,8 +157,8 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
   for (const card of cards) if (!linkedCards.has(card.id)) pairs.push({ card })
   const visibleCards = new Set(cards.map(c => c.id)), groups = new Map<string, FloorGroup>(), memberships = new Map<string, Pair[]>()
   const buckets = (pair: Pair, id: FloorField | 'none') => id === 'none' ? ['All work'] : field(id).kind === 'date'
-    ? [...new Set((floorFieldValues(scene, pair, id).length ? floorFieldValues(scene, pair, id) : [null]).map(v => dateBucket(v, now, id === 'checkIn')))]
-    : floorFieldValues(scene, pair, id).length ? [...new Set(floorFieldValues(scene, pair, id))] : ['Unassigned / Unknown']
+    ? [...new Set((floorFieldValues(scene, pair, id, now).length ? floorFieldValues(scene, pair, id, now) : [null]).map(v => dateBucket(v, now, id === 'checkIn')))]
+    : floorFieldValues(scene, pair, id, now).length ? [...new Set(floorFieldValues(scene, pair, id, now))] : ['Unassigned / Unknown']
   for (const pair of pairs) for (const outerLabel of buckets(pair, organizer.outer)) for (const innerLabel of buckets(pair, organizer.inner)) {
     if (!pair.worker && (!pair.card || !visibleCards.has(pair.card.id))) continue
     const outerId = JSON.stringify(['floor', organizer.outer, outerLabel]), id = JSON.stringify([outerId, organizer.inner, innerLabel])
@@ -199,7 +196,7 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     const localPairs = memberships.get(group.id)!
     const workerOrder = new Map<string, string | number>(), cardOrder = new Map<string, string | number>()
     const compareScalar = (a: string | number, b: string | number) => typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b))
-    if (organizer.order !== 'operational') for (const pair of localPairs) for (const value of floorFieldValues(scene, pair, organizer.order)) {
+    if (organizer.order !== 'operational') for (const pair of localPairs) for (const value of floorFieldValues(scene, pair, organizer.order, now)) {
       const kind = field(organizer.order).kind
       const scalar = kind === 'date' ? dateTimestamp(value) : kind === 'priority' ? priorityRank(value) : value
       if (typeof scalar === 'number' && !Number.isFinite(scalar)) continue
@@ -215,13 +212,13 @@ export function organizedGroups(scene: FloorScene, state: PresentationState, now
     }
     const checkIns = new Map<string, number>()
     for (const pair of localPairs) {
-      const dates = floorFieldValues(scene, pair, 'checkIn').map(dateTimestamp).filter(Number.isFinite)
+      const dates = floorFieldValues(scene, pair, 'checkIn', now).map(dateTimestamp).filter(Number.isFinite)
       if (!dates.length) continue
       const earliest = Math.min(...dates)
       for (const id of [pair.worker?.id, pair.card?.id]) if (id) checkIns.set(id, Math.min(checkIns.get(id) ?? Infinity, earliest))
     }
     const operational = (a: Execution | SceneCard, b: Execution | SceneCard, domain: 'cards' | 'workers') => {
-      const status = (entity: Execution | SceneCard) => domain === 'workers' ? floorWorkerStatus(entity as Execution) : statusName(entity as SceneCard)
+      const status = (entity: Execution | SceneCard) => domain === 'workers' ? floorWorkerStatus(entity as Execution, now) : statusName(entity as SceneCard)
       const title = (entity: Execution | SceneCard) => domain === 'workers' ? String((entity as Execution).source.backlog.title || (entity as Execution).identity.task_id || '') : String((entity as SceneCard).source.properties.Name?.value || '')
       const at = checkIns.get(a.id) ?? Infinity, bt = checkIns.get(b.id) ?? Infinity
       return Number(statusRank(status(a), domain) === 10000) - Number(statusRank(status(b), domain) === 10000) || direction * compareStatus(status(a), status(b), domain) || (at === bt ? 0 : at < bt ? -1 : 1) || title(a).localeCompare(title(b)) || a.id.localeCompare(b.id)

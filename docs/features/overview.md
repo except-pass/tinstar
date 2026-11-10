@@ -266,8 +266,11 @@ with the ordinary view preferences. Non-matches are hidden. Matches retain only
 their direct linked counterparts as secondary context; uncertain cards stay
 visible. One line above the list counts unchecked cards and names the missing
 evidence. Cards show known worker facts in their existing metadata, such as
-Worker running or Worker state unknown (codex pane); a wait's report age is
-shown only when the published event reports that same state.
+1 worker running or 1 worker, no update since 2026-11-08 12:22 UTC. Headers,
+worker chips, relationships and pattern counts share the same observed, unfinished
+worker membership; finished tasks and declared links with no observed execution
+are excluded. A stale or missing home reads home unreachable. A wait's report age
+is shown only when the published event reports that same recorded state.
 No worker requires a supported per-card execution-gap finding and fresh source
 coverage. Fresh configured homes alone do not establish absence on an unknown
 home; when absence remains unknown, the card omits that fact.
@@ -356,9 +359,11 @@ running/waiting/terminal/unknown counts, blockers, observation/coverage, explici
 `null` for unavailable runnable/resolver evidence and unpublished progress time, and per-pattern
 `match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
 Health uses the shared current-activity classification: fresh crew-state
-(`run-step` or `pane`) and the [Codex turn fallback](codex-activity.md). Historical
-status verbs and endpoint existence do not prove current activity. Floor badge
-liveness follows the [liveness contract](reconciliation-floor.md#floor-ui-s3).
+(`run-step`) and the [Codex turn fallback](codex-activity.md) from session logs.
+Pane-derived states are ignored, including apparently working or finished states.
+Status events date the last update and retain terminal outcomes; historical working
+verbs and endpoint existence do not prove current activity. The same evidence
+supplies floor chips and status categories; source details remain in diagnostics.
 This feature implements no recovery, watchdog or scheduling behavior.
 
 The inspectable builtin definitions live in `patternDefinitions`:

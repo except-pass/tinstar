@@ -275,7 +275,7 @@ it('keeps operational requests before Ask inbox records in the shared Desk', () 
   expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
-it.each(['done', 'landed'])('shows resumed Codex activity after a historical %s report', (report) => {
+it.each(['done', 'landed'])('keeps a recorded %s outcome in history despite retained Codex activity', (report) => {
   const sources = fixtureSources(), task = sources.fleet[1]!.observation.data!.tasks[0]!
   const now = Date.now()
   // Keep the home fresh independently of the quiet log's mtime.
@@ -288,9 +288,7 @@ it.each(['done', 'landed'])('shows resumed Codex activity after a historical %s 
   observed.scene = scene
   const { container } = mount()
   const worker = scene.executions.find(value => value.identity.task_id === task.id)!
-  const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)!
-  expect(element.textContent).toContain('Running')
-  expect(element.textContent).toContain('Last activity 12m ago')
-  fireEvent.click(within(element.parentElement!).getByRole('button', { name: 'Open in Inspector' }))
-  expect(screen.getByLabelText('Inspector').textContent).toContain('Last activity 12m ago')
+  const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)
+  expect(element).toBeUndefined()
+  expect(container.querySelector('.ov-history')).toHaveTextContent('Finished')
 })

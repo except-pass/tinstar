@@ -1,8 +1,6 @@
 import { freshObservation, verifiedLink, type PatternResult } from '../shared/workHealth'
 import type { FloorScene } from './presentation'
-import { ageLabel } from './recordFields'
-import { reportTimestamp } from '../shared/workerTimestamps'
-import { currentActivity } from '../shared/workReadiness'
+import { activeWorker, workerFact } from '../shared/workerEvidence'
 
 /** Unique visible cards, with positive conflicts separate from missing evidence. */
 export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<string>, now: number, readFailed = false) {
@@ -27,7 +25,7 @@ export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<stri
 export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, readFailed = false): string | null {
   const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
   const ids = new Set(links.filter(verifiedLink).map(link => link.executionId))
-  const workers = scene.executions.filter(worker => ids.has(worker.id))
+  const workers = scene.executions.filter(worker => ids.has(worker.id) && activeWorker(worker))
   if (!workers.length) {
     return !links.length && scene.findings.some(finding => finding.kind === 'task-execution-gap' && finding.cardIds.includes(cardId)) &&
       !readFailed && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
@@ -36,24 +34,11 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
   }
   const facts = new Map<string, number>()
   for (const worker of workers) {
-    const state = worker.source.current_state
     const home = scene.coverage.homes.find(home => home.source.home === worker.home)
-    const activity = currentActivity(worker, now)
-    let fact: string
-    if (readFailed || !home || !freshObservation(home.observation, now) || !freshObservation(worker.observation, now)) {
-      const age = ageLabel(Date.parse(worker.observation.observedAt ?? ''), now)
-      fact = `state unknown${age === 'Unknown' ? '' : ` · last seen ${age}`}`
-    } else if (activity === 'working') fact = 'running'
-    else if (activity === 'waiting') {
-      // Only a matching state report supplies an age; snapshot time is not the
-      // start of a wait, and an old working report cannot date a newer pause.
-      const age = ['parked', 'paused', 'blocked'].includes(String(state.state)) && worker.source.last_event.state === state.state ? ageLabel(reportTimestamp(worker), now) : 'Unknown'
-      fact = `waiting${age === 'Unknown' ? '' : ` · reported ${age}`}`
-    } else if (activity === 'terminal') fact = String(state.state)
-    else fact = `state unknown${state.source === 'pane' ? ` (${worker.source.harness ? `${worker.source.harness} ` : ''}pane)` : ''}`
+    const fact = workerFact(worker, now, home?.observation, readFailed)
     facts.set(fact, (facts.get(fact) ?? 0) + 1)
   }
-  return [...facts].map(([fact, count]) => `${count > 1 ? `${count} workers` : 'Worker'} ${fact}`).join(' · ')
+  return [...facts].map(([fact, count]) => `${count} ${count === 1 ? 'worker' : 'workers'}${/^(?:running|waiting)(?:$| ·)/.test(fact) ? ' ' : ', '}${fact}`).join(' · ')
 }
 
 /** One explanation for the unique visible cards a pattern could not check. */
@@ -66,7 +51,7 @@ export function patternCheckSummary(results: Iterable<PatternResult | undefined>
     if (/Work status is not published/i.test(reason)) return 'work status unknown'
     if (/last reported|observation |liveness not observed/i.test(reason)) return 'worker observations incomplete or stale'
     if (/Home snapshot/i.test(reason)) return 'worker snapshots unavailable or stale'
-    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'worker state unknown'
+    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'workers have no current update'
     if (/Worker decision requests/i.test(reason)) return 'worker decisions or links unknown'
     if (/accountability|source, link|assignment coverage/i.test(reason)) return 'worker links incomplete'
     if (/Runnable.*(?:coverage|unknown|availability)/i.test(reason)) return 'runnable work unknown'
