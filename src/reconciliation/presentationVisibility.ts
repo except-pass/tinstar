@@ -28,7 +28,10 @@ export function observeTargets(targets: string[], surface: 'overview' | 'decisio
 }
 export function revealTargets(targets: string[], surface: 'overview' | 'decisions' | 'other') {
   const root = document.querySelector(surface === 'decisions' ? '.decisions' : '.ov')
-  const node = [...root?.querySelectorAll<HTMLElement>('[data-semantic-id], .decisions-row[data-card-id]') ?? []].find(node => targets.includes(node.dataset.semanticId ?? `card:${node.dataset.cardId}`))
+  const nodes = [...root?.querySelectorAll<HTMLElement>('[data-semantic-id], .decisions-row[data-card-id]') ?? []].filter(node => targets.includes(node.dataset.semanticId ?? `card:${node.dataset.cardId}`))
+  // An open card detail can cover its board row; focus that actual selected
+  // representation rather than repeatedly scrolling a row behind the detail.
+  const node = nodes.find(node => node.classList.contains('ov-inspector')) ?? nodes[0]
   node?.scrollIntoView({ block: 'center', behavior: 'instant' })
   node?.focus({ preventScroll: true })
 }

@@ -324,8 +324,8 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   </>
   const composerSubject = claim && scene.claims.some(item => item.id === claim.id) ? { target: { kind: 'claim' as const, id: claim.id } } : card ? { cardId: card.id } : execution ? { target: { kind: 'execution' as const, id: execution.id } } : null
   const composerView = { scene: 'overview' as const, organizer: state.organizer, statusFilter: state.statusFilter }
-  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className="ov-inspector" aria-label="Inspector">{content}{composerSubject && <AskContextComposer subject={{ ...composerSubject, view: composerView }} />}</AskSurface>
-    : <section className="ov-inspector" aria-label="Inspector">{content}</section>
+  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className={`ov-inspector${flashRelated(view, selection) ? ' flashed' : ''}`} data-semantic-id={semanticId(selection)} tabIndex={-1} aria-label="Inspector">{content}{composerSubject && <AskContextComposer subject={{ ...composerSubject, view: composerView }} />}</AskSurface>
+    : <section className={`ov-inspector${flashRelated(view, selection) ? ' flashed' : ''}`} data-semantic-id={semanticId(selection)} tabIndex={-1} aria-label="Inspector">{content}</section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
   const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch, refresh, refreshing, lastSuccessfulSyncAt } = useDeskWorkspace()

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { SceneSessions } from '../../server/reconciliation/sessions'
 import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { usePresentation } from '../usePresentation'
-import { observeTargets } from '../presentationVisibility'
+import { observeTargets, revealTargets } from '../presentationVisibility'
 
 const scene = fixtureScene(), queue = fixtureQueue(), cardId = queue.items[0]!.cardIds[0]!
 let broker: SceneSessions, hidden = false, focused = true
@@ -83,6 +83,14 @@ describe('browser delivery and replay', () => {
     expect(latest.state.selection).toBeNull()
     expect(latest.state.flash!.until).toBeLessThan(Date.now())
     expect(broker.result(input.scene_id, input.command_id).delivery).toMatchObject({ stage: 'not-visible', pending: false, reason: 'Superseded by user interaction.' })
+  })
+  it('observes and focuses an open card Inspector when it covers the same board row', () => {
+    render(<div className="ov"><button data-semantic-id={`card:${cardId}`}>Board row</button><section className="ov-inspector" data-semantic-id={`card:${cardId}`} tabIndex={-1}>Card detail</section></div>)
+    const inspector = screen.getByText('Card detail')
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => inspector })
+    revealTargets([`card:${cardId}`], 'overview')
+    expect(inspector).toHaveFocus()
+    expect(observeTargets([`card:${cardId}`], 'overview')).toMatchObject({ stage: 'foreground-visible', visible_targets: [`card:${cardId}`], pending: false })
   })
   it('distinguishes covered DOM targets and unsupported surfaces from foreground visibility', () => {
     render(<div className="ov"><button data-semantic-id={`card:${cardId}`}>Target</button><aside>Cover</aside></div>)
