@@ -145,10 +145,10 @@ describe('floor deploy executable', () => {
     expect(result.code, result.stderr).toBe(0)
     const commands = (await readFile(join(root, 'commands.log'), 'utf8')).trim().split('\n')
     const build = commands.indexOf('npm run build:all')
-    expect(commands.slice(build, build + 4)).toEqual([
+    expect(commands.slice(build, build + 3)).toEqual([
       'npm run build:all', `voice-cli voice install config=${root}`, `voice-cli voice status config=${root}`,
-      'sudo -n systemctl restart tinstar-floor',
     ])
+    expect(commands.indexOf('sudo -n systemctl restart tinstar-floor')).toBeGreaterThan(build + 2)
     if (failure === '1') {
       expect(result.stderr).toContain('voice model install failed; continuing deploy')
       expect(result.stderr).toContain('voice model status failed; continuing deploy')

@@ -34,7 +34,7 @@ const field = (label: string, value: string, set: (value: string) => void, requi
 
 /** These forms collect consumer intent; the same backend policy serves MCP. */
 export function WorkActions({ card, onSaved, sources = [], answerOnly = false }: { answerOnly?: boolean; card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
-  const [kind, setKind] = useState<UpdateWorkInput['kind']>(answerOnly ? 'answer_decision' : 'edit')
+  const [kind, setKind] = useState<Exclude<UpdateWorkInput['kind'], 'submit_for_review' | 'accept_review' | 'request_review_changes'>>(answerOnly ? 'answer_decision' : 'edit')
   const [owner, setOwner] = useState(String(card.source.properties.Owner?.value ?? ''))
   const [status, setStatus] = useState('Queued'), [note, setNote] = useState('')
   const [property, setProperty] = useState<typeof ordinary[number]>('Name'), [value, setValue] = useState(''), [changeProperty, setChangeProperty] = useState(false)

@@ -1,6 +1,47 @@
 import { useRef, useState } from 'react'
 import { Composer, Face } from './present'
 import type { AttentionCard, Draft, OutboxMessage, SubmitResult, Worker } from './types'
+import type { ReviewItem, ReviewView } from '../../shared/reviews'
+import { apiFetch } from '../../apiClient'
+import { useWorkSave } from '../../reconciliation/WorkActions'
+
+function DeliverableReview({ item: initial, onOpen }: { item: ReviewItem; onOpen?: (id: string) => void }) {
+  const [detail, setDetail] = useState<ReviewItem | null>(null), [loadError, setLoadError] = useState<string | null>(null)
+  const item = detail ?? initial
+  async function loadEvidence() {
+    try {
+      const response = await apiFetch('/api/reconciliation/workflow', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'get', input: { card_id: item.cardId, details: true, refresh: true } }) })
+      const body = await response.json()
+      if (!response.ok || !body.ok || body.data?.outcome !== 'available' || !body.data.review) throw new Error('Current review unavailable')
+      setDetail(body.data.review); setLoadError(null)
+    } catch { setLoadError('Review evidence unavailable; open the canonical card and refresh before acting.') }
+  }
+  const [feedback, setFeedback] = useState(''), [remaining, setRemaining] = useState(''), [complete, setComplete] = useState(false)
+  const { save, busy, result } = useWorkSave(async () => {})
+  const respond = (kind: 'accept_review' | 'request_review_changes') => save({ kind, card_id: item.cardId, submission_key: item.submissionKey,
+    feedback: feedback.trim() || 'Will explicitly accepted this deliverable in Review.', remaining_scope: remaining.split('\n').map(line => line.trim()).filter(Boolean), scope_complete: complete })
+  return <article className="cockpit-attention-card cockpit-attention-review" aria-label={item.title}>
+    <div className="cockpit-attention-type"><span className="material-symbols-outlined" aria-hidden="true">rate_review</span><strong>Review Ready</strong><span>{item.status}</span></div>
+    <h3>{item.title}</h3>
+    <div className="cockpit-review-links">
+      {onOpen ? <button type="button" onClick={() => onOpen(item.cardId)}>Open card</button> : <a href={item.cardUrl} target="_blank" rel="noopener noreferrer">Open card ↗</a>}
+      {item.liveUrl && <a href={item.liveUrl} target="_blank" rel="noopener noreferrer">Open live feature ↗</a>}
+      {item.evidenceUrls.map((url, index) => <a key={url + index} href={url} target="_blank" rel="noopener noreferrer">{index ? `Screenshot ${index}` : 'Evidence'} ↗</a>)}
+    </div>
+    {item.instructions && <p>{item.instructions}</p>}
+    {item.evidenceWarning && <><p role="note">{item.evidenceWarning}</p><button type="button" onClick={() => void loadEvidence()}>Load current review evidence</button></>}
+    {loadError && <p role="alert">{loadError}</p>}
+    <label>Feedback<textarea value={feedback} onChange={event => setFeedback(event.target.value)} rows={2} /></label>
+    <label>Remaining scope (one item per line)<textarea value={remaining} onChange={event => setRemaining(event.target.value)} rows={2} /></label>
+    <label className="cockpit-review-check"><input type="checkbox" checked={complete} onChange={event => setComplete(event.target.checked)} />This card's full scope is finished; no dependencies remain.</label>
+    <small>Approval records Will's acceptance. Unfinished scope keeps the card open with Firstmate.</small>
+    <div className="cockpit-review-links">
+      <button type="button" disabled={busy} onClick={() => void respond('accept_review')}>Approve deliverable</button>
+      <button type="button" disabled={busy || !feedback.trim()} onClick={() => void respond('request_review_changes')}>Request changes</button>
+    </div>
+    {result && <p role="status">{result.message}</p>}
+  </article>
+}
 
 export const attentionLabels = { decision: 'Decision', blocked: 'Blocked', failure: 'Failure', review: 'Review Ready' } as const
 export const attentionIcons = { decision: 'help', blocked: 'front_hand', failure: 'error', review: 'rate_review' } as const
@@ -124,7 +165,9 @@ export function AttentionCardView({ card, worker, open, submit, dismissing, dism
   </article>
 }
 
-export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismissing, dismissed, dismissError, onOpen, onDismiss }: {
+export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismissing, dismissed, dismissError, onOpen, onDismiss, reviews, onCardOpen }: {
+  reviews?: ReviewView
+  onCardOpen?: (id: string) => void
   cards: AttentionCard[]
   workers: Worker[]
   errors: string[]
@@ -138,7 +181,9 @@ export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismiss
 }) {
   return <div className="cockpit-attention-list" aria-label="Needs You">
     {errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {errors.join('; ')}</p>}
+    {reviews?.warning && <p role="status">{reviews.warning}</p>}
+    {reviews?.items.map(item => <DeliverableReview key={item.submissionKey} item={item} onOpen={onCardOpen} />)}
     {cards.length ? cards.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => onOpen(card)} submit={submit} dismissing={dismissing(card)} dismissed={dismissed(card)} dismissError={dismissError(card)} onDismiss={onDismiss} />)
-      : errors.length > 0 ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
+      : errors.length > 0 || reviews?.items.length || reviews && !reviews.complete ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
   </div>
 }

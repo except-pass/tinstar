@@ -1,3 +1,5 @@
+import { reviewView } from './reviews'
+import { isReviewStatus } from '../../shared/reviews'
 import { releasePull } from '../../shared/releases'
 import { inventoryPullState, queuePulls, type PullsRead } from '../../shared/pulls'
 import type { SourceSnapshot } from './index'
@@ -155,7 +157,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       tags = tags.filter(tag => normalize(tag) !== 'merge')
       if (!tags.length && !waitingForWill) continue
     }
-    if (owner !== 'will' && !tags.length && !waitingForWill) continue
+    if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
     const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
@@ -342,6 +344,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],
     needsWill: undefined as NeedsWillItem[] | undefined, operationalExceptions: undefined as ExecutionWarning[] | undefined,
     pullCoverage: undefined as Pick<import('../../shared/pulls').PullsRead, 'repositories' | 'warnings' | 'associationsComplete'> | undefined,
+    reviews: reviewView(intentions, undefined, now),
+    reviewRecoveries: [] as Array<{ cardId: string; result: import('../../shared/workflow').StartWorkResult }>,
+    reviewExceptions: [] as import('./reviewDeployment').HandoffException[],
     items, counts: Object.fromEntries(Object.keys(rank).map(readiness => [readiness, items.filter(item => item.readiness === readiness).length])),
   }
 }
