@@ -1,3 +1,5 @@
+import { releasePull } from '../../shared/releases'
+import { inventoryPullState, queuePulls, type PullsRead } from '../../shared/pulls'
 import type { SourceSnapshot } from './index'
 import { parsePullUrl } from '../fleet/attention'
 import { sourceRequests } from '../fleet/requests'
@@ -6,9 +8,12 @@ import { ageObservation, type Observation } from './observation'
 import { reconcileScene } from './scene'
 import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
+import type { NeedsWillItem } from './needsWill'
+import type { ExecutionWarning } from './workflowViews'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  actions?: string[]
   request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
   /** Readiness and response belong to this source, never inherited from another source. */
   readiness?: QueueReadiness
@@ -61,7 +66,7 @@ const safeUrl = (value: string | null) => {
 const pulls = (item: QueueItem) => item.evidence.filter(e => e.kind === 'pull-request').map(e => e.url)
 function link(item: QueueItem, value: string | null, kind: 'card' | 'reference' = 'reference') {
   const url = safeUrl(value)
-  const pull = url ? parsePullUrl(url) : null
+  const pull = url ? releasePull(url) : null
   const canonical = pull ? `https://github.com/${pull.repository}/pull/${pull.number}` : url
   if (canonical && !item.evidence.some(e => e.url === canonical)) item.evidence.push({ url: canonical, kind: pull ? 'pull-request' : kind })
 }
@@ -102,17 +107,18 @@ function context(item: QueueItem, card: Card, observation: SourceSnapshot['inten
 }
 
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */
-export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now()) {
+export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now(), inventory: PullsRead | null = null) {
   const intentions = ageObservation(input.intentions, now)
   const fleet = input.fleet.map(home => ({ ...home, observation: ageObservation(home.observation, now) }))
   const scene = reconcileScene({ ...input, intentions, fleet }, now)
   const cards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const candidates: QueueItem[] = []
+  const resolvedMerges = new Set<QueueItem>()
   const tagOnlyCandidates = new Set<QueueItem>()
   const identities = new Map<QueueItem, string[]>()
   const explicitPulls = new Map<QueueItem, string[]>()
   const pullIds = (values: Array<string | null>) => unique(values.flatMap(value => {
-    const pull = value && parsePullUrl(value)
+    const pull = value && releasePull(value)
     return pull ? [`pr:https://github.com/${pull.repository}/pull/${pull.number}`] : []
   }))
   const blank = (id: string, title: string, action: string | null, kind: QueueItem['kind']): QueueItem => ({
@@ -122,17 +128,30 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const card of cards.values()) {
     if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
-    const tags = Array.isArray(actions) ? actions.filter((a): a is string => typeof a === 'string') : []
+    let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
     // A mention in a title is not an owner request. Tags only create candidates.
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
+    const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
+    const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
+    const resolvedMerge = tags.some(tag => normalize(tag) === 'merge') && linkedPulls.length === 1 &&
+      (inventoryPullState(linkedPulls[0]!.url, inventory) === 'not-open' || pr?.status === 'fresh' &&
+      (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed'))
+    if (resolvedMerge) {
+      tags = tags.filter(tag => normalize(tag) !== 'merge')
+      if (!tags.length && !waitingForWill) continue
+    }
     if (owner !== 'will' && !tags.length && !waitingForWill) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
-    const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, action, merge ? 'merge' : 'decision')
+    const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
+      ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
+    const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
+    if (resolvedMerge) resolvedMerges.add(item)
     context(item, card, intentions, now)
+    if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
     item.sources.push({ ...source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
-      request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
+      actions: tags, request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
     identities.set(item, [item.id])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (owner !== 'will' || !action) {
@@ -221,14 +240,24 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const verifyPull = (item: QueueItem) => {
     const urls = pulls(item)
     if (item.kind === 'merge') {
-      if (urls.length !== 1) lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
+      if (urls.length !== 1) {
+        if (inventory) item.action = 'PR state unverified'
+        lower(item, 'needs-readiness-verification', 'PR state unverified')
+        lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
+      }
       else {
+        const inventoryState = inventoryPullState(urls[0]!, inventory)
+        if (inventoryState === 'not-open') return false
+        if (inventory && inventoryState === 'unverified') {
+          item.action = 'PR state unverified'
+          lower(item, 'needs-readiness-verification', 'PR state unverified')
+        }
         const observed = pullStates.get(urls[0]!)
         const pr = observed?.expiresAt && Date.parse(observed.expiresAt) <= now ? { ...observed, status: 'stale' as const } : observed
         if (pr && !item.sources.some(source => source.kind === 'github' && source.id === urls[0])) item.sources.push({ kind: 'github', id: urls[0]!, field: 'pull/head/checks/mergeability', observedAt: pr.observedAt,
           expiresAt: pr.expiresAt, status: pr.status, coverage: pr.status === 'fresh' ? 'complete' : 'unknown' })
         if (pr?.status === 'fresh' && (pr.state === 'merged' || pr.state === 'closed')) return false
-        if (pr?.status !== 'fresh') lower(item, 'needs-readiness-verification', 'PR state/checks are unavailable or stale')
+        if (pr?.status !== 'fresh') lower(item, 'needs-readiness-verification', 'PR state unverified')
         else if (pr.draft || pr.checks === 'pending' || pr.checks === 'failed' || pr.mergeability === 'blocked') lower(item, 'future-or-conditional', 'PR is draft, blocked, or still requires passing checks')
         else if (pr.state !== 'open' || pr.checks !== 'passed' || pr.mergeability !== 'ready') lower(item, 'needs-readiness-verification', 'Current PR head/checks/mergeability do not yet prove merge readiness')
         else if (scene.executions.some(execution => item.executionIds.includes(execution.id) &&
@@ -244,8 +273,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   // cannot promote an unverified worker question into an actionable response.
   const retained: QueueItem[] = []
   for (const item of candidates) {
+    for (const pull of queuePulls(item, inventory)) link(item, pull.url)
     if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
-    const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
+    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
     if (!verifyPull(item)) continue
     for (const source of item.sources) if (source.request) Object.assign(source, { readiness: item.readiness, action: item.action, reasons: [...item.reasons] })
@@ -295,6 +325,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     coverage: { intentions: meta(intentions), fleet: fleet.map(home => ({ home: home.source.home, ...meta(home.observation) })),
       wholeFarm: 'not-certified' as const, cardBodies: 'not-collected' as const, emptyQueueMeansAllClear: false as const },
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],
+    needsWill: undefined as NeedsWillItem[] | undefined, operationalExceptions: undefined as ExecutionWarning[] | undefined,
+    pullCoverage: undefined as Pick<import('../../shared/pulls').PullsRead, 'repositories' | 'warnings' | 'associationsComplete'> | undefined,
     items, counts: Object.fromEntries(Object.keys(rank).map(readiness => [readiness, items.filter(item => item.readiness === readiness).length])),
   }
 }

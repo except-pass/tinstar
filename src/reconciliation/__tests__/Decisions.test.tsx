@@ -147,3 +147,16 @@ describe('Decisions presentation acknowledgment', () => {
     expect(result.current.send({ type: 'flash', targets: [{ kind: 'card', id: fixtureId(5) }] })?.outcome).toBe('queue-source-unavailable')
   })
 })
+
+it('uses the shared Needs Will projection and shows advisory unknowns and honest PR/request ages', () => {
+  const queue = fixtureQueue(), item = queue.items[0]!
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', requests: [], pulls: [{ id: 'example/repo#1', repository: 'example/repo', number: 1, url: 'https://github.com/example/repo/pull/1', title: 'Merge me', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-10T00:00:00Z', observedAt: '2026-11-10T00:00:00Z', freshness: 'fresh', links: [], readiness: null }] }]
+  queue.operationalExceptions = [{ cardId: fixtureId(1), title: 'Slow source card', state: 'unknown', reasons: ['Linked home snapshot expired'], sources: [] }]
+  workspace.value.queue = queue
+  render(<Decisions />)
+  expect(screen.getByText('Request age unknown')).toBeInTheDocument()
+  expect(screen.getByText(/PR opened 2026-11-01.*not request age/)).toBeInTheDocument()
+  expect(screen.getByText('Execution unknown')).toBeInTheDocument()
+  expect(screen.getByText('Linked home snapshot expired')).toBeInTheDocument()
+  expect(document.querySelectorAll('.decisions-row, .decisions-request')).toHaveLength(1)
+})

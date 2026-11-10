@@ -28,6 +28,7 @@ export class PullReader {
   private identityCache?: { until: number; data: PullActor }
   private identityPending?: Promise<PullActor>
   constructor(private read = githubJson, private now = Date.now, private readiness = new QueuePullReader()) {}
+  readinessFor(urls: string[]) { return this.readiness.get(urls) }
   async identity(): Promise<PullActor> {
     if (this.identityCache && this.identityCache.until > this.now()) return this.identityCache.data
     if (!this.identityPending) this.identityPending = (async () => {

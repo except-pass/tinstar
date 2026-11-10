@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-li
 import { fixtureQueue, fixtureScene, fixtureViewerWorkers } from '../../../test-fixtures/reconciliation/scenes'
 import { initialPresentation } from '../presentation'
 import { QueuePanel } from '../QueuePanel'
+import { requestAnchor } from '../../shared/deskSource'
 afterEach(cleanup)
 it('omits operational queue summaries and updates readiness when selected evidence expires', () => {
   const now = Date.now(), queue = fixtureQueue(now), send = vi.fn()
@@ -173,4 +174,14 @@ it.each([
     await act(async () => { fireEvent.click(retry) })
     expect(submit).toHaveBeenCalledWith({ requestId: 'original-request', kind: 'answer', text: 'Choose A' })
   }
+})
+
+it('uses projected readiness for a retained selection and its answer controls', () => {
+  const now = Date.now(), queue = fixtureQueue(now), selected = queue.items.find(item => item.readiness === 'ready-now')!
+  selected.sources = [{ kind: 'firstmate', id: 'source', field: 'hold', responseAnchor: requestAnchor({ home: '/farm/hulk', taskId: 'worker', id: 'worker', kind: 'hold' }), readiness: 'ready-now', request: { home: '/farm/hulk', taskId: 'worker', id: 'worker', kind: 'hold' }, status: 'fresh', coverage: 'complete', observedAt: null, expiresAt: null }]
+  queue.needsWill = [{ ...selected, readiness: 'needs-readiness-verification', oneTouch: false, requests: [], requestSince: null, ageBasis: 'unknown', pulls: [] }]
+  const { container } = render(<QueuePanel messages={[]} submit={vi.fn()} workers={[]} state={{ ...initialPresentation(), queueItemId: selected.id }} send={vi.fn()} queue={queue} error={null} now={now} />)
+  expect(container.querySelector('[data-queue-item-id]')).toHaveAttribute('data-queue-item-id', selected.id)
+  expect(screen.getByText('Needs verification', { selector: '.ov-eyebrow' })).toBeTruthy()
+  expect(container.querySelector('.ov-source-actions')).toBeNull()
 })

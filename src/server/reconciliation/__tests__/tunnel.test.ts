@@ -56,11 +56,13 @@ it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with th
   expect(listed.headers.get('cache-control')).toBe('no-store')
   const list = await listed.json()
   expect(list.id).toBe(7)
-  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work']))
-  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toHaveLength(13)
+  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work', 'get_work_views']))
+  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toHaveLength(14)
   expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain('present_view')
   if (version === '2026-07-28') expect(list.result).toMatchObject({ resultType: 'complete', ttlMs: 0, cacheScope: 'private' })
   else expect(list.result).not.toHaveProperty('resultType')
+  const views = await post(url, 'tools/call', version, { name: 'get_work_views', arguments: {} })
+  expect(JSON.parse((await views.json()).result.content[0].text).outcome).toBe('queue-source-unavailable')
   const called = await post(url, 'tools/call', version, { name: 'list_ui_sessions', arguments: {} })
   expect(called.status).toBe(200)
   const call = await called.json()
@@ -136,7 +138,7 @@ it('requires explicit separate caller auth and rejects forwarded identities and 
   for (const path of ['/api/reconciliation/mcp', '/api/reconciliation/ui', '/.well-known/oauth-protected-resource/mcp']) {
     expect((await fetch(new URL(path, url), { headers: { Authorization: `Bearer ${callerToken}` } })).status).toBe(404)
   }
-  expect((await client.listTools()).tools.map(tool => tool.name)).toHaveLength(15)
+  expect((await client.listTools()).tools.map(tool => tool.name)).toHaveLength(16)
   for (const name of ['echo', 'server_info', 'dispatch_worker', 'openExternal']) expect((await client.callTool({ name, arguments: {} })).isError).toBe(true)
 })
 it('read scope cannot call view tools, even by guessing a hidden name', async () => {
@@ -232,7 +234,7 @@ it('starts from the shared Authorization file and rejects invalid caller values'
         })
         const client = new Client({ name: 'cli-test', version: '1' }); clients.push(client)
         await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: value.trim() } } }))
-        expect((await client.listTools()).tools).toHaveLength(13)
+        expect((await client.listTools()).tools).toHaveLength(14)
         await client.close()
       } else {
         expect((await exited)[0]).toBe(1)

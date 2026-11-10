@@ -58,7 +58,8 @@ export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(1
 }).strict()
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
 export const workflowRules = {
-  version: 'tinstar.workflow.s2', enforced: [
+  pr_authorization: 'PR details require owner authorization through the existing trusted Tailscale ask.ownerLogins check. MCP work views retain asks with an explicit authorization placeholder.',
+  version: 'tinstar.workflow.s3', enforced: [
     'Create requires a declared Owner, Status and Area. Assignment to Firstmate is Queued until real execution.',
     'Start work requires Owner and Area and current tracked execution evidence.',
     'First Mate workers retain exact home, task and spawn-generation identities. External runs retain their system, run reference, card and authenticated reporter; their evidence is consumer-reported, not independently verified.',
@@ -70,7 +71,15 @@ export const workflowRules = {
     'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved; Only a missing note may be repaired in the same process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id; no automatic replay or restart recovery.',
     'UI and MCP use the same serialized operations and authenticated actor. Firstmate pickup is Queued only; active edits are contextual updates, never worker dispatch.',
   ],
-  later_slices: ['Computed decision view and redundant writer/poller retirement'],
+  operations: {
+    read: ['search_work: current assigned cards, independent of UI filters; history is explicit', 'get_work: exact card, properties/worker evidence and optional bounded body/comments', 'get_work_views: shared Needs Will/PR evidence and advisory execution warnings; no window required'],
+    write: ['create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (edit,assign,checkpoint,wait,request_decision,answer_decision,complete,park); use tool schema for coupled fields'],
+    decisions: 'request_decision records request_id, question, requested_from and action. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
+    checkpoints: 'checkpoint requires assessment, evidence, next_action, next_check_in, confirmation (provisional or owner-confirmed); include the original watchdog request_id when responding, and blocker when applicable. Business days 8 AM–8 PM Eastern: at most four hours; otherwise no later than 10 AM next business morning. Date-only is 9 AM Eastern; Due Date is a separate delivery deadline.',
+    repair: 'Retry identical operation_id and intent after an uncertain response. A definite result with requires_new_operation_id means refresh and explicitly re-issue. Only a missing history note can be repaired in-process while its confirmed card state is unchanged; no automatic replay.',
+  },
+  views: ['Associated PR absence suppresses only the merge ask when repository open inventory is fresh, complete and covers that identity: all-open, or authored-or-associated with an active association. Unknown scope and Link/Evidence-only identities outside the scope remain PR state unverified with unknown readiness and no extra lookup. Partial/stale/unavailable coverage retains it as PR state unverified. This infers not-open, never merged, delivered or complete; no extra PR lookups or history are added.', 'Needs Will requires a current explicit ask; green PRs alone do not create merge permission. Request age is unknown unless request history supplies a timestamp; PR creation is labelled separately.', 'In Progress warnings inspect linked sources with their existing freshness windows. Stale or missing evidence is unknown, never stranded. Warnings do not mutate or block existing cards.'],
+  retained_dependencies: ['First Mate owns worker dispatch/supervision and its inbox. Tin Star owns pickup/update notices and the mechanical check-in watchdog.', 'The Mac poller and duplicate PM Bot monitors are retired by their owners only after guarded live feed validation. No paused routine is restarted; PM Bot reasoning/reporting remains.'],
 }
 export interface StartWorkResult {
   outcome: 'saved' | 'not-saved' | 'partially-saved'

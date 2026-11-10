@@ -942,3 +942,57 @@ it.each(['brief', 'acceptance_criteria'] as const)('adopts unknown cold-start bo
   await feed.sweep(true)
   expect((await feed.bridgeWork()).pending).toEqual(unknown)
 })
+
+it('serves one current Needs Will projection through UI and authenticated MCP without a window and shares cached comment/property reads', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'tinstar-views-')); roots.push(root)
+  f.raw.properties['Will action'].multi_select = []
+  f.raw.properties['Waiting For'].rich_text = []
+  const sources = f.sources(root)
+  sources.readPulls = async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true })
+  sources.readPullReadiness = async () => new Map()
+  const request = await sources.updateWork({ kind: 'request_decision', card_id: id, operation_id: 'new-view-request', request_id: 'choose-one', question: 'Accept the implementation evidence?', requested_from: 'Will', action: 'Decision' }, 'Clawson')
+  expect(request.outcome).toBe('saved')
+  const beforeBodyReads = f.requests.filter(request => request.url.includes('/blocks/')).length
+  const view = await sources.queue()
+  expect(view.needsWill).toHaveLength(1)
+  expect(view.needsWill?.[0]).toMatchObject({ action: 'Accept the implementation evidence?', ageBasis: 'request-history', requests: [expect.objectContaining({ id: 'choose-one', answered: false })] })
+  const count = f.requests.length
+  expect((await sources.queue()).needsWill).toEqual(view.needsWill)
+  expect(f.requests).toHaveLength(count)
+  expect(f.requests.filter(request => request.url.includes('/blocks/'))).toHaveLength(beforeBodyReads)
+  const mcp = new ReconciliationMcp(sources, root)
+  const server = createServer(async (req, res) => { if (await mcp.handle(req, res)) return; await handleReconciliationRequest(sources, req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
+  seedOriginAllowlist(port)
+  const restricted = await (await fetch(`${base}/api/reconciliation/queue`)).json()
+  expect(restricted.data.needsWill).toEqual(view.needsWill)
+  expect(restricted.data.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+  const ui = await (await fetch(`${base}/api/reconciliation/queue`, { headers: { 'X-Tinstar-UI': '1' } })).json()
+  const client = new Client({ name: 'offline-consumer-view', version: '1' }); clients.push(client)
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
+  const read = await client.callTool({ name: 'get_work_views', arguments: {} })
+  const agent = JSON.parse((read.content as Array<{ text: string }>)[0]!.text)
+  expect(agent.needsWill).toEqual(ui.data.needsWill)
+  expect(agent.operationalExceptions).toEqual(ui.data.operationalExceptions)
+  expect(mcp.sessions.list()).toEqual([])
+  const answer = await sources.updateWork({ kind: 'answer_decision', card_id: id, operation_id: 'answer-view-request', request_id: 'choose-one', answer: 'Accept the evidence; queue the next assignment.', next: { owner: 'Firstmate', status: 'Queued' } }, 'Tin Star UI')
+  expect(answer.outcome).toBe('saved')
+  expect((await sources.queue()).needsWill).toEqual([])
+})
+
+it('requests readiness for active association-only PRs through the shared queue', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'tinstar-associated-view-')); roots.push(root)
+  const sources = f.sources(root), snapshot = fixtureSources({ now: Date.now() })
+  const card = snapshot.intentions.data!.cards[0]!
+  card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Merge'], hasMore: false }
+  const url = 'https://github.com/except-pass/tinstar/pull/100'
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  sources.authorizePulls = async () => true
+  sources.readPulls = async () => ({ pulls: [{ id: 'except-pass/tinstar#100', repository: 'except-pass/tinstar', number: 100, url, title: 'Associated PR', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), observedAt: new Date().toISOString(), freshness: 'fresh', links: [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }] }], repositories: [], warnings: [], associationsComplete: true })
+  const read = vi.fn(async () => new Map())
+  sources.readPullReadiness = read
+  const view = await sources.queue()
+  expect(read).toHaveBeenCalledWith([url])
+  expect(view.needsWill?.find(item => item.cardIds.includes(card.id))?.pulls).toEqual([expect.objectContaining({ url, readiness: null })])
+})

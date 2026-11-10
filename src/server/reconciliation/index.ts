@@ -21,12 +21,19 @@ import { externalWorkers, searchWorkSchema, getWorkSchema, type StartWorkInput, 
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
 import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
+import { executionWarnings } from './workflowViews'
+import { needsWill } from './needsWill'
+import { inventoryPullState, type PullsRead } from '../../shared/pulls'
+import type { PullReadiness } from './queuePulls'
 
 export type SourceSnapshot = Omit<Awaited<ReturnType<ReconciliationSources['snapshot']>>, 'diagnostics'>
 export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['intentions'] }
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
+  authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
+  readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
+  readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private fleet
@@ -164,12 +171,35 @@ export class ReconciliationSources {
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
-  async queue() {
-    const snapshot = await this.snapshot()
-    const candidates = buildQueue(snapshot)
+  async queue(req?: IncomingMessage) {
+    const authorized = !!await this.authorizePulls?.(req)
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
-    return buildQueue(snapshot, await this.queuePulls.get(urls))
+    const readableUrls = urls.filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
+    const states = authorized ? await (this.readPullReadiness?.(readableUrls) ?? this.queuePulls.get(readableUrls)) : new Map<string, PullReadiness>()
+    if (authorized && pullRead) for (const url of urls) if (inventoryPullState(url, pullRead) === 'unverified') {
+      states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
+    }
+    const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
+    // Detail reads are demand-only for this view, share the normal cache/limiter,
+    // and are bounded independently of the property census. Unknown history is
+    // disclosed; it never becomes a fabricated request age or answer.
+    const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
+      contexts.set(id, await this.context.commentDetails(id))
+    }))
+    if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
+    if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
+    const scene = this.reconciler.project(snapshot)
+    queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized)
+    queue.operationalExceptions = executionWarnings(scene)
+    if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
+    else if (!authorized) queue.warnings.push('PR details require owner authorization')
+    else queue.warnings.push('PR state unverified: inventory unavailable; explicit asks are retained without a verified waiting-on-merge conclusion.')
+    return workReadback(queue)
   }
 }
 
@@ -177,7 +207,7 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   const path = (req.url ?? '').split('?')[0] ?? ''
   if (!['/api/reconciliation/sources', '/api/reconciliation/scene', '/api/reconciliation/queue', '/api/reconciliation/card-context'].includes(path)) return false
   const allowlist = currentOriginAllowlist()
-  const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Cache-Control': 'no-store' }
+  const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Cache-Control': 'no-store', 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI' }
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
@@ -188,5 +218,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue(req) : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

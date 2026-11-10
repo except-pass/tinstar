@@ -196,3 +196,70 @@ it('explicitly re-issues a partial save after a direct edit, card-changed respon
   expect(reissued.input.properties).toEqual({ Priority: 'High' })
   expect(reissued.input.note).toBe('Raise priority')
 })
+
+it('keeps the original watchdog request and blocker in a human checkpoint', async () => {
+  const card = fixtureScene().cards[0]!
+  card.checkInRequest = { requestId: 'a9567a39-65c8-4ee1-968d-164570640373', originalCheckpoint: '2026-11-10T12:00:00Z', state: 'requested', requestedAt: '2026-11-10T12:01:00Z', answered: false }
+  vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', saved_fields: ['Next check-in'], message: 'Checkpoint saved' } })))
+  render(<WorkActions card={card} onSaved={vi.fn(async () => {})} />)
+  fill('Operation', 'checkpoint'); fill('Assessment', 'Tests pass; owner acceptance remains'); fill('Evidence', 'Fixture evidence is available'); fill('Next action', 'Inspect the result'); fill('Next check-in (date or timestamp with timezone)', '2026-11-10T15:00:00-05:00'); fill('Blocker / owner (optional)', 'Waiting for owner approval')
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalledTimes(1))
+  const input = updateWorkSchema.parse(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body)).input)
+  expect(input).toMatchObject({ checkpoint: { request_id: card.checkInRequest.requestId, blocker: 'Waiting for owner approval' } })
+})
+
+it('offers open requests while retaining legacy source selection and excluding answered history', () => {
+  render(<WorkActions card={fixtureScene().cards[0]!} onSaved={vi.fn()} sources={[
+    { id: 'open', text: 'Question: Choose deployment time\nTin Star request: {"id":"open-one","action":"Decision","preserve_action":false}' },
+    { id: 'closed', text: 'Question: Old answered question\nTin Star request: {"id":"closed-one","action":"Decision","preserve_action":false}' },
+    { id: 'answer', text: 'Tin Star answer: "closed-one"' },
+    { id: 'legacy', text: 'Legacy merge request' },
+  ]} />)
+  fill('Operation', 'answer_decision')
+  expect(screen.getByRole('option', { name: 'Question: Choose deployment time' })).toHaveValue('open-one')
+  expect(screen.getByRole('option', { name: 'Legacy merge request' })).toHaveValue('legacy')
+  expect(screen.queryByRole('option', { name: 'Question: Old answered question' })).not.toBeInTheDocument()
+})
+
+it.each([
+  { initial: undefined, current: 'request-one', edit: undefined },
+  { initial: 'request-one', current: 'request-two', edit: undefined },
+  { initial: 'request-one', current: undefined, edit: undefined },
+  { initial: undefined, current: 'request-two', edit: 'human-request' },
+  { initial: 'request-one', current: 'request-two', edit: '' },
+])('keeps checkpoint display, submission and retry intent aligned across $initial to $current with edit $edit', async ({ initial, current, edit }) => {
+  const original = structuredClone(fixtureScene().cards[0]!)
+  const indicator = (requestId: string | undefined) => requestId === undefined ? undefined : {
+    requestId, originalCheckpoint: '2026-11-10T12:00:00Z', state: 'requested' as const, requestedAt: '2026-11-10T12:01:00Z', answered: false,
+  }
+  original.checkInRequest = indicator(initial)
+  const refreshed = { ...original, checkInRequest: indicator(current) }
+  const fetcher = vi.mocked(apiFetch)
+  fetcher.mockImplementation(async () => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', message: 'Save unconfirmed', saved_fields: [] } })))
+  const onSaved = vi.fn(async () => {})
+  const view = render(<WorkActions card={original} onSaved={onSaved} />)
+  fill('Operation', 'checkpoint')
+  fill('Assessment', 'Current assessment'); fill('Evidence', 'Fixture evidence'); fill('Next action', 'Review result')
+  fill('Next check-in (date or timestamp with timezone)', '2026-11-10T15:00:00-05:00')
+  expect(screen.getByLabelText('Check-in request ID (optional)')).toHaveValue(initial ?? '')
+  if (edit !== undefined) fill('Check-in request ID (optional)', edit)
+  const submit = async (count: number) => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(count))
+  }
+  const input = (index: number) => JSON.parse(String(fetcher.mock.calls[index]![1]!.body)).input
+  await submit(1)
+  const first = input(0)
+  view.rerender(<WorkActions card={refreshed} onSaved={onSaved} />)
+  const expected = edit ?? current ?? ''
+  expect(screen.getByLabelText('Check-in request ID (optional)')).toHaveValue(expected)
+  await submit(2)
+  const second = input(1)
+  expect(second.checkpoint.request_id).toBe(expected || undefined)
+  if ((edit ?? initial ?? '') === expected) expect(second).toEqual(first)
+  else expect(second.operation_id).not.toBe(first.operation_id)
+  view.rerender(<WorkActions card={{ ...refreshed }} onSaved={onSaved} />)
+  await submit(3)
+  expect(input(2)).toEqual(second)
+})

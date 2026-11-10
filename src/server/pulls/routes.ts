@@ -25,6 +25,7 @@ async function configuredRepositories(root: string): Promise<string[] | null> {
 /** Read-only artifact projection. Uses the exact Releases association store and join. */
 export class PullsApi {
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader()) {}
+  readiness(urls: string[]) { return this.reader.readinessFor(urls) }
   private async scope() {
     const scene = await this.sources.scene(), warnings: string[] = []
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true
@@ -44,7 +45,7 @@ export class PullsApi {
     const identity = await this.reader.identity()
     const reads = await this.reader.inventory(repositories, { ...identity, associated })
     const links = new Map(associations.pulls.map(pull => [pull.id, pull.links]))
-    return { account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
+    return { associations: auditAvailable ? associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0).map(({ id, repository, number, url, links }) => ({ id, repository, number, url, links })) : [], account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
       repositories: reads.map(read => read.coverage), warnings: [...warnings, ...(identity.authenticatedActor ? [`Authenticated as ${identity.authenticatedActor}; review author ${identity.account}. Repositories outside its verified installations are unavailable; no ambient-login fallback.`] : []), ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }
   }
   async origin(url: string) {
@@ -67,6 +68,17 @@ export class PullsApi {
       })),
     }
   }
+  async authorized(req?: IncomingMessage): Promise<boolean> {
+    if (!req) return false
+    let ownerLogins: string[] = []
+    try {
+      const config = JSON.parse(await readFile(join(this.root, 'config.json'), 'utf8'))
+      ownerLogins = askConfigSchema.parse(config.ask).ownerLogins
+    } catch { ownerLogins = [] }
+    const peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
+    const login = req.headers['tailscale-user-login']
+    return (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && ownerLogins.includes(login)
+  }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
     if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files', '/api/pulls/origin'].includes(url.pathname)) return false
@@ -75,14 +87,7 @@ export class PullsApi {
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
     if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'PR Operations is read-only; use GET.', { headers })
-    let ownerLogins: string[] = []
-    try {
-      const config = JSON.parse(await readFile(join(this.root, 'config.json'), 'utf8'))
-      ownerLogins = askConfigSchema.parse(config.ask).ownerLogins
-    } catch { ownerLogins = [] }
-    const peer = (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '')
-    const login = req.headers['tailscale-user-login']
-    if (!(peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !ownerLogins.includes(login)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for PR Operations.', { headers })
+    if (!await this.authorized(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for PR Operations.', { headers })
     try {
       if (url.pathname === '/api/pulls/origin') return ok(res, await this.origin(url.searchParams.get('url') ?? ''), { headers })
       if (url.pathname !== '/api/pulls') {

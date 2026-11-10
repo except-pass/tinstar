@@ -3,6 +3,9 @@ import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { CreateWorkInput, StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
+import { decisionRequests } from '../shared/workflowRequests'
+import { workflowSaved } from './workflowSaved'
+
 type WithoutOperation<T> = T extends unknown ? Omit<T, 'operation_id'> : never
 const actions = [['edit', 'Edit / note'], ['assign', 'Assign / handoff'], ['checkpoint', 'Record checkpoint'], ['wait', 'Record wait'], ['request_decision', 'Request decision'], ['answer_decision', 'Answer decision'], ['complete', 'Complete'], ['park', 'Park']] as const
 const ordinary = ['Name', 'Area', 'Priority', 'Sub-area', 'Attention', 'Initiative', 'Epic', 'Link', 'Due Date', 'Start Date', 'Next action'] as const
@@ -20,7 +23,7 @@ function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
       const body = await response.json()
       if (!response.ok || !body.ok || !body.data) throw new Error('Workflow unavailable')
       setResult(body.data)
-      if (body.data.outcome !== 'not-saved') await onSaved(body.data).catch(() => {})
+      if (body.data.outcome !== 'not-saved') { await onSaved(body.data).catch(() => {}); workflowSaved() }
     } catch { setResult({ outcome: 'partially-saved', code: 'response-unavailable', operation_id: attempt.current.id, saved_fields: [], message: 'Save unconfirmed. Refresh, then retry; this attempt will be reused.' }) }
     finally { setBusy(false) }
   }
@@ -36,12 +39,17 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const [property, setProperty] = useState<typeof ordinary[number]>('Name'), [value, setValue] = useState(''), [changeProperty, setChangeProperty] = useState(false)
   const [brief, setBrief] = useState(''), [acceptance, setAcceptance] = useState('')
   const [evidence, setEvidence] = useState(''), [nextAction, setNextAction] = useState(''), [appointment, setAppointment] = useState(''), [confirmation, setConfirmation] = useState('provisional')
+  const [checkpointRequestOverride, setCheckpointRequest] = useState<string>(), [blocker, setBlocker] = useState('')
+  const checkpointRequest = checkpointRequestOverride ?? card.checkInRequest?.requestId ?? ''
   const [dependency, setDependency] = useState(''), [unblocks, setUnblocks] = useState(''), [followUp, setFollowUp] = useState('')
   const [requestId, setRequestId] = useState(''), [requestedFrom, setRequestedFrom] = useState('Will'), [action, setAction] = useState('Decision'), [resolvedWait, setResolvedWait] = useState(''), [legacyAction, setLegacyAction] = useState('')
   const [disposition, setDisposition] = useState(''), [workerKind, setWorkerKind] = useState('firstmate')
   const [home, setHome] = useState(''), [task, setTask] = useState(''), [generation, setGeneration] = useState('')
   const [system, setSystem] = useState(''), [run, setRun] = useState(''), [reference, setReference] = useState(''), [observed, setObserved] = useState(''), [running, setRunning] = useState(false)
   const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
+  const requests = decisionRequests(sources)
+  const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
+  const choices = sources.filter(source => !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }
@@ -51,7 +59,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
       input = { ...base, kind, ...(changeProperty ? { properties: { [property]: propValue }, expected: { [property]: card.source.properties[property]?.value ?? null } } : {}),
         ...(brief || acceptance ? { content: { ...(brief ? { brief } : {}), ...(acceptance ? { acceptance_criteria: acceptance } : {}) } } : {}), ...(note ? { note } : {}) } as UpdateWorkInput
     } else if (kind === 'assign') input = { ...base, kind, owner, status, ...(note ? { note } : {}) } as UpdateWorkInput
-    else if (kind === 'checkpoint') input = { ...base, kind, checkpoint: { assessment: note, evidence, next_action: nextAction, next_check_in: appointment, confirmation } } as UpdateWorkInput
+    else if (kind === 'checkpoint') input = { ...base, kind, checkpoint: { assessment: note, evidence, next_action: nextAction, next_check_in: appointment, confirmation, ...(checkpointRequest ? { request_id: checkpointRequest } : {}), ...(blocker ? { blocker } : {}) } } as UpdateWorkInput
     else if (kind === 'wait') input = { ...base, kind, dependency, unblocks_when: unblocks, follow_up_by: followUp, ...(note ? { note } : {}) }
     else if (kind === 'request_decision') input = { ...base, kind, request_id: requestId, question: note, action, requested_from: requestedFrom }
     else if (kind === 'answer_decision') {
@@ -76,11 +84,11 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
       {field('Brief (leave blank to preserve)', brief, setBrief, false, true)}{field('Acceptance criteria (leave blank to preserve)', acceptance, setAcceptance, false, true)}
     </>}
     {(kind === 'assign' || kind === 'answer_decision') && <>{field('Next owner', owner, setOwner)}<label>Next status<select value={status} onChange={e => setStatus(e.target.value)}><option>Queued</option><option>Todo</option><option>Backlog</option>{kind === 'answer_decision' && ['In Progress', 'Waiting For', 'Done', 'Archived'].map(state => <option key={state}>{state}</option>)}</select></label>{kind === 'assign' && <p>Assignment to Firstmate queues work. Use Start work when a tracked worker is executing.</p>}</>}
-    {kind === 'checkpoint' && <>{field('Evidence', evidence, setEvidence, true, true)}{field('Next action', nextAction, setNextAction, true, true)}{field('Next check-in (date or timestamp with timezone)', appointment, setAppointment)}<label>Appointment<select value={confirmation} onChange={e => setConfirmation(e.target.value)}><option value="provisional">Provisional</option><option value="owner-confirmed">Owner confirmed</option></select></label><p>Date-only means 9 AM Eastern. In Progress uses the board ceiling.</p></>}
+    {kind === 'checkpoint' && <>{field('Check-in request ID (optional)', checkpointRequest, setCheckpointRequest, false)}{field('Blocker / owner (optional)', blocker, setBlocker, false, true)}{field('Evidence', evidence, setEvidence, true, true)}{field('Next action', nextAction, setNextAction, true, true)}{field('Next check-in (date or timestamp with timezone)', appointment, setAppointment)}<label>Appointment<select value={confirmation} onChange={e => setConfirmation(e.target.value)}><option value="provisional">Provisional</option><option value="owner-confirmed">Owner confirmed</option></select></label><p>Date-only means 9 AM Eastern. In Progress uses the board ceiling.</p></>}
     {(kind === 'wait' || kind === 'answer_decision' && status === 'Waiting For') && <>{field('Named dependency', dependency, setDependency, true, true)}{field('What unblocks it', unblocks, setUnblocks, true, true)}{field('Who follows up', followUp, setFollowUp)}</>}
     {(kind === 'request_decision' || kind === 'answer_decision') && field('Decision request ID', requestId, setRequestId)}
     {kind === 'request_decision' && <>{field('Requested from', requestedFrom, setRequestedFrom)}{field('Will action', action, setAction)}</>}
-    {kind === 'answer_decision' && sources.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{sources.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text.slice(0, 100)}</option> })}</select></label>}
+    {kind === 'answer_decision' && choices.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{choices.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text.slice(0, 100)}</option> })}</select></label>}
     {kind === 'answer_decision' && field('Legacy action tag explicitly resolved (optional)', legacyAction, setLegacyAction, false)}
     {kind === 'answer_decision' && field('Exact wait text resolved (optional; preserves other waits)', resolvedWait, setResolvedWait, false, true)}
     {kind === 'answer_decision' && status === 'In Progress' && <>

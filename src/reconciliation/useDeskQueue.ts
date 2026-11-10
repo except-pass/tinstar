@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from '../apiClient'
+import { WORKFLOW_SAVED } from './workflowSaved'
 import type { DeskQueue } from '../shared/reconciliationQueue'
 
 export function useDeskQueue() {
@@ -8,18 +9,23 @@ export function useDeskQueue() {
   useEffect(() => {
     let stopped = false, timer: ReturnType<typeof setTimeout>, pending: AbortController | null = null
     async function read() {
-      pending = new AbortController()
-      const deadline = setTimeout(() => pending?.abort(), 60_000)
+      clearTimeout(timer)
+      pending?.abort()
+      const controller = new AbortController()
+      pending = controller
+      const deadline = setTimeout(() => controller.abort(), 60_000)
       try {
-        const res = await apiFetch('/api/reconciliation/queue', { signal: pending.signal })
+        const res = await apiFetch('/api/reconciliation/queue', { signal: controller.signal, headers: { 'X-Tinstar-UI': '1' } })
         const body = await res.json()
         if (!res.ok || !body.ok || !Array.isArray(body.data?.items)) throw new Error('queue unavailable')
-        if (!stopped) { setQueue(body.data); setError(null) }
-      } catch { if (!stopped) setError('Queue source unavailable; retained items are last-known. Readiness requires verification.') }
-      finally { clearTimeout(deadline); if (!stopped) timer = setTimeout(() => void read(), 20_000) }
+        if (!stopped && pending === controller) { setQueue(body.data); setError(null) }
+      } catch { if (!stopped && pending === controller) setError('Queue source unavailable; retained items are last-known. Readiness requires verification.') }
+      finally { clearTimeout(deadline); if (!stopped && pending === controller) timer = setTimeout(() => void read(), 20_000) }
     }
+    const refresh = () => { void read() }
+    window.addEventListener(WORKFLOW_SAVED, refresh)
     void read()
-    return () => { stopped = true; clearTimeout(timer); pending?.abort() }
+    return () => { window.removeEventListener(WORKFLOW_SAVED, refresh); stopped = true; clearTimeout(timer); pending?.abort() }
   }, [])
   return { queue, error }
 }
