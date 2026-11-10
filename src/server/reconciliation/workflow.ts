@@ -412,9 +412,10 @@ export class WorkflowOperations {
         if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
       }
       if (candidates.has_more === false) return
-      if (candidates.has_more !== true || typeof candidates.next_cursor !== 'string' || !candidates.next_cursor || cursors.has(candidates.next_cursor)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
-      cursor = candidates.next_cursor
-      cursors.add(cursor)
+      const nextCursor = candidates.next_cursor
+      if (candidates.has_more !== true || typeof nextCursor !== 'string' || !nextCursor || cursors.has(nextCursor)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+      cursor = nextCursor
+      cursors.add(nextCursor)
     }
   }
   private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown> }): Promise<StartWorkResult> {
