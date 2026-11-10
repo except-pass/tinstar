@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { AskAction, AskSuggestion } from '../shared/ask-actions'
-import type { AskSelectionInput } from '../shared/ask'
+import type { AskSelectionInput, AskItem } from '../shared/ask'
 import { sendSuggestedMerge, type SuggestedMergeCard, type SuggestedMergeAttempt } from './suggestedMerge'
 import './ask-actions.css'
 
@@ -12,6 +12,8 @@ import './ask-actions.css'
 export class AskSelectionRejected extends Error {}
 export interface AskActionDelivery {
   status: 'sent' | 'delivered' | 'answered' | 'failed'
+  outcome?: AskItem['outcome']
+  merge_selection?: AskItem['merge_selection']
   error?: string | null
 }
 export interface AskActionSelectionState extends AskActionDelivery { action_id: string }
@@ -19,12 +21,14 @@ export interface AskActionsProps {
   answerId: string
   suggestions: AskSuggestion[]
   recommendedActionId?: string
+  decision?: boolean
   disabled?: boolean
   superseded: boolean
   selection?: AskActionSelectionState | null
   onSelect: (input: AskSelectionInput) => Promise<AskActionDelivery>
 }
 const statusLabel = { sent: 'Requested', delivered: 'Delivered', answered: 'Result received', failed: 'Failed' } as const
+export const actionDeliveryLabel = (delivery: AskActionDelivery) => delivery.outcome ? ({ acting: 'Acting', completed: 'Completed', blocked: 'Blocked', failed: 'Failed' } as const)[delivery.outcome] : statusLabel[delivery.status]
 interface Attempt { input: AskSelectionInput; delivery?: AskActionDelivery; uncertain?: boolean; rejection?: string }
 interface MergeClick { actionId: string; sending?: boolean; error?: string; sent?: SuggestedMergeCard }
 
@@ -33,7 +37,7 @@ export function AskActions(props: AskActionsProps) {
   return <ActionChoices key={props.answerId} {...props} />
 }
 
-function ActionChoices({ answerId, suggestions, superseded, selection, onSelect, recommendedActionId, disabled = false }: AskActionsProps) {
+function ActionChoices({ answerId, suggestions, superseded, selection, onSelect, recommendedActionId, disabled = false, decision = false }: AskActionsProps) {
   const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [merge, setMerge] = useState<MergeClick | null>(null)
   const locked = useRef(false)
@@ -45,14 +49,14 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
   const selectedId = selection?.action_id ?? attempt?.input.action_id
   const selected = actions.find(action => action.id === selectedId)
   const delivery = selection ?? attempt?.delivery
-  const uncertain = !selection && attempt?.uncertain
+  const uncertain = selection?.merge_selection ? !selection.merge_selection.receipt : !selection && attempt?.uncertain
   const unavailable = disabled || superseded || !!selectedId || !!merge?.sent || !!merge?.sending
 
   async function select(action: AskAction) {
     // The ref closes the same-event double-click window before React rerenders.
     // Unknown acknowledgements keep the key and chosen action for reconciliation.
-    if (disabled || locked.current || superseded || selection || merge?.sent || merge?.sending) return
-    if (action.merge) {
+    if (disabled || locked.current || superseded || selection && !uncertain || merge?.sent || merge?.sending) return
+    if (action.merge && !decision) {
       locked.current = true
       const mergeAttempt = mergeOps.current.get(action.id) ?? { operationId: crypto.randomUUID() }
       mergeOps.current.set(action.id, mergeAttempt)
@@ -65,7 +69,7 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
       return
     }
     if (attemptRef.current && attemptRef.current.input.action_id !== action.id) return
-    if (attemptRef.current && !attemptRef.current.uncertain) return
+    if (attemptRef.current && !attemptRef.current.uncertain && !uncertain) return
     locked.current = true
     const current: Attempt = { input: attemptRef.current?.input ?? { answer_id: answerId, action_id: action.id, client_key: crypto.randomUUID() } }
     attemptRef.current = current
@@ -100,9 +104,10 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
     {merge?.error && <><p role="alert">Merge request unconfirmed. Retry this choice.</p><details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{merge.error}</p></details></>}
     {merge?.sent && <p role="status">{merge.sent.message} <a href={merge.sent.url} target="_blank" rel="noreferrer">Open Clawson card ↗</a></p>}
     {selected && <div className="ask-action-selection">
-      <p role="status">{delivery ? statusLabel[delivery.status] : attempt?.rejection ? 'Blocked · Request unavailable' : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}</p>
+      <p role="status">{delivery ? actionDeliveryLabel(delivery) : attempt?.rejection ? 'Blocked · Request unavailable' : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}</p>
       {(attempt?.rejection || delivery?.error) && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{attempt?.rejection ?? delivery?.error}</p></details>}
-      {delivery?.status === 'answered' && <p className="ask-action-explanation">First Mate replied in this conversation. Read the reply for the outcome.</p>}
+      {delivery?.merge_selection?.receipt && <p><a href={delivery.merge_selection.receipt.url} target="_blank" rel="noreferrer">Open Clawson card ↗</a></p>}
+      {!delivery?.outcome && delivery?.status === 'answered' && <p className="ask-action-explanation">First Mate replied in this conversation. Read the reply for the outcome.</p>}
       {uncertain && !superseded && <button type="button" className="ask-action-choice" onClick={() => { void select(selected) }}>Retry same selection</button>}
     </div>}
   </div>

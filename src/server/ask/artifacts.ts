@@ -5,7 +5,7 @@ import type { PullSummary, PullsRead } from '../../shared/pulls'
 import type { ReleasesRead } from '../../shared/releases'
 import { AskNotFound } from './store'
 
-export interface AskArtifactSources { actionReceipt?: (id: string) => Promise<ActionReceipt | undefined>; pulls: () => Promise<PullsRead>; releases: () => Promise<ReleasesRead>; pullOrigin?: (url: string) => Promise<PullSummary>; pullRelationships?: (id: string) => Promise<AskContext['relationships']> }
+export interface AskArtifactSources { sendMerge?: (input: import('../../shared/clawsonMerge').ClawsonMergeInput, actor: string) => Promise<import('../../shared/workflow').StartWorkResult>; actionReceipt?: (id: string) => Promise<ActionReceipt | undefined>; pulls: () => Promise<PullsRead>; releases: () => Promise<ReleasesRead>; pullOrigin?: (url: string) => Promise<PullSummary>; pullRelationships?: (id: string) => Promise<AskContext['relationships']> }
 /** Only records in the existing authorized projections may become Ask origins.
  * Captured field text and head are hints; the source observation is server-owned. */
 export async function artifactContext(target: ArtifactAskTarget, view: AskView, fields: { element?: AskElement; field_key?: AskField; field_value?: string }, sources: AskArtifactSources): Promise<AskContext> {

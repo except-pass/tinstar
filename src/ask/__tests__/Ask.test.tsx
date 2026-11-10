@@ -1239,3 +1239,26 @@ it('counts unread answers and current actions separately from quiet list members
   expect(screen.getByRole('button', { name: /New answer.*Unread question/ })).toBeVisible()
   expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 2')
 })
+
+it('keeps decision Discussion choices through explanations and disables them for a newer work proposal', async () => {
+  const { AskProvider, AskDesk } = await import('../Ask')
+  const { initialPresentation } = await import('../../reconciliation/presentation')
+  const { fixtureProposal } = await import('../../../test-fixtures/reconciliation/decisionProposal')
+  const first = seed(), explanation = seed()
+  const requestKey = 'discussion-request'
+  first.context = { ...first.context, target: { kind: 'decision', id: requestKey }, view: { scene: 'decisions' } }
+  const proposal = { ...fixtureProposal(requestKey, fixtureId(1)), source: { kind: 'ask-reply' as const, id: first.request_id, revision: '1' } }
+  first.reply!.decision_proposal = proposal
+  explanation.context = first.context
+  explanation.conversation_id = first.conversation_id
+  explanation.question = 'Why this option?'
+  explanation.reply!.summary = 'It reduces operational burden.'
+  records = [first, explanation]
+  const renderDesk = (decisionItems?: typeof queue.items) => <AskProvider decisionItems={decisionItems} scene={scene} state={initialPresentation()} send={vi.fn()} onReturn={vi.fn()}><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const view = render(renderDesk())
+  fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
+  expect(await screen.findByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  const newer = { ...proposal, proposal_id: 'new-work', supersedes: proposal.proposal_id, source: { kind: 'firstmate-request' as const, id: 'work', revision: '2' } }
+  view.rerender(renderDesk([{ ...queue.items[0]!, id: requestKey, proposal: { answer_id: crypto.randomUUID(), value: newer } }]))
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+})

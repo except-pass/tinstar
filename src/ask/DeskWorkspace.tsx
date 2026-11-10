@@ -99,7 +99,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
   const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
-    <AskProvider onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
+    <AskProvider decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
       if (destination.section === 'overview') search.remember()
       if (onNavigate) onNavigate(destination)
       else if (destination.section === 'overview') {

@@ -1016,6 +1016,84 @@ describe('request-bound decision workbench', () => {
     queue.needsWill = [{ ...item, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }, { ...item, id: 'exact-request-b', proposal: undefined, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }]
     return queue
   }
+  it('reuses an implicit owner/request thread across row questions, reloads and retries', async () => {
+    const { call, reload } = await setup(undefined, publishedQueue())
+    const body = { target: { kind: 'decision', id: 'exact-request-a' }, view: { scene: 'decisions' }, question: 'Why this route?', client_key: randomUUID() }
+    const first = (await call('requests', body)).data.data
+    reload()
+    const nextInput = { ...body, question: 'Please explain the tradeoff', client_key: randomUUID() }
+    const next = (await call('requests', nextInput)).data.data
+    expect(next).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: first.request_id })
+    reload()
+    expect((await call('requests', nextInput)).data.data.request_id).toBe(next.request_id)
+    const foreign = (await call('requests', { ...body, client_key: randomUUID() }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).data.data
+    expect(foreign.conversation_id).not.toBe(first.conversation_id)
+    const sibling = (await call('requests', { ...body, client_key: randomUUID(), target: { kind: 'decision', id: 'exact-request-b' } })).data.data
+    expect(sibling.conversation_id).not.toBe(first.conversation_id)
+    expect((await call('requests', { ...body, client_key: randomUUID(), follow_up_to: sibling.request_id })).status).toBe(409)
+  })
+
+  it.each(['work', 'ask'])('retains the %s proposal after an explanatory reply', async source => {
+    const queue = publishedQueue(), { call, bridge } = await setup(undefined, queue)
+    const item = queue.needsWill![0]!
+    const body = { target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' }, question: 'Recommend a route', client_key: randomUUID() }
+    let answerId = item.proposal!.answer_id
+    if (source === 'ask') {
+      answerId = (await call('requests', body)).data.data.request_id
+      await bridge({ request_id: answerId, note: { ...note(answerId), id: 'proposal-note' } })
+      const proposal = { ...item.proposal!.value, proposal_id: answerId, source: { kind: 'ask-reply', id: answerId, revision: '1' }, supersedes: item.proposal!.value.proposal_id }
+      await bridge({ request_id: answerId, reply: { id: 'proposal-note', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: answerId, summary: 'Recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })
+    }
+    const explanation = (await call('requests', { ...body, question: 'Why this option?', client_key: randomUUID() })).data.data
+    await bridge({ request_id: explanation.request_id, note: { ...note(explanation.request_id), id: 'explanation-note' } })
+    await bridge({ request_id: explanation.request_id, reply: { id: 'explanation-note', cursor: '2', at: new Date().toISOString(), body: 'It reduces the operational burden.' } })
+    const choice = await call('selections', { answer_id: answerId, action_id: 'proceed', client_key: randomUUID() })
+    expect(choice.status).toBe(200)
+    expect(choice.data.data).toMatchObject({ conversation_id: explanation.conversation_id, action_selection: { answer_id: answerId } })
+  })
+
+  it.each(['acting', 'completed', 'blocked', 'failed', undefined])('persists only a structured execution outcome: %s', async outcome => {
+    const queue = publishedQueue(), { call, bridge, reload } = await setup(undefined, queue)
+    const selected = (await call('selections', { answer_id: queue.needsWill![0]!.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() })).data.data
+    await bridge({ request_id: selected.request_id, note: note(selected.request_id) })
+    const body = outcome ? JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: selected.request_id, summary: 'Execution receipt', detail: '', references: [], suggested_actions: [], outcome }) : 'Completed. Acting. Blocked. Failed.'
+    expect((await bridge({ request_id: selected.request_id, reply: { id: 'note-1', cursor: '1', at: new Date().toISOString(), body } })).status).toBe(200)
+    reload()
+    const saved = (await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === selected.request_id)
+    expect(saved.status).toBe('answered')
+    expect(saved.outcome).toBe(outcome)
+  })
+
+  it('records merge membership and head before dispatch and recovers the same operation after restart', async () => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17', head = 'b'.repeat(40)
+    item.proposal!.value.actions[0]!.merge = { pr_url: pr }
+    const origin = vi.fn(async () => ({ id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: pr, state: 'open' as const, title: 'Ready', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }))
+    const sendMerge = vi.fn<NonNullable<AskArtifactSources['sendMerge']>>().mockRejectedValueOnce(new Error('Lost acknowledgement')).mockImplementation(async input => ({ outcome: 'saved', code: 'already-saved', message: 'Recovered', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }))
+    const { call, bridge, reload } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()), pullOrigin: origin, sendMerge }, queue)
+    const input = { answer_id: item.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    expect((await call('selections', { ...input, action_id: 'forged' })).status).toBe(404)
+    expect(sendMerge).not.toHaveBeenCalled()
+    item.readiness = 'needs-readiness-verification'
+    expect((await call('selections', input)).status).toBe(409)
+    expect(origin).not.toHaveBeenCalled()
+    item.readiness = 'ready-now'
+    expect((await call('selections', input, {})).status).toBe(403)
+    expect((await call('selections', input)).status).toBe(503)
+    const saved = (await call('requests')).data.data.find((row: { action_selection?: unknown }) => row.action_selection)
+    expect(saved).toMatchObject({ status: 'sent', merge_selection: { input: { operation_id: saved.action_selection.selection_id, targets: [{ url: pr, head }] } } })
+    expect((await bridge()).data.data.pending).toHaveLength(0)
+    reload()
+    const recovered = await call('selections', { ...input, client_key: randomUUID() })
+    expect(recovered.status).toBe(200)
+    expect(recovered.data.data).toMatchObject({ request_id: saved.request_id, status: 'delivered', merge_selection: { receipt: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } } })
+    expect(sendMerge.mock.calls[1]).toEqual(sendMerge.mock.calls[0])
+    expect(origin).toHaveBeenCalledTimes(1)
+    reload()
+    await call('selections', input)
+    expect(sendMerge).toHaveBeenCalledTimes(2)
+    expect((await call('selections', { ...input, action_id: 'defer', client_key: randomUUID() })).status).toBe(409)
+  })
+
   it('captures the publication into the same Ask thread and converges authenticated retries without closing the queue', async () => {
     const queue = publishedQueue(), { call, bridge, decisionKeys, decisionAuthorization } = await setup(undefined, queue)
     const target = { kind: 'decision', id: 'exact-request-a' }, view = { scene: 'decisions', request_key: target.id, query: 'route' }

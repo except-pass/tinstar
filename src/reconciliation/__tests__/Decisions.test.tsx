@@ -591,6 +591,15 @@ it('keeps an Ask publication read-only until its source snapshot matches the ref
   record.context.decision.revision = decisionRequestRevision(item)
   await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
   expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  const explanation = { ...record, request_id: '22222222-2222-4222-a222-222222222222', question: 'Why this option?', reply: { summary: 'An explanation', detail: '', references: [], suggested_actions: [] } }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record, explanation] }))))
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  const selection = { ...explanation, request_id: '33333333-3333-4333-a333-333333333333', outcome: 'completed', action_selection: { selection_id: '44444444-4444-4444-a444-444444444444', answer_id: id, action_id: 'proceed', instruction: 'Proceed', label: 'Proceed', actor: 'owner', selected_at: new Date().toISOString() } }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record, explanation, selection] }))))
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(screen.queryByText('Awaiting your choice')).toBeNull()
+  expect(screen.getAllByText('Completed')).toHaveLength(2)
 })
 
 

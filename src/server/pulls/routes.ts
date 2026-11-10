@@ -13,7 +13,7 @@ import { PullReader } from './reader'
 import { PullFilesReader } from './files'
 import type { AskContext } from '../../shared/ask'
 import { pullContext } from '../../shared/pullContext'
-import { clawsonMergeSchema } from '../../shared/clawsonMerge'
+import { clawsonMergeSchema, type ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { prepareClawsonMerge } from './clawsonMerge'
 import { actionBody } from '../actions/routes'
 import type { WorkflowOperations } from '../reconciliation/workflow'
@@ -29,6 +29,14 @@ async function configuredRepositories(root: string): Promise<string[] | null> {
 /** PR projection and owner handoffs. Uses the shared Releases associations and workflow writer. */
 export class PullsApi {
   constructor(private sources: Pick<ReconciliationSources, 'scene'> & { workflow?: WorkflowOperations }, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader(), private prepareMerge = prepareClawsonMerge) {}
+  async sendMerge(input: ClawsonMergeInput, actor: string) {
+    if (new Set(input.targets.map(target => releasePull(target.url)?.id)).size !== input.targets.length) throw new Error('Select each PR once.')
+    if (!this.sources.workflow) throw new Error('Card creation is unavailable.')
+    return this.sources.workflow.createClawsonMerge(input, actor, async () => {
+      for (const target of input.targets) await this.origin(target.url)
+      return this.prepareMerge(input, actor)
+    })
+  }
   readiness(urls: string[]) { return this.reader.readinessFor(urls) }
   private async scope() {
     const scene = await this.sources.scene(), warnings: string[] = []
@@ -113,14 +121,7 @@ export class PullsApi {
       if (url.pathname === '/api/pulls/clawson-merge') {
         if (req.method !== 'POST' || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'BAD_REQUEST', 'Use the Send to Clawson button.', { headers })
         const input = clawsonMergeSchema.parse(await actionBody(req))
-        if (new Set(input.targets.map(target => releasePull(target.url)?.id)).size !== input.targets.length) throw new Error('Select each PR once.')
-        if (!this.sources.workflow) throw new Error('Card creation is unavailable.')
-        const actor = req.headers['tailscale-user-login'] as string
-        const result = await this.sources.workflow.createClawsonMerge(input, actor, async () => {
-          // The same configured, owned/authored/associated scope used for PR reads.
-          for (const target of input.targets) await this.origin(target.url)
-          return this.prepareMerge(input, actor)
-        })
+        const result = await this.sendMerge(input, req.headers['tailscale-user-login'] as string)
         if (!result.card) return fail(res, 'CONFLICT', result.message, { headers, details: { code: result.code } })
         return ok(res, { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }, { headers })
       }

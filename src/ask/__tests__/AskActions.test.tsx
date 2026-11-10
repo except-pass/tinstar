@@ -228,3 +228,24 @@ describe('Ask recommendation buttons', () => {
     expect(container).toBeEmptyDOMElement()
   })
 })
+
+ it('routes decision merges through the saved selection boundary and restores their receipt', async () => {
+  const merge = { id: 'merge', label: 'Request merge', instruction: 'Request this merge', merge: { pr_url: 'https://github.com/owner/repo/pull/17' } }
+  const onSelect = vi.fn<AskActionsProps['onSelect']>(async () => ({ status: 'delivered' as const }))
+  vi.stubGlobal('fetch', vi.fn())
+  const view = render(<AskActions {...props({ decision: true, suggestions: [merge], onSelect })} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Request merge: Request this merge' }))
+  await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1))
+  expect(onSelect.mock.calls[0]).toEqual([{ answer_id: answerId, action_id: 'merge', client_key: expect.any(String) }])
+  expect(fetch).not.toHaveBeenCalled()
+  view.unmount()
+  render(<AskActions {...props({ decision: true, suggestions: [merge], onSelect, selection: { action_id: 'merge', status: 'delivered', merge_selection: { input: { operation_id: answerId, targets: [{ url: merge.merge.pr_url, head: 'a'.repeat(40) }] }, receipt: { url: 'https://www.notion.so/card', message: 'Sent to Clawson' } } } })} />)
+  expect(screen.getByRole('link', { name: 'Open Clawson card ↗' })).toHaveAttribute('href', 'https://www.notion.so/card')
+  expect(screen.getByRole('button')).toBeDisabled()
+})
+
+it.each(['acting', 'completed', 'blocked', 'failed'] as const)('renders the observed %s outcome', outcome => {
+  render(<AskActions {...props({ selection: { action_id: close.id, status: 'answered', outcome } })} />)
+  expect(screen.getByRole('status')).toHaveTextContent({ acting: 'Acting', completed: 'Completed', blocked: 'Blocked', failed: 'Failed' }[outcome])
+  expect(screen.queryByText('Result received')).toBeNull()
+})

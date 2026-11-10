@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
+import { currentDecisionProposal } from '../../shared/decisionProposal'
+import { clawsonMergeSchema } from '../../shared/clawsonMerge'
 import { decisionContext, decisionFresh, decisionRevision } from './decision'
 import { findSuggestedAction } from '../../shared/ask-actions'
 import { getConfigRoot } from '../configRoot'
@@ -137,7 +139,7 @@ export class AskApi {
             if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
             if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
             if (answer.published_proposal && (item.proposal?.answer_id !== answer.request_id || JSON.stringify(item.proposal.value) !== JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
-            if (!answer.published_proposal && item.proposal && (item.proposal.value.supersedes === proposal.proposal_id || Date.parse(item.proposal.value.published_at) > Date.parse(proposal.published_at))) throw new AskConflict('A newer work publication supersedes this answer')
+            if (!answer.published_proposal && item.proposal && currentDecisionProposal([{ answer_id: answer.request_id, value: proposal }, item.proposal])?.answer_id !== answer.request_id) throw new AskConflict('A newer work publication supersedes this answer')
             if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
             return findSuggestedAction(proposal.actions, actionId)
           }
@@ -148,8 +150,18 @@ export class AskApi {
           if (!item?.proposal) return undefined
           if (!decisionFresh(item)) throw new AskConflict('Published request needs refresh')
           return { context: decisionContext(item, { scene: 'decisions' }), proposal: item.proposal.value }
+        }, async (action, operationId) => {
+          if (!this.artifacts?.pullOrigin || !this.artifacts.sendMerge) throw new AskConflict('Merge handoff unavailable')
+          const pull = await this.artifacts.pullOrigin(action.merge!.pr_url)
+          return clawsonMergeSchema.parse({ operation_id: operationId, targets: [{ url: action.merge!.pr_url, head: pull.head }] })
         })
-        return ok(res, publicAsk(selected), { headers })
+        const delivered = selected.merge_selection ? await this.store.deliverMerge(login, selected.request_id, async input => {
+          if (!this.artifacts?.sendMerge) throw new AskConflict('Merge handoff unavailable')
+          const result = await this.artifacts.sendMerge(input, login)
+          if (!result.card) throw new Error(result.message)
+          return { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }
+        }) : selected
+        return ok(res, publicAsk(delivered), { headers })
       }
       if (path === '/api/ask/requests' && req.method === 'POST') {
         const input = askCreateSchema.parse(await readBody(req))

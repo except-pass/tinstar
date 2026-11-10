@@ -29,3 +29,8 @@ export const decisionRequestRevision = (item: Pick<import('../server/reconciliat
   // the original First Mate/Notion request identity used by ordinary questions.
   item.sources.filter(source => source.kind !== 'github').map(source => JSON.stringify([source.id, source.request, source.question ?? source.action, source.generation])).sort(),
 ])
+
+export function currentDecisionProposal<T extends { answer_id: string; value: DecisionProposal }>(candidates: T[]): T | undefined {
+  return candidates.filter(candidate => !candidates.some(other => other !== candidate && other.value.supersedes === candidate.value.proposal_id))
+    .sort((a, b) => Date.parse(a.value.published_at) - Date.parse(b.value.published_at)).at(-1)
+}
