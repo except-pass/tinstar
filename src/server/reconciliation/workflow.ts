@@ -214,11 +214,12 @@ export class WorkflowOperations {
       if (input.note) note += `\n${input.note}`
     } else if (input.kind === 'checkpoint') {
       const cp = input.checkpoint, next = this.validateCheckpoint(card, cp.next_check_in)
+      const proseLine = (value: string) => value.replace(/\s*[\r\n]+\s*/g, ' ')
       reads.add('Status')
       // Normalize meaning so Notion timezone/format rendering cannot reject a save.
       set('Next check-in', new Date(next).toISOString())
       if (card.properties['Next action']) set('Next action', cp.next_action)
-      note = `${cp.request_id ? `Check-in request: ${cp.request_id}\n` : ''}Date: ${at}\nBy: ${actor}\nProgress: ${cp.assessment}\nEvidence: ${cp.evidence}\nBlocker/owner: ${cp.blocker ?? 'none'}\nNext action: ${cp.next_action}\nNext check-in: ${new Date(next).toISOString()}\nAppointment: ${cp.confirmation}`
+      note = `${cp.request_id ? `Check-in request: ${cp.request_id}\n` : ''}Date: ${at}\nBy: ${actor}\nProgress: ${proseLine(cp.assessment)}\nEvidence: ${proseLine(cp.evidence)}\nBlocker/owner: ${proseLine(cp.blocker ?? 'none')}\nNext action: ${proseLine(cp.next_action)}\nNext check-in: ${new Date(next).toISOString()}\nAppointment: ${cp.confirmation}`
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const requests = notes.flatMap(note => note.text.split('\n').filter(line => line.startsWith('Tin Star request: ')).flatMap(line => {
         try { const row = JSON.parse(line.slice('Tin Star request: '.length)); return typeof row.id === 'string' && typeof row.action === 'string' ? [row as { id: string; action: string; preserve_action: boolean }] : [] } catch { return [] }

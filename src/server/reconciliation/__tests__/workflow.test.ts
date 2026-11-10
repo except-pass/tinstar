@@ -1,3 +1,4 @@
+import { checkInReport } from '../checkInWatchdog'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -570,4 +571,25 @@ it.each(['conflict', 'card-changed', 'readback-mismatch'])('marks definite %s re
   const writes = f.requests.filter(r => ['POST', 'PATCH'].includes(r.method)).length
   expect(await f.workflow.update(input, 'Owner')).toEqual(result)
   expect(f.requests.filter(r => ['POST', 'PATCH'].includes(r.method))).toHaveLength(writes)
+})
+
+it.each(['\n', '\r\n', '\r'])('saves multiline checkpoint prose that round-trips through the watchdog verifier (%j)', async newline => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture()
+  f.raw.properties['Next action'] = { type: 'rich_text', rich_text: [] }
+  const requestId = '11111111-1111-4111-8111-111111111111'
+  const checkpoint = {
+    request_id: requestId, assessment: `Done${newline}Build and tests passed`, evidence: `None${newline}Fixture build and test receipts`,
+    blocker: `None${newline}Owner acceptance pending`, next_action: `Review${newline}Confirm output`,
+    next_check_in: '2026-11-10T17:00:00Z', confirmation: 'owner-confirmed',
+  }
+  expect(await f.workflow.update({ card_id: id, operation_id: 'multiline-checkpoint', kind: 'checkpoint', checkpoint } as UpdateWorkInput, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+  const savedNote = f.comments.at(-1).rich_text.map((part: any) => part.text.content).join('')
+  expect(checkInReport(savedNote, requestId)).toEqual({
+    'Check-in request': requestId, Date: '2026-11-10T15:00:00.000Z', By: 'Firstmate',
+    Progress: 'Done Build and tests passed', Evidence: 'None Fixture build and test receipts',
+    'Blocker/owner': 'None Owner acceptance pending', 'Next action': 'Review Confirm output', 'Next check-in': '2026-11-10T17:00:00.000Z',
+  })
+  expect((await f.reader.card(id, true)).properties['Next action']!.value).toBe(checkpoint.next_action)
+  expect(checkInReport(savedNote, '22222222-2222-4222-8222-222222222222')).toBeNull()
 })
