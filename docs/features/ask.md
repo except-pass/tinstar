@@ -330,10 +330,8 @@ Instructions are inert text and are never executed by Tin Star.
 A recommendation may also carry one optional `merge` object, exactly
 `{ "pr_url": "https://github.com/owner/repo/pull/1" }`. No head SHA and no other
 fields. The installed puller forwards that object inside the reply body unchanged.
-When the owner clicks that button, Tin Star does not open an operator request and
-does not merge. It reads the pull request at click time and uses the same
-Clawson handoff as [Send selected PRs to Clawson](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
-One click writes one card for that head, or shows the refusal with no card.
+For click behavior, head binding, refusals and retries, see
+[Send selected PRs to Clawson](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
 A malformed `merge` value is omitted like any other invalid suggestion and
 returned in `reply_warnings`; the owner does not see the rejection text.
 Historical string suggestions still display as inert text.
@@ -485,6 +483,9 @@ be retrieved, ask for it before relying on the missing content. Pending batches
 account for outer JSON escaping and stay below the installed puller's 2 MiB read
 bound. The store remains the only persisted conversation source; private frozen
 bodies and retry-key aliases never enter browser records.
+
+Recommendations without `merge` use the operator-request flow below; merge
+recommendations use the [Clawson handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
 
 The shared selected-action seam is
 `AskStore.createActionSelection(owner, {answer_id, action_id, client_key}, lookupAction)`.

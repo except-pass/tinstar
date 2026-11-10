@@ -107,10 +107,15 @@ the exact owner and operation receipt; an unconfirmed creation is never repeated
 Fresh preflight is required before a new creation. Tin Star
 does not execute these commands; the installed-action Merge restrictions above still apply.
 
-A First Mate suggested action uses this same handoff when it includes
-`merge: { "pr_url": "https://github.com/owner/repo/pull/N" }`. The suggestion
-does not carry a head. The owner’s click reads that pull request then, and this
-route binds the head it just read. The same refusals apply: a red, pending,
-draft, merged, or conflicting pull request produces no card and a plain
-explanation. The thread shows the card link after a successful click. One click
-writes one card. An action without `merge` stays an ordinary recommendation.
+A First Mate suggested action with the optional `merge` target documented in the
+[Ask reply format](features/ask.md#outbound-only-mac-puller) uses this same handoff
+instead of creating an operator request. The owner’s initial click reads the PR
+and binds its head. The same preflight and card authority apply. The thread shows
+the card link after success or an explanation on refusal. Tin Star does not merge.
+
+Within the mounted answer, retries reuse the operation ID. An uncertain outcome,
+including an unreadable response or `create-unconfirmed`, retains and replays the
+posted URL and head without another GitHub read. A definite refusal clears that
+payload so the next click reads the PR again under the same operation ID. Receipt
+lookup failures are unconfirmed outcomes; definite preflight refusals remain
+refusals.
