@@ -196,3 +196,28 @@ it('explicitly re-issues a partial save after a direct edit, card-changed respon
   expect(reissued.input.properties).toEqual({ Priority: 'High' })
   expect(reissued.input.note).toBe('Raise priority')
 })
+
+it('keeps the original watchdog request and blocker in a human checkpoint', async () => {
+  const card = fixtureScene().cards[0]!
+  card.checkInRequest = { requestId: 'a9567a39-65c8-4ee1-968d-164570640373', originalCheckpoint: '2026-11-10T12:00:00Z', state: 'requested', requestedAt: '2026-11-10T12:01:00Z', answered: false }
+  vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', saved_fields: ['Next check-in'], message: 'Checkpoint saved' } })))
+  render(<WorkActions card={card} onSaved={vi.fn(async () => {})} />)
+  fill('Operation', 'checkpoint'); fill('Assessment', 'Tests pass; owner acceptance remains'); fill('Evidence', 'Fixture evidence is available'); fill('Next action', 'Inspect the result'); fill('Next check-in (date or timestamp with timezone)', '2026-11-10T15:00:00-05:00'); fill('Blocker / owner (optional)', 'Waiting for owner approval')
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(vi.mocked(apiFetch)).toHaveBeenCalledTimes(1))
+  const input = updateWorkSchema.parse(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body)).input)
+  expect(input).toMatchObject({ checkpoint: { request_id: card.checkInRequest.requestId, blocker: 'Waiting for owner approval' } })
+})
+
+it('offers open requests while retaining legacy source selection and excluding answered history', () => {
+  render(<WorkActions card={fixtureScene().cards[0]!} onSaved={vi.fn()} sources={[
+    { id: 'open', text: 'Question: Choose deployment time\nTin Star request: {"id":"open-one","action":"Decision","preserve_action":false}' },
+    { id: 'closed', text: 'Question: Old answered question\nTin Star request: {"id":"closed-one","action":"Decision","preserve_action":false}' },
+    { id: 'answer', text: 'Tin Star answer: "closed-one"' },
+    { id: 'legacy', text: 'Legacy merge request' },
+  ]} />)
+  fill('Operation', 'answer_decision')
+  expect(screen.getByRole('option', { name: 'Question: Choose deployment time' })).toHaveValue('open-one')
+  expect(screen.getByRole('option', { name: 'Legacy merge request' })).toHaveValue('legacy')
+  expect(screen.queryByRole('option', { name: 'Question: Old answered question' })).not.toBeInTheDocument()
+})

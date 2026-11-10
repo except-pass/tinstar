@@ -25,6 +25,7 @@ async function configuredRepositories(root: string): Promise<string[] | null> {
 /** Read-only artifact projection. Uses the exact Releases association store and join. */
 export class PullsApi {
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader()) {}
+  readiness(urls: string[]) { return this.reader.readinessFor(urls) }
   private async scope() {
     const scene = await this.sources.scene(), warnings: string[] = []
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], auditAvailable = true

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { workflowSaved } from './workflowSaved'
 import { apiFetch } from '../apiClient'
 import type { FloorScene } from '../shared/reconciliationPresentation'
 import type { StartWorkInput, StartWorkResult } from '../shared/workflow'
@@ -27,7 +28,7 @@ export function StartWork({ cardId, scene, onSaved }: { cardId: string; scene: F
       if (!response.ok || !body.ok || !body.data) throw new Error(body.error?.message ?? 'Start work unavailable')
       const saved = body.data as StartWorkResult
       setResult(saved)
-      if (saved.outcome !== 'not-saved') await onSaved(saved).catch(() => {})
+      if (saved.outcome !== 'not-saved') { await onSaved(saved).catch(() => {}); workflowSaved() }
     } catch { setResult({ outcome: 'partially-saved', code: 'response-unavailable', operation_id: attempt.current.input.operation_id, saved_fields: [], message: 'Not confirmed saved. Refresh the card, then retry; the same attempt will be reused.' }) }
     finally { setBusy(false) }
   }

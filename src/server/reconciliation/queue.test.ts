@@ -623,14 +623,15 @@ it('serves queue through the same read-only HTTP boundary and never calls domain
   seedOriginAllowlist(address.port)
   const url = `http://127.0.0.1:${address.port}/api/reconciliation/queue`
   try {
-    const response = await fetch(url)
+    expect((await fetch(url)).status).toBe(403)
+    const response = await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.json()).toMatchObject({ ok: true, data: { readOnly: true, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
     for (const method of ['POST', 'PATCH', 'DELETE']) expect((await fetch(url, { method })).status).toBe(400)
     expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
     expect((await fetch(url, { method: 'OPTIONS' })).status).toBe(204)
     // This home has only a read executable: a hidden write would fail this route.
-    expect((await fetch(url)).status).toBe(200)
+    expect((await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })).status).toBe(200)
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     await rm(dir, { recursive: true, force: true })

@@ -6,6 +6,8 @@ import { ageObservation, type Observation } from './observation'
 import { reconcileScene } from './scene'
 import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
+import type { NeedsWillItem } from './needsWill'
+import type { ExecutionWarning } from './workflowViews'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
@@ -122,7 +124,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const card of cards.values()) {
     if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
-    const tags = Array.isArray(actions) ? actions.filter((a): a is string => typeof a === 'string') : []
+    const tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
     // A mention in a title is not an owner request. Tags only create candidates.
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
@@ -295,6 +297,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     coverage: { intentions: meta(intentions), fleet: fleet.map(home => ({ home: home.source.home, ...meta(home.observation) })),
       wholeFarm: 'not-certified' as const, cardBodies: 'not-collected' as const, emptyQueueMeansAllClear: false as const },
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],
+    needsWill: undefined as NeedsWillItem[] | undefined, operationalExceptions: undefined as ExecutionWarning[] | undefined,
+    pullCoverage: undefined as Pick<import('../../shared/pulls').PullsRead, 'repositories' | 'warnings' | 'associationsComplete'> | undefined,
     items, counts: Object.fromEntries(Object.keys(rank).map(readiness => [readiness, items.filter(item => item.readiness === readiness).length])),
   }
 }

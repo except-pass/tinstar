@@ -98,7 +98,7 @@ Start preserves Next check-in, Due Date, asks, waits, classification and unrelat
 properties. Ordinary activity never advances appointments. Existing timezone,
 9 AM date-only, DST, ceiling, provisional/confirmed and watchdog idempotency rules
 remain with their existing helpers. `get_workflow_rules` exposes the enforced
-rules and identifies pending operations without needing separate Notion rules-page
+rules and describes supported operations without needing separate Notion rules-page
 access.
 
 ## Slice 1 delivery history
@@ -253,9 +253,146 @@ card context now includes comments. Both new tools traverse the existing
 single authenticated tunnel with the same network/credential boundary. After
 deploy, Firstmate must tell the owner to refresh the ChatGPT connector catalog.
 
-Retained for slice 3: the Mac Notion poller and PM Bot monitors/listeners,
+Retained at slice 2 delivery (see Slice 3 below): the Mac Notion poller and PM Bot monitors/listeners,
 consumer reporting/judgment, shared computed decision/Needs Will PR view and
 staged writer/poller retirement. No paused routine is restarted. The new feed's
 live deployment and poller cutover must be coordinated by Firstmate to avoid
 duplicate pickup during the staged transition. This slice does not grant merge,
 deploy, shell, worker-lifecycle or production authority.
+
+## Slice 3: shared operational views and normal use
+
+`get_work_views({})` reads the same projection as Decisions and the Desk's ready
+request navigation. It requires no open UI, window ID or inherited browser
+filter. Its `needsWill` list joins current explicit card asks (Will action, a recorded open question for Will, or a named wait on Will)
+and exact owner-routed worker requests with the existing PR Operations inventory,
+Releases associations and head/check/mergeability reader. Green PRs without a
+published owner request are evidence, not an invented merge ask. To request the
+owner's merge, record the ask through `request_decision` with the Merge action or
+an existing owner-routed worker request and the canonical PR link. No merge,
+deploy or dispatch action is exposed by this read.
+
+Answered tracked requests are excluded from the Needs Will list when complete
+request history establishes the answer; unrelated action tags and waits survive.
+An owner name alone is insufficient; a current action tag without a concrete next
+action remains a request needing readiness verification. Unavailable/partial history
+retains current explicit property asks for verification instead of inventing an
+answer. The old general queue remains work context for prerequisites and source
+requests; it is not a second Needs Will digest. Existing Ask threads and Decisions
+selection/focus/flash retain their identities and presentation behavior.
+
+Each projected item includes `requests`, `requestSince`, `ageBasis` and associated
+`pulls` with head-bound readiness. `requestSince` is the oldest **observed open
+request** timestamp from workflow history, or null. `ageBasis` is
+`request-history` or `unknown`. Card Last edited and PR Updated are never request,
+completion or decision age. PR creation is labelled separately. GitHub source
+coverage remains explicit; unavailable inventory never erases an explicit ask.
+A changed inventory head cannot inherit passing checks for another head.
+
+`operationalExceptions` is one advisory list for observed In Progress cards.
+Exact native declarations reuse the existing home/task/generation references;
+current external reports retain their consumer provenance. Each linked source
+uses its published expiry (file snapshots already allow five minutes, including
+slow publication; local collection uses its existing shorter window). Complete
+fresh source evidence of no running linked worker produces `no-running-worker`;
+stale, missing, partial, conflicting or unknown execution evidence produces
+`unknown`. An unrelated stale home cannot certify absence or hide a positively
+observed running worker. Blank/unreadable links stay unknown. These observations
+never change status, invent worker links or prevent corrective edits. They are
+not business-progress or completion judgments, and no new watchdog is introduced.
+
+The existing queue endpoint now requires the existing private UI handshake
+(`X-Tinstar-UI: 1`, trusted private peer and allowed Origin) because its projection
+includes private PR metadata. Agents use the authenticated `get_work_views` tool;
+the authenticated tunnel advertises it under the existing credential/network
+boundary. There are no consumer write modes or new permission settings.
+
+Views reuse the shared property reader, source caches/expiry, PR inventory and
+readiness caches, and comment reader/Notion limiter. No body reads are added to
+property scans. The demand-driven view inspects comments for at most twenty
+candidate cards, four at once; it explicitly discloses unavailable/uninspected
+history. Exact `get_work` reads provide further context. Shared cached source
+reads coalesce; there is no new timer, board mirror, ledger or replay/retry queue.
+Confirmed/partial human saves promptly refresh the local shared request view;
+external writes appear through the existing polling/cache refresh. Failed reads
+retain last-known data and visible source warnings.
+
+Inspector checkpoints now include the original watchdog request ID (prefilled
+when available) and optional blocker/owner context, so human responses can close
+the same request without Notion. Answer selection omits known answered requests
+while retaining legacy source IDs and explicit ID entry. Create/edit/assign,
+start (native or external), checkpoint/wait, request/answer, complete and park
+continue to use the shared backend operations described above. State changes,
+errors, partial-save/readback and selective cleanup are shared with MCP.
+
+`get_workflow_rules` now returns `tinstar.workflow.s3`: enforced responsibilities,
+operation/decision signatures, exact worker provenance, Eastern checkpoint
+ceiling/date-only semantics, confirmation, partial repair, source-unknown behavior
+and retirement ownership. Clawson and any other authenticated consumer can read
+these rules without permissions on separate Notion rules pages. MCP tool schemas
+remain the complete input contract. No consumer-specific adapter is required;
+after downtime, read current assigned cards and reconcile their current state.
+
+### Cutover ownership and staged retirement
+
+| Responsibility | Current Tin Star implementation | Owner action / retained dependency |
+| --- | --- | --- |
+| Queued Firstmate pickup and active-card updates | `FirstmateUpdates`, targeted shared reads, authenticated actor suppression, existing Ask bearer bridge/inbox | Firstmate validates live delivery, then retires its Mac poller as below. Tin Star never dispatches workers. |
+| Mechanical appointments and bounded follow-up | Existing `CheckInWatchdog`, shared reader, `update_work` checkpoint contract | Keep this watchdog and its original request IDs/idempotency/unknown behavior. Do not add another appointment monitor. |
+| Operational warnings and Needs Will/PR evidence | `ReconciliationSources.queue`, `needsWill`, `executionWarnings`, existing PR Operations/Releases readers and associations; `get_work_views` | Consumers read this one projection. Do not independently rebuild an authoritative digest from Notion plus GitHub. |
+| Consumer reasoning, digests, agendas and roadmap writing | PM Bot / each consumer | Retain human judgment/report generation. PM Bot owner pauses only duplicate Notion polling/listening/stranded/Needs Will collection when the shared projection is verified. Never restart an already paused routine. |
+| Worker creation, routing, supervision | First Mate | Retained unchanged; Tin Star reads exact published references and sends context through the existing inbox. |
+| Normal workflow writes | `WorkflowOperations` via UI/MCP; authenticated actor/readback | Consumers migrate normal writes to these tools before removing their old direct Notion writer. Direct human Notion editing remains an escape hatch. |
+
+This branch changes Tin Star only. No First Mate source/script, Mac poller,
+PM Bot schedule, MCP service or deployed configuration is modified. No external
+mechanism is claimed retired by this code change. The existing Mac poller
+`~/.local/bin/fm-notion-poller.py` remains a cutover dependency until its owner
+confirms replacement behavior on the guarded deployed release.
+
+Firstmate's exact cutover sequence:
+
+1. Merge and perform the existing guarded deployment under existing permissions;
+   read back the deployed head and MCP catalog. Have the owner refresh the
+   ChatGPT connector so `get_work_views` and the updated rules are discoverable.
+2. With authorized disposable work, record a Queued Firstmate assignment; verify
+   one pickup in First Mate's **existing** inbox. Re-observe it without duplicate
+   dispatch, leave/requeue it, and verify a legitimate new pickup. Change an
+   active card as another actor and verify a contextual coalesced update; verify
+   Firstmate's confirmed self-edit produces no wake. Read a checkpoint response
+   with its original watchdog request ID. Preserve unknown source behavior.
+3. The parent on the Mac records the current launch mechanism and its prior
+   enabled state, stops/disables only the job invoking
+   `~/.local/bin/fm-notion-poller.py` through that mechanism, and records the stop
+   and subsequent Tin Star pickup/update readback. Do not delete or edit First
+   Mate scripts. If this mechanism is launchd, the owner uses `launchctl bootout
+   gui/$(id -u) <the actual poller plist>`; obtain the actual installed plist from
+   the job owner rather than guessing a service label. No Tin Star worker runs
+   this operator command. Re-enable that previously enabled job only as an
+   explicit rollback after disabling duplicate Tin Star delivery.
+4. PM Bot's owner records the names and prior enabled/paused state of its
+   duplicate monitors/listeners, pauses those exact routines through their
+   existing scheduler, and switches their reads/writes to `get_work_views`,
+   `search_work`/`get_work` and the shared mutation tools. Retain digest/agenda/
+   roadmap judgment. The PM Bot job names/scheduler are owner-supplied deployment
+   prerequisites, not guessed configuration or a reason to restart paused jobs.
+5. Record the release/head, inbox evidence, disabled job identities, shared-view
+   readback, connector refresh and any genuinely retained dependency on the work
+   card. Remove redundant direct writers only after each consumer's replacement
+   journey works. No guaranteed event replay, central completion tracking or new
+   event service is part of this migration.
+
+Reused: shared reader/cache/limiter, workflow writer, external-worker representation,
+First Mate inbox notices, watchdog, PR Operations inventory/readiness and Releases
+associations, compact Inspector and Decisions/Desk. Removed from Tin Star: no
+still-needed mechanism; the standalone duplicated Needs Will computation is
+avoided by using one projection. Retained: consumer judgment, First Mate worker
+management, security boundaries, and owner-operated poller/monitor cutover until
+live validation. Deferred to those owners: production deployment, real-card/inbox
+acceptance, connector refresh, disabling external jobs and consumer writer migration.
+
+Slice 3 MCP catalog: added **`get_work_views`**; changed **`get_workflow_rules`**
+(output now documents the complete enforced workflow). Existing mutation/read and
+explicit-window presentation signatures remain compatible. After deployment the
+owner refreshes the ChatGPT connector catalog. The queue HTTP UI read now uses
+the existing explicit private-UI handshake as described above.
