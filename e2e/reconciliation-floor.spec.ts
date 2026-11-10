@@ -1149,7 +1149,7 @@ for (const width of [1440, 390]) test(`single-row toolbar live combined pattern 
   await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
   const geometry = await page.locator('.ov-pattern-dial button').evaluateAll(buttons => buttons.map(button => {
     const bounds = button.getBoundingClientRect()
-    const lines = [...button.querySelectorAll('.ov-pattern-value > *')].map(line => {
+    const lines = Array.from(button.querySelectorAll('.ov-pattern-value > *')).map(line => {
       const range = document.createRange()
       range.selectNodeContents(line)
       const text = range.getBoundingClientRect()
@@ -1199,7 +1199,7 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   await expect(center).toHaveText('Active 8 confirmed11 not evaluated')
   expect(await center.evaluate(element => {
     const toolbar = element.closest('.ov-toolbar')!.getBoundingClientRect()
-    return [...element.querySelectorAll('.ov-pattern-value > *')].every(line => {
+    return Array.from(element.querySelectorAll('.ov-pattern-value > *')).every(line => {
       const range = document.createRange(); range.selectNodeContents(line)
       const box = range.getBoundingClientRect()
       return box.left >= toolbar.left && box.right <= Math.min(toolbar.right, innerWidth)
