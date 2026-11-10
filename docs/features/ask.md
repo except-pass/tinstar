@@ -334,12 +334,14 @@ invalid summary falls back to the first 240 characters of the reply body, and a
 non-string detail falls back to the full bounded reply body. Only the first 20
 valid references are retained. A suggestion that fails on its own, such as a
 URL in the instruction, is omitted and the remaining valid suggestions stay
-buttons. Duplicate IDs and lists over 10 are dropped as a whole, so they create
-no buttons and cannot promote an ambiguous recommendation. Either omission
+buttons. If the remaining valid suggestions have duplicate IDs or exceed 10,
+the collection is dropped as a whole, creating no buttons and preventing an
+ambiguous recommendation from being promoted. Either omission
 cannot delay other answers in the installed puller. `reply.rejected_actions`
 records a reason for each omitted entry, with its index and string ID when
 available, or a collection-level reason when the field is not an array. Desk
-shows the answer and the valid buttons. The stored reply and later conversation
+shows the answer and the valid buttons without rejection notices or validation
+errors. The stored reply and later conversation
 history keep the rejection details. Bridge POST receipts return the same
 details in `data.reply_warnings` (including on delivery retries), so pullers
 can surface them to First Mate. The published 6.0.0 puller ignores this extra field;
