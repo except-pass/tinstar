@@ -137,7 +137,7 @@ if name == 'fm-captain-hold.sh' and (state / 'fail-hold').exists():
   }
 }
 
-for (const kind of ['keyed', 'held-work'] as const) test(`Desk is read-only for ${kind} requests and keeps its source link`, async ({ page, request }) => {
+for (const kind of ['keyed', 'held-work'] as const) test(`Decisions keeps ${kind} source controls and adds the shared Ask composer`, async ({ page, request }) => {
   const { base, notes, calls, stop } = await startCockpit(request, ['firstmate'], kind)
   try {
     await installDeskAttention(page, base)
@@ -146,8 +146,10 @@ for (const kind of ['keyed', 'held-work'] as const) test(`Desk is read-only for 
     await page.locator('.decisions-row').first().click()
     const desk = page.getByLabel('Selected decision')
     await expect(desk.getByRole('heading', { level: 2 })).toBeVisible()
+    await desk.getByText('Evidence and delivery details', { exact: true }).click()
     await expect(desk.getByRole('link', { name: 'Open source terminal' })).toHaveAttribute('href', /worker=alpha/)
-    await expect(desk.getByRole('textbox')).toHaveCount(0)
+    await expect(desk.getByRole('textbox')).toHaveCount(1)
+    await expect(desk.getByRole('button', { name: 'Record voice question' })).toHaveCount(1)
     await expect(desk.getByRole('slider')).toHaveCount(0)
     await expect(desk.getByRole('button', { name: /Answer|Dismiss|Send to First Mate/i })).toHaveCount(0)
     expect(notes()).toHaveLength(0)

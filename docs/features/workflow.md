@@ -509,6 +509,42 @@ those asks were already removed; never clear an unrelated remaining action.
 
 Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.
 
+### Decisions workbench proposals
+
+First Mate can add `proposal` to the existing `request_decision` publication. It
+uses `schema: "tinstar.decision-proposal.v1"`, a stable `proposal_id`, the exact
+queue `request_key`, optional canonical `card_id`, `question`, `rationale`,
+`recommended_action_id`, `actions: [{id,label,instruction,merge?}]`, HTTPS
+`references: [{label,url}]`, `source: {kind:"firstmate-request",id,revision}`,
+`published_at` and `supersedes` (null or the prior proposal ID). Use the existing
+`source_request` binding; the source ID identifies that request. Actions use the
+existing Ask action validation. A revision is a new publication with a new
+`request_id` and proposal ID; it supersedes the prior proposal for that exact ask.
+Legacy options and freeform text retain their existing behavior.
+
+Ask replies may carry the same `decision_proposal` object with
+`source.kind: "ask-reply"` and `source.id` equal to their existing request/answer
+ID. Ask's selection input remains `{answer_id,action_id,client_key}`. Publications
+in work history resolve to a durable source-derived answer ID. At selection time
+the server verifies current queue membership, source binding/generation, proposal
+revision, freshness and owner authorization, then imports the publication into
+the same request's Ask thread and records the ordinary idempotent selection.
+Importing a publication never invents an owner message or sends it to First Mate.
+The selection is the only new outbound turn. Unknown delivery retains its key;
+retrying or choosing from a second device converges on the original selection.
+No choice marks a card Done, changes its owner/status, or dismisses the queue.
+
+Decisions uses the existing Ask provider and text/voice composer. Its context
+and return locator carry the exact request key, including for unlinked requests.
+Full conversation opens that same persistent Discuss thread; Return to source
+restores Decisions and its search, closing the mobile Discuss sheet. Resolving a contextual Ask scopes the existing queue projection to that request so unrelated card histories do not delay the turn. Source text, receipts and diagnostics remain
+available through the compact disclosures. Stale or unknown evidence disables
+recommendation buttons while retaining the last-known proposal and source links.
+
+The MCP catalog changes only by the additive optional `request_decision.proposal`
+field; refresh the connector once to discover it. No tools are added.
+`search_work` owner/status filters and `coverage.intentions` are unchanged.
+
 ## One-call approved implementation handoffs
 
 `submit_handoff` extends the same authenticated MCP facade and

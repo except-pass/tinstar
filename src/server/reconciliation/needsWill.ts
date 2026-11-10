@@ -1,3 +1,5 @@
+import { proposalAnswerId } from '../ask/decision'
+import { requestAnchor } from '../../shared/deskSource'
 import type { QueueItem, buildQueue } from './queue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import type { CardContextRead } from './cardContext'
@@ -40,8 +42,14 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const identity = releasePull(pull.url)
       return identity && ids.has(identity.id) ? [[identity.id, { ...pull, ...identity, readiness: readiness.get(identity.url)?.head === pull.head ? readiness.get(identity.url)! : null }] as const] : []
     })).values()]
+    const published = requests.filter(request => !request.answered && request.proposal && request.proposal.request_key === item.id &&
+      (!request.proposal.card_id || item.cardIds.includes(request.proposal.card_id)) && request.sourceRequest &&
+      item.sources.some(source => source.request?.kind !== 'notion-card' && source.request && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null)))
+      .map(request => request.proposal!)
+    const superseded = new Set(published.flatMap(proposal => proposal.supersedes ? [proposal.supersedes] : []))
+    const proposal = published.filter(proposal => !superseded.has(proposal.proposal_id)).sort((a, b) => Date.parse(a.published_at) - Date.parse(b.published_at)).at(-1)
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = since.length ? since.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null
-    return [{ ...item, ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
+    return [{ ...item, ...(proposal ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
   })
 }

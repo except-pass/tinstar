@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { clampDeskWidth, defaultDeskWidth, deskWidthLimit, loadDeskPreferences, minimumDeskWidth, saveDeskPreferences } from './deskPreferences'
 import './desk.css'
 
-export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, children }: {
-  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose?: () => void; children: ReactNode
+export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, onVisibilityChange, children }: {
+  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose?: () => void; onVisibilityChange?: (visible: boolean) => void; children: ReactNode
 }) {
   const [preferences, setPreferences] = useState(loadDeskPreferences)
   const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width:850px)').matches ?? false)
@@ -13,6 +13,7 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
   const drag = useRef<{ id: number; x: number; width: number } | null>(null)
   const width = clampDeskWidth(preferences.width, available)
   const visible = narrow ? mobileOpen : !preferences.collapsed
+  useLayoutEffect(() => { onVisibilityChange?.(visible) }, [visible, onVisibilityChange])
   const open = () => setPreferences(value => value.collapsed ? { ...value, collapsed: false } : value)
   // Explicit open requests (queue navigation, PR header) never remount the inbox.
   const handledRequest = useRef(0)

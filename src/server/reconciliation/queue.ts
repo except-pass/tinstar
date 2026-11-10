@@ -16,6 +16,8 @@ import { requestText, isCoordinationRequest, displayRequestText } from '../../sh
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  question?: string
+  generation?: string | null
   actions?: string[]
   request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
   /** Readiness and response belong to this source, never inherited from another source. */
@@ -32,6 +34,7 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  proposal?: { answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }
   decisionResolution?: import('../../shared/workflow').StartWorkResult['decision_resolution']
   identities?: string[]
   id: string
@@ -219,7 +222,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (requestId && call.type !== 'blocked') item.decisionKeys.push(requestId)
-      item.sources.push({ ...source('firstmate', call.key, request.kind === 'decision' ? 'hints.open_decisions' : 'backlog.hold', observation), request,
+      item.sources.push({ question: call.headline, generation: task?.identity.spawn_gen ?? null, ...source('firstmate', call.key, request.kind === 'decision' ? 'hints.open_decisions' : 'backlog.hold', observation), request,
         ...(entry.ownerReady && request.id ? { responseAnchor: requestAnchor(request) } : {}) })
       // Readiness also depends on the Notion feed staying fresh enough to
       // verify that this request has not already been answered in its context.

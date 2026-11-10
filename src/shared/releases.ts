@@ -5,18 +5,9 @@ import type { ReleaseAutomationPlan } from './releaseAutomation'
 import type { ReleaseObject } from './releaseObjects'
 import type { SceneCard } from '../server/reconciliation/scene'
 
-export interface PullIdentity { id: string; repository: string; number: number; url: string }
-/** GitHub identity is repository + number; URLs with query/fragment retain that identity. */
-export function releasePull(value: string): PullIdentity | null {
-  try {
-    const url = new URL(value)
-    const match = /^\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d*)\/?$/.exec(url.pathname)
-    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password || !match) return null
-    const repository = `${match[1]}/${match[2]}`.toLowerCase(), number = Number(match[3])
-    if (!Number.isSafeInteger(number)) return null
-    return { id: `${repository}#${number}`, repository, number, url: `https://github.com/${repository}/pull/${number}` }
-  } catch { return null }
-}
+import { releasePull, type PullIdentity } from './pullIdentity'
+export { releasePull, type PullIdentity } from './pullIdentity'
+
 /** Existing First Mate registrations, including retained backlog records. No ownership inference. */
 export function registeredPulls(scene: FloorScene): PullIdentity[] {
   return [...scene.executions.map(worker => worker.source.pr.url), ...scene.backlog.map(row => row.source.pr_url)]

@@ -30,6 +30,7 @@ export function normalizeAskReply(content: Record<string, unknown>, body: string
     detail: typeof content.detail === 'string' ? content.detail.slice(0, 32000) : body,
     references,
     suggested_actions,
+    ...(fields.decision_proposal.safeParse(content.decision_proposal).success && content.decision_proposal ? { decision_proposal: fields.decision_proposal.parse(content.decision_proposal) } : {}),
     ...(rejectedActions.length ? { rejected_actions: rejectedActions } : {}),
     degraded: true as const,
   }

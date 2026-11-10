@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
+import { decisionContext, decisionFresh, decisionRevision } from './decision'
 import { findSuggestedAction } from '../../shared/ask-actions'
 import { getConfigRoot } from '../configRoot'
 import { ok, fail } from '../api/envelope'
@@ -48,7 +49,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -123,8 +124,31 @@ export class AskApi {
       if (path === '/api/ask/requests' && req.method === 'GET') return ok(res, (await this.store.list(login)).map(publicAsk), { headers })
       if (path === '/api/ask/selections' && req.method === 'POST') {
         const input = askSelectionInputSchema.parse(await readBody(req))
-        const selected = await this.store.createActionSelection(login, input, (answer, actionId) =>
-          findSuggestedAction(answer.reply!.suggested_actions, actionId))
+        const current = async (key: string) => {
+          const queue = await this.sources.queue?.(req, key)
+          const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === key)
+          if (!item || !decisionFresh(item)) throw new AskConflict('Request freshness is unverified; refresh before choosing')
+          return item
+        }
+        const selected = await this.store.createActionSelection(login, input, async (answer, actionId) => {
+          const proposal = answer.reply!.decision_proposal
+          if (answer.context.target?.kind === 'decision') {
+            const item = await current(answer.context.target.id)
+            if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
+            if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
+            if (answer.published_proposal && (item.proposal?.answer_id !== answer.request_id || JSON.stringify(item.proposal.value) !== JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
+            if (!answer.published_proposal && item.proposal && (item.proposal.value.supersedes === proposal.proposal_id || Date.parse(item.proposal.value.published_at) > Date.parse(proposal.published_at))) throw new AskConflict('A newer work publication supersedes this answer')
+            if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
+            return findSuggestedAction(proposal.actions, actionId)
+          }
+          return findSuggestedAction(answer.reply!.suggested_actions, actionId)
+        }, async answerId => {
+          const queue = await this.sources.queue?.(req)
+          const item = (queue?.needsWill ?? []).find(item => item.proposal?.answer_id === answerId)
+          if (!item?.proposal) return undefined
+          if (!decisionFresh(item)) throw new AskConflict('Published request needs refresh')
+          return { context: decisionContext(item, { scene: 'decisions' }), proposal: item.proposal.value }
+        })
         return ok(res, publicAsk(selected), { headers })
       }
       if (path === '/api/ask/requests' && req.method === 'POST') {
@@ -138,10 +162,29 @@ export class AskApi {
         const parent = input.follow_up_to ? await this.store.find(login, input.follow_up_to) : undefined
         if (input.follow_up_to && !parent) throw new AskNotFound('Original question unavailable')
         let context: AskContext
-        if (existing || parent) context = (existing ?? parent)!.context
+        if (existing) context = existing.context
+        else if (parent) {
+          context = parent.context
+          if (parent.context.target?.kind === 'decision') {
+            // Keep the thread's exact request and return locator while refreshing
+            // its source observation; old turns retain their original snapshot.
+            try {
+              const queue = await this.sources.queue?.(undefined, parent.context.target.id)
+              const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === parent.context.target!.id)
+              if (item) context = decisionContext(item, parent.context.view)
+              else context = { ...context, anchor: { ...context.anchor, freshness: 'unknown' } }
+            } catch { context = { ...context, anchor: { ...context.anchor, freshness: 'unknown' } } }
+          }
+        }
         else if (input.synthetic_id) {
           if (input.card_id !== '00000000000000000000000000000000') throw new AskNotFound('Synthetic Ask requires the smoke anchor')
           context = { anchor: { kind: 'work', page_id: input.card_id, label: 'Deploy smoke', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: input.view }
+        }
+        else if (input.target?.kind === 'decision') {
+          const queue = await this.sources.queue?.(undefined, input.target.id)
+          const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === input.target!.id)
+          if (!item) throw new AskNotFound('Request unavailable in the authorized queue')
+          context = decisionContext(item, input.view)
         }
         else if (isArtifactTarget(input.target)) {
           if (input.view.worker) throw new AskConflict('Worker view requires a canonical execution')

@@ -31,10 +31,11 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 }
 interface AskControls {
   scene: FloorScene | null; expanded: string | null; collapse: () => void; state: PresentationState; submit: (body: unknown) => Promise<void>; canBack?: boolean; onBack?: () => void
+  deskVisible: boolean; setDeskVisible: (visible: boolean) => void; showThread: (item: AskItem) => void
   replySeed: { conversationId: string; seed: AskSeed; key: string } | null;
   selectAction: (input: AskSelectionInput) => Promise<AskItem>
   items: AskItem[]; error: string | null; open: (subject?: AskSeed, parent?: AskItem) => void
-  returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss' | 'restore') => void
+  returnToSource: (item: AskItem) => void; returnTo: (item: AskItem) => void; action: (item: AskItem, action: 'retry' | 'dismiss' | 'restore') => void
 }
 const Controls = createContext<AskControls | null>(null)
 export const useAskControls = () => useContext(Controls)
@@ -57,7 +58,8 @@ export function AskCardAction({ cardId, subject, icon = false }: { cardId?: stri
     {icon ? <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-5 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 3-2Z" /></svg> : 'Ask First Mate about this task'}
   </button>
 }
-export function AskProvider({ scene, state, onReturn, canBack, onBack, children }: { canBack?: boolean; onBack?: () => void; scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: (origin: AskReturn) => void; children: ReactNode }) {
+export function AskProvider({ scene, state, onReturn, onSourceReturn, canBack, onBack, children }: { canBack?: boolean; onBack?: () => void; onSourceReturn?: () => void; scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: (origin: AskReturn) => void; children: ReactNode }) {
+  const [deskVisible, setDeskVisible] = useState(false)
   const [items, setItems] = useState<AskItem[]>([]), [error, setError] = useState<string | null>(null)
   const [composer, setComposer] = useState<{ seed: AskSeed; parent?: AskItem; key: string } | null>(null)
   const [replySeed, setReplySeed] = useState<AskControls['replySeed']>(null)
@@ -149,7 +151,7 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
       throw reason
     }
   }
-  return <Controls.Provider value={{ scene, state, submit, selectAction, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, action }}>{children}
+  return <Controls.Provider value={{ scene, state, deskVisible, setDeskVisible, showThread: item => { setExpanded(item.conversation_id); markRead(item) }, submit, selectAction, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, returnToSource: item => { returnTo(item); onSourceReturn?.() }, action }}>{children}
     {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
       await submit(body)
       setComposer(null)
@@ -179,7 +181,7 @@ function useDialogFocus(enabled: boolean) {
   return ref
 }
 /** One form for contextual surfaces, semantic entry points and Desk replies. */
-function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inline = false, embedded = false }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void; inline?: boolean; embedded?: boolean }) {
+function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inline = false, embedded = false, compact = false }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void; inline?: boolean; embedded?: boolean; compact?: boolean }) {
   const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.question ?? (seed.target?.kind === 'pull' && seed.target.action_receipt_id ? 'What does this action receipt establish?' : seed.field_key ? fieldDrafts[seed.field_key] : '')), [busy, setBusy] = useState(false), [voiceBusy, setVoiceBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const ref = useDialogFocus(!inline && !embedded), locked = useRef(false), titleId = useId()
   const card = scene?.cards.find(card => card.id === chosen)
@@ -203,7 +205,7 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
     } catch (reason) { setError((reason as Error).message) }
     finally { locked.current = false; setBusy(false) }
   }
-  const form = <form className="ask-composer" aria-label={inline ? 'Reply to First Mate' : embedded ? `Ask about ${label}` : 'New question'} onKeyDown={event => {
+  const form = <form className={`ask-composer${compact ? " ask-composer-compact" : ""}`} aria-label={inline ? 'Reply to First Mate' : embedded ? `Ask about ${label}` : 'New question'} onKeyDown={event => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); if (!busy) close() }
   }} onSubmit={event => {
     event.preventDefault()
@@ -214,7 +216,7 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
       {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); edited() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); edited() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
       </>}
     {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
-    <label><span className={inline ? 'ask-sr-only' : undefined}>{inline ? 'Reply to First Mate' : embedded ? `Question about ${label}` : 'Question'}</span><textarea autoFocus={!inline && !embedded || !!seed.question} required maxLength={4000} value={question} aria-busy={busy || voiceBusy} readOnly={busy || voiceBusy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Message First Mate…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
+    <label><span className={inline || compact ? 'ask-sr-only' : undefined}>{inline ? 'Reply to First Mate' : embedded ? `Question about ${label}` : 'Question'}</span><textarea autoFocus={!inline && !embedded || !!seed.question} required maxLength={4000} value={question} aria-busy={busy || voiceBusy} readOnly={busy || voiceBusy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={compact ? 'Ask First Mate about this decision…' : inline ? 'Message First Mate…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
     {error && <><p role="alert">Message could not be sent. Try again.</p><details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{error}</p></details></>}
     <VoiceInput disabled={busy || !bound} onBusyChange={setVoiceBusy} onTranscript={async transcript => {
       const next = [question.trim(), transcript].filter(Boolean).join('\n')
@@ -222,18 +224,18 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
       if (next.length > 4000) { setError('Recording added to draft. Shorten it to 4,000 characters before sending.'); return }
       await send(next)
     }} />
-    <footer>{!inline && !embedded && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" aria-label={inline ? 'Send reply' : undefined} disabled={busy || voiceBusy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send' : embedded ? 'Send to First Mate' : 'Send question'}</button></footer>
+    <footer>{!inline && !embedded && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" aria-label={compact ? 'Send question' : inline ? 'Send reply' : undefined} disabled={busy || voiceBusy || !bound || !question.trim()}>{busy ? 'Sending…' : compact ? '↑' : inline ? 'Send' : embedded ? 'Send to First Mate' : 'Send question'}</button></footer>
   </form>
   return inline || embedded ? form : <dialog ref={ref} className="ask-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!busy) close() }}>{form}</dialog>
 }
 /** Hosts supply the same canonical subject used by right-click and swipe Ask.
  * Freshness is resolved by the authenticated server, never trusted from text. */
-export function AskContextComposer({ subject }: { subject: AskSubject }) {
+export function AskContextComposer({ subject, compact = false }: { subject: AskSeed; compact?: boolean }) {
   const controls = useAskControls()
   const [clientKey] = useState(() => crypto.randomUUID())
   if (!controls) return null
   const parent = subject.followUpTo ? controls.items.find(item => item.request_id === subject.followUpTo) : undefined
-  return <div className="ask-context-composer"><AskComposer key={JSON.stringify(subject)} embedded scene={controls.scene} state={controls.state}
+  return <div className="ask-context-composer"><AskComposer key={JSON.stringify(subject)} embedded compact={compact} scene={controls.scene} state={controls.state}
     seed={subject} parent={parent} clientKey={clientKey} submit={controls.submit} close={() => undefined} /></div>
 }
 /** Resolve the fleet terminal against the same canonical scene used by Ask.
@@ -282,7 +284,7 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
   const viewport = useRef<HTMLDivElement>(null), nearBottom = useRef(true)
   // Reply timestamps can interleave with later questions. Sort message events,
   // not request pairs, and never render action selections twice.
-  const messages = turns.flatMap(turn => [{ key: `${turn.request_id}:user`, turn, sender: 'You', at: turn.action_selection?.selected_at ?? turn.created_at },
+  const messages = turns.flatMap(turn => [...(turn.published_proposal ? [] : [{ key: `${turn.request_id}:user`, turn, sender: 'You', at: turn.action_selection?.selected_at ?? turn.created_at }]),
     ...(turn.reply ? [{ key: `${turn.request_id}:reply`, turn, sender: 'First Mate', at: turn.answered_at ?? turn.created_at }] : [])])
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
   const signature = messages.map(message => message.key).join('|')
@@ -294,7 +296,7 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
   return <section className="ask-thread" id={`ask-thread-${latest.conversation_id}`} aria-label={`Answer thread: ${turns[0]!.question}`}>
     <header className="ask-thread-header"><h3>{conversationTitle(turns)}</h3><div>
       {unread && <button type="button" className="ask-thread-unread" aria-label="Read new answer" onClick={() => { controls.returnTo(latest); nearBottom.current = true; if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight }}>New answer</button>}
-      <button type="button" className="ask-source-return" aria-label="Return to source" title="Return to source" onClick={() => controls.returnTo(latest)}>↗</button>
+      <button type="button" className="ask-source-return" aria-label="Return to source" title="Return to source" onClick={() => controls.returnToSource(latest)}>↗</button>
       <button type="button" aria-label="Collapse answer" onClick={controls.collapse}>×</button>
     </div></header>
     <div className="ask-messages" ref={viewport} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64 }}>
@@ -312,7 +314,7 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
             <div {...askElement('answer', 'First Mate answer', detail.startsWith(summary) ? text : summary)}><MessageText text={detail.startsWith(summary) ? text : summary} /></div>{!detail.startsWith(summary) && detail && <div {...askElement('answer', 'Answer detail', detail)}><MessageText text={detail} /></div>}
             {!!reply.references.length && <div className="ask-message-references">{reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(reference.url) ? `Open PR #${reference.url.match(/\d+\/?$/)?.[0].replace('/', '')}` : reference.label} ↗</a>)}</div>}
             {unavailable && <p className="ask-action-unavailable">One-click action unavailable{!superseded && <button type="button" onClick={() => controls.open({ question: 'Please resend the one-click choices for your last answer.' }, latest)}>Request new choices</button>}</p>}
-            <AskActions answerId={turn.request_id} suggestions={reply.suggested_actions} superseded={superseded}
+            <AskActions answerId={turn.request_id} suggestions={reply.decision_proposal?.actions ?? (turn.context.target?.kind === 'decision' ? reply.suggested_actions.filter(action => typeof action === 'string') : reply.suggested_actions)} superseded={superseded}
               selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, error: selected.error } : null} onSelect={controls.selectAction} />
             {!!reply.rejected_actions?.length && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><pre>{JSON.stringify(reply.rejected_actions, null, 2)}</pre></details>}
           </> : <>

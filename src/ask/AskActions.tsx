@@ -18,6 +18,8 @@ export interface AskActionSelectionState extends AskActionDelivery { action_id: 
 export interface AskActionsProps {
   answerId: string
   suggestions: AskSuggestion[]
+  recommendedActionId?: string
+  disabled?: boolean
   superseded: boolean
   selection?: AskActionSelectionState | null
   onSelect: (input: AskSelectionInput) => Promise<AskActionDelivery>
@@ -31,24 +33,25 @@ export function AskActions(props: AskActionsProps) {
   return <ActionChoices key={props.answerId} {...props} />
 }
 
-function ActionChoices({ answerId, suggestions, superseded, selection, onSelect }: AskActionsProps) {
+function ActionChoices({ answerId, suggestions, superseded, selection, onSelect, recommendedActionId, disabled = false }: AskActionsProps) {
   const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [merge, setMerge] = useState<MergeClick | null>(null)
   const locked = useRef(false)
   const attemptRef = useRef<Attempt | null>(null)
   const mergeOps = useRef(new Map<string, SuggestedMergeAttempt>())
-  const actions = suggestions.filter((suggestion): suggestion is AskAction => typeof suggestion !== 'string')
+  const supplied = suggestions.filter((suggestion): suggestion is AskAction => typeof suggestion !== 'string')
+  const actions = recommendedActionId ? [...supplied.filter(action => action.id === recommendedActionId), ...supplied.filter(action => action.id !== recommendedActionId)] : supplied
   const legacy = suggestions.filter((suggestion): suggestion is string => typeof suggestion === 'string')
   const selectedId = selection?.action_id ?? attempt?.input.action_id
   const selected = actions.find(action => action.id === selectedId)
   const delivery = selection ?? attempt?.delivery
   const uncertain = !selection && attempt?.uncertain
-  const unavailable = superseded || !!selectedId || !!merge?.sent || !!merge?.sending
+  const unavailable = disabled || superseded || !!selectedId || !!merge?.sent || !!merge?.sending
 
   async function select(action: AskAction) {
     // The ref closes the same-event double-click window before React rerenders.
     // Unknown acknowledgements keep the key and chosen action for reconciliation.
-    if (locked.current || superseded || selection || merge?.sent || merge?.sending) return
+    if (disabled || locked.current || superseded || selection || merge?.sent || merge?.sending) return
     if (action.merge) {
       locked.current = true
       const mergeAttempt = mergeOps.current.get(action.id) ?? { operationId: crypto.randomUUID() }
@@ -80,14 +83,14 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
   }
 
   if (!suggestions.length) return null
-  const button = (action: AskAction) => <button key={action.id} type="button" className="ask-action-choice"
+  const button = (action: AskAction) => <button key={action.id} type="button" className={`ask-action-choice${recommendedActionId === action.id ? " is-recommended" : ""}`}
     disabled={unavailable} aria-label={`${action.label}: ${action.instruction}`} title={action.instruction}
     onClick={() => { void select(action) }}>{action.label}</button>
 
   return <div className="ask-recommendations" role="group" aria-label="Suggested next actions">
     {!!actions.length && <>
       <div className="ask-action-choices">{actions.slice(0, 3).map(button)}</div>
-      {actions.length > 3 && <details className="ask-action-overflow"><summary>More choices ({actions.length - 3})</summary>
+      {actions.length > 3 && <details className="ask-action-overflow"><summary>{recommendedActionId ? 'More options' : 'More choices'} ({actions.length - 3})</summary>
         <div className="ask-action-choices">{actions.slice(3).map(button)}</div>
       </details>}
     </>}
