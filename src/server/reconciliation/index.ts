@@ -97,8 +97,15 @@ export class ReconciliationSources {
     const keys = directNeighbors(scene, searchSeeds(scene, { query: args.query, patterns: args.patterns, facets: [] }, Date.now()))
     const cards = scene.cards.filter(card => keys.has(`card:${card.id}`)).sort((a, b) => a.id.localeCompare(b.id))
     const page = cards.slice(args.offset, args.offset + args.limit)
+    const filteredCards = new Set(cards.map(card => card.id)), links = [...scene.claims, ...scene.claimHistory]
+    const cardScoped = !!(args.owner || args.statuses || args.initiative || args.epic || args.checkpoint_before || args.patterns.length)
+    const workers = scene.executions.filter(worker => keys.has(`execution:${worker.id}`) &&
+      (!cardScoped || links.some(link => link.executionId === worker.id && filteredCards.has(link.cardId))))
     return { scope, coverage: scene.coverage, warnings: scene.warnings, total: cards.length,
-      next_offset: args.offset + page.length < cards.length ? args.offset + page.length : null,
+      next_offset: args.offset + args.limit < Math.max(cards.length, workers.length) ? args.offset + args.limit : null,
+      worker_total: workers.length, workers: workReadback(workers.slice(args.offset, args.offset + args.limit).map(worker => ({ ...worker,
+        links: links.filter(link => link.executionId === worker.id),
+        relationship_scope: 'Observed links only; unlinked is not proof of no assignment' }))),
       records: page.map(card => this.workRecord(scene, card.id)), diagnostics: { notion: this.notionApi.diagnostics } }
   }
   private workRecord(scene: ReturnType<SceneReconciler['reconcile']>, id: string) {
@@ -106,7 +113,7 @@ export class ReconciliationSources {
     const links = [...scene.claims, ...scene.claimHistory].filter(claim => claim.cardId === id)
     // Source readers already allowlist fields; redact likely credential literals
     // from ordinary properties/evidence as well as body and comments.
-    return workReadback({ card, links, external_workers: externalWorkers(card?.source.properties.Evidence?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
+    return workReadback({ card, links, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
       findings: scene.findings.filter(finding => finding.cardIds.includes(id)), health: workHealth(scene, id, Date.now()),
       omissions: 'Allowlisted source metadata only; no raw terminal transcripts or secrets. Query pages and on-demand body/comment reads have explicit bounds.',
       pull_requests: [...new Set([...(card ? Object.values(card.source.properties).map(property => String(property.value ?? '')) : []),

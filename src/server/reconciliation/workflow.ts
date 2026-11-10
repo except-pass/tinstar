@@ -16,8 +16,8 @@ const richText = (content: string) => {
   if (rich_text.length > 100) throw new Error('Worker provenance exceeds Notion property limits')
   return { rich_text }
 }
-const relevant = (card: WorkCard) => ({ owner: card.properties.Owner?.value ?? null, status: card.properties.Status?.value ?? null,
-  worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null, evidence: card.properties.Evidence?.value ?? null, area: card.properties.Area?.value ?? null })
+const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ owner: card.properties.Owner?.value ?? null, status: card.properties.Status?.value ?? null,
+  ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /** One mutation, one application implementation. No notes or second Notion
@@ -55,8 +55,8 @@ export class WorkflowOperations {
     try {
       const card = await this.reader.card(input.card_id, true)
       if (card.archived || card.in_trash) return result('not-saved', 'archived', 'Restore this card before starting work')
-      const initial = relevant(card)
-      if (input.expected && !same(input.expected, { owner: initial.owner, status: initial.status, worker_links: initial.worker_links })) return result('not-saved', 'conflict', 'Owner, Status or worker links changed; read the card and retry', card)
+      const initial = relevant(card, input.worker.kind)
+      if (input.expected && !same(input.expected, { owner: initial.owner, status: initial.status, worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null })) return result('not-saved', 'conflict', 'Owner, Status or worker links changed; read the card and retry', card)
       if (typeof initial.owner !== 'string' || !initial.owner.trim() || !initial.area || typeof initial.area === 'string' && !initial.area.trim() || Array.isArray(initial.area) && !initial.area.length) return result('not-saved', 'required-fields', 'Start work requires an existing Owner and Area; Tin Star does not infer them', card)
       const status = card.properties.Status?.type, touched = card.properties['Last touched by']?.type
       if (!['select', 'status'].includes(status ?? '') || !['select', 'rich_text'].includes(touched ?? '')) return result('not-saved', 'unsupported-properties', 'Status or Last touched by has an unsupported property type', card)
@@ -75,7 +75,6 @@ export class WorkflowOperations {
         const current = ['pane', 'run-step'].includes(String(state.source)) && state.freshness === 'fresh' && ['working', 'running', 'executing'].includes(String(state.state))
         const alive = task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' && task.endpoint.status !== 'dead'
         if (task.kind === 'secondmate' || !alive || !(current || codexTurn(task, Date.now()) === true)) return result('not-saved', 'worker-not-executing', 'Tracked worker has no current execution evidence; owner names, historical reports and waits do not establish execution', card)
-        if (task.cardReferences.some(ref => ref.pageId !== input.card_id)) return result('not-saved', 'worker-card-conflict', 'Worker references another card; reconcile the relationship before starting', card)
         const property = card.properties[FIRST_MATE_TASKS], links = property?.workerLinks
         if (property?.type !== 'rich_text' || !links || links.status !== 'valid' && !isBlankWorkerLinks(links)) return result('not-saved', 'worker-links-unreadable', 'Existing First Mate tasks cannot be safely merged; correct that property first', card)
         const tasks = links.status === 'valid' ? [...links.tasks] : []
@@ -87,18 +86,18 @@ export class WorkflowOperations {
       } else {
         const worker = input.worker, age = Date.now() - Date.parse(worker.observed_at)
         if (worker.card_id !== input.card_id || age < -30_000 || age >= 300_000) return result('not-saved', 'external-evidence-stale', 'External run must reference this card and include a current running observation within five minutes', card)
-        const evidence = card.properties.Evidence
-        if (evidence?.type !== 'rich_text' || evidence.hasMore) return result('not-saved', 'external-evidence-property', 'External worker provenance requires a readable Evidence rich-text property', card)
+        const evidence = card.properties['Delegated To']
+        if (evidence?.type !== 'rich_text' || evidence.hasMore) return result('not-saved', 'external-evidence-property', 'External worker provenance requires a readable Delegated To rich-text property', card)
         const entry = JSON.stringify({ schema: 'tinstar.external-worker.v1', ...worker, reported_by: actor })
         const old = String(evidence.value ?? '')
         const value = old.includes(entry) ? old : `${old}${old ? '\n' : ''}${entry}`
-        properties.Evidence = richText(value); desired.Evidence = value
+        properties['Delegated To'] = richText(value); desired['Delegated To'] = value
       }
       fields = Object.keys(desired)
       // Compare only fields used to validate/build this operation, not unrelated
       // edits or Last edited time. Direct edits can still race Notion PATCH.
       const current = await this.reader.card(input.card_id, true)
-      if (!same(relevant(current), initial)) return result('not-saved', 'conflict', 'Relevant card properties changed during validation; read and retry', current)
+      if (!same(relevant(current, input.worker.kind), initial)) return result('not-saved', 'conflict', 'Relevant card properties changed during validation; read and retry', current)
       if (fields.every(field => same(current.properties[field]?.value, desired[field]))) { this.reader.confirm(current); return result('saved', 'already-saved', 'Start work already saved', current, fields) }
       const config = this.reader.config!
       attempted = true

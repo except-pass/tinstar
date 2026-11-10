@@ -21,7 +21,7 @@ function fixture() {
   let raw = { object: 'page', id, parent: { data_source_id: dataSourceId }, url: `https://www.notion.so/${id}`, last_edited_time: new Date().toISOString(),
     properties: { Name: { type: 'title', title: [{ plain_text: 'Fixture start' }] }, Status: { type: 'status', status: { name: 'Queued' } },
       Owner: { type: 'select', select: { name: 'Firstmate' } }, Area: { type: 'select', select: { name: 'Engineering' } },
-      'Last touched by': { type: 'rich_text', rich_text: [] }, 'First Mate tasks': { type: 'rich_text', rich_text: [] }, Evidence: { type: 'rich_text', rich_text: [] },
+      'Last touched by': { type: 'rich_text', rich_text: [] }, 'First Mate tasks': { type: 'rich_text', rich_text: [] }, 'Delegated To': { type: 'rich_text', rich_text: [{ plain_text: 'Existing delegated consumer context' }] },
       'Will action': { type: 'multi_select', multi_select: [{ name: 'Merge' }, { name: 'Decision' }] },
       'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: 'Preserve another request' }] },
       'Next check-in': { type: 'date', date: { start: '2026-11-12' } }, Initiative: { type: 'select', select: { name: 'Tin Star' } }, Epic: { type: 'rich_text', rich_text: [{ plain_text: 'Workflow' }] } } } as Record<string, any>
@@ -48,10 +48,13 @@ function fixture() {
         if (!filter) return true
         if (filter.and) return filter.and.every(matches)
         if (filter.or) return filter.or.some(matches)
-        const prop = raw.properties[filter.property], type = prop.type, test = filter[type], value = prop[type]?.name ?? prop[type]?.map((v: any) => v.plain_text).join('')
+        const prop = raw.properties[filter.property], type = prop.type, test = filter[type]
+        // Date values are objects, not rich-text arrays. Handle the supported
+        // date filter before attempting the scalar/rich-text projection.
+        if (type === 'date') return Date.parse(prop.date.start) <= Date.parse(test.on_or_before)
+        const value = prop[type]?.name ?? prop[type]?.map((v: any) => v.plain_text).join('')
         if (test?.equals !== undefined) return value === test.equals
         if (test?.does_not_equal !== undefined) return value !== test.does_not_equal
-        if (type === 'date') return Date.parse(prop.date.start) <= Date.parse(test.on_or_before)
         return true
       }
       return json({ results: matches(body.filter) ? [raw] : [], has_more: false })
@@ -86,6 +89,7 @@ describe('shared policy-aware start work', () => {
   it('merges exact native provenance and coupled fields, preserves appointments/asks, and deduplicates concurrent retries', async () => {
     const f = fixture()
     Object.assign(f.raw.properties['First Mate tasks'], workerLinkRecord([{ fm_home: '/other', task_id: 'retained', first_observed_spawn_gen: 'old-gen' }]).properties['First Mate tasks'])
+    f.task.cardReferences = [{ pageId: 'c'.repeat(32), source: 'task.body', strength: 'textual' } as any]
     const before = structuredClone(f.raw.properties)
     const [one, two] = await Promise.all([f.workflow.start(f.native, 'Firstmate'), f.workflow.start(f.native, 'Firstmate')])
     expect(one).toEqual(two); expect(one).toMatchObject({ outcome: 'saved', saved_fields: ['Status', 'Last touched by', 'First Mate tasks'] })
@@ -116,9 +120,10 @@ describe('shared policy-aware start work', () => {
     expect(await f.workflow.start(stale, 'Consumer')).toMatchObject({ code: 'external-evidence-stale' })
     expect(await f.workflow.start(f.external, 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect(f.raw.properties['First Mate tasks'].rich_text).toEqual([])
-    const external = externalWorkers((await f.reader.card(id)).properties.Evidence!.value)
+    expect((await f.reader.card(id)).properties['Delegated To']!.value).toContain('Existing delegated consumer context')
+    const external = externalWorkers((await f.reader.card(id)).properties['Delegated To']!.value)
     expect(external).toMatchObject([{ run_id: 'run-123', reported_by: 'Consumer', verification: 'consumer-reported', freshness: 'current-report' }])
-    expect(externalWorkers((await f.reader.card(id)).properties.Evidence!.value, Date.now() + 600_000)[0]!.freshness).toBe('unknown')
+    expect(externalWorkers((await f.reader.card(id)).properties['Delegated To']!.value, Date.now() + 600_000)[0]!.freshness).toBe('unknown')
   })
   it('compares relevant preconditions while preserving concurrent unrelated edits', async () => {
     const f = fixture(); let count = 0
@@ -240,4 +245,19 @@ it('keeps UI history explicit while ordinary work queries retain their own opera
   expect((await sources.searchWork({})).records).toHaveLength(0)
   expect((await sources.searchWork({ history: true })).records[0]!.card!.id).toBe(id)
   expect(f.requests.filter(request => request.method === 'POST').map(request => !!request.body.filter)).toEqual([true, false])
+})
+
+it('uses the existing 9 AM Eastern date-only checkpoint semantics after Notion filtering', async () => {
+  const f = fixture()
+  expect((await f.reader.query({ checkpoint_before: '2026-11-12T13:00:00Z' })).data!.cards).toHaveLength(0)
+  expect((await f.reader.query({ checkpoint_before: '2026-11-12T14:00:00Z' })).data!.cards).toHaveLength(1)
+})
+
+it('discovers an unlinked native worker without an open UI, and does not attribute it to a filtered owner', async () => {
+  const f = fixture(), sources = f.sources()
+  vi.spyOn(sources, 'fleetSnapshot').mockResolvedValue([f.home])
+  const result = await sources.searchWork({ query: 'native-task' })
+  expect(result.records).toHaveLength(0)
+  expect(result.workers).toMatchObject([{ identity: { task_id: 'native-task', spawn_gen: 'native-gen' }, links: [] }])
+  expect((await sources.searchWork({ owner: 'Firstmate', query: 'native-task' })).workers).toHaveLength(0)
 })

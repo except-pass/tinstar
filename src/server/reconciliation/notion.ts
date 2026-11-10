@@ -1,3 +1,4 @@
+import { checkInTime } from '../../shared/checkIn'
 import { CachedObservation, retainMissing } from './observation'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, readWorkerLinks, type WorkerLinks } from './workerLinks'
@@ -152,7 +153,11 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       if (!next || next === cursor) throw new Error('invalid Notion cursor')
       cursor = next
     }
-    const items = [...cards.values()]
+    const items = [...cards.values()].filter(card => {
+      if (!work?.checkpoint_before) return true
+      const date = card.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null
+      return !!date?.start && checkInTime(date.start, date.time_zone) <= Date.parse(work.checkpoint_before)
+    })
     // Notion inlines at most 25 relation ids. Follow each has_more relation so a
     // finished card query can still report complete coverage. Cap the follow-up
     // at 10 pages per property and 20 requests per refresh: this read shares one

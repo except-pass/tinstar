@@ -24,7 +24,7 @@ PR checks and releases get their own later read tools (`list_prs`, `get_pr`,
 filters run at Notion. Relation classifications use the canonical related page ID.
 Absent explicit statuses, operational queries exclude Done and Archived;
 `history: true` allows an explicit historical scope. The response names its scope,
-coverage, warnings, result total and `next_offset`. Total is within the observed
+coverage, warnings, card/worker totals and `next_offset`. The same offset/limit pages the records and worker evidence. Unlinked workers remain discoverable through an unfiltered or text query; owner/status/classification filters return only workers related to cards in that scope, with link verification disclosed. Total is within the observed
 bounded result, not a claim about an incomplete board. Missing source evidence is
 visible in coverage and per-record health. No browser filters are inherited. The UI’s explicit All/custom status choices request history through the same reader; the default operational view does not scan history.
 
@@ -68,8 +68,8 @@ An external `worker` contains `kind: "external"`, `system`, `run_id`, HTTP(S)
 clock skew allowed). The authenticated reporter supplies the judgment and remains
 responsible for its truth. Tin Star validates recording inputs and labels this
 **consumer-reported**, not independently verified. The smallest durable record,
-`tinstar.external-worker.v1`, is appended as a JSON line to the existing Evidence
-rich-text field. Other Evidence content remains. External runs never become fake
+`tinstar.external-worker.v1`, is appended as a JSON line to the existing Delegated To
+rich-text field. Other Delegated To content remains. External runs never become fake
 First Mate tasks. Reads/UI preserve their own references, reporter and observation;
 a report that ages out displays execution unknown without changing card status.
 

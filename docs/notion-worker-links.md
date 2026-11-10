@@ -441,4 +441,4 @@ and screenshot/readback evidence remain First Mate's post-merge operator step.
 The Inspector and MCP now share the [start-work operation](features/workflow.md).
 It preserves this native schema unchanged and validates current execution before
 setting In Progress. Tracked external runs use their own consumer-reported
-provenance in Evidence; they never invent a First Mate home/task identity.
+provenance in Delegated To; they never invent a First Mate home/task identity.
