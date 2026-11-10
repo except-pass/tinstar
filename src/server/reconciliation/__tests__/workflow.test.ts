@@ -996,3 +996,19 @@ it('requests readiness for active association-only PRs through the shared queue'
   expect(read).toHaveBeenCalledWith([url])
   expect(view.needsWill?.find(item => item.cardIds.includes(card.id))?.pulls).toEqual([expect.objectContaining({ url, readiness: null })])
 })
+
+it('creates one Clawson merge card with the owner click properties and deduplicates concurrent/restarted clicks', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-card-')); roots.push(root)
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [1, 2].map(number => ({ url: `https://github.com/owner/repo/pull/${number}`, head: 'a'.repeat(40) })) }
+  const at = '2026-11-10T12:00:00.000Z'
+  const prepared = vi.fn(async () => ({ at, name: 'Admin merge 2 PRs: owner/repo', brief: 'Owner gave the merge word for the two exact PR heads.' }))
+  const results = await Promise.all([workflow.createClawsonMerge(input, 'owner@example.test', prepared), workflow.createClawsonMerge(input, 'owner@example.test', prepared)])
+  for (const result of results) expect(result).toMatchObject({ outcome: 'saved', card: { properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' }, 'Will action': { value: ['Merge'] }, 'Next check-in': { value: { start: at } }, 'Last touched by': { value: 'owner@example.test' } } } })
+  const restarted = new WorkflowOperations(f.reader, async () => [], root)
+  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepared)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(prepared).toHaveBeenCalledTimes(1)
+  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+  expect(f.blocks.some(block => JSON.stringify(block).includes('Owner gave the merge word'))).toBe(true)
+  expect(await restarted.createClawsonMerge({ ...input, targets: [input.targets[0]!] }, 'owner@example.test', prepared)).toMatchObject({ code: 'operation-conflict' })
+})

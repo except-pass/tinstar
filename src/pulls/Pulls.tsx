@@ -14,6 +14,7 @@ import { usePulls } from './usePulls'
 import { pullContext, visiblePulls, type PullSort } from './model'
 import './pulls.css'
 import { Footprint } from './Footprint'
+import { ClawsonMergeButton } from '../actions/ClawsonMergeButton'
 import { ActionControls } from '../actions/ActionControls'
 import type { PullFootprint } from '../shared/pullFootprint'
 
@@ -112,6 +113,7 @@ export function Pulls() {
     {data && <details className="pr-coverage"><summary>{data.repositories.length} repositories · {data.repositories.every(repo => repo.complete) ? 'Open PR inventory complete in this scope' : 'Inventory incomplete'}</summary>{data.repositories.map(repo => <p key={repo.repository}>{repo.repository} · {repo.scope === 'authored-or-associated' ? 'Authored or explicitly associated' : 'All open PRs'} · {repo.status} · {repo.observedAt ? new Date(repo.observedAt).toLocaleString() : 'No successful observation'}{repo.error && ` · ${repo.error}`}</p>)}<p>Repositories come from explicit PR sources or configuration. All open PRs in the authenticated account’s repositories and organizations; elsewhere, only PRs authored by {data.account ?? 'the authenticated account'} or explicitly associated with a card or worker. Counts, CI and reviews load when you inspect a row.</p></details>}
     {data?.repositories.filter(repo => repo.error).map(repo => <p role="alert" className="pr-notice" key={repo.repository}>{repo.repository}: {repo.error}</p>)}
     {actualSelection.length > 0 && <div className="pr-selection" role="status">{actualSelection.length} selected <button type="button" onClick={() => setSelected(new Set())}>Clear selection</button></div>}
+    {data && <ClawsonMergeButton targets={inventory.filter(pull => actualSelection.includes(pull.id))} />}
     <ActionControls targets={inventory.filter(pull => actualSelection.includes(pull.id))} view={view} />
     <div className="pr-scroll" tabIndex={0} role="region" aria-label="PR table, scroll horizontally for all columns"><table className="pr-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible PRs" checked={allSelected} onChange={() => setSelected(previous => { const next = new Set(previous); for (const row of rows) { if (allSelected) next.delete(row.id); else next.add(row.id) } return next })} /></th>
       {columns.map(([key, label]) => <th key={key} aria-sort={sort === key ? descending ? 'descending' : 'ascending' : 'none'}><button type="button" onClick={() => { setSort(key); setDescending(sort === key ? !descending : false) }}>{label}{sort === key ? descending ? ' ↓' : ' ↑' : ''}</button></th>)}<th>Inspect</th></tr></thead><tbody>

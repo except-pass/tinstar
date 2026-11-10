@@ -1,3 +1,4 @@
+import type { ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
@@ -141,6 +142,21 @@ export class WorkflowOperations {
     const parsed = createWorkSchema.safeParse(input)
     if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
     return this.serialize('create', parsed.data, actor, () => this.performCreate(parsed.data, actor))
+  }
+  /** Owner-only PR handoff; shares create_work's Notion writer and durable receipts. */
+  createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<{ at: string; name: string; brief: string }>): Promise<StartWorkResult> {
+    const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
+    return this.serialize('create', input, actor, async () => {
+      const previous = await this.creations.get(JSON.stringify([actor, input.operation_id]))
+      if (previous && previous.input !== signature) return { outcome: 'not-saved', code: 'operation-conflict', message: 'This click was already used with a different selection.', operation_id: input.operation_id, saved_fields: [] }
+      if (previous?.cardId) {
+        const card = await this.reader.card(previous.cardId, true)
+        return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card }
+      }
+      const prepared = await prepare()
+      const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })
+      return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] } })
+    })
   }
   private property(card: WorkCard, name: string, value: unknown) {
     const prop = card.properties[name], type = prop?.type
@@ -369,10 +385,10 @@ export class WorkflowOperations {
       return partial
     }
   }
-  private async performCreate(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
+  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown> }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
-    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = JSON.stringify(input)
+    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = handoff?.signature ?? JSON.stringify(input)
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = saved): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
     try {
       const config = this.reader.config
@@ -398,7 +414,7 @@ export class WorkflowOperations {
       const schema = await this.content.request(`data_sources/${config.dataSourceId}`)
       const template = { properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, value]) => [name, { type: (value as { type: string }).type }])) } as WorkCard
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
-        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor }
+        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
       const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))]
       await this.creations.put(key, signature)

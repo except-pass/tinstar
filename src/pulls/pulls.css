@@ -5,3 +5,8 @@
 .pr-detail{width:min(1000px,calc(100vw - 105px));box-sizing:border-box}.pr-detail header{flex-wrap:wrap}.pr-footprint-categories button{white-space:normal;text-align:left}
 
 .pr-actions{overflow:visible}.pr-actions button{vertical-align:middle}.pr-page [data-ask-field]:focus-visible{outline:2px solid #6dd4e8;outline-offset:-2px}
+.pr-clawson-action { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: 8px 14px; }
+.pr-clawson-action small { color: var(--text-muted, #91a1b1); }
+.pr-clawson-action p { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+
+.pr-clawson-action button:disabled { opacity: .6; cursor: default; }

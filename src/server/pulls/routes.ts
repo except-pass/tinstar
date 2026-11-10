@@ -13,6 +13,10 @@ import { PullReader } from './reader'
 import { PullFilesReader } from './files'
 import type { AskContext } from '../../shared/ask'
 import { pullContext } from '../../shared/pullContext'
+import { clawsonMergeSchema } from '../../shared/clawsonMerge'
+import { prepareClawsonMerge } from './clawsonMerge'
+import { actionBody } from '../actions/routes'
+import type { WorkflowOperations } from '../reconciliation/workflow'
 import { askConfigSchema } from '../ask/routes'
 
 const repositorySchema = z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase())
@@ -22,9 +26,9 @@ async function configuredRepositories(root: string): Promise<string[] | null> {
     return config.prOperations?.repositories === undefined ? null : z.array(repositorySchema).parse(config.prOperations.repositories)
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw new Error('PR repository configuration could not be read. Check prOperations.repositories in config.json.') }
 }
-/** Read-only artifact projection. Uses the exact Releases association store and join. */
+/** PR projection and owner handoffs. Uses the shared Releases associations and workflow writer. */
 export class PullsApi {
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader()) {}
+  constructor(private sources: Pick<ReconciliationSources, 'scene'> & { workflow?: WorkflowOperations }, private store = new AssociationStore(), private root = getConfigRoot(), private reader = new PullReader(), private files = new PullFilesReader(), private prepareMerge = prepareClawsonMerge) {}
   readiness(urls: string[]) { return this.reader.readinessFor(urls) }
   private async scope() {
     const scene = await this.sources.scene(), warnings: string[] = []
@@ -81,14 +85,28 @@ export class PullsApi {
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files', '/api/pulls/origin'].includes(url.pathname)) return false
+    if (!['/api/pulls', '/api/pulls/detail', '/api/pulls/files', '/api/pulls/origin', '/api/pulls/clawson-merge'].includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' }
     if (origin && !allowlist.includes(origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
     if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
-    if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'PR Operations is read-only; use GET.', { headers })
     if (!await this.authorized(req)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required for PR Operations.', { headers })
     try {
+      if (url.pathname === '/api/pulls/clawson-merge') {
+        if (req.method !== 'POST' || req.headers['x-tinstar-ui'] !== '1') return fail(res, 'BAD_REQUEST', 'Use the Send to Clawson button.', { headers })
+        const input = clawsonMergeSchema.parse(await actionBody(req))
+        if (new Set(input.targets.map(target => releasePull(target.url)?.id)).size !== input.targets.length) throw new Error('Select each PR once.')
+        if (!this.sources.workflow) throw new Error('Card creation is unavailable.')
+        const actor = req.headers['tailscale-user-login'] as string
+        const result = await this.sources.workflow.createClawsonMerge(input, actor, async () => {
+          // The same configured, owned/authored/associated scope used for PR reads.
+          for (const target of input.targets) await this.origin(target.url)
+          return this.prepareMerge(input, actor)
+        })
+        if (!result.card) return fail(res, 'CONFLICT', result.message, { headers })
+        return ok(res, { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }, { headers })
+      }
+      if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Use GET for PR reads.', { headers })
       if (url.pathname === '/api/pulls/origin') return ok(res, await this.origin(url.searchParams.get('url') ?? ''), { headers })
       if (url.pathname !== '/api/pulls') {
         const { repositories } = await this.scope()
@@ -97,6 +115,9 @@ export class PullsApi {
         return ok(res, url.pathname.endsWith('/files') ? await this.files.get(identity.url, head) : await this.reader.detail(identity.url, head), { headers })
       }
       return ok(res, await this.read(), { headers })
-    } catch (error) { return fail(res, 'BACKEND_UNAVAILABLE', (error as Error).message, { headers }) }
+    } catch (error) {
+      if (url.pathname !== '/api/pulls/clawson-merge') return fail(res, 'BACKEND_UNAVAILABLE', (error as Error).message, { headers })
+      return fail(res, error instanceof z.ZodError || error instanceof SyntaxError ? 'BAD_REQUEST' : 'CONFLICT', error instanceof z.ZodError ? 'Choose between 1 and 10 PRs with their observed heads.' : (error as Error).message, { headers })
+    }
   }
 }

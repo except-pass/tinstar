@@ -73,3 +73,28 @@ No test creates an App, mints a token against GitHub or writes to GitHub. Owner-
 App registration, key placement, activation, read verification, limits and rollback
 are in [provisioning.md](../data/tinstar-pr-ops-actions/provisioning.md). Merge provisioning
 is not requested.
+
+## Send selected PRs to Clawson for admin merge
+
+The Pulls view has a built-in **Send to Clawson for admin merge** action for the
+same authenticated owner principal used by PR reads. Select up to ten PRs, then
+click once. Tin Star checks their current GitHub heads, open/draft/conflict state,
+active branch rules and branch protection requirements, check runs and commit
+statuses. A changed head or any failed, pending, missing required or unreadable
+check stops the handoff with the affected PR and reason. This prevents a card
+from granting merge permission against an unverified or different commit.
+
+One click creates one card through `create_work`'s shared workflow writer and
+creation receipts: Owner **Clawson**, Status **In Progress**, Next check-in at the
+click time, and Will action **Merge**. The card records the authenticated owner’s
+merge word for only the listed URLs and exact heads, with one command per PR:
+
+```text
+gh pr merge <url> --squash --admin --match-head-commit <sha>
+```
+
+Clawson must recheck every head and required check immediately before merging,
+stop and report any red check, changed head or conflict, and post each result on
+the card. The button shows the card link and preserves selection. Double-clicks
+and retries of the same selection reuse the same operation receipt. Tin Star
+does not execute these commands; its Admin Merge capability remains disabled.
