@@ -302,7 +302,10 @@ export class WorkflowOperations {
       } catch {
         return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation could not be reconciled; retry to retrieve its receipt.', operation_id: input.operation_id, saved_fields: [] }
       }
-      const prepared = await prepare()
+      let prepared: ClawsonMergePlan
+      try { prepared = await prepare() } catch (error) {
+        return { outcome: 'not-saved', code: 'merge-refused', message: (error as Error).message, operation_id: input.operation_id, saved_fields: [] }
+      }
       const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })
       return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] }, children: [
         heading('Authority'), paragraph(prepared.brief), heading('Step 1 (run once)'), codeBlock(prepared.script),

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { AskAction, AskSuggestion } from '../shared/ask-actions'
-import type { AskSelectionInput, AskItem } from '../shared/ask'
+import { releasedMergeSelection, type AskSelectionInput, type AskItem } from '../shared/ask'
 import { sendSuggestedMerge, type SuggestedMergeCard, type SuggestedMergeAttempt } from './suggestedMerge'
 import './ask-actions.css'
 
@@ -16,7 +16,7 @@ export interface AskActionDelivery {
   merge_selection?: AskItem['merge_selection']
   error?: string | null
 }
-export interface AskActionSelectionState extends AskActionDelivery { action_id: string }
+export interface AskActionSelectionState extends AskActionDelivery { action_id: string; request_id?: string }
 export interface AskActionsProps {
   answerId: string
   suggestions: AskSuggestion[]
@@ -34,7 +34,7 @@ interface MergeClick { actionId: string; sending?: boolean; error?: string; sent
 
 export function AskActions(props: AskActionsProps) {
   // Changing the answer resets only local presentation, never a retained turn.
-  return <ActionChoices key={props.answerId} {...props} />
+  return <ActionChoices key={`${props.answerId}:${props.selection?.request_id ?? ''}:${props.selection?.status ?? ''}:${props.selection?.outcome ?? ''}`} {...props} />
 }
 
 function ActionChoices({ answerId, suggestions, superseded, selection, onSelect, recommendedActionId, disabled = false, decision = false }: AskActionsProps) {
@@ -46,16 +46,17 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
   const supplied = suggestions.filter((suggestion): suggestion is AskAction => typeof suggestion !== 'string')
   const actions = recommendedActionId ? [...supplied.filter(action => action.id === recommendedActionId), ...supplied.filter(action => action.id !== recommendedActionId)] : supplied
   const legacy = suggestions.filter((suggestion): suggestion is string => typeof suggestion === 'string')
-  const selectedId = selection?.action_id ?? attempt?.input.action_id
+  const selectedId = attempt?.input.action_id ?? selection?.action_id
   const selected = actions.find(action => action.id === selectedId)
-  const delivery = selection ?? attempt?.delivery
-  const uncertain = selection?.merge_selection ? !selection.merge_selection.receipt : !selection && attempt?.uncertain
-  const unavailable = disabled || superseded || !!selectedId || !!merge?.sent || !!merge?.sending
+  const delivery = attempt ? attempt.delivery : selection
+  const released = !!delivery && releasedMergeSelection(delivery)
+  const uncertain = !released && (attempt ? attempt.uncertain : selection?.merge_selection && !selection.merge_selection.receipt)
+  const unavailable = disabled || superseded || !!selectedId && !released || !!merge?.sent || !!merge?.sending
 
   async function select(action: AskAction) {
     // The ref closes the same-event double-click window before React rerenders.
     // Unknown acknowledgements keep the key and chosen action for reconciliation.
-    if (disabled || locked.current || superseded || selection && !uncertain || merge?.sent || merge?.sending) return
+    if (disabled || locked.current || superseded || !attempt && selection && !uncertain && !released || merge?.sent || merge?.sending) return
     if (action.merge && !decision) {
       locked.current = true
       const mergeAttempt = mergeOps.current.get(action.id) ?? { operationId: crypto.randomUUID() }
@@ -68,6 +69,7 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
       } finally { locked.current = false }
       return
     }
+    if (released) attemptRef.current = null
     if (attemptRef.current && attemptRef.current.input.action_id !== action.id) return
     if (attemptRef.current && !attemptRef.current.uncertain && !uncertain) return
     locked.current = true

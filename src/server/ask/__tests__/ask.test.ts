@@ -1064,6 +1064,40 @@ describe('request-bound decision workbench', () => {
     expect(saved.outcome).toBe(outcome)
   })
 
+  it.each(['proceed', 'defer'])('releases a definite merge refusal for a fresh %s choice', async actionId => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17'
+    item.proposal!.value.actions[0]!.merge = { pr_url: pr }
+    let head = 'a'.repeat(40)
+    const origin = vi.fn(async () => ({ id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: pr, state: 'open' as const, title: 'Ready', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }))
+    const sendMerge = vi.fn<NonNullable<AskArtifactSources['sendMerge']>>().mockImplementationOnce(async input => ({ outcome: 'not-saved', code: 'merge-refused', message: 'PR head changed; refresh and select it again', operation_id: input.operation_id, saved_fields: [] })).mockImplementation(async input => ({ outcome: 'saved', code: 'saved', message: 'Sent', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }))
+    const { call, reload, bridge } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()), pullOrigin: origin, sendMerge }, queue)
+    const input = { answer_id: item.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    const refused = await call('selections', input)
+    expect(refused.status).toBe(200)
+    expect(refused.data.data).toMatchObject({ status: 'failed', outcome: 'blocked', error: 'PR head changed; refresh and select it again' })
+    reload()
+    expect((await call('selections', input)).data.data.request_id).toBe(refused.data.data.request_id)
+    expect(sendMerge).toHaveBeenCalledTimes(1)
+    head = 'b'.repeat(40)
+    const fresh = { ...input, action_id: actionId, client_key: randomUUID() }
+    item.readiness = 'needs-readiness-verification'
+    expect((await call('selections', fresh)).status).toBe(409)
+    item.readiness = 'ready-now'
+    const recovered = await call('selections', fresh)
+    expect(recovered.status).toBe(200)
+    expect(recovered.data.data.request_id).not.toBe(refused.data.data.request_id)
+    expect(recovered.data.data.action_selection.action_id).toBe(actionId)
+    if (actionId === 'proceed') {
+      expect(sendMerge.mock.calls[1]![0].targets).toEqual([{ url: pr, head }])
+      expect(sendMerge.mock.calls[1]![0].operation_id).not.toBe(sendMerge.mock.calls[0]![0].operation_id)
+      expect(recovered.data.data.status).toBe('delivered')
+    } else {
+      expect(sendMerge).toHaveBeenCalledTimes(1)
+      expect((await bridge()).data.data.pending).toMatchObject([{ request_id: recovered.data.data.request_id }])
+    }
+    expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === refused.data.data.request_id).outcome).toBe('blocked')
+  })
+
   it('records merge membership and head before dispatch and recovers the same operation after restart', async () => {
     const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17', head = 'b'.repeat(40)
     item.proposal!.value.actions[0]!.merge = { pr_url: pr }

@@ -1246,7 +1246,9 @@ it('keeps decision Discussion choices through explanations and disables them for
   const { fixtureProposal } = await import('../../../test-fixtures/reconciliation/decisionProposal')
   const first = seed(), explanation = seed()
   const requestKey = 'discussion-request'
-  first.context = { ...first.context, target: { kind: 'decision', id: requestKey }, view: { scene: 'decisions' } }
+  const item = { ...queue.items[0]!, id: requestKey, readiness: 'ready-now' as const, sources: [{ kind: 'firstmate' as const, id: 'source', field: 'decision', status: 'fresh' as const, coverage: 'complete' as const, observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }] }
+  const { decisionRequestRevision } = await import('../../shared/decisionProposal')
+  first.context = { ...first.context, target: { kind: 'decision', id: requestKey }, view: { scene: 'decisions' }, decision: { request_key: requestKey, revision: decisionRequestRevision(item) } }
   const proposal = { ...fixtureProposal(requestKey, fixtureId(1)), source: { kind: 'ask-reply' as const, id: first.request_id, revision: '1' } }
   first.reply!.decision_proposal = proposal
   explanation.context = first.context
@@ -1254,10 +1256,22 @@ it('keeps decision Discussion choices through explanations and disables them for
   explanation.question = 'Why this option?'
   explanation.reply!.summary = 'It reduces operational burden.'
   records = [first, explanation]
-  const renderDesk = (decisionItems?: typeof queue.items) => <AskProvider decisionItems={decisionItems} scene={scene} state={initialPresentation()} send={vi.fn()} onReturn={vi.fn()}><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const renderDesk = (decisionItems: typeof queue.items = [item], decisionUnavailable = false, now = Date.now()) => <AskProvider decisionUnavailable={decisionUnavailable} decisionItems={decisionItems} scene={scene} state={initialPresentation()} send={vi.fn()} onReturn={vi.fn()}><AskDesk now={now} view="needs-you" /></AskProvider>
   const view = render(renderDesk())
   fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
   expect(await screen.findByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  for (const unavailable of [[], [{ ...item, action: 'Changed request' }], [{ ...item, cardIds: [] }], [{ ...item, sources: [] }], [{ ...item, sources: [{ ...item.sources[0]!, coverage: 'partial' as const }] }], [{ ...item, sources: [{ ...item.sources[0]!, status: 'unknown' as const }] }]]) {
+    view.rerender(renderDesk(unavailable))
+    expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+    view.rerender(renderDesk())
+    expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  }
+  view.rerender(renderDesk([item], true))
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+  view.rerender(renderDesk([item], false, Date.now() + 120_000))
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+  view.rerender(renderDesk())
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
   const newer = { ...proposal, proposal_id: 'new-work', supersedes: proposal.proposal_id, source: { kind: 'firstmate-request' as const, id: 'work', revision: '2' } }
   view.rerender(renderDesk([{ ...queue.items[0]!, id: requestKey, proposal: { answer_id: crypto.randomUUID(), value: newer } }]))
   expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()

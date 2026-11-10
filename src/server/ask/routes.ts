@@ -158,6 +158,7 @@ export class AskApi {
         const delivered = selected.merge_selection ? await this.store.deliverMerge(login, selected.request_id, async input => {
           if (!this.artifacts?.sendMerge) throw new AskConflict('Merge handoff unavailable')
           const result = await this.artifacts.sendMerge(input, login)
+          if (result.outcome === 'not-saved' && result.code !== 'operation-conflict') return { blocked: result.message }
           if (!result.card) throw new Error(result.message)
           return { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }
         }) : selected

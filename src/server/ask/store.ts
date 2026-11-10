@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import { releasedMergeSelection, askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
 import { currentDecisionProposal, type DecisionProposal } from '../../shared/decisionProposal'
 import type { AskAction } from '../../shared/ask-actions'
 import type { ClawsonMergeInput } from '../../shared/clawsonMerge'
@@ -135,7 +135,7 @@ export class AskStore {
       if (!answer?.reply) throw new AskNotFound('Original answer unavailable')
       // Both same-key retries and another device's same-action retry recover the
       // original request even after its answer is superseded by a later reply.
-      const consumed = rows.find(row => row.owner === owner && row.action_selection?.answer_id === answerId)
+      const consumed = rows.find(row => row.owner === owner && row.action_selection?.answer_id === answerId && !releasedMergeSelection(row))
       if (consumed) {
         if (consumed.action_selection!.action_id !== actionId) throw new AskConflict('Another action was already selected for this answer')
         ;(consumed.client_key_aliases ??= []).push(clientKey)
@@ -159,13 +159,19 @@ export class AskStore {
       return row
     })
   }
-  deliverMerge(owner: string, requestId: string, send: (input: ClawsonMergeInput) => Promise<{ url: string; message: string }>) {
+  deliverMerge(owner: string, requestId: string, send: (input: ClawsonMergeInput) => Promise<{ url: string; message: string } | { blocked: string }>) {
     return this.change(async rows => {
       const row = rows.find(row => row.owner === owner && row.request_id === requestId)
       if (!row?.merge_selection) throw new AskNotFound('Merge selection unavailable')
-      if (!row.merge_selection.receipt) {
-        row.merge_selection.receipt = await send(row.merge_selection.input)
-        row.status = 'delivered'; row.updated_at = this.now()
+      if (!row.merge_selection.receipt && !releasedMergeSelection(row)) {
+        const result = await send(row.merge_selection.input)
+        if ('blocked' in result) {
+          row.status = 'failed'; row.outcome = 'blocked'; row.error = result.blocked
+        } else {
+          row.merge_selection.receipt = result
+          row.status = 'delivered'
+        }
+        row.updated_at = this.now()
       }
       return row
     })

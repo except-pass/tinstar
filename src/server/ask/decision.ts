@@ -20,10 +20,6 @@ export function decisionContext(item: QueueItem, view: AskContext['view']): AskC
     view: { ...view, scene: 'decisions', request_key: item.id },
   }
 }
-export function decisionFresh(item: QueueItem, now = Date.now()) {
-  return item.readiness === 'ready-now' && item.sources.length > 0 && item.sources.every(source =>
-    ['fresh', 'partial'].includes(source.status) && source.coverage === 'complete' && !!source.observedAt &&
-    !!source.expiresAt && Date.parse(source.expiresAt) > now)
-}
+export { decisionFresh } from '../../shared/decisionProposal'
 
 export const decisionRevision = decisionRequestRevision

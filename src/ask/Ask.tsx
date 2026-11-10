@@ -7,7 +7,7 @@ import { ageLabel } from '../reconciliation/recordFields'
 import { useAskGesture } from './useAskGesture'
 import { askElement } from './element'
 import { AskSurface } from './AskSurface'
-import { AskActions, AskSelectionRejected } from './AskActions'
+import { AskActions, AskSelectionRejected, actionDeliveryLabel } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
@@ -17,7 +17,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { conversationTitle } from './deskInbox'
 import type { QueueItem } from '../server/reconciliation/queue'
-import { currentDecisionProposal } from '../shared/decisionProposal'
+import { currentDecisionProposal, decisionProposalReady } from '../shared/decisionProposal'
 import { displayRequestText } from '../shared/requestText'
 import './ask.css'
 
@@ -32,7 +32,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return result.data as T
 }
 interface AskControls {
-  decisionItems?: QueueItem[];
+  decisionItems?: QueueItem[]; decisionUnavailable?: boolean;
   scene: FloorScene | null; expanded: string | null; collapse: () => void; state: PresentationState; submit: (body: unknown) => Promise<void>; canBack?: boolean; onBack?: () => void
   deskVisible: boolean; setDeskVisible: (visible: boolean) => void; showThread: (item: AskItem) => void
   replySeed: { conversationId: string; seed: AskSeed; key: string } | null;
@@ -61,7 +61,7 @@ export function AskCardAction({ cardId, subject, icon = false }: { cardId?: stri
     {icon ? <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M4 3h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8l-5 3v-3a2 2 0 0 1-2-2V5a2 2 0 0 1 3-2Z" /></svg> : 'Ask First Mate about this task'}
   </button>
 }
-export function AskProvider({ decisionItems, scene, state, onReturn, onSourceReturn, canBack, onBack, children }: { decisionItems?: QueueItem[]; canBack?: boolean; onBack?: () => void; onSourceReturn?: () => void; scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: (origin: AskReturn) => void; children: ReactNode }) {
+export function AskProvider({ decisionItems, decisionUnavailable, scene, state, onReturn, onSourceReturn, canBack, onBack, children }: { decisionItems?: QueueItem[]; decisionUnavailable?: boolean; canBack?: boolean; onBack?: () => void; onSourceReturn?: () => void; scene: FloorScene | null; state: PresentationState; send: (action: PresentationAction) => void; onReturn: (origin: AskReturn) => void; children: ReactNode }) {
   const [deskVisible, setDeskVisible] = useState(false)
   const [items, setItems] = useState<AskItem[]>([]), [error, setError] = useState<string | null>(null)
   const [composer, setComposer] = useState<{ seed: AskSeed; parent?: AskItem; key: string } | null>(null)
@@ -154,7 +154,7 @@ export function AskProvider({ decisionItems, scene, state, onReturn, onSourceRet
       throw reason
     }
   }
-  return <Controls.Provider value={{ decisionItems, scene, state, deskVisible, setDeskVisible, showThread: item => { setExpanded(item.conversation_id); markRead(item) }, submit, selectAction, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, returnToSource: item => { returnTo(item); onSourceReturn?.() }, action }}>{children}
+  return <Controls.Provider value={{ decisionItems, decisionUnavailable, scene, state, deskVisible, setDeskVisible, showThread: item => { setExpanded(item.conversation_id); markRead(item) }, submit, selectAction, replySeed, expanded, collapse: () => setExpanded(null), canBack, onBack, items, error, open, returnTo, returnToSource: item => { returnTo(item); onSourceReturn?.() }, action }}>{children}
     {composer && createPortal(<AskComposer key={composer.key} scene={scene} state={state} seed={composer.seed} parent={composer.parent} clientKey={composer.key} close={() => setComposer(null)} submit={async body => {
       await submit(body)
       setComposer(null)
@@ -305,9 +305,10 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
     <div className="ask-messages" ref={viewport} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64 }}>
       {messages.map(({ key, turn, sender, at }) => {
         const incoming = sender === 'First Mate', reply = turn.reply
-        const selected = turns.find(item => item.action_selection?.answer_id === turn.request_id)
+        const selected = turns.filter(item => item.action_selection?.answer_id === turn.request_id).at(-1)
         const decision = turn.context.target?.kind === 'decision'
-        const workProposal = controls.decisionItems?.find(item => item.id === turn.context.target?.id)?.proposal
+        const decisionItem = controls.decisionItems?.find(item => item.id === turn.context.target?.id)
+        const workProposal = decisionItem?.proposal
         const currentProposal = decision ? currentDecisionProposal([...controls.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === turn.context.target!.id && item.reply?.decision_proposal?.request_key === turn.context.target!.id).map(item => ({ answer_id: item.request_id, value: item.reply!.decision_proposal! })), ...(workProposal ? [workProposal] : [])]) : undefined
         const superseded = decision ? currentProposal?.answer_id !== turn.request_id : latestAnswer?.request_id !== turn.request_id
         const unavailable = !!reply?.rejected_actions?.length && !reply.suggested_actions.some(action => typeof action !== 'string')
@@ -320,13 +321,13 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
             <div {...askElement('answer', 'First Mate answer', detail.startsWith(summary) ? text : summary)}><MessageText text={detail.startsWith(summary) ? text : summary} /></div>{!detail.startsWith(summary) && detail && <div {...askElement('answer', 'Answer detail', detail)}><MessageText text={detail} /></div>}
             {!!reply.references.length && <div className="ask-message-references">{reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(reference.url) ? `Open PR #${reference.url.match(/\d+\/?$/)?.[0].replace('/', '')}` : reference.label} ↗</a>)}</div>}
             {unavailable && <p className="ask-action-unavailable">One-click action unavailable{!superseded && <button type="button" onClick={() => controls.open({ question: 'Please resend the one-click choices for your last answer.' }, latest)}>Request new choices</button>}</p>}
-            <AskActions decision={decision} answerId={turn.request_id} suggestions={reply.decision_proposal?.actions ?? (turn.context.target?.kind === 'decision' ? reply.suggested_actions.filter(action => typeof action === 'string') : reply.suggested_actions)} superseded={superseded}
-              selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, outcome: selected.outcome, merge_selection: selected.merge_selection, error: selected.error } : null} onSelect={controls.selectAction} />
+            <AskActions decision={decision} disabled={decision && (!!controls.error || !!controls.decisionUnavailable || !decisionProposalReady(decisionItem, currentProposal, turn, now))} answerId={turn.request_id} suggestions={reply.decision_proposal?.actions ?? (turn.context.target?.kind === 'decision' ? reply.suggested_actions.filter(action => typeof action === 'string') : reply.suggested_actions)} superseded={superseded}
+              selection={selected ? { request_id: selected.request_id, action_id: selected.action_selection!.action_id, status: selected.status, outcome: selected.outcome, merge_selection: selected.merge_selection, error: selected.error } : null} onSelect={controls.selectAction} />
             {!!reply.rejected_actions?.length && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><pre>{JSON.stringify(reply.rejected_actions, null, 2)}</pre></details>}
           </> : <>
             <MessageText text={turn.action_selection ? `Requested: ${turn.action_selection.label}` : turn.question} />
             {turn.captured_selection && <details className="ask-delivery-diagnostics"><summary>Selected context</summary><blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote></details>}
-            {!turn.reply && <AskDelivery item={turn} controls={controls} now={now} />}
+            {turn.merge_selection ? <div><p role="status">{actionDeliveryLabel(turn)}</p>{turn.error && <p>{turn.error}</p>}</div> : !turn.reply && <AskDelivery item={turn} controls={controls} now={now} />}
           </>}
         </section>
       })}

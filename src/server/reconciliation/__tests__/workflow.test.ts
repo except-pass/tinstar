@@ -1357,20 +1357,21 @@ it.each([
   ['draft', { conclusion: 'success', status: 'completed', draft: true, merged: false, mergeable: true }, 'still a draft'],
   ['merged', { conclusion: 'success', status: 'completed', draft: false, merged: true, mergeable: true }, 'already merged'],
   ['conflict', { conclusion: 'success', status: 'completed', draft: false, merged: false, mergeable: false }, 'has merge conflicts'],
+  ['head-changed', { conclusion: 'success', status: 'completed', draft: false, merged: false, mergeable: true }, 'head changed'],
 ])('writes no Clawson card when a suggested merge is %s', async (_name, state, reason) => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-suggested-stop-')); roots.push(root)
   const workflow = new WorkflowOperations(f.reader, async () => [], root)
   const head = 'c'.repeat(40)
   const input = { operation_id: '11111111-1111-4111-8111-111111111111', targets: [{ url: 'https://github.com/owner/repo/pull/7', head }] }
   const read = async (path: string): Promise<unknown> => {
-    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: state.merged, draft: state.draft, mergeable: state.mergeable }
+    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: _name === 'head-changed' ? 'd'.repeat(40) : head }, base: { ref: 'main' }, state: 'open', merged: state.merged, draft: state.draft, mergeable: state.mergeable }
     if (path.includes('/rules/')) return []
     if (path.includes('/branches/')) return {}
     if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: state.status, conclusion: state.conclusion, app: { id: 1 } }] }
     if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
     throw new Error(`Unexpected read: ${path}`)
   }
-  await expect(workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))).rejects.toThrow(reason)
+  await expect(workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))).resolves.toMatchObject({ outcome: 'not-saved', code: 'merge-refused', message: expect.stringContaining(reason) })
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(0)
 })
 

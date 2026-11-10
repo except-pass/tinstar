@@ -4,7 +4,7 @@ import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { useViewSnapshot } from '../ask/workspaceHistory'
 import { AskContextComposer, useAskControls } from '../ask/Ask'
 import { AskActions, actionDeliveryLabel } from '../ask/AskActions'
-import { decisionRequestRevision, currentDecisionProposal } from '../shared/decisionProposal'
+import { decisionProposalReady, currentDecisionProposal } from '../shared/decisionProposal'
 import { mostRecentAnswer } from '../ask/deskInbox'
 import { AskSurface } from '../ask/AskSurface'
 import { apiFetch } from '../apiClient'
@@ -203,13 +203,12 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
   })
   const proposal = currentDecisionProposal([...replyProposals, ...(item.proposal ? [item.proposal] : [])])
   const proposalReply = turns.find(turn => turn.request_id === proposal?.answer_id && !turn.published_proposal)
-  const replyMatchesSource = !proposalReply || proposalReply.context.decision?.revision === decisionRequestRevision(item)
-  const proposalReady = ready && replyMatchesSource && !controls?.error && item.sources.length > 0 && item.sources.every(source => source.coverage === 'complete' && !!source.observedAt && !!source.expiresAt && Date.parse(source.expiresAt) > now)
+  const proposalReady = !unavailable && !controls?.error && decisionProposalReady(item, proposal, proposalReply, now)
   const recommended = proposal?.value.actions.find(action => action.id === proposal.value.recommended_action_id)
   const [draft, setDraft] = useState<{ question: string; key: number } | null>(null), [challenge, setChallenge] = useState(false)
   const subject = { target: { kind: 'decision' as const, id: item.id }, view: { scene: 'decisions' as const, request_key: item.id, query }, label: entry.title, ...(latest ? { followUpTo: latest.request_id } : {}) }
   const seed = (question: string) => { controls?.collapse(); setDraft({ question, key: Date.now() }); setChallenge(false) }
-  const selection = proposal && turns.find(turn => turn.action_selection?.answer_id === proposal.answer_id)
+  const selection = proposal && turns.filter(turn => turn.action_selection?.answer_id === proposal.answer_id).at(-1)
   const card = scene?.cards.find(card => card.id === entry.id)
   const question = proposal?.value.question ?? entry.question ?? displayRequestText(item.action ?? '', '').replace(/^owner\s*:\s*/i, '').trim()
   const sourceStatus = card ? [card.source.properties.Owner?.value, card.source.properties.Status?.value].filter(Boolean).join(' · ') : `Owner/status not published · ${readinessLabels[item.readiness]}`
@@ -221,7 +220,7 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
         <div className="rec-title">{recommended?.label ?? 'Recommendation not yet published'}</div>
         {proposal ? <><p className="rec-basis">{proposal.value.rationale}</p>
           {controls && <AskActions decision answerId={proposal.answer_id} suggestions={proposal.value.actions} recommendedActionId={proposal.value.recommended_action_id} superseded={false} disabled={!proposalReady}
-            selection={selection ? { action_id: selection.action_selection!.action_id, status: selection.status, outcome: selection.outcome, merge_selection: selection.merge_selection, error: selection.error } : null} onSelect={controls.selectAction} />}
+            selection={selection ? { request_id: selection.request_id, action_id: selection.action_selection!.action_id, status: selection.status, outcome: selection.outcome, merge_selection: selection.merge_selection, error: selection.error } : null} onSelect={controls.selectAction} />}
         </> : <button type="button" className="primary" onClick={() => seed('Please publish a current recommendation and alternatives for this exact request using tinstar.decision-proposal.v1, with request_key matching this context. Include rationale and source references.')}>Ask for a recommendation →</button>}
         <div className="secondary-bar"><button type="button" className="wrong-btn" aria-expanded={challenge} onClick={() => setChallenge(!challenge)}>Something wrong? ▾</button><span className="source-basis">{proposal ? `${proposalReady ? 'Current request' : 'Last-known recommendation'} · First Mate` : 'No current proposal'}</span></div>
         {challenge && <div className="wrong-menu">{[
