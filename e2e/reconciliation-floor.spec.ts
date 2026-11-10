@@ -76,7 +76,7 @@ async function tabToStatusSlice(page: Page, name: string) {
 
 // These regressions exercise the preserved rich presentation.
 test.beforeEach(async ({ page }, info) => {
-  if (info.title.startsWith('single-row toolbar')) return
+  if (info.title.startsWith('single-row toolbar') || info.title.startsWith('Waiting For entry')) return
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed'); if (!localStorage.getItem('tinstar.floor.preferences')) localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' } })) })
 })
 
@@ -1228,4 +1228,41 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   await waiting.scrollIntoViewIfNeeded()
   await expect(waiting).toHaveText('▤ Waiting For ×')
   expect(await waiting.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+})
+
+
+for (const width of [1440, 1180, 390]) for (const entry of ['dropdown', 'chip'] as const) for (const keyboard of [false, true]) test(`Waiting For entry ${entry} by ${keyboard ? 'keyboard' : 'click'} at ${width}px from fresh preferences`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const scene = fixtureScene({ now: Date.now() })
+  const card = scene.cards.find(card => card.id === fixtureId(4))!
+  card.source.properties['Waiting For Type'] = { id: 'wait-type', type: 'select', value: 'Actor', hasMore: false }
+  card.source.properties['Waiting For ID'] = { id: 'wait-id', type: 'rich_text', value: 'Reviewer', hasMore: false }
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  const control = page.getByRole('button', { name: entry === 'dropdown' ? 'Choose pattern' : 'Waiting For', exact: true })
+  await expect(control).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Waiting For Type', exact: true })).toHaveCount(0)
+  if (keyboard) {
+    // Traverse the native tab order from a fresh page, including narrow toolbar scrolling.
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press('Tab')
+      if (await control.evaluate(element => element === document.activeElement)) break
+    }
+    await expect(control).toBeFocused()
+    await page.keyboard.press('Enter')
+  } else await control.click()
+  if (entry === 'dropdown') {
+    const option = page.getByRole('option', { name: 'Waiting For', exact: true })
+    await expect(option).toBeVisible()
+    if (keyboard) { await page.keyboard.press('ArrowUp'); await page.keyboard.press('Enter') }
+    else await option.click()
+  }
+  const types = page.getByRole('group', { name: 'Waiting For Type', exact: true })
+  await expect(types).toBeVisible()
+  await expect(types.getByRole('button', { name: 'Actor', exact: true })).toBeInViewport()
+  for (const name of ['All', 'Actor', 'Event', 'Work']) await expect(types.getByRole('button', { name, exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Actor dependencies', exact: true })).toContainText('Reviewer')
+  await expect(page.getByRole('button', { name: 'Waiting For', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
 })

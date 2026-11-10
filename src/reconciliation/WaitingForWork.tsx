@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SceneCard } from '../server/reconciliation/scene'
 import { cardTitle } from './overviewModel'
 import { waitingForTypes, type WaitingForType, type waitingForGroups } from './waitingFor'
@@ -9,6 +9,9 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
   flashed: (id: string) => boolean; onSelect: (id: string) => void; onHover: (card: SceneCard | null) => void
   partial: boolean; failed: boolean; observedAt: string | null
 }) {
+  const heading = useRef<HTMLElement>(null)
+  // The existing narrow canvas scrolls horizontally; reveal Work on entry.
+  useEffect(() => { heading.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }) }, [])
   const [searchClosed, setSearchClosed] = useState<ReadonlySet<string>>(new Set())
   useEffect(() => { setSearchClosed(new Set()) }, [searchKey])
   const toggle = (key: string) => {
@@ -23,7 +26,7 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
   const categories = projection.categories.filter(category => type === 'All' || category.type === type)
   const shown = categories.reduce((sum, category) => sum + category.groups.reduce((sum, group) => sum + group.cards.length, 0), 0)
   return <section className="ov-waiting-work" aria-label="Waiting For work">
-    <header className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>
+    <header ref={heading} className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>
     {(failed || partial) && <p className="ov-waiting-notice" role="status">{failed ? 'Could not refresh Waiting For. Showing the last known cards.' : `Partial results · ${projection.count} shown`}{observedAt && <time dateTime={observedAt}> · Last known {new Date(observedAt).toLocaleString()}</time>}</p>}
     {categories.map(category => category.groups.length > 0 && <section key={category.type} className="ov-waiting-category" aria-label={`${category.type} dependencies`}>
       <h3><span>{category.type}</span><span>{category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>

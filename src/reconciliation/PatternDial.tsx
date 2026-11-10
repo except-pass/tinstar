@@ -5,7 +5,10 @@ import { emptySearch } from '../shared/smartSearch'
 import { isPlanned, type FloorScene, type PresentationAction, type PresentationState } from './presentation'
 import { overviewGroups } from './overviewModel'
 import { patternCheckSummary, type PatternCoverage } from './overviewEvidence'
+import { waitingForActive } from './waitingFor'
 import './smartSearch.css'
+
+const menuPatterns = [...dialPatterns, 'waiting-for'] as const
 
 const definitions: Record<DialPattern | Pattern, string> = {
   all: 'All work under your current filters.',
@@ -84,6 +87,11 @@ export function PatternDial({ scene, state, send, now, coverage, onInspectCovera
   const focusDial = () => { restoring.current = true; center.current?.focus(); restoring.current = false }
   const closeMenu = (restore: boolean) => { setMenu(false); if (restore) focusDial() }
   const choose = (pattern: DialPattern, restore = false) => { hide(); closeMenu(restore); send({ type: 'set-pattern', pattern: pattern === 'all' ? null : pattern }) }
+  const chooseMenu = (pattern: typeof menuPatterns[number]) => {
+    if (pattern !== 'waiting-for') { choose(pattern, true); return }
+    hide(); closeMenu(true)
+    send({ type: 'set-donut-filter', filter: { cards: ['Waiting For'], workers: state.donutFilter?.workers ?? [] } })
+  }
   const step = (direction: number) => choose(dialPatterns[(index + direction + dialPatterns.length) % dialPatterns.length]!)
   const openMenu = () => { hide(); setActive(index); setMenu(true) }
   const count = (pattern: DialPattern | Pattern) => `${counts[pattern].count}${pattern !== 'all' && counts[pattern].unknown ? ' confirmed' : ''}`
@@ -163,12 +171,12 @@ export function PatternDial({ scene, state, send, now, coverage, onInspectCovera
     window.addEventListener('resize', place); window.addEventListener('scroll', place, true)
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
   }, [menu])
-  const move = (direction: number) => setActive(current => (current + direction + dialPatterns.length) % dialPatterns.length)
+  const move = (direction: number) => setActive(current => (current + direction + menuPatterns.length) % menuPatterns.length)
   const onMenuKey = (event: ReactKeyboardEvent) => {
     // The list is portaled, but React still bubbles its keys to the dial.
     if (event.key === 'ArrowDown' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); move(1) }
     else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') { event.preventDefault(); event.stopPropagation(); move(-1) }
-    else if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); choose(dialPatterns[active]!, true) }
+    else if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); chooseMenu(menuPatterns[active]!) }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(true) }
   }
   return <div className="ov-pattern-dial" ref={host} role="group" aria-label="Operational pattern dial" onKeyDown={event => {
@@ -204,10 +212,11 @@ export function PatternDial({ scene, state, send, now, coverage, onInspectCovera
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(previous)}`} onClick={() => choose(previous)}>{neighbor(previous)}</button>
     <button ref={center} type="button" className="ov-pattern-selected" aria-label={`${selectedName}, ${selectedCount}${scopedCoverage ? `, ${scopedCoverage.label}` : ''}. Show details`} aria-describedby="ov-pattern-description" aria-expanded={shown && pinned} aria-haspopup="dialog" aria-controls={shown && pinned ? 'ov-pattern-detail' : undefined} onMouseEnter={showLater} onMouseLeave={() => { stopTimer(); if (!pinned) setShown(false) }} onFocus={() => { if (!restoring.current) showLater() }} onBlur={() => { stopTimer(); if (!pinned) setShown(false) }} onClick={() => { stopTimer(); setPinned(!pinned); setShown(!pinned) }}><span className="ov-pattern-value"><span><strong>{selectedName}</strong> <b>{selectedCount}</b></span>{scopedCoverage && <small className="ov-pattern-coverage">{scopedCoverage.label}</small>}</span></button>
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(next)}`} onClick={() => choose(next)}>{neighbor(next)}</button>
+    <button type="button" className="ov-pattern-dropdown" aria-label="Choose pattern" aria-haspopup="listbox" aria-expanded={menu} aria-controls="ov-pattern-list" onClick={openMenu}>▾</button>
     <span id="ov-pattern-description" className="ov-sr-only">{selectedName}: {selectedReminder} Swipe sideways, scroll, or use Left and Right arrow keys to change pattern. Enter or Alt+Down lists every pattern; Space shows details.</span>
     {shown && !menu && createPortal(<div ref={tip} id={pinned ? 'ov-pattern-detail' : undefined} role={pinned ? 'dialog' : 'tooltip'} aria-label={pinned ? `${selectedName} pattern coverage` : undefined} className={`ov-pattern-tooltip${pinned ? ' ov-pattern-popover' : ''}`} style={position} onKeyDown={event => event.stopPropagation()}>{pinned ? <><strong>{confirmed} confirmed {selectedName.toLowerCase()}{scopedCoverage && ` · ${scopedCoverage.label}`}</strong><p>{scopedCoverage ? scopedCoverage.reasons[0] : selectedReminder}</p>{scopedCoverage && onInspectCoverage && <button type="button" onClick={() => { hide(); onInspectCoverage() }}>Show {scopedCoverage.unavailableCardIds.length} cards</button>}<button type="button" className="ov-pattern-close" onClick={() => { hide(); focusDial() }}>Close</button></> : `${selectedName}: ${selectedReminder}`}</div>, document.body)}
-    {menu && createPortal(<div ref={menuEl} id="ov-pattern-list" role="listbox" aria-label="Operational patterns" aria-activedescendant={`ov-pattern-option-${dialPatterns[active]}`} tabIndex={-1} className="ov-pattern-menu" style={menuPos} onKeyDown={onMenuKey}>
-      {dialPatterns.map(pattern => <button type="button" tabIndex={-1} key={pattern} id={`ov-pattern-option-${pattern}`} role="option" aria-selected={pattern === selected} aria-label={label(pattern)} title={reminder(pattern)} data-active={pattern === dialPatterns[active] ? 'true' : undefined} onMouseEnter={() => setActive(dialPatterns.indexOf(pattern))} onClick={() => choose(pattern, true)}><span>{dialNames[pattern]}</span><span className="ov-pattern-value"><small>{count(pattern)}</small>{counts[pattern].coverage && <small className="ov-pattern-coverage">{counts[pattern].coverage!.label}</small>}</span></button>)}
+    {menu && createPortal(<div ref={menuEl} id="ov-pattern-list" role="listbox" aria-label="Operational patterns" aria-activedescendant={`ov-pattern-option-${menuPatterns[active]}`} tabIndex={-1} className="ov-pattern-menu" style={menuPos} onKeyDown={onMenuKey}>
+      {menuPatterns.map(pattern => pattern === 'waiting-for' ? <button type="button" tabIndex={-1} key={pattern} id={`ov-pattern-option-${pattern}`} role="option" aria-selected={waitingForActive(state)} data-active={pattern === menuPatterns[active] ? 'true' : undefined} onMouseEnter={() => setActive(menuPatterns.indexOf(pattern))} onClick={() => chooseMenu(pattern)}>Waiting For</button> : <button type="button" tabIndex={-1} key={pattern} id={`ov-pattern-option-${pattern}`} role="option" aria-selected={pattern === selected && !waitingForActive(state)} aria-label={label(pattern)} title={reminder(pattern)} data-active={pattern === menuPatterns[active] ? 'true' : undefined} onMouseEnter={() => setActive(menuPatterns.indexOf(pattern))} onClick={() => choose(pattern, true)}><span>{dialNames[pattern]}</span><span className="ov-pattern-value"><small>{count(pattern)}</small>{counts[pattern].coverage && <small className="ov-pattern-coverage">{counts[pattern].coverage!.label}</small>}</span></button>)}
     </div>, document.body)}
   </div>
 }

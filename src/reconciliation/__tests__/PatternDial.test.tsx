@@ -188,7 +188,8 @@ describe('Pattern Dial', () => {
     fireEvent.click(selected())
     expect(screen.queryByRole('tooltip')).toBeNull()
     expect(selected()).toHaveTextContent('Blocked')
-    expect(screen.getAllByRole('option')).toHaveLength(dialPatterns.length)
+    expect(screen.getAllByRole('option')).toHaveLength(dialPatterns.length + 1)
+    expect(screen.getByRole('option', { name: /^Waiting For$/ })).toBeVisible()
     const previews = patternPreviews(fixtureScene({ now }), state(), now)
     const texts = dialPatterns.map(pattern => {
       const option = screen.getByRole('option', { name: new RegExp(`^${dialNames[pattern]},`) })
