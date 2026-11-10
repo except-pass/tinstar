@@ -41,10 +41,19 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError, action => {
     if (action.type === 'open-queue' || action.type === 'navigate-queue') {
       if (!decisionsActive) onDecisions?.()
-    } else {
+      return
+    }
+    if (action.origin !== 'assistant') {
       if (action.type === 'navigate-card') setCloseRequest(value => value + 1)
       if (!overviewActive) onOverview()
+      return
     }
+    const targets = action.type === 'navigate-card' ? [{ kind: 'card', id: action.cardId }] : action.type === 'reveal-search' || action.type === 'focus' ? [action.target] : action.type === 'flash' ? action.targets : []
+    if (!targets.length) return
+    setCloseRequest(value => value + 1)
+    const inDecisions = targets.every(target => target.kind === 'card' && (queue?.needsWill ?? queue?.items ?? []).some(item => item.cardIds.includes(target.id)))
+    if (inDecisions && onDecisions) { if (!decisionsActive) onDecisions() }
+    else if (!overviewActive) onOverview()
   })
   // All/custom are explicit requests for records outside the operational scope.
   // MCP work queries choose their own scope and never inherit this UI state.

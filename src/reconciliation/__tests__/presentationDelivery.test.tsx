@@ -1,0 +1,93 @@
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+import { SceneSessions } from '../../server/reconciliation/sessions'
+import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
+import { usePresentation } from '../usePresentation'
+import { observeTargets } from '../presentationVisibility'
+
+const scene = fixtureScene(), queue = fixtureQueue(), cardId = queue.items[0]!.cardIds[0]!
+let broker: SceneSessions, hidden = false, focused = true
+let latest: ReturnType<typeof usePresentation>
+function Browser() {
+  const [surface, setSurface] = useState('overview')
+  latest = usePresentation(scene, queue, false, true, surface === 'decisions', false, () => setSurface('decisions'))
+  return <div className={surface === 'decisions' ? 'decisions' : 'ov'} data-revision={latest.state.revision}>
+    <button className={`decisions-row${latest.state.selection?.id === cardId ? ' selected' : ''}${latest.state.flash && latest.state.flash.until > Date.now() ? ' flashed' : ''}`} data-card-id={cardId} data-semantic-id={`card:${cardId}`}>Target decision</button>
+    <button onClick={() => latest.send({ type: 'clear-selection' })}>Browse manually</button>
+  </div>
+}
+async function tick(ms = 1050) { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+function enqueue(command_id = 'target') {
+  const tab = broker.list()[0]!
+  const input = { scene_id: tab.scene_id, command_id, expected_revision: tab.revision, ttl_ms: 8000, action: { type: 'navigate-card' as const, cardId } }
+  expect(broker.enqueue(input, scene).outcome).toBe('queued')
+  return input
+}
+beforeEach(() => {
+  vi.useFakeTimers(); localStorage.clear(); hidden = false; focused = true; broker = new SceneSessions()
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => focused)
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ x: 10, y: 10, left: 10, top: 10, right: 310, bottom: 50, width: 300, height: 40, toJSON() {} }))
+  vi.stubGlobal('fetch', vi.fn(async (_url, request) => {
+    const body = JSON.parse(request.body)
+    const data = body.type === 'register' ? broker.register(body.state, body.rendered_scene)
+      : body.type === 'sync' ? { commands: broker.sync(body.scene_id, body.state, body.acknowledgments, body.rendered_scene), designated: broker.read(body.scene_id).designated }
+      : body.type === 'designate' ? (broker.designate(body.scene_id), { designated: true }) : {}
+    return new Response(JSON.stringify({ ok: true, data }))
+  }))
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('[data-card-id]') })
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+})
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+describe('browser delivery and replay', () => {
+  it('routes assistant navigation through the workspace and observes the actual DOM target before visible delivery', async () => {
+    render(<Browser />); await tick()
+    const input = enqueue(); await tick(); await tick()
+    expect(document.querySelector('.decisions .selected')).toBe(screen.getByText('Target decision'))
+    expect(broker.result(input.scene_id, input.command_id)).toMatchObject({ outcome: 'applied', delivery: { stage: 'foreground-visible', surface: 'decisions', targets: [`card:${cardId}`], visible_targets: [`card:${cardId}`], pending: false } })
+    const observation = broker.read(input.scene_id).rendered_scene!
+    expect(observation.rendered_at).toBeTruthy()
+    expect(observation.scene_generated_at).toBe(scene.generatedAt)
+    expect(observation.surface).toBe('decisions')
+    await act(async () => latest.useThisTab())
+    expect(broker.resolve()).toEqual({ scene_id: input.scene_id })
+    expect(broker.list()[0]!.designated).toBe(true)
+  })
+  it('retains background focus past flash expiry, then replays on foreground without another revision or command', async () => {
+    hidden = true; focused = false
+    render(<Browser />); await tick()
+    const input = enqueue(); await tick(); await tick(5500)
+    expect(broker.result(input.scene_id, input.command_id)).toMatchObject({ outcome: 'applied', delivery: { stage: 'not-visible', visible_targets: [], pending: true } })
+    expect(latest.pendingFocus).toBe(true)
+    expect(latest.state.flash!.until).toBeLessThan(Date.now())
+    const revision = latest.state.revision
+    hidden = false; focused = true
+    act(() => window.dispatchEvent(new Event('focus')))
+    await tick()
+    expect(latest.state.flash!.until).toBeGreaterThan(Date.now())
+    expect(latest.state.revision).toBe(revision)
+    expect(latest.pendingFocus).toBe(false)
+    expect(broker.enqueue(input, scene)).toMatchObject({ outcome: 'applied', delivery: { stage: 'foreground-visible', pending: false } })
+    expect(broker.sync(input.scene_id, latest.state, [])).toEqual([])
+  })
+  it('lets manual interaction cancel background replay', async () => {
+    hidden = true; focused = false
+    render(<Browser />); await tick()
+    const input = enqueue(); await tick(); await tick(5500)
+    fireEvent.click(screen.getByText('Browse manually')); await tick()
+    hidden = false; focused = true
+    act(() => window.dispatchEvent(new Event('focus'))); await tick()
+    expect(latest.state.selection).toBeNull()
+    expect(latest.state.flash!.until).toBeLessThan(Date.now())
+    expect(broker.result(input.scene_id, input.command_id).delivery).toMatchObject({ stage: 'not-visible', pending: false, reason: 'Superseded by user interaction.' })
+  })
+  it('distinguishes covered DOM targets and unsupported surfaces from foreground visibility', () => {
+    render(<div className="ov"><button data-semantic-id={`card:${cardId}`}>Target</button><aside>Cover</aside></div>)
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('aside') })
+    expect(observeTargets([`card:${cardId}`], 'overview')).toMatchObject({ stage: 'rendered', rendered_targets: [`card:${cardId}`], visible_targets: [], pending: true })
+    expect(observeTargets(['you:root'], 'overview')).toMatchObject({ stage: 'not-supported', pending: false })
+  })
+})

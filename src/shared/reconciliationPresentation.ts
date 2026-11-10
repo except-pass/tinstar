@@ -173,6 +173,15 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     }
     case 'clear-selection': next.selection = null; break
   }
+  if (action.origin === 'assistant' && ['navigate-card', 'reveal-search', 'flash', 'focus'].includes(action.type)) {
+    // A queued filter/overlay hid the owner's ECR decision despite state acks.
+    // Explicit assistant targeting must reveal its destination in this tab.
+    const target = action.type === 'navigate-card' ? { kind: 'card' as const, id: action.cardId } : targets[0]
+    next.queueOpen = false; next.queueCardId = null
+    next.donutFilter = emptyDonutFilter(); next.search = emptySearch(); next.collapsed = []
+    if (target && (target.kind === 'card' || target.kind === 'execution')) { next.searchReveal = target; next.searchFocus = action.type === 'flash' ? action.targets : action.type === 'reveal-search' ? action.targets ?? [target] : [target]; if (action.type !== 'flash') next.selection = target }
+    if (action.type !== 'flash' && target) next.flash = { ids: [semanticId(target)], until: now + 4000 }
+  }
   // Regrouping/focus reveal the selected item without changing its identity.
   const revealTargets = action.type === 'navigate-card' ? [{ kind: 'card' as const, id: action.cardId }] : action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []
   for (const target of revealTargets) {

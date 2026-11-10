@@ -10,7 +10,7 @@ import { StatusDonut, type StatusCount } from './StatusDonut'
 import type { OverviewDensity } from './overviewDensity'
 import type { FloorScene, PresentationAction, PresentationState, Target } from './presentation'
 
-export function FloorToolbar({ scene, state, workerScope, send, gaps, density, onDensityChange, now = Date.now(), visibleWorkers, visibleCards, sourceLabel, onSourceDetails, countNotes, searchControl, sync, patternCoverage, onInspectPatternCoverage }: { scene: FloorScene; state: PresentationState; workerScope?: PresentationState; send: (action: PresentationAction) => void; gaps: Target[]; density?: OverviewDensity; onDensityChange?: (density: OverviewDensity) => void; countNotes?: { cards?: string; workers?: string }; now?: number; visibleWorkers?: number; visibleCards?: number; sourceLabel?: string; onSourceDetails?: () => void; searchControl?: ReactNode; sync?: FloorSync; patternCoverage?: PatternCoverage | null; onInspectPatternCoverage?: () => void }) {
+export function FloorToolbar({ scene, state, workerScope, send, gaps, density, onDensityChange, now = Date.now(), visibleWorkers, visibleCards, sourceLabel, onSourceDetails, countNotes, searchControl, sync, patternCoverage, onInspectPatternCoverage, sessionControl }: { scene: FloorScene; state: PresentationState; workerScope?: PresentationState; send: (action: PresentationAction) => void; gaps: Target[]; density?: OverviewDensity; onDensityChange?: (density: OverviewDensity) => void; countNotes?: { cards?: string; workers?: string }; now?: number; visibleWorkers?: number; visibleCards?: number; sourceLabel?: string; onSourceDetails?: () => void; searchControl?: ReactNode; sync?: FloorSync; patternCoverage?: PatternCoverage | null; onInspectPatternCoverage?: () => void; sessionControl?: ReactNode }) {
   const [panel, setPanel] = useState<'customize' | null>(null)
   const [advanced, setAdvanced] = useState<'filters' | 'fields' | null>(null), [chosen, setChosen] = useState<FloorField | null>(null)
   const organizer = state.organizer ?? defaultOrganizer(), filter = state.statusFilter ?? defaultStatusFilter()
@@ -44,6 +44,7 @@ export function FloorToolbar({ scene, state, workerScope, send, gaps, density, o
       {sync && <FloorRefresh sync={sync} scene={scene} now={now} />}
       <button type="button" className="ov-waiting-entry" aria-pressed={waitingForActive(state)} onClick={() => send({ type: 'enter-waiting-for' })}>Waiting For</button>
       <PatternDial coverage={patternCoverage} onInspectCoverage={onInspectPatternCoverage} scene={scene} state={state} send={send} now={now} />
+      {sessionControl}
       {onSourceDetails && <button type="button" className={`ov-source-indicator ${sourceLabel === 'Sources connected' ? 'ov-signal' : 'ov-warning'}`} title={sourceLabel} aria-label={`${sourceLabel} · Details`} onClick={onSourceDetails}>◉</button>}
     </div>
     <div className="ov-filter-shelf">

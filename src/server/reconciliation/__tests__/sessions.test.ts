@@ -88,3 +88,45 @@ it('distinguishes the rendered UI observation from newer server source reads', (
   broker.sync(a.scene_id, state, [], { ...observation, scene_read_failed: false })
   expect(broker.read(a.scene_id).rendered_scene?.scene_read_failed).toBe(false)
 })
+
+it('identifies four similarly fresh tabs by unique copyable codes or exclusive owner designation', () => {
+  const broker = new SceneSessions(), state = initialPresentation()
+  const tabs = Array.from({ length: 4 }, (_, i) => broker.register(state, {
+    scene_generated_at: '2026-11-10T15:40:00.000Z', scene_read_failed: false,
+    rendered_at: '2026-11-10T17:31:00.000Z', surface: i % 2 ? 'decisions' : 'overview',
+    visibility: i === 0 ? 'visible' : 'hidden', focused: i === 0, route: i % 2 ? '/?view=decisions' : '/',
+  }))
+  expect(new Set(tabs.map(tab => tab.session_code)).size).toBe(4)
+  expect(tabs.every(tab => /^[0-9A-F]{6}$/.test(tab.session_code))).toBe(true)
+  expect(broker.resolve()).toMatchObject({ outcome: 'ambiguous-session' })
+  expect(broker.resolve(undefined, tabs[2]!.session_code.toLowerCase())).toEqual({ scene_id: tabs[2]!.scene_id })
+  expect(broker.resolve(tabs[0]!.scene_id, tabs[1]!.session_code)).toMatchObject({ outcome: 'unknown-id' })
+  broker.designate(tabs[1]!.scene_id)
+  expect(broker.resolve()).toEqual({ scene_id: tabs[1]!.scene_id })
+  broker.designate(tabs[3]!.scene_id)
+  expect(broker.list().filter(tab => tab.designated).map(tab => tab.scene_id)).toEqual([tabs[3]!.scene_id])
+  expect(broker.list()[0]!.observation).toMatchObject({ surface: 'overview', focused: true, rendered_at: '2026-11-10T17:31:00.000Z', scene_generated_at: '2026-11-10T15:40:00.000Z' })
+  expect(JSON.stringify(broker.list())).not.toContain(tabs[0]!.key)
+  broker.disconnect(tabs[3]!.scene_id)
+  expect(broker.resolve()).toMatchObject({ outcome: 'ambiguous-session' })
+})
+
+it('updates visual delivery after an applied background command without reapplying or accepting a different commit', () => {
+  let now = Date.now()
+  const broker = new SceneSessions(() => now), state = initialPresentation(), tab = broker.register(state)
+  const input = { scene_id: tab.scene_id, command_id: 'pending-visual', expected_revision: 0, ttl_ms: 500, action: { type: 'navigate-card' as const, cardId: scene.cards[0]!.id } }
+  expect(broker.enqueue(input, scene).delivery?.stage).toBe('accepted')
+  const command = broker.sync(tab.scene_id, state, [])[0]!
+  const applied = applyPresentationAction(state, command.action, scene, now).state
+  const ack = { scene_id: tab.scene_id, command_id: command.command_id, revision: 1, state: applied, applied_at: now, outcome: 'applied' as const, delivery: { stage: 'not-visible' as const, pending: true } }
+  broker.sync(tab.scene_id, applied, [ack])
+  now += 5000
+  expect(broker.enqueue(input, scene)).toMatchObject({ outcome: 'applied', delivery: { stage: 'not-visible', pending: true } })
+  broker.sync(tab.scene_id, applied, [{ ...ack, applied_at: now, delivery: { stage: 'foreground-visible', pending: false } }])
+  expect(broker.result(tab.scene_id, command.command_id).delivery?.stage).toBe('not-visible')
+  broker.sync(tab.scene_id, applied, [{ ...ack, delivery: { stage: 'foreground-visible', pending: false } }])
+  expect(broker.enqueue(input, scene)).toMatchObject({ outcome: 'applied', revision: 1, delivery: { stage: 'foreground-visible', pending: false } })
+  broker.sync(tab.scene_id, applied, [ack])
+  expect(broker.result(tab.scene_id, command.command_id).delivery?.stage).toBe('foreground-visible')
+  expect(broker.sync(tab.scene_id, applied, [])).toEqual([])
+})

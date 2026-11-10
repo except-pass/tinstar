@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { PresentationAction, PresentationState } from './reconciliationPresentation'
+import type { PresentationDelivery } from './presentationObservation'
 import { patterns } from './workHealth'
 
 export const searchFilterSchema = z.object({ query: z.string().max(512), patterns: z.array(z.enum([patterns[0]!, ...patterns.slice(1)])).max(8), facets: z.array(z.object({ field: z.enum(['initiative', 'machine', 'manager', 'entity']), value: z.string().min(1).max(2048) }).strict()).max(32) }).strict()
@@ -56,7 +57,7 @@ export const stateSchema = z.object({
   flash: z.object({ ids: z.array(z.string().max(2048)).max(4096), until: z.number() }).nullable(), assistantChangedView: z.boolean(),
   queueOpen: z.boolean().optional(), queueCardId: z.string().nullable().optional(), queueItemId: z.string().max(4096).nullable().optional(),
 }).strict()
-export type CommandOutcome = 'queued' | 'applied' | 'expired' | 'disconnected' | 'unknown-id' | 'unauthorized' | 'stale-revision' | 'conflict' | 'queue-source-unavailable'
+export type CommandOutcome = 'queued' | 'applied' | 'expired' | 'disconnected' | 'unknown-id' | 'unauthorized' | 'stale-revision' | 'conflict' | 'queue-source-unavailable' | 'ambiguous-session'
 export interface ViewCommand {
   command_id: string
   scene_id: string
@@ -69,6 +70,7 @@ export interface CommandResult {
   scene_id: string
   outcome: CommandOutcome
   revision?: number
+  delivery?: PresentationDelivery
   applied_at?: number
   state?: PresentationState
 }

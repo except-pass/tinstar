@@ -1,3 +1,4 @@
+import { renderedObservationSchema, deliverySchema } from '../../shared/presentationObservation'
 import { organizedGroups } from '../../shared/floorOrganization'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
@@ -49,7 +50,7 @@ async function body(req: IncomingMessage) {
   } finally { clearTimeout(timeout) }
 }
 const commandInput = {
-  scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(),
+  scene_id: z.string().uuid().optional(), session_code: z.string().regex(/^[a-fA-F0-9]{6}$/).optional(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(),
   ttl_ms: z.number().int().min(500).max(15_000).default(8000), action: actionSchema,
 }
 export interface PresentationReaders {
@@ -65,8 +66,8 @@ export interface PresentationReaders {
   workerLinkReport(): Promise<WorkerLinkReport>
 }
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
-const renderedSchema = z.object({ scene_generated_at: z.string().datetime().nullable(), scene_read_failed: z.boolean() }).strict()
-const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), state: stateSchema.optional() }).strict()
+const renderedSchema = renderedObservationSchema
+const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), delivery: deliverySchema.optional(), state: stateSchema.optional() }).strict()
 
 export class ReconciliationMcp {
   readonly sessions = new SceneSessions()
@@ -86,8 +87,11 @@ export class ReconciliationMcp {
     server.registerTool('start_work', { description: 'Record a real execution: merge exact tracked worker provenance and set In Progress together, attributed to the authenticated caller. Requires Owner and Area; rejects stale/historical/owner-only evidence. Returns confirmed readback or precise not-saved/partially-saved result. Retry identical operation_id/input; no checkpoint/ask changes. External running evidence is explicitly consumer-reported.', inputSchema: startWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.startWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
     server.registerTool('create_work', { description: 'Create a configured-board card with declared owner/area, ordinary properties, brief and acceptance criteria. Firstmate assignment is Queued. Authenticated attribution, confirmed readback and retryable operation_id; no scene/window required.', inputSchema: createWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.createWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
     server.registerTool('update_work', { description: 'Shared workflow operation: edit ordinary properties/brief/acceptance or note; assign/handoff; evidence-backed checkpoint (provisional or owner-confirmed); wait with dependency/unblock/follow-up; request/answer a specific decision with declared next owner/status (source_request binds an exact First Mate home/task/id/kind; its answer is delivered through the existing receipt bridge and remains pending until acknowledgment plus source closure); complete/park with supported disposition. In Progress requires worker evidence, other asks/history survive. Returns exact saved fields and partial results. Retry identical operation_id/input; no scene/window required.', inputSchema: updateWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.updateWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
-    server.registerTool('list_ui_sessions', { description: 'List authorized ephemeral Overview windows and connected state. Choose an explicit scene_id; never guess a window.', inputSchema: {}, annotations: readAnnotations }, async () => result({ sessions: this.sessions.list() }))
-    server.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => {
+    server.registerTool('list_ui_sessions', { description: 'List authorized tabs with copyable session_code, owner designation, route, surface, rendered time, selection and visibility. Match the code the user sees or their designated tab; never guess by last_seen. Multiple undesignated tabs are ambiguous.', inputSchema: {}, annotations: readAnnotations }, async () => result({ sessions: this.sessions.list(), targeting: this.sessions.resolve() }))
+    server.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid().optional(), session_code: z.string().regex(/^[a-fA-F0-9]{6}$/).optional() }, annotations: readAnnotations }, async input => {
+      const selected = this.sessions.resolve(input.scene_id, input.session_code)
+      if (!('scene_id' in selected)) return result(selected)
+      const { scene_id } = selected
       const window = this.sessions.read(scene_id)
       if (window.outcome === 'unknown-id') return result(window)
       const scene = await this.sceneForWindow(scene_id)
@@ -119,8 +123,8 @@ export class ReconciliationMcp {
     })
     server.registerTool('get_queue', { description: 'Read ordered decision readiness and each exact source (home, task, request id/kind), per-source readiness and bound response identity. Bounded refresh reconciles already-recorded answers; it never chooses an answer. An unavailable queue is never an empty ready queue.', inputSchema: { scene_id: z.string().uuid() }, annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: true, openWorldHint: true } }, async ({ scene_id }) => result(this.sessions.read(scene_id).outcome === 'unknown-id' ? { outcome: 'unknown-id' } : await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Queue source read failed' }))))
     server.registerTool('get_worker_link_report', { description: 'Read deterministic configured-home worker-link mismatch findings, unknown coverage and auditable backfill proposals. Report only: First Mate must verify durable task records before writing any proposed merged Notion property.', inputSchema: {}, annotations: readAnnotations }, async () => result(await this.readers.workerLinkReport()))
-    server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
-    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered verified ready decision; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
+    server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. outcome=applied means state only; delivery.stage separately reports accepted/applied-to-state/rendered/foreground-visible/not-visible/not-supported. Only foreground-visible proves observed target visibility, not that the user noticed it. Background focus remains pending until foreground. Provide scene_id or session_code confirmed by the user, or omit both to use their designated tab (ambiguous tabs refuse). User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
+    server.registerTool('next_queue_item', { description: 'Navigate to the next ordered verified ready decision; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid().optional(), session_code: z.string().regex(/^[a-fA-F0-9]{6}$/).optional(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
     registerDomainReadTools(server, this.domainReads, request)
     return server
@@ -129,7 +133,11 @@ export class ReconciliationMcp {
     const filter = this.sessions.read(sceneId).state?.statusFilter?.preset
     return this.readers.scene(false, filter === 'all' || filter === 'custom' ? { history: true } : {})
   }
-  private async submitAndWait(input: Parameters<SceneSessions['enqueue']>[0]) {
+  private async submitAndWait(request: Omit<Parameters<SceneSessions['enqueue']>[0], 'scene_id'> & { scene_id?: string; session_code?: string }) {
+    const selected = this.sessions.resolve(request.scene_id, request.session_code)
+    if (!('scene_id' in selected)) return result(selected)
+    const { session_code: _code, ...rest } = request
+    const input = { ...rest, scene_id: selected.scene_id }
     const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
     const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
     const queued = this.sessions.enqueue(input, await this.sceneForWindow(input.scene_id), queue)
@@ -190,12 +198,14 @@ export class ReconciliationMcp {
       const parsed = z.discriminatedUnion('type', [
         z.object({ type: z.literal('register'), state: stateSchema, rendered_scene: renderedSchema.optional() }).strict(),
         z.object({ type: z.literal('sync'), scene_id: z.string().uuid(), key: z.string().max(128), state: stateSchema, acknowledgments: z.array(ackSchema).max(32), rendered_scene: renderedSchema.optional() }).strict(),
+        z.object({ type: z.literal('designate'), scene_id: z.string().uuid(), key: z.string().max(128) }).strict(),
         z.object({ type: z.literal('disconnect'), scene_id: z.string().uuid(), key: z.string().max(128) }).strict(),
       ]).parse(await body(req))
       if (parsed.type === 'register') return ok(res, this.sessions.register(parsed.state, parsed.rendered_scene), { headers })
       if (!this.sessions.authorized(parsed.scene_id, parsed.key)) return fail(res, 'FORBIDDEN', 'unauthorized', { headers })
+      if (parsed.type === 'designate') { this.sessions.designate(parsed.scene_id); return ok(res, { designated: true }, { headers }) }
       if (parsed.type === 'disconnect') { this.sessions.disconnect(parsed.scene_id); return ok(res, { outcome: 'disconnected' }, { headers }) }
-      return ok(res, { commands: this.sessions.sync(parsed.scene_id, parsed.state, parsed.acknowledgments as CommandResult[], parsed.rendered_scene) }, { headers })
+      return ok(res, { commands: this.sessions.sync(parsed.scene_id, parsed.state, parsed.acknowledgments as CommandResult[], parsed.rendered_scene), designated: this.sessions.read(parsed.scene_id).designated }, { headers })
     } catch { return fail(res, 'BAD_REQUEST', 'Invalid UI presentation request', { headers }) }
   }
 }

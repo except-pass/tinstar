@@ -88,7 +88,7 @@ it('accepts an encoded modern tool name and keeps transport content negotiation'
   const { url } = await setup()
   const encoded = await post(url, 'tools/call', '2026-07-28', { name: 'list_ui_sessions', arguments: {} }, { 'Mcp-Name': '=?base64?bGlzdF91aV9zZXNzaW9ucw==?=' })
   expect(encoded.status).toBe(200)
-  expect(parse((await encoded.json()).result)).toEqual({ sessions: [] })
+  expect(parse((await encoded.json()).result)).toMatchObject({ sessions: [], targeting: { outcome: 'unknown-id' } })
   expect((await post(url, 'tools/list', '2026-07-28', {}, { Accept: 'text/html' })).status).toBe(406)
   expect((await post(url, 'tools/list', '2026-07-28', {}, { 'Content-Type': 'text/plain' })).status).toBe(415)
 })

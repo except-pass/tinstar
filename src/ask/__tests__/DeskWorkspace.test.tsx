@@ -369,3 +369,28 @@ it('routes each intentional decision navigation and keeps Discuss collapse indep
   fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
   expect(screen.getByTestId('page')).toHaveTextContent('decisions')
 })
+
+it('routes an MCP navigate-card in the same App tab and closes an already-open mobile Desk', async () => {
+  vi.useFakeTimers()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+  source.queue = fixtureQueue()
+  const cardId = source.queue.items[0]!.cardIds[0]!
+  const fallback = read.getMockImplementation()!
+  let sent = false
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    const data = body.type === 'register' ? { scene_id: 'test', session_code: 'A123BC', key: 'secret', designated: false }
+      : body.type === 'sync' && !sent ? { commands: [{ scene_id: 'test', command_id: 'navigate', expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { type: 'navigate-card', cardId, origin: 'assistant', expectedRevision: body.state.revision } }] } : { commands: [] }
+    if (body.type === 'sync') sent = true
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: /^Open Discuss/ }))
+  expect(screen.getByLabelText('Discuss').closest('.desk-host')).toHaveClass('is-open')
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  expect(location.search).toContain('view=decisions')
+  expect(document.querySelector(`.decisions-row[data-card-id="${cardId}"]`)).toHaveClass('selected')
+  expect(screen.getByLabelText('Discuss').closest('.desk-host')).not.toHaveClass('is-open')
+  expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-scene-id', 'test')
+})
