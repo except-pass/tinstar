@@ -19,7 +19,7 @@ const searchViewSchema = z.object({
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
   exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   donutFilter: donutFilterSchema.optional(), linksVisible: z.boolean().optional(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), sort: z.enum(['activity', 'priority']).optional(),
-}).strict()
+}).partial().strict()
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('set-search'), search: searchFilterSchema }).strict(),
   z.object({ type: z.literal('set-pattern'), pattern: z.enum([patterns[0]!, ...patterns.slice(1)]).nullable() }).strict(),

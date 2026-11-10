@@ -543,6 +543,39 @@ describe('initiative selection applies the canonical filter', () => {
     expect(preferences().search?.facets ?? []).toEqual([])
   })
 
+  it.each([true, false])('keeps explicit Gaps-only edits after initiative selection from %s', initiallyEnabled => {
+    const { container } = mount()
+    act(() => observed.send!({ type: 'set-exceptions', enabled: initiallyEnabled }))
+    chooseInitiative()
+    expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeTruthy()
+    if (initiallyEnabled) fireEvent.click(screen.getByRole('button', { name: 'Remove View: Gaps only' }))
+    else act(() => observed.send!({ type: 'set-exceptions', enabled: true }))
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+    const before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(!!screen.queryByRole('button', { name: 'Remove View: Gaps only' })).toBe(!initiallyEnabled)
+    expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
+    expect(cardIds(container)).toEqual(before)
+  })
+
+  it.each(['compact', 'detailed'])('reveals through Gaps only without changing the filter in %s view', density => {
+    const { container } = mount()
+    if (density === 'detailed') {
+      fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+      fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    }
+    act(() => observed.send!({ type: 'set-exceptions', enabled: true }))
+    const before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('Release Coordinator')
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(cardIds(container)).toContain(fixtureId(1))
+    expect(screen.getByRole('button', { name: 'Remove View: Gaps only' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    expect(screen.getByRole('button', { name: 'Remove View: Gaps only' })).toBeTruthy()
+    expect(cardIds(container)).toEqual(before)
+  })
+
   it('uses the relation identity with its display name, matching semantic set-search and Customize', () => {
     const parent = scene.cards.find(card => card.id === fixtureId(100))!
     parent.source.properties.Name!.value = 'Tin Star'

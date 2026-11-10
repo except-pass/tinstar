@@ -171,7 +171,7 @@ export function Group({ view, group, hover, focus, allGroups, workersOnly = fals
   const ws = group.workers, cards = group.cards
   // Measurement updates local path state; keep its filtered input stable so
   // that update cannot retrigger measurement in a render loop.
-  const cs = useMemo(() => tasksByWorkerPosition(ws, state.roadmapExpanded ? cards : cards.filter(c => !isPlanned(scene, c)), scene.claims), [ws, cards, scene, state.roadmapExpanded])
+  const cs = useMemo(() => tasksByWorkerPosition(ws, (state.roadmapExpanded || state.searchFocus?.length) ? cards : cards.filter(c => !isPlanned(scene, c)), scene.claims), [ws, cards, scene, state.roadmapExpanded, state.searchFocus])
   const rows = useMemo(() => {
     const workerIds = new Set(ws.map(w => w.id)), cardIds = new Set(cs.map(c => c.id))
     const links = scene.claims.filter(c => c.state !== 'historical' && workerIds.has(c.executionId) && cardIds.has(c.cardId))
@@ -426,7 +426,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const visibleCardIds = new Set(groups.flatMap(g => g.cards.map(c => c.id)))
   const visibleCards = visibleCardIds.size
   const linkHealth = workerLinkSourceHealth(scene, visibleCardIds, now, !!error)
-  const patternCoverage = patternResults ? patternCheckSummary(groups.flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)), patternResults) : null
+  const patternCoverage = patternResults ? patternCheckSummary(groups.flatMap(group => group.cards.filter(card => state.roadmapExpanded || state.searchFocus?.length || !isPlanned(scene, card)).map(card => card.id)), patternResults) : null
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
