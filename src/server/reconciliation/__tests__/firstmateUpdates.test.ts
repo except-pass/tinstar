@@ -200,3 +200,35 @@ it('bounds slow pickup preflight and rotates to later ready batches without losi
     expect(state.batches.find((b: any) => b.items.some((item: any) => item.card_id === f.card.id)).announced).toBe(false)
   } finally { vi.useRealTimers() }
 })
+
+it('delivers healthy siblings from a twenty-card batch and rotates past an inaccessible pickup', async () => {
+  const f = await fixture()
+  const cards = Array.from({ length: 20 }, (_, index) => ({ ...structuredClone(f.card), id: index.toString(16).padStart(32, '0') }))
+  for (const card of cards) await f.feed.confirmed({ card, actor: 'Owner', operationId: card.id })
+  f.sources.currentCard.mockImplementation(async id => {
+    if (id === cards[0]!.id) throw new Error('Unavailable')
+    return structuredClone(cards.find(card => card.id === id)!)
+  })
+  f.advance()
+  const seen = new Set<string>()
+  for (let pull = 0; pull < 7; pull++) {
+    f.sources.currentCard.mockClear()
+    const notices = (await f.feed.bridgeWork()).pending
+    expect(f.sources.currentCard.mock.calls.length).toBeLessThanOrEqual(4)
+    for (const notice of notices) {
+      for (const item of payload(notice.body).changes) {
+        expect(seen.has(item.card_id)).toBe(false)
+        seen.add(item.card_id)
+      }
+      await f.feed.ingest({ request_id: notice.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, id: notice.request_id, request_id: inboxRequestId(notice.request_id), announced: true } })
+    }
+  }
+  expect([...seen].sort()).toEqual(cards.slice(1).map(card => card.id).sort())
+  const state = JSON.parse(await readFile(f.feed.path, 'utf8'))
+  expect(state.batches.filter((batch: any) => !batch.announced).flatMap((batch: any) => batch.items.map((item: any) => item.card_id))).toEqual([cards[0]!.id])
+  f.sources.currentCard.mockResolvedValue(structuredClone(cards[0]!))
+  const recovered = (await f.restarted().bridgeWork()).pending
+  expect(recovered).toHaveLength(1)
+  expect(payload(recovered[0]!.body).changes[0].card_id).toBe(cards[0]!.id)
+  expect((await f.restarted().bridgeWork()).pending).toEqual(recovered)
+})
