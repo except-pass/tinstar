@@ -62,9 +62,11 @@ Opening a row retains its canonical request identity and shares linked-card focu
 visible through `get_scene`; persistence follows the [presentation preference rules](overview.md).
 Unlinked requests expose their details and evidence without offering card focus.
 
-The [MCP session contract](reconciliation-mcp.md#start-and-connect) governs bridge availability.
-`present_view` focus and flash remain in Decisions. Flash reveals a row
-outside the current search or scroll position, then restores the list scroll
-unless the user interacts. Steady selection and a brief flash use distinct
-styles. A card missing from either the queue or source scene cannot receive an
-applied visible flash; failed source reads report unavailable coverage.
+The [MCP delivery contract](reconciliation-mcp.md#delivery-and-acknowledgment)
+governs tab selection, surface handoff and visual acknowledgment.
+Within Decisions, flash temporarily reveals all requested queue rows outside
+the local search without changing its text, then restores the list scroll
+unless the user interacts. Assistant reveal includes both its primary target
+and additional targets, including during foreground replay. Editing the local
+query dismisses the transient reveal. Steady selection and a brief flash use
+distinct styles; failed source reads report unavailable coverage.

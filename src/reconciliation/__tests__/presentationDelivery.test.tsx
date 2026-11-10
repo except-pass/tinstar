@@ -47,7 +47,8 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstub
 describe('browser delivery and replay', () => {
   it('routes assistant navigation through the workspace and observes the actual DOM target before visible delivery', async () => {
     render(<Browser />); await tick()
-    const input = enqueue(); await tick(); await tick()
+    // The committed-state acknowledgment precedes the DOM observation in sync.
+    const input = enqueue(); await tick(); await tick(); await tick()
     expect(document.querySelector('.decisions .selected')).toBe(screen.getByText('Target decision'))
     expect(broker.result(input.scene_id, input.command_id)).toMatchObject({ outcome: 'applied', delivery: { stage: 'foreground-visible', surface: 'decisions', targets: [`card:${cardId}`], visible_targets: [`card:${cardId}`], pending: false } })
     const observation = broker.read(input.scene_id).rendered_scene!
@@ -68,7 +69,8 @@ describe('browser delivery and replay', () => {
     const revision = latest.state.revision
     hidden = false; focused = true
     act(() => window.dispatchEvent(new Event('focus')))
-    await tick()
+    // Drain the earlier not-visible acknowledgment before the replay observation.
+    await tick(); await tick()
     expect(latest.state.flash!.until).toBeGreaterThan(Date.now())
     expect(latest.state.revision).toBe(revision)
     expect(latest.pendingFocus).toBe(false)

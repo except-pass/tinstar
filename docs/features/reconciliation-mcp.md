@@ -112,7 +112,7 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `list_prs(offset?, limit?)` | Shared PR Operations open inventory, captured heads, card links and coverage; requires a verified owner binding |
 | `get_pr(url, head, include_files?, offset?, limit?)` | Shared exact-head description, checks, reviews, optional file metadata and card/worker attribution; requires a verified owner binding |
 | `get_release_status(offset?, limit?)` | Shared Releases PR-first observations, links, production receipts/ancestry, dry-run eligibility and verification requirements; no owner/write authority |
-| `present_view(...)` | Enqueue a semantic action for one explicit window and wait up to two seconds for its acknowledgment |
+| `present_view(...)` | Enqueue a semantic action for one selected tab and wait up to two seconds for its acknowledgment |
 | `next_queue_item(...)` | Navigate the real S4 ordered verified-ready queue with the same acknowledgment protocol |
 | `get_command(scene_id, command_id)` | Query a prior command outcome without applying it again |
 
@@ -265,6 +265,8 @@ The small **ChatGPT · A1B2C3** connection menu in the existing Overview toolbar
 The tool names are unchanged, but `get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`; refresh the ChatGPT connector once after deployment to load the updated schemas/descriptions. `search_work` owner/status filtering and `coverage.intentions` are unchanged.
 
 The registry keeps at most 64 windows and 256 command receipts per window. Windows/receipts expire after ten minutes; a heartbeat older than ten seconds is disconnected. The MCP interface is stateless at the transport level: browser window IDs, rather than transport sessions, select the view. There is no event watcher or new fleet poller.
+
+For `present_view` and `next_queue_item`, an implicit command reserves its tab before source reads begin. Identical retries stay bound to that retained tab even if the owner designates another tab while the first request is in flight. Explicit window commands retain independent per-window command IDs and revisions.
 
 - `queued`: accepted for delivery, **not** applied. Query `get_command` or retry the identical `present_view` input.
 - `applied`: the UI dispatched the shared reducer, React committed the resulting view, and the browser returned its resulting revision/state. Server acceptance alone cannot yield this result.
