@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fixtureId, fixtureReadinessScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureReadinessScene, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { workHealth } from '../../shared/workHealth'
 
 const now = Date.parse('2026-11-09T16:00:00Z')
@@ -227,5 +227,47 @@ describe('Codex turn readiness', () => {
     worker.source.codex!.turn_open = false
     worker.source.current_state.state = 'working'
     expect(health(scene)).toMatchObject({ running: 1, waiting: 0 })
+  })
+})
+
+describe('status-aware worker coverage', () => {
+  it.each(['Queued', 'Waiting For', 'Waiting for Prod Release', 'Done', 'Archived'])(
+    'does not require a First Mate worker for %s', status => {
+      const scene = fixtureScene({ now }), card = scene.cards.find(card => card.id === fixtureId(2))!
+      card.source.properties.Status!.value = status
+      expect(health(scene, 2).patterns.unstaffed.outcome).toBe('no-match')
+      expect(health(scene, 2).patterns.stalled.outcome).toBe('no-match')
+      expect(health(scene, 2).patterns.active.outcome).toBe('no-match')
+    },
+  )
+  it('does not treat an archived In Progress card as unstaffed', () => {
+    const scene = fixtureScene({ now })
+    scene.cards.find(card => card.id === fixtureId(2))!.source.archived = true
+    expect(health(scene, 2).patterns.unstaffed.outcome).toBe('no-match')
+  })
+  it('requires sufficient coverage to conclude In Progress is unstaffed', () => {
+    const scene = fixtureScene({ now })
+    expect(health(scene, 2).patterns.unstaffed.outcome).toBe('match')
+    scene.coverage.absenceConclusions = 'suppressed'
+    expect(health(scene, 2).patterns.unstaffed.outcome).toBe('unavailable')
+  })
+  it('retains unknown instead of a defect for an unaccountable blank link', () => {
+    const scene = fixtureScene({ now }), card = scene.cards.find(card => card.id === fixtureId(2))!
+    card.source.properties['First Mate tasks']!.value = ''
+    scene.findings = scene.findings.filter(finding => !finding.cardIds.includes(card.id))
+    expect(health(scene, 2).patterns.unstaffed.outcome).toBe('unavailable')
+  })
+  it.each(['current', 'stale', 'different-card'] as const)('accounts for a %s external-worker report without inventing verified runtime coverage', freshness => {
+    const scene = fixtureScene({ now }), card = scene.cards.find(card => card.id === fixtureId(2))!
+    card.source.properties['Delegated To'] = { id: 'external', type: 'rich_text', hasMore: false, value: JSON.stringify({
+      schema: 'tinstar.external-worker.v1', kind: 'external', system: 'Build runner', run_id: 'one',
+      reference: 'https://runner.example/one', card_id: freshness === 'different-card' ? fixtureId(1) : card.id,
+      observed_at: new Date(now - (freshness === 'stale' ? 600_000 : 0)).toISOString(), state: 'running',
+      evidence: 'Actively compiling the assigned card', reported_by: 'Clawson',
+    }) }
+    const verdict = health(scene, 2)
+    expect(verdict.patterns.unstaffed.outcome).toBe(freshness === 'current' ? 'no-match' : freshness === 'stale' ? 'unavailable' : 'match')
+    expect(verdict.patterns.active.outcome).toBe('unavailable')
+    if (freshness !== 'different-card') expect(verdict.patterns.unstaffed.evidence.join(' ')).toContain('https://runner.example/one')
   })
 })

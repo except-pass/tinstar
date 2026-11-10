@@ -41,9 +41,19 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
   return [...facts].map(([fact, count]) => `${count} ${count === 1 ? 'worker' : 'workers'}${/^(?:running|waiting)(?:$| ·)/.test(fact) ? ' ' : ', '}${fact}`).join(' · ')
 }
 
-/** One explanation for the unique visible cards a pattern could not check. */
-export function patternCheckSummary(results: Iterable<PatternResult | undefined>): string | null {
-  const unknown = [...results].filter((result): result is PatternResult => result?.outcome === 'unavailable')
+export interface PatternCoverage {
+  unavailableCardIds: string[]
+  total: number
+  evaluated: number
+  label: string
+  reasons: string[]
+}
+
+/** Coverage of the selected pattern, never a worker-link finding count. */
+export function patternCheckSummary(cardIds: Iterable<string>, results: ReadonlyMap<string, PatternResult>): PatternCoverage | null {
+  const visible = [...new Set(cardIds)].filter(id => results.has(id))
+  const unavailableCardIds = visible.filter(id => results.get(id)!.outcome === 'unavailable')
+  const unknown = unavailableCardIds.map(id => results.get(id)!)
   if (!unknown.length) return null
   const reasons = new Set(unknown.flatMap(result => result.reason.split('; ').map(reason => {
     if (/source read failed/i.test(reason)) return 'source read failed'
@@ -51,14 +61,15 @@ export function patternCheckSummary(results: Iterable<PatternResult | undefined>
     if (/Work status is not published/i.test(reason)) return 'work status unknown'
     if (/last reported|observation |liveness not observed/i.test(reason)) return 'worker observations incomplete or stale'
     if (/Home snapshot/i.test(reason)) return 'worker snapshots unavailable or stale'
-    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'workers have no current update'
-    if (/Worker decision requests/i.test(reason)) return 'worker decisions or links unknown'
-    if (/accountability|source, link|assignment coverage/i.test(reason)) return 'worker links incomplete'
+    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'worker state unknown'
+    if (/Worker decision requests/i.test(reason)) return 'worker decision evidence unavailable'
+    if (/accountability|source, link|assignment coverage/i.test(reason)) return 'assignment evidence incomplete'
     if (/Runnable.*(?:coverage|unknown|availability)/i.test(reason)) return 'runnable work unknown'
     if (/resolver.*(?:coverage|unknown)/i.test(reason)) return 'resolver coverage incomplete'
     if (/Tracked continuation/i.test(reason)) return 'continuations not checked'
     if (/Meaningful progress|heartbeat\/check-in age|no threshold can/i.test(reason)) return 'progress time unknown'
     return reason
   }).filter(Boolean)))
-  return `${unknown.length} ${unknown.length === 1 ? 'card' : 'cards'} not checked: ${[...reasons].join('; ')}`
+  return { unavailableCardIds, total: visible.length, evaluated: visible.length - unknown.length,
+    label: `Pattern unknown: ${unknown.length}`, reasons: [...reasons] }
 }

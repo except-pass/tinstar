@@ -282,8 +282,8 @@ describe('shared dial filtering contract', () => {
     const unknown = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
     expect(unknown).toHaveTextContent('No worker')
     expect(container).not.toHaveTextContent("Can't tell")
-    expect(container.querySelectorAll('.ov-pattern-summary')).toHaveLength(1)
-    expect(screen.getByText('1 card not checked: worker observations incomplete or stale')).toBeVisible()
+    expect(container.querySelector('.ov-pattern-summary')).toBeNull()
+    expect(screen.getByText('Pattern unknown: 1')).toBeVisible()
     fireEvent.click(counterpart)
     expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(6)}"]`)).toBeNull()
   })
@@ -381,5 +381,86 @@ describe('worker facts in existing card metadata', () => {
     expect(shownWorkers.some(element => element.dataset.entityId === finished.id)).toBe(false)
     expect(container.querySelector('.ov-pattern-summary')).toBeNull()
     expect(card).not.toHaveTextContent("Can't tell")
+  })
+})
+
+
+describe('pattern coverage drilldown', () => {
+  it('uses the existing floor focus to inspect exactly unknown cards and restores the selected pattern', () => {
+    const records = health.sceneWorkHealth(scene, Date.now()).map(record => ({ ...record, patterns: { ...record.patterns,
+      decision: { outcome: record.cardId === fixtureId(1) ? 'match' : record.cardId === fixtureId(2) || record.cardId === fixtureId(3) ? 'unavailable' : 'no-match',
+        reason: 'Worker decision requests or assignment coverage are incomplete', evidence: ['Exact source evidence'] } as health.PatternResult,
+    } }))
+    vi.spyOn(health, 'sceneWorkHealth').mockReturnValue(records)
+    const before = JSON.stringify(scene)
+    const { container } = mount()
+    expect(screen.queryByText(/Pattern unknown:/)).toBeNull()
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'decision' }) })
+    const original = [...new Set(cardIds(container))].sort()
+    expect(screen.getByText('Pattern unknown: 2')).toBeVisible()
+    fireEvent.click(container.querySelector('.ov-pattern-selected')!)
+    const detail = screen.getByRole('dialog', { name: 'Needs me pattern coverage' })
+    expect(detail).toHaveTextContent('Selected pattern could not evaluate 2 of 3 visible cards; 1 evaluated.')
+    expect(detail).toHaveTextContent('worker decision evidence unavailable')
+    const inspect = within(detail).getByRole('button', { name: 'Inspect 2 cards with unknown pattern' })
+    expect(inspect).toHaveFocus()
+    expect(fireEvent.keyDown(inspect, { key: 'Enter' })).toBe(true)
+    expect(screen.queryByRole('listbox', { name: 'Operational patterns' })).toBeNull()
+    fireEvent.click(inspect)
+    expect([...new Set(cardIds(container))].sort()).toEqual([fixtureId(2), fixtureId(3)])
+    expect(container.querySelector('.ov-pattern-selected')).toHaveTextContent('Needs me')
+    expect(container.querySelectorAll('.ov-card.ov-collapsed').length).toBeGreaterThan(0)
+    const card = container.querySelector(`.ov-card[data-entity-id="${fixtureId(2)}"]`)!
+    fireEvent.click(within(card.closest<HTMLElement>('.ov-item-frame')!).getByRole('button', { name: 'Open in Inspector' }))
+    expect(screen.getByRole('region', { name: 'Inspector' })).toHaveTextContent('Selected pattern: unable to evaluate')
+    fireEvent.click(screen.getByRole('button', { name: 'Close Inspector' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    expect([...new Set(cardIds(container))].sort()).toEqual(original)
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'blocked' }) })
+    expect(screen.queryByText(/Pattern unknown:/)).toBeNull()
+    act(() => { observed.send!({ type: 'set-pattern', pattern: null }) })
+    expect(screen.queryByText(/Pattern unknown:/)).toBeNull()
+    expect(JSON.stringify(scene)).toBe(before)
+  })
+  it.each([false, true])('scopes coverage and drilldown to roadmap visibility (%s)', expanded => {
+    const planned = scene.cards.find(card => card.id === fixtureId(2))!
+    planned.source.properties.Status!.value = 'Queued'
+    planned.expectation = 'wait-planned'
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-roadmap', expanded }) })
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'stale' }) })
+    const visible = [...new Set(cardIds(container))].sort()
+    expect(visible.includes(planned.id)).toBe(expanded)
+    expect(screen.getByText(`Pattern unknown: ${visible.length}`)).toBeVisible()
+    fireEvent.click(container.querySelector('.ov-pattern-selected')!)
+    const detail = screen.getByRole('dialog', { name: 'Stale pattern coverage' })
+    expect(detail).toHaveTextContent(`${visible.length} of ${visible.length} visible cards; 0 evaluated.`)
+    fireEvent.click(within(detail).getByRole('button', { name: /Inspect .* with unknown pattern/ }))
+    expect([...new Set(cardIds(container))].sort()).toEqual(visible)
+  })
+  it('describes every predicate in a combined pattern selection', () => {
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }) })
+    act(() => { observed.send!({ type: 'set-search', search: { query: '', patterns: ['blocked', 'stale'], facets: [] } }) })
+    const selected = container.querySelector('.ov-pattern-selected')!
+    expect(selected).toHaveTextContent('Blocked + Stale')
+    expect(selected).toHaveAccessibleName(/Blocked \+ Stale.*Selected pattern combination \(Blocked \+ Stale\)/)
+    const description = container.querySelector('#ov-pattern-description')!
+    expect(description).toHaveTextContent(health.patternReminders.blocked)
+    expect(description).toHaveTextContent(health.patternReminders.stale)
+    fireEvent.click(selected)
+    const detail = screen.getByRole('dialog', { name: 'Blocked + Stale pattern coverage' })
+    expect(detail).toHaveTextContent('Selected pattern combination (Blocked + Stale) could not evaluate 1 of 1 visible cards; 0 evaluated.')
+    expect(detail).toHaveTextContent(health.patternReminders.blocked)
+    expect(detail).toHaveTextContent(health.patternReminders.stale)
+  })
+  it('counts only unique cards remaining under status scope', () => {
+    const { container } = mount()
+    act(() => { observed.send!({ type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }) })
+    act(() => { observed.send!({ type: 'set-pattern', pattern: 'stale' }) })
+    expect([...new Set(cardIds(container))]).toEqual([fixtureId(4)])
+    expect(screen.getByText('Pattern unknown: 1')).toBeVisible()
+    fireEvent.click(container.querySelector('.ov-pattern-selected')!)
+    expect(screen.getByRole('dialog', { name: 'Stale pattern coverage' })).toHaveTextContent('1 of 1 visible cards; 0 evaluated.')
   })
 })

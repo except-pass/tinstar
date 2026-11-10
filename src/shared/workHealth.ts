@@ -2,6 +2,7 @@ import type { FloorScene } from './reconciliationPresentation'
 import { currentActivity, readinessContext, workReadiness } from './workReadiness'
 import { activeWorker } from './workerEvidence'
 import type { Claim } from '../server/reconciliation/scene'
+import { externalWorkers } from './workflow'
 
 export const verifiedLink = (link: Claim) => link.basis === 'explicit' && link.verification === 'confirmed' && link.state === 'current'
 export const freshObservation = (value: { status: string; coverage: string; expiresAt: string | null }, now: number) =>
@@ -89,12 +90,14 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
   const unknown = workers.filter(worker => activity(worker) === 'unknown').length
   const inProgress = status.trim().toLowerCase() === 'in progress'
   const closed = card.source.archived || card.source.in_trash || ['done', 'archived'].includes(status.trim().toLowerCase())
+  const external = externalWorkers(card.source.properties['Delegated To']?.value, now).filter(worker => worker.card_id === cardId)
   // The reconciler additionally requires explicit per-card home accountability;
   // globally complete configured homes alone are not a census of the farm.
   const absenceKnown = context.gaps.has(cardId)
   const evidence = [`Work status: ${status || 'unknown'}`, `${workers.length} verified workers: ${running} running, ${waiting} waiting, ${terminal} terminal, ${unknown} unknown`,
     `Notion observation: ${scene.coverage.intentions.observedAt ?? 'unknown'} (${scene.coverage.intentions.status}/${scene.coverage.intentions.coverage})`,
     ...readiness.evidence,
+    ...external.map(worker => `External worker: ${worker.system}/${worker.run_id}; ${worker.verification}; observed ${worker.observed_at} (${worker.freshness}); ${worker.reference}`),
     ...workers.map(worker => `${worker.home}/${worker.identity.task_id}: current_state ${worker.source.current_state.state ?? 'unknown'} from ${worker.source.current_state.source ?? 'none'} (${worker.source.current_state.freshness ?? 'unknown'}); ${worker.source.codex ? `Codex turn ${worker.source.codex.turn_open === true ? 'open' : worker.source.codex.turn_open === false ? 'closed' : 'unknown'}, observed ${worker.source.codex.observed_at ?? 'unknown'}, last activity ${worker.source.codex.last_activity_at ?? 'unknown'}; ` : ''}${worker.liveness}; observed ${worker.observation.observedAt ?? 'unknown'} (${worker.observation.status}/${worker.observation.coverage})`),
     ...links.filter(verifiedLink).map(link => `Verified link: ${link.sources.join(', ') || 'explicit source'}; observed ${link.observedAt ?? 'unknown'}`),
     ...blockers.map(blocker => `Published blocker: ${blocker}`)]
@@ -121,14 +124,16 @@ export function workHealth(scene: FloorScene, cardId: string, now: number, readF
     patterns: {
       active: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason) : !inProgress ? boolean(false, 'Work is outside In Progress')
         : activePath ? boolean(true, 'At least one verified running or runnable path')
-          : runningKnown && runnable === 0 ? boolean(false, 'Verified zero running and runnable paths') : uncertain(readinessReasons.join('; ') || 'Running/runnable accountability is incomplete'),
+          : runningKnown && runnable === 0 && !external.length ? boolean(false, 'Verified zero running and runnable paths') : uncertain(readinessReasons.join('; ') || 'Running/runnable accountability is incomplete'),
       blocked: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason)
         : boolean(!!wait && (status.trim().toLowerCase() === 'waiting for' || waiting > 0 || blockers.length > 0), `Waiting For: ${wait || 'not set'}; ${status.trim().toLowerCase() === 'waiting for' ? 'worker freshness is not required' : 'verified waiting worker or published blocker'}`),
-      unstaffed: sourceReason ? uncertain(sourceReason) : !inProgress || workers.length > 0 ? boolean(false, workers.length ? 'A verified assigned worker exists' : 'Work is outside In Progress')
+      unstaffed: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason) : !inProgress || workers.length > 0 ? boolean(false, workers.length ? 'A verified assigned worker exists' : 'Work is outside In Progress')
+        : external.length ? external.some(worker => worker.freshness === 'current-report') ? boolean(false, 'A tracked external worker is reported running') : uncertain('External worker report is stale; current execution is unknown')
         : complete && absenceKnown ? boolean(true, 'Complete configured source and explicit accountability coverage; no verified assigned worker') : uncertain('Incomplete source, link or accountability coverage; no absence conclusion'),
       decision: !sourceFresh ? uncertain(sourceReason!) : decision || request ? boolean(true, decision ? `Explicit Notion Will action: ${String(will)}` : 'Published needs-decision request on a verified worker')
         : complete ? boolean(false, 'No explicit human decision request') : uncertain('Worker decision requests or assignment coverage are incomplete'),
-      stalled: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason) : wait ? boolean(false, `Explicit Waiting For: ${wait}`) : activePath || (!readFailed && readiness.hasResolver) ? boolean(false, 'A verified running, runnable or active resolver path exists')
+      stalled: closed ? boolean(false, 'Work is Done or Archived') : sourceReason ? uncertain(sourceReason) : !inProgress ? boolean(false, 'Work is outside In Progress') : wait ? boolean(false, `Explicit Waiting For: ${wait}`) : activePath || (!readFailed && readiness.hasResolver) ? boolean(false, 'A verified running, runnable or active resolver path exists')
+        : external.length ? external.some(worker => worker.freshness === 'current-report') ? boolean(false, 'A tracked external worker is reported running') : uncertain('External worker report is stale; current execution is unknown')
         : result(stalledOutcome({ inProgress, complete: readinessComplete, workerCount: workers.length, running, runnable, activeResolverCount }),
           readinessComplete && runnable === 0 && activeResolverCount === 0 ? 'Fresh complete proof of zero running, runnable and active resolver paths' : readinessReasons.join('; ') || 'Source, link or running accountability is incomplete'),
       idle: uncertain('Runnable assignment availability is not published; waiting is not proof of idle'),

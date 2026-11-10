@@ -25,7 +25,7 @@
 .ov-pattern-neighbor span { overflow:hidden; text-overflow:ellipsis; }
 .ov-pattern-selected { color:#c4ecdc!important; font-size:11px!important; }
 .ov-pattern-selected strong { white-space:nowrap; }
-.ov-pattern-selected>span { font-size:9px; color:#85aea3; }
+.ov-pattern-selected>span:last-child { font-size:9px; color:#85aea3; }
 .ov-pattern-dial small { font:9px var(--ov-mono); flex:none; }
 .ov-pattern-dial button:focus-visible { outline:2px solid #85d2b8; outline-offset:-2px; border-radius:5px; }
 .ov-pattern-tooltip { position:fixed; z-index:100; width:min(330px,calc(100vw - 16px)); box-sizing:border-box; padding:12px; background:#152a30; color:#c4d5db; border:1px solid #507a76; border-radius:8px; box-shadow:0 8px 24px #0009; font:12px/1.5 ui-monospace,monospace; pointer-events:none; }
@@ -47,10 +47,10 @@
   .ov-search-panel { position:fixed; top:60px; left:78px; width:calc(100vw - 88px); max-height:calc(100dvh - 76px); overflow:auto; }
 }
 @media(max-width:600px) {
-  .ov-pattern-dial { flex:none; width:180px; min-width:180px; grid-template-columns:minmax(0,1fr) 88px minmax(0,1fr); }
+  .ov-pattern-dial { flex:none; width:180px; min-width:180px; grid-template-columns:minmax(0,1fr) 104px minmax(0,1fr); }
   .ov-pattern-neighbor { font-size:8px!important; flex-direction:column; gap:1px!important; }
   .ov-pattern-selected { font-size:10px!important; gap:3px!important; }
-  .ov-pattern-selected>span { display:none; }
+  .ov-pattern-selected>span:last-child { display:none; }
   .ov-toolbar { overflow-x:auto; scrollbar-width:none; }
   .ov-toolbar .ov-preset-scroll { flex:none; width:76px; }
   .ov-toolbar .ov-filter-chips { flex:none; max-width:55px; }
@@ -59,7 +59,14 @@
 }
 
 
-.ov-pattern-summary { margin:0; padding:6px 12px; color:#c8b98e; font-size:11px; border-bottom:1px solid #343d47; }
+.ov-toolbar .ov-pattern-selected { overflow:hidden; }
+.ov-pattern-value { display:flex; flex-direction:column; min-width:0; font-size:11px; line-height:14px; }
+.ov-pattern-value>span { white-space:nowrap; }
+.ov-pattern-dial .ov-pattern-coverage { font-size:8px; letter-spacing:-.15px; color:#a2b5bd; overflow:hidden; text-overflow:ellipsis; }
+.ov-pattern-selected:has(.ov-pattern-coverage)>span:last-child { display:none; }
+.ov-pattern-popover { pointer-events:auto; }
+.ov-pattern-popover button { margin-top:10px; padding:7px; border:1px solid #507a76; border-radius:5px; background:#203b3b; color:#c4ecdc; cursor:pointer; font:inherit; }
+.ov-pattern-popover button:focus-visible { outline:2px solid #85d2b8; }
 
 .ov .ov-worker-fact { max-width:min(180px, 35%); flex-shrink:1; min-width:0; }
 .ov-density-compact .ov-card.ov-collapsed:has(.ov-worker-fact) strong { min-width:70px; }

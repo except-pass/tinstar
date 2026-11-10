@@ -1,3 +1,4 @@
+import { externalWorkers } from '../../shared/workflow'
 import { homeLabel } from '../../shared/reconciliationLabels'
 import { isException as exception } from '../../shared/reconciliationFindings'
 import { retainedExecutionLiveness } from '../../shared/executionLiveness'
@@ -304,6 +305,7 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
   const absenceCovered = sufficient(intentions) && declarationsReadable && fleet.length > 0 && fleet.every(home => sufficient(home.observation)) &&
     executions.every(execution => execution.activity !== 'unknown')
   for (const card of cards) {
+    const external = externalWorkers(property(card.source, 'Delegated To'), now).filter(worker => worker.card_id === card.id)
     const related = claims.filter(claim => claim.cardId === card.id)
     const linked = executions.filter(execution => related.some(claim => claim.executionId === execution.id))
     const live = linked.filter(execution => execution.activity === 'executing' || execution.activity === 'waiting')
@@ -334,8 +336,8 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       add(explicit ? 'legitimate-wait-planned' : 'unverified-conflicting', [card.id], linked.map(e => e.id),
         explicit ? 'First Mate backlog accounts for queued/held work; retain hold reason, blocker and checkpoint in source data'
           : 'Textual backlog card reference suggests queued/held work; execution-gap conclusion suppressed pending verification')
-    } else if (!related.length || !live.length) {
-      if (absenceCovered && accountableHomes.length && related.every(claim => claim.verification === 'confirmed') && !card.source.archived && !card.source.in_trash) {
+    } else if ((!related.length || !live.length) && !external.some(worker => worker.freshness === 'current-report')) {
+      if (!external.length && absenceCovered && accountableHomes.length && related.every(claim => claim.verification === 'confirmed') && !card.source.archived && !card.source.in_trash) {
         add('task-execution-gap', [card.id], linked.map(e => e.id), `${card.expectationReason}; explicit accountability in ${accountableHomes.join(', ')} and complete fresh configured coverage contain no execution or legitimate wait`, accountableHomes)
       } else add('unknown-stale-source', [card.id], linked.map(e => e.id), 'Expected execution cannot be accounted for; insufficient coverage, unverified claims or missing explicit home accountability suppress an execution-gap conclusion')
     } else if (confirmedWaiting.length) {

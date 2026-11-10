@@ -27,7 +27,7 @@ import { AskSurface } from '../ask/AskSurface'
 import { askElement } from '../ask/element'
 import { useElementAsk } from '../ask/useElementAsk'
 import { AskContextComposer, AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit, useAskControls } from '../ask/Ask'
-import { combinedPatternResult, sceneWorkHealth, patternEmptyText } from '../shared/workHealth'
+import { combinedPatternResult, sceneWorkHealth, patternEmptyText, type PatternResult } from '../shared/workHealth'
 
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { OpenInChatGPT } from '../ask/OpenInChatGPT'
@@ -39,7 +39,7 @@ function CreateWorkAction() {
 }
 
 type Dispatch = (action: PresentationAction) => void
-interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
+interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; patternResults?: ReadonlyMap<string, PatternResult>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const same = (a: Target | null, b: Target) => !!a && semanticId(a) === semanticId(b)
 const safeUrl = (value: string | null | undefined) => { try { const url = new URL(value ?? ''); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null } }
@@ -308,6 +308,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const backlog = scene.backlog.filter(entry => card && entry.source.cardReferences.some(ref => ref.pageId === card.id))
   const findings = scene.findings.filter(f => card ? f.cardIds.includes(card.id) : execution ? f.executionIds.includes(execution.id) : home ? f.homeIds.includes(home.source.home) : false)
   const notionUrl = card ? safeUrl(card.source.url) : null
+  const selectedPattern = currentCard ? view.patternResults?.get(currentCard.id) : undefined
   const content = <>
     <header><h2>Inspector</h2><button type="button" className="ov-back" ref={close} onClick={() => send({ type: 'clear-selection' })}>Close Inspector</button></header>
     <small className="ov-eyebrow">{card ? 'Notion card' : execution ? 'Worker' : home ? 'Manager' : 'Overview'}</small>
@@ -320,7 +321,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     {selection.kind === 'firstMate' && <><p>Supervising the configured managers.</p>{scene.coverage.homes.map(h => <div key={h.source.home} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('manager', h.source.home) })}>{managerName(scene, h.source.home)}</button></div>)}</>}
     {claims.length > 0 && <><h4>Connections & history</h4>{claims.map(c => <AskSurface as="div" enabled={scene.claims.some(claim => claim.id === c.id)} className="ov-related" key={c.id} data-claim-id={c.id} subject={{ target: { kind: 'claim', id: c.id } }} onInspect={() => send({ type: 'focus', target: target('claim', c.id) })}>{scene.claims.some(claim => claim.id === c.id) && <AskCardAction subject={{ target: { kind: 'claim', id: c.id } }} icon />}<small {...askElement('status', 'Connection status')}>{c.state === 'historical' ? 'History' : c.verification === 'confirmed' && c.state === 'current' ? 'Linked' : 'Unverified'}</small><button {...askElement('relationship')} type="button" disabled={!scene.executions.some(e => e.id === c.executionId)} onClick={() => send({ type: 'focus', target: target('execution', c.executionId) })}>{scene.executions.find(e => e.id === c.executionId) ? workerTitle(scene.executions.find(e => e.id === c.executionId)!) : 'Worker history'}</button><button {...askElement('relationship')} type="button" disabled={!scene.cards.some(card => card.id === c.cardId)} onClick={() => send({ type: 'focus', target: target('card', c.cardId) })}>{scene.cards.find(card => card.id === c.cardId) ? cardTitle(scene.cards.find(card => card.id === c.cardId)!) : 'Card unavailable'}</button></AskSurface>)}</>}
     <h4>Activity history</h4>{execution && <p {...askElement('description', 'Activity history')}>{execution.source.last_event.note ?? 'No activity report published'} · {ageLabel(reportTimestamp(execution), now)}</p>}{card && <p {...askElement('last_edited')}>Edited {ageLabel(Date.parse(card.source.last_edited_time), now)}</p>}{claims.map(c => <p {...askElement('relationship', 'Connection history')} key={c.id}>{c.state === 'historical' ? 'Connection ended' : 'Connection observed'} · {c.endedAt ?? c.observedAt ?? 'Time unknown'}</p>)}
-    <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
+    <details><summary>Evidence & diagnostics</summary>{selectedPattern && <p>Selected pattern: {selectedPattern.outcome === 'unavailable' ? 'unable to evaluate' : selectedPattern.outcome === 'match' ? 'match' : 'no match'} · {selectedPattern.reason}</p>}<pre>{JSON.stringify({ selectedPattern, selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </>
   const composerSubject = claim && scene.claims.some(item => item.id === claim.id) ? { target: { kind: 'claim' as const, id: claim.id } } : card ? { cardId: card.id } : execution ? { target: { kind: 'execution' as const, id: execution.id } } : null
   const composerView = { scene: 'overview' as const, organizer: state.organizer, statusFilter: state.statusFilter }
@@ -381,7 +382,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
       }
     }
   }
-  const view: View = { scene, state, send, now, readFailed: !!error, searchMatches, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
+  const view: View = { scene, state, send, now, readFailed: !!error, searchMatches, patternResults, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
   const gaps = gapTargets(scene, now, !!error)
   const notionUnavailable = !!error || stale(scene.coverage.intentions, now)
   const fleetCoverage = workerSourceCoverage(scene.coverage.homes, now, !!error)
@@ -393,12 +394,15 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const visibleCardIds = new Set(groups.flatMap(g => g.cards.map(c => c.id)))
   const visibleCards = visibleCardIds.size
   const linkHealth = workerLinkSourceHealth(scene, visibleCardIds, now, !!error)
-  const patternSummary = patternCheckSummary([...visibleCardIds].map(id => patternResults?.get(id)))
+  const patternCoverage = patternResults ? patternCheckSummary(groups.flatMap(group => group.cards.filter(card => state.roadmapExpanded || !isPlanned(scene, card)).map(card => card.id)), patternResults) : null
   const workerCountNote = fleetCoverage === 'unavailable' ? visibleWorkers ? 'last known' : 'unavailable' : fleetCoverage === 'partial' ? visibleWorkers ? 'partial' : 'unknown' : undefined
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
+      <FloorToolbar patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
+        const targets = patternCoverage?.unavailableCardIds.map(id => target('card', id)) ?? []
+        if (targets.length) { search.choose(targets[0]!, targets); setOpenRelationships([]) }
+      }} sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
         setDensity(value); saveOverviewDensity(value)
         if (value === 'compact' && state.selection) {
           const selected = state.selection
@@ -408,7 +412,6 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
       }} />
       <CreateWorkAction />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      {patternSummary && <p className="ov-pattern-summary" role="status">{patternSummary}</p>}
       <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
