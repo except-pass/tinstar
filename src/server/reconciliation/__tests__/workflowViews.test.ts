@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fixtureHomes, fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { executionWarnings } from '../workflowViews'
 import { needsWill } from '../needsWill'
@@ -81,7 +81,7 @@ describe('one Needs Will projection', () => {
     const readiness = new Map([[url, { status: 'fresh' as const, state: 'open' as const, head: 'a'.repeat(40), draft: false, checks: 'passed' as const, mergeability: 'ready' as const, observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString() }]])
     const inventory: PullsRead = { pulls: [{ id: 'except-pass/tinstar#100', repository: 'except-pass/tinstar', number: 100, url, title: 'Requested change', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), freshness: 'fresh', state: 'open', links: [] }], repositories: [], warnings: [], associationsComplete: true }
     const queue = buildQueue(snapshot, readiness, now)
-    const items = needsWill(queue, scene, new Map(), inventory, readiness)
+    const items = needsWill(queue, scene, new Map(), inventory, readiness, true)
     expect(items).toHaveLength(1)
     expect(items[0]?.pulls[0]).toMatchObject({ title: 'Requested change', readiness: { checks: 'passed' } })
     expect(items[0]).toMatchObject({ requestSince: null, ageBasis: 'unknown' })
@@ -89,15 +89,15 @@ describe('one Needs Will projection', () => {
     inventory.pulls[0]!.links = [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }]
     const associated = buildQueue(snapshot, readiness, now, inventory)
     expect(associated.items.find(item => item.cardIds.includes(card.id))?.evidence.filter(link => link.kind === 'pull-request')).toEqual([{ kind: 'pull-request', url }])
-    expect(needsWill(associated, scene, new Map(), inventory, readiness)[0]?.pulls).toHaveLength(1)
+    expect(needsWill(associated, scene, new Map(), inventory, readiness, true)[0]?.pulls).toHaveLength(1)
     inventory.pulls[0]!.url = url.replace('except-pass', 'EXCEPT-PASS') + '?tab=checks'
     card.properties.Link = { id: 'link', type: 'url', value: url, hasMore: false }
-    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness)[0]?.pulls).toHaveLength(1)
+    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness, true)[0]?.pulls).toHaveLength(1)
     delete card.properties.Link
     inventory.pulls[0]!.links[0]!.active = false
-    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness)[0]?.pulls).toEqual([])
+    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness, true)[0]?.pulls).toEqual([])
     delete card.properties['Will action']; delete card.properties['Next action']
-    expect(needsWill(buildQueue(snapshot, readiness, now), scene, new Map(), inventory, readiness)).toEqual([])
+    expect(needsWill(buildQueue(snapshot, readiness, now), scene, new Map(), inventory, readiness, true)).toEqual([])
   })
   it('does not infer an answer or missing request from incomplete comment coverage', () => {
     const snapshot = fixtureSources({ now }), card = snapshot.intentions.data!.cards.find(card => card.id === fixtureId(1))!
@@ -113,4 +113,46 @@ it('keeps a current explicit action tag visible for verification even without ne
   card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision'], hasMore: false }
   const scene = fixtureScene({ now }); scene.cards.find(row => row.id === card.id)!.source = card
   expect(needsWill(buildQueue(snapshot, new Map(), now), scene, new Map(), null, new Map())[0]).toMatchObject({ cardIds: [card.id], readiness: 'needs-readiness-verification', ageBasis: 'unknown' })
+})
+
+it('keeps asks with authorization placeholders until the PR Operations owner check passes', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { PullsApi } = await import('../../pulls/routes')
+  const { ReconciliationSources } = await import('../index')
+  const { CardContextReader } = await import('../cardContext')
+  const root = await mkdtemp(join(process.cwd(), '.owner-view-test-'))
+  const context = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockResolvedValue({ outcome: 'available', blocks: [] })
+  try {
+    await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+    const sources = new ReconciliationSources({ fleet: [], warnings: [] }, undefined, undefined, root)
+    const snapshot = fixtureSources({ now: Date.now() }), card = snapshot.intentions.data!.cards.find(card => card.id === fixtureId(1))!
+    card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Merge'], hasMore: false }
+    const url = 'https://github.com/except-pass/tinstar/pull/100'
+    card.properties.Link = { id: 'link', type: 'url', value: url, hasMore: false }
+    vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+    const api = new PullsApi(sources, undefined, root)
+    sources.authorizePulls = req => api.authorized(req)
+    const inventory: PullsRead = { pulls: [{ id: 'except-pass/tinstar#100', repository: 'except-pass/tinstar', number: 100, url, title: 'Private title', author: 'private-author', head: 'a'.repeat(40), base: 'private-branch', draft: false, createdAt: '', updatedAt: '', observedAt: '', freshness: 'fresh', links: [] }], repositories: [], warnings: [], associationsComplete: true }
+    const read = vi.fn(async () => inventory), readiness = vi.fn(async () => new Map())
+    sources.readPulls = read
+    sources.readPullReadiness = readiness
+    const request = (headers: Record<string, string>, peer = '127.0.0.1') => ({ headers, socket: { remoteAddress: peer } }) as import('node:http').IncomingMessage
+    for (const req of [undefined, request({ 'x-tinstar-ui': '1' }), request({ 'tailscale-user-login': 'stranger@example.test' }), request({ 'tailscale-user-login': 'owner@example.test' }, '100.64.0.1')]) {
+      const result = await sources.queue(req)
+      expect(result.needsWill.find(item => item.cardIds.includes(card.id))).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+      expect(JSON.stringify(result)).not.toContain('Private title')
+    }
+    expect(read).not.toHaveBeenCalled()
+    expect(readiness).not.toHaveBeenCalled()
+    const result = await sources.queue(request({ 'tailscale-user-login': 'owner@example.test' }))
+    expect(result.needsWill.find(item => item.cardIds.includes(card.id))?.pulls[0]).toMatchObject({ title: 'Private title', author: 'private-author', base: 'private-branch' })
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(readiness).toHaveBeenCalledTimes(1)
+    const scene = fixtureScene({ now }); scene.cards.find(row => row.id === card.id)!.source = card
+    expect(needsWill(buildQueue(snapshot), scene, new Map(), inventory, new Map())[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+  } finally {
+    context.mockRestore()
+    await rm(root, { recursive: true, force: true })
+  }
 })

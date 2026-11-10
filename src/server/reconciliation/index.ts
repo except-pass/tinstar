@@ -23,7 +23,6 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
-import { privatePeer } from './mcp'
 import type { PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 
@@ -32,7 +31,8 @@ export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['inte
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
-  readPulls?: () => Promise<PullsRead>
+  authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
+  readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
   readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
@@ -171,12 +171,13 @@ export class ReconciliationSources {
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
-  async queue() {
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(), this.readPulls?.().catch(() => null)])
+  async queue(req?: IncomingMessage) {
+    const authorized = !!await this.authorizePulls?.(req)
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
-    const states = await (this.readPullReadiness?.(urls) ?? this.queuePulls.get(urls))
+    const states = authorized ? await (this.readPullReadiness?.(urls) ?? this.queuePulls.get(urls)) : new Map<string, PullReadiness>()
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is
@@ -189,9 +190,10 @@ export class ReconciliationSources {
     if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
     const scene = this.reconciler.project(snapshot)
-    queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states)
+    queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized)
     queue.operationalExceptions = executionWarnings(scene)
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
+    else if (!authorized) queue.warnings.push('PR details require owner authorization')
     else queue.warnings.push('PR inventory unavailable; explicit merge requests retain their evidence and readiness, inventory coverage is unknown.')
     return workReadback(queue)
   }
@@ -205,9 +207,6 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
-  // The shared queue now includes private PR metadata. Use the same local UI
-  // authority as workflow writes; MCP reaches it through its authenticated tool.
-  if (path === '/api/reconciliation/queue' && (!privatePeer(req.socket.remoteAddress) || req.headers['x-tinstar-ui'] !== '1')) return fail(res, 'FORBIDDEN', 'Private UI handshake required; agents use get_work_views.', { headers })
   if (path === '/api/reconciliation/card-context') {
     const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
     if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
@@ -215,5 +214,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue(req) : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

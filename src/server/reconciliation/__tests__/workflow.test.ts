@@ -965,7 +965,9 @@ it('serves one current Needs Will projection through UI and authenticated MCP wi
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
   seedOriginAllowlist(port)
-  expect((await fetch(`${base}/api/reconciliation/queue`)).status).toBe(403)
+  const restricted = await (await fetch(`${base}/api/reconciliation/queue`)).json()
+  expect(restricted.data.needsWill).toEqual(view.needsWill)
+  expect(restricted.data.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
   const ui = await (await fetch(`${base}/api/reconciliation/queue`, { headers: { 'X-Tinstar-UI': '1' } })).json()
   const client = new Client({ name: 'offline-consumer-view', version: '1' }); clients.push(client)
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
@@ -986,6 +988,7 @@ it('requests readiness for active association-only PRs through the shared queue'
   card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Merge'], hasMore: false }
   const url = 'https://github.com/except-pass/tinstar/pull/100'
   vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  sources.authorizePulls = async () => true
   sources.readPulls = async () => ({ pulls: [{ id: 'except-pass/tinstar#100', repository: 'except-pass/tinstar', number: 100, url, title: 'Associated PR', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), observedAt: new Date().toISOString(), freshness: 'fresh', links: [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }] }], repositories: [], warnings: [], associationsComplete: true })
   const read = vi.fn(async () => new Map())
   sources.readPullReadiness = read

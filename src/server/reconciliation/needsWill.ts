@@ -7,6 +7,7 @@ import type { PullReadiness } from './queuePulls'
 import { decisionRequests } from '../../shared/workflowRequests'
 
 export interface NeedsWillItem extends QueueItem {
+  prDetails?: string
   requestSince: string | null
   ageBasis: 'request-history' | 'unknown'
   requests: ReturnType<typeof decisionRequests>
@@ -16,7 +17,8 @@ const tags = (value: unknown) => (Array.isArray(value) ? value : [value]).filter
 /** Current explicit asks only. Green GitHub evidence enriches a routed merge
  * request; repository membership and passing checks never create permission. */
 export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScene, contexts: Map<string, CardContextRead>, inventory: PullsRead | null,
-  readiness: ReadonlyMap<string, PullReadiness>): NeedsWillItem[] {
+  readiness: ReadonlyMap<string, PullReadiness>, authorized = false): NeedsWillItem[] {
+  if (!authorized) { inventory = null; readiness = new Map() }
   const cards = new Map(scene.cards.map(card => [card.id, card]))
   return queue.items.flatMap(item => {
     let real = item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action)
@@ -40,6 +42,6 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     })).values()]
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = since.length ? since.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null
-    return [{ ...item, ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
+    return [{ ...item, ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
   })
 }

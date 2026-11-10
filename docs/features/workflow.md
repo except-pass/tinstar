@@ -396,3 +396,5 @@ Slice 3 MCP catalog: added **`get_work_views`**; changed **`get_workflow_rules`*
 explicit-window presentation signatures remain compatible. After deployment the
 owner refreshes the ChatGPT connector catalog. The queue HTTP UI read now uses
 the existing explicit private-UI handshake as described above.
+
+Needs Will preserves the PR Operations owner boundary: only the trusted Tailscale identity in `ask.ownerLogins` can collect PR inventory and readiness. Other HTTP callers and MCP work-view callers retain card asks with “PR details require owner authorization”; no PR inventory metadata is collected or returned. UI headers, install tokens and caller IDs do not grant owner authority.

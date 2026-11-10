@@ -81,7 +81,8 @@ export function startServer(opts: ServerOptions) {
   const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
   const pulls = new PullsApi(reconciliation, releases.store)
-  reconciliation.readPulls = () => pulls.read()
+  reconciliation.authorizePulls = req => pulls.authorized(req)
+  reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
   reconciliation.readPullReadiness = urls => pulls.readiness(urls)
   const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation)

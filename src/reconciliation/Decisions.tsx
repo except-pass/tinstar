@@ -106,7 +106,7 @@ function RequestEvidence({ item, now }: { item: QueueItem; now: number }) {
   const request = item as Partial<NeedsWillItem>
   if (!request.pulls) return null
   const age = request.requestSince ? Math.max(0, Math.floor((now - Date.parse(request.requestSince)) / 3600_000)) : null
-  return <><small>{age === null ? 'Request age unknown' : `Oldest recorded open ask: ${age}h (${request.requestSince})`}</small>{request.requests?.map(ask => <small key={ask.id}>{ask.question ?? ask.action} · request {ask.id}</small>)}{request.pulls.map(pull => <small key={pull.id}>{pull.repository} #{pull.number} · {pull.freshness === 'fresh' && pull.readiness?.status === 'fresh' && (!pull.readiness.expiresAt || Date.parse(pull.readiness.expiresAt) > now) ? pull.readiness.checks : 'checks unknown / stale'} · PR opened {pull.createdAt} (not request age)</small>)}</>
+  return <>{request.prDetails && <small>{request.prDetails}</small>}<small>{age === null ? 'Request age unknown' : `Oldest recorded open ask: ${age}h (${request.requestSince})`}</small>{request.requests?.map(ask => <small key={ask.id}>{ask.question ?? ask.action} · request {ask.id}</small>)}{request.pulls.map(pull => <small key={pull.id}>{pull.repository} #{pull.number} · {pull.freshness === 'fresh' && pull.readiness?.status === 'fresh' && (!pull.readiness.expiresAt || Date.parse(pull.readiness.expiresAt) > now) ? pull.readiness.checks : 'checks unknown / stale'} · PR opened {pull.createdAt} (not request age)</small>)}</>
 }
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
   if (!warnings) return null

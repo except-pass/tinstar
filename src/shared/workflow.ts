@@ -58,6 +58,7 @@ export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(1
 }).strict()
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
 export const workflowRules = {
+  pr_authorization: 'PR details require owner authorization through the existing trusted Tailscale ask.ownerLogins check. MCP work views retain asks with an explicit authorization placeholder.',
   version: 'tinstar.workflow.s3', enforced: [
     'Create requires a declared Owner, Status and Area. Assignment to Firstmate is Queued until real execution.',
     'Start work requires Owner and Area and current tracked execution evidence.',
