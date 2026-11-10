@@ -215,7 +215,7 @@ export class CheckInWatchdog {
       for (const block of context.blocks) {
         const report = checkInReport(block.text, row.request.requestId)
         if (!report) continue
-        const at = Date.parse(report.Date), next = checkInTime(report['Next check-in'])
+        const at = Date.parse(report.Date), next = checkInTime(report['Next check-in'], text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
         if (!Number.isFinite(at) || at < Date.parse(row.createdAt) || at > this.now() || Date.parse(card.last_edited_time) < at ||
           word(card, 'Last touched by').toLowerCase() !== report.By.toLowerCase()) continue
@@ -233,23 +233,27 @@ export class CheckInWatchdog {
    * before returning it; uncertain HTTP/inbox retries use those same bytes. */
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
-    return this.change(async rows => {
+    const observed = await this.rows()
+    const start = this.deliveryCursor % Math.max(observed.length, 1)
+    const ordered = [...observed.slice(start), ...observed.slice(0, start)]
+    const candidates = ordered.filter(row => !['resolved', 'superseded'].includes(row.state) &&
+      [row.request, row.followUp].some(item => item && !item.reply && (!item.noteId || item.announced === false || !!item.error))).slice(0, 3)
+    const currentCards = new Map<string, Card>()
+    for (const row of candidates) {
+      this.deliveryCursor = observed.indexOf(row) + 1
+      try { currentCards.set(row.key, await this.sources.currentCard(row.cardId)) } catch {}
+    }
+    return this.change(rows => {
       const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
-      // Three five-second page reads fit the installed puller's 20-second HTTP
-      // timeout. Rotate attempts so a failing page cannot starve later cards.
-      const start = this.deliveryCursor % Math.max(rows.length, 1)
-      const ordered = [...rows.slice(start), ...rows.slice(0, start)]
-      let attempted = 0
-      for (const row of ordered) {
+      for (const candidate of candidates) {
+        const row = rows.find(row => row.key === candidate.key)
+        if (!row) continue
         if (['resolved', 'superseded'].includes(row.state)) continue
         const retryOriginal = !row.request.reply && (!row.request.noteId || row.request.announced === false || !!row.request.error)
         let item = retryOriginal ? row.request : row.followUp && !row.followUp.reply ? row.followUp : row.request
         if (item.reply || item.noteId && item.announced !== false && !item.error) continue
-        if (attempted >= 3) break
-        attempted++
-        this.deliveryCursor = rows.indexOf(row) + 1
-        let current: Card
-        try { current = await this.sources.currentCard(row.cardId) } catch { continue }
+        const current = currentCards.get(row.key)
+        if (!current) continue
         const unchanged = eligible(current) && appointment(current) === Date.parse(row.dueAt) && word(current, 'Status') === row.status && word(current, 'Owner') === row.owner
         if (item === row.request && !unchanged) {
           if (!row.request.offeredAt) row.state = 'superseded'

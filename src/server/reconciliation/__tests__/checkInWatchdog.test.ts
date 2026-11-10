@@ -284,6 +284,35 @@ describe('durable lifecycle on the existing bridge', () => {
     await h.watchdog.sweep(true)
     expect((await h.watchdog.rows())[0]!.verifiedAt).toBeNull()
   })
+  it('verifies a named-timezone checkpoint against its property instant', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.publish(id, '2026-11-10T17:00:00')
+    h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00', time_zone: 'Europe/Paris' }
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]!.state).toBe('resolved')
+  })
+  it('keeps indicators and receipts available during preflight and honors the newer receipt', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    let release!: (value: typeof h.card) => void, started!: () => void
+    const reading = new Promise<void>(resolve => { started = resolve })
+    h.sources.currentCard.mockImplementationOnce(() => new Promise(resolve => { release = resolve; started() }))
+    const pull = h.watchdog.bridgeWork()
+    await reading
+    try {
+      await Promise.race([
+        (async () => {
+          expect((await h.watchdog.indicators()).get(h.card.id)?.state).toBe('requested')
+          await h.note(id)
+          await h.reply(id, h.report(id))
+        })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('preflight blocked ledger')), 1000)),
+      ])
+    } finally { release(structuredClone(h.card)) }
+    expect((await pull).pending).toEqual([])
+    expect((await h.watchdog.rows())[0]!.state).toBe('acknowledged')
+  })
   it('does not hold the receipt queue during slow readback or overwrite an acknowledgement received meanwhile', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id

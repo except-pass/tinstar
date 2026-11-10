@@ -176,6 +176,19 @@ describe('shared organization of independent endpoints', () => {
       expect(group.workers.at(-1)!.identity.task_id).toBe('untracked-worker')
     }
   })
+  it('groups and orders named-timezone checkpoints by the same instant', () => {
+    const at = Date.parse('2026-11-10T15:00:00Z')
+    const scene = fixtureScene({ now: at })
+    const first = scene.cards.find(c => c.id === fixtureId(1))!, other = scene.cards.find(c => c.id === fixtureId(4))!
+    first.source.properties['Next check-in'] = { id: 'check', type: 'date', hasMore: false,
+      value: { start: '2026-11-10T15:00:00', time_zone: 'Europe/Paris' } }
+    other.source.properties['Next check-in']!.value = { start: '2026-11-10T14:30:00Z' }
+    expect(organizedGroups(scene, stateFor({ outer: 'checkIn' }), at).find(g => g.cardIds.includes(first.id))!.outerLabel).toBe('Overdue')
+    for (const direction of ['asc', 'desc'] as const) {
+      const group = organizedGroups(scene, stateFor({ outer: 'none', order: 'checkIn', direction }), at)[0]!
+      expect(group.cards.slice(0, 2).map(c => c.id)).toEqual(direction === 'asc' ? [first.id, other.id] : [other.id, first.id])
+    }
+  })
   it('does not lose zero-link cards or workers when grouping every available field', async () => {
     const { floorFields } = await import('../../shared/floorOrganization')
     const scene = fixtureScene({ now })

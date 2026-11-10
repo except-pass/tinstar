@@ -12,6 +12,11 @@ export function propertyDate(card: SceneCard, name: string): string | null {
   const value = card.source.properties[name]?.value
   return value && typeof value === 'object' && 'start' in value && typeof value.start === 'string' ? value.start : null
 }
+function checkpointTime(card: SceneCard): number {
+  const value = card.source.properties['Next check-in']?.value
+  const zone = value && typeof value === 'object' && 'time_zone' in value && typeof value.time_zone === 'string' ? value.time_zone : null
+  return checkInTime(propertyDate(card, 'Next check-in'), zone)
+}
 export function workBreadcrumb(scene: FloorScene, card: SceneCard): string {
   return ['Initiative', 'Epic'].map(name => {
     const property = card.source.properties[name]
@@ -29,9 +34,8 @@ export function ageLabel(time: number, now: number): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   return `${Math.floor(seconds / 86400)}d ago`
 }
-export function dateLabel(value: string | null): string {
+export function dateLabel(value: string | null, time = value ? dateTimestamp(value) : NaN): string {
   if (!value) return 'Not set'
-  const time = dateTimestamp(value)
   if (!Number.isFinite(time)) return 'Unknown'
   return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', ...(value.length > 10 ? { hour: 'numeric', minute: '2-digit' } as const : {}) }).format(time)
 }
@@ -40,9 +44,9 @@ export function checkIn(card: SceneCard, now: number): { state: string; label: s
   if (['done', 'archived', 'backlog', 'todo', 'not started', 'planned', 'spare tokens'].includes(status)) return { state: 'not-applicable', label: 'Not applicable' }
   const at = propertyDate(card, 'Next check-in')
   if (!at) return { state: 'missing', label: 'Not scheduled' }
-  const time = checkInTime(at)
+  const time = checkpointTime(card)
   const overdue = time < now
-  return { state: !Number.isFinite(time) ? 'unknown' : overdue ? 'overdue' : 'upcoming', label: `${overdue ? 'Overdue · ' : ''}${dateLabel(at)}${at.length === 10 ? ' 9 AM ET' : ''}` }
+  return { state: !Number.isFinite(time) ? 'unknown' : overdue ? 'overdue' : 'upcoming', label: `${overdue ? 'Overdue · ' : ''}${dateLabel(at, time)}${at.length === 10 ? ' 9 AM ET' : ''}` }
 }
 /** Stable order for compact cards and complete Inspector metadata. */
 export function taskFields(card: SceneCard, now: number, actionable = true) {
@@ -69,14 +73,16 @@ export function workerBreadcrumb(scene: FloorScene, worker: Execution): string {
 export function compactCheckIn(card: SceneCard, now: number): string {
   const check = checkIn(card, now)
   if (check.state === 'overdue') {
-    const elapsed = now - checkInTime(propertyDate(card, 'Next check-in')!)
+    const elapsed = now - checkpointTime(card)
     return `Overdue ${elapsed < 3600000 ? `${Math.max(1, Math.floor(elapsed / 60000))}m` : elapsed < 86400000 ? `${Math.floor(elapsed / 3600000)}h` : `${Math.floor(elapsed / 86400000)}d`}`
   }
   if (check.state === 'upcoming') {
     const value = propertyDate(card, 'Next check-in')!
-    const label = value.length > 10 && dateBucket(value, now, true) === 'Today'
-      ? new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }).format(dateTimestamp(value)).replace(' AM', 'a').replace(' PM', 'p')
-      : dateLabel(value)
+    const time = checkpointTime(card)
+    const instant = new Date(time).toISOString()
+    const label = value.length > 10 && dateBucket(instant, now, true) === 'Today'
+      ? new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }).format(time).replace(' AM', 'a').replace(' PM', 'p')
+      : dateLabel(value, time)
     return `Check-in ${label}`
   }
   if (cardStatus(card) === 'Ready for Review' && check.state === 'missing') return 'Review requested'

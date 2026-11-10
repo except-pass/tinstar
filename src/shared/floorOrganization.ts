@@ -91,6 +91,11 @@ export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField):
     case 'edited': raw = c?.source.last_edited_time; break
     default: raw = c?.source.properties[({ status: 'Status', owner: 'Owner', priority: 'Priority', checkIn: 'Next check-in', due: 'Due Date', area: 'Area', subArea: 'Sub-area' } as const)[id]]?.value
   }
+  if (id === 'checkIn' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const value = raw as { start?: unknown; time_zone?: unknown }
+    const time = checkInTime(typeof value.start === 'string' ? value.start : null, typeof value.time_zone === 'string' ? value.time_zone : null)
+    return Number.isFinite(time) ? [new Date(time).toISOString()] : typeof value.start === 'string' && value.start ? ['Unknown'] : []
+  }
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) raw = (raw as { start?: unknown }).start
   return (Array.isArray(raw) ? raw : [raw]).filter((v): v is string => typeof v === 'string' && !!v.trim()).map(v => v.trim())
 }
