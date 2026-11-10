@@ -68,7 +68,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     savePresentationPreferences(state)
     committed.current = { rendered_at: new Date().toISOString(), revision: state.revision }
     pending.current.filter(ack => (ack.revision ?? 0) <= state.revision).forEach(ack => {
-      const committedAck = { ...ack, applied_at: ack.applied_at ?? Date.now(), delivery: ack.delivery?.targets?.length ? ack.delivery : { stage: 'rendered' as const, pending: false } }
+      const committedAck = { ...ack, applied_at: ack.applied_at ?? Date.now(), delivery: ack.delivery?.targets?.length || ack.delivery?.stage === 'not-supported' ? ack.delivery : { stage: 'rendered' as const, pending: false } }
       const queued = queueAck(committedAck)
       if (visual.current?.ack.command_id === ack.command_id) visual.current.ack = queued
     })
@@ -125,8 +125,10 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
           queueAck(superseded)
           visual.current = null; setPendingFocus(false)
         }
-        const targets = presentationTargets(command.action).map(semanticId)
-        ack.delivery = { stage: 'applied-to-state', targets, pending: targets.length > 0 }
+        const targets = presentationTargets(command.action, applied.state, latestQueue.current).map(semanticId)
+        ack.delivery = !targets.length && (command.action.type === 'open-queue' || command.action.type === 'navigate-queue')
+          ? { stage: 'not-supported', reason: 'Queue destination has no observable card on Decisions.', targets, pending: false }
+          : { stage: 'applied-to-state', targets, pending: targets.length > 0 }
         pending.current.push(ack)
         if (targets.length) {
           visual.current = { ack, targets, needsReplay: document.visibilityState !== 'visible' || !document.hasFocus() }

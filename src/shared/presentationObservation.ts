@@ -1,5 +1,7 @@
 import { z } from 'zod'
-import type { PresentationAction, Target } from './reconciliationPresentation'
+import type { PresentationAction, PresentationState, Target } from './reconciliationPresentation'
+import type { DeskQueue } from './reconciliationQueue'
+import { isCoordinationRequest } from './requestText'
 
 export const semanticIdSchema = z.string().max(2060)
 
@@ -22,7 +24,12 @@ export const deliverySchema = z.object({
   visible_targets: z.array(semanticIdSchema).max(4097).optional(), pending: z.boolean().optional(),
 }).strict()
 export type PresentationDelivery = z.infer<typeof deliverySchema>
-export function presentationTargets(action: PresentationAction): Target[] {
+export function presentationTargets(action: PresentationAction, state?: PresentationState, queue?: DeskQueue | null): Target[] {
+  if (action.type === 'open-queue' || action.type === 'navigate-queue') {
+    const entries = (queue?.needsWill ?? queue?.items ?? []).filter(item => !isCoordinationRequest(item.title))
+    const item = state?.queueCardId ? entries.find(item => item.cardIds.includes(state.queueCardId!)) : entries.find(item => item.id === state?.queueItemId)
+    return item?.cardIds[0] ? [{ kind: 'card', id: item.cardIds[0] }] : []
+  }
   if (action.type === 'navigate-card') return [{ kind: 'card', id: action.cardId }]
   if (action.type === 'reveal-search') return [...new Map([action.target, ...(action.targets ?? [])].map(target => [`${target.kind}:${target.id}`, target])).values()]
   if (action.type === 'focus') return [action.target]
