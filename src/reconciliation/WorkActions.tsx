@@ -11,7 +11,8 @@ function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<StartWorkResult | null>(null)
   const attempt = useRef<{ signature: string; input: unknown; id: string }>()
   async function save(operation: 'create' | 'update', values: Omit<CreateWorkInput, 'operation_id'> | WithoutOperation<UpdateWorkInput>) {
-    const signature = JSON.stringify([operation, values])
+    const { expected: _expected, ...intent } = values as WithoutOperation<UpdateWorkInput>
+    const signature = JSON.stringify([operation, intent])
     if (signature !== attempt.current?.signature) { const id = crypto.randomUUID(); attempt.current = { signature, id, input: { ...values, operation_id: id } } }
     setBusy(true); setResult(null)
     try {

@@ -41,3 +41,28 @@ it('creates a queued card from declared owner/area and brief without an open Not
   expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body))).toMatchObject({ operation: 'create', input: { name: 'New work', owner: 'Firstmate', area: 'Engineering', status: 'Queued', content: { brief: 'Implement the supported behavior', acceptance_criteria: 'Readback matches both interfaces' } } })
   expect(saved).toHaveBeenCalledTimes(1)
 })
+
+it('retains edit preconditions and identity across refreshed props until intent changes', async () => {
+  const card = structuredClone(fixtureScene().cards[0]!)
+  card.source.properties.Priority = { type: 'select', value: 'Low' } as any
+  const fetcher = vi.mocked(apiFetch)
+  fetcher.mockImplementation(async () => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', message: 'Note unconfirmed', saved_fields: ['Priority'] } })))
+  const saved = vi.fn(async () => {})
+  const view = render(<WorkActions card={card} onSaved={saved} />)
+  fireEvent.click(screen.getByLabelText('Change an ordinary property'))
+  fill('Property', 'Priority'); fill('New value (relation IDs separated by commas)', 'High'); fill('Note', 'Raise priority')
+  const submit = async (count: number) => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(count))
+  }
+  await submit(1)
+  const original = JSON.parse(String(fetcher.mock.calls[0]![1]!.body))
+  card.source.properties.Priority!.value = 'High'
+  view.rerender(<WorkActions card={card} onSaved={saved} />)
+  await submit(2)
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body))).toEqual(original)
+  fill('Note', 'Raise priority with new intent'); await submit(3)
+  const changed = JSON.parse(String(fetcher.mock.calls[2]![1]!.body))
+  expect(changed.input.operation_id).not.toBe(original.input.operation_id)
+  expect(changed.input.expected).toEqual({ Priority: 'High' })
+})

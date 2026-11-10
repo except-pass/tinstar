@@ -69,6 +69,8 @@ export class FirstmateUpdates {
     const batch = [...state.batches].reverse().find(batch => batch.actor === actor && !batch.offered && batch.items.length < 20 && this.now() - batch.createdAt < 60_000)
     const existing = batch?.items.find(row => row.card_id === item.card_id && row.kind === item.kind)
     if (existing) {
+      existing.current = item.current
+      existing.card_url = item.card_url
       for (const [name, change] of Object.entries(item.properties)) existing.properties[name] = { before: existing.properties[name]?.before ?? change.before, after: change.after }
       existing.comments.push(...item.comments.filter(comment => !existing.comments.some(old => old.id && old.id === comment.id || old.text === comment.text && old.author === comment.author)))
       existing.body_sections = [...new Set([...existing.body_sections, ...item.body_sections])]

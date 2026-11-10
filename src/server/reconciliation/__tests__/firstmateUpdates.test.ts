@@ -81,6 +81,20 @@ describe('Firstmate current-state pickup/update bridge', () => {
     await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Firstmate', operationId: 'self-update', notes: ['No self wake'] })
     f.advance(); expect((await f.feed.bridgeWork()).pending).toHaveLength(0)
   })
+  it('coalesces the latest current context and URL with the final property diff', async () => {
+    const f = await fixture(); f.card.properties.Status!.value = 'In Progress'
+    await f.feed.sweep(true)
+    for (const status of ['Waiting For', 'In Progress']) {
+      const before = structuredClone(f.card)
+      f.card.properties.Status!.value = status
+      f.card.url = `https://notion.so/${status}`
+      await f.feed.confirmed({ before, card: structuredClone(f.card), actor: 'Owner', operationId: status })
+    }
+    f.advance()
+    const notices = (await f.feed.bridgeWork()).pending
+    const update = notices.flatMap(notice => payload(notice.body).changes).find((item: any) => item.kind === 'update')
+    expect(update).toMatchObject({ current: { Status: 'In Progress' }, card_url: 'https://notion.so/In Progress', properties: { Status: { before: 'In Progress', after: 'In Progress' } } })
+  })
   it('uses a small targeted property census; direct edits fetch details only after a relevant active change', async () => {
     const f = await fixture(); f.card.properties.Status!.value = 'Waiting For'
     await f.feed.sweep(true)
