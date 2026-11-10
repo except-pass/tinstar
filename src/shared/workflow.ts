@@ -78,6 +78,7 @@ export interface StartWorkResult {
   message: string
   operation_id: string
   saved_fields: string[]
+  requires_new_operation_id?: boolean
   card?: unknown
 }
 

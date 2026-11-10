@@ -178,7 +178,10 @@ Updates confirm properties and managed sections before writing the history note.
 If only the note fails, the same process can repair it once, provided the card's
 last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
-with a new operation ID. Other partial failures also require reconciliation by
+with a new operation ID. Definite results that require a fresh attempt set
+`requires_new_operation_id`; the UI offers refresh and explicit re-issue solely
+from that flag, including on cached results. Uncertain saves retain their identity.
+Other partial failures also require reconciliation by
 the caller. There is no property replay, note-first plan receipt or automatic
 restart recovery. A completed operation's note marker prevents duplicate notes.
 

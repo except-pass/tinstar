@@ -15,7 +15,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, card.properties, card.archived, card.in_trash])
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
-class WorkflowError extends Error { constructor(readonly code: string, message: string) { super(message) } }
+class WorkflowError extends Error { constructor(readonly code: string, message: string, readonly requiresNewOperationId = false) { super(message) } }
 export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; notes?: string[]; sections?: string[] }
 export class WorkflowOperations {
   onChange?: (change: WorkflowChange) => Promise<void>
@@ -31,7 +31,7 @@ export class WorkflowOperations {
     for (const [key, receipt] of this.receipts) if (receipt.until < Date.now()) { this.receipts.delete(key); this.noteRepairs.delete(key) }
     const key = JSON.stringify([actor, cardId, input.operation_id]), signature = JSON.stringify(input)
     const previous = this.receipts.get(key)
-    if (previous && previous.input !== signature) return Promise.resolve(failed('operation-conflict', 'operation_id was used with different input'))
+    if (previous && previous.input !== signature) return Promise.resolve({ ...failed('operation-conflict', 'operation_id was used with different input'), requires_new_operation_id: true })
     if (previous && !this.noteRepairs.has(key)) return previous.result
     const prior = this.locks.get(cardId) ?? Promise.resolve()
     const result = prior.catch(() => {}).then(perform)
@@ -312,18 +312,18 @@ export class WorkflowOperations {
         return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
       }
       if (repair) {
-        if (repair.signature !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input')
+        if (repair.signature !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
         if (cardVersion(card) !== repair.version) {
           this.noteRepairs.delete(key)
-          return result('partially-saved', 'card-changed', 'Previously listed steps saved; the card changed since that partial write. Nothing else submitted. Review current state and re-issue with a new operation_id.')
+          return { ...result('partially-saved', 'card-changed', 'Previously listed steps saved; the card changed since that partial write. Nothing else submitted. Review current state and re-issue with a new operation_id.'), requires_new_operation_id: true }
         }
         notePending = repair.note
       } else {
-        if (input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh the card and retry')
+        if (input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh and re-issue with a new operation_id', true)
         const plan = await this.updatePlan(card, input, actor, notes)
         const current = await this.reader.card(card.id, true)
         for (const [name, value] of Object.entries(plan.original)) {
-          if (name !== 'Last touched by' && !this.matches(current, name, value)) throw new WorkflowError('conflict', `${name} changed during this operation; unrelated work was preserved`)
+          if (name !== 'Last touched by' && !this.matches(current, name, value)) throw new WorkflowError('conflict', `${name} changed during this operation; unrelated work was preserved. Refresh and re-issue with a new operation_id.`, true)
         }
         card = current
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
@@ -335,7 +335,7 @@ export class WorkflowOperations {
         this.reader.confirm(card)
         saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan.desired[name])))
         await this.changed({ before, card, actor, operationId: input.operation_id })
-        if (saved.length !== Object.keys(plan.desired).length) return result('partially-saved', 'readback-mismatch', 'Only listed properties confirmed saved. Review current state and re-issue with a new operation_id; no properties will be replayed.')
+        if (saved.length !== Object.keys(plan.desired).length) return { ...result('partially-saved', 'readback-mismatch', 'Only listed properties confirmed saved. Review current state and re-issue with a new operation_id; no properties will be replayed.'), requires_new_operation_id: true }
         for (const [name, text] of Object.entries(plan.sections)) {
           attempted = true
           await this.content.section(card.id, name, text, plan.sectionOriginal[name])
@@ -353,10 +353,10 @@ export class WorkflowOperations {
       return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
       if (error instanceof NotionWriteError && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
-      const partial = error instanceof WorkflowError ? result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
+      const partial = error instanceof WorkflowError ? { ...result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message), ...(error.requiresNewOperationId ? { requires_new_operation_id: true } : {}) }
         : result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'save-unconfirmed' : 'source-unavailable',
           notePending ? 'Listed steps saved; note unconfirmed. This process can repair only the note if the card stays unchanged. Otherwise review and re-issue with a new operation_id.'
-            : saved.length ? 'Listed steps previously saved; current source read failed. No further write submitted.' : attempted ? 'Write unconfirmed; only listed steps are confirmed saved. Review current state and re-issue with a new operation_id; no automatic replay.' : 'Current source read failed; nothing submitted')
+            : saved.length ? 'Listed steps previously saved; current source read failed. No further write submitted.' : attempted ? 'Write unconfirmed; only listed steps are confirmed saved. Read current state to reconcile this uncertain write; no automatic replay.' : 'Current source read failed; nothing submitted')
       if (notePending && card && !saved.includes('note')) this.noteRepairs.set(key, { signature: JSON.stringify(input), version: cardVersion(card), note: notePending, result: partial })
       return partial
     }

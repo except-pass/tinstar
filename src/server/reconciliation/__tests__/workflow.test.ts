@@ -552,3 +552,22 @@ it('keeps cached broader declarations separate from watchdog eligibility without
   expect(f.requests.filter(r => r.url.endsWith('/query'))).toHaveLength(queries)
 })
 
+
+it.each(['conflict', 'card-changed', 'readback-mismatch'])('marks definite %s results for a fresh operation and retains the flag on cached partials', async code => {
+  const f = fixture()
+  const input = { card_id: id, operation_id: `reissue-${code}`, kind: 'assign', owner: 'Other consumer' } as UpdateWorkInput
+  if (code === 'conflict') input.expected = { Owner: 'Changed owner' }
+  else if (code === 'card-changed') {
+    f.controls.failNote()
+    const uncertain = await f.workflow.update(input, 'Owner')
+    expect(uncertain.outcome).toBe('partially-saved')
+    expect(uncertain.requires_new_operation_id).not.toBe(true)
+    f.controls.failNote(false)
+    f.raw.properties.Priority = { type: 'select', select: { name: 'High' } }
+  } else f.controls.partial()
+  const result = await f.workflow.update(input, 'Owner')
+  expect(result).toMatchObject({ code, requires_new_operation_id: true })
+  const writes = f.requests.filter(r => ['POST', 'PATCH'].includes(r.method)).length
+  expect(await f.workflow.update(input, 'Owner')).toEqual(result)
+  expect(f.requests.filter(r => ['POST', 'PATCH'].includes(r.method))).toHaveLength(writes)
+})

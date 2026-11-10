@@ -100,7 +100,14 @@ it.each(['Waiting For', 'In Progress', 'external', 'Done', 'Archived'])('answers
   else expect(input.next).toMatchObject({ disposition: 'Owner accepted the supported outcome', evidence: 'Owner acceptance receipt' })
 })
 
-it('refreshes a definite conflict and saves explicit re-issue with a new ID and current preconditions', async () => {
+it.each([
+  { outcome: 'not-saved', code: 'conflict', requires_new_operation_id: true },
+  { outcome: 'partially-saved', code: 'card-changed', requires_new_operation_id: true },
+  { outcome: 'partially-saved', code: 'readback-mismatch', requires_new_operation_id: true },
+  { outcome: 'not-saved', code: 'future-definite-case', requires_new_operation_id: true },
+  { outcome: 'partially-saved', code: 'save-unconfirmed', requires_new_operation_id: false },
+  { outcome: 'partially-saved', code: 'response-unavailable', requires_new_operation_id: undefined },
+])('uses the server re-issue flag for $code and preserves uncertain identity', async serverResult => {
   const original = structuredClone(fixtureScene().cards[0]!)
   original.source.properties.Priority = { type: 'select', value: 'Low' } as any
   const refreshed = structuredClone(original)
@@ -113,25 +120,32 @@ it('refreshes a definite conflict and saves explicit re-issue with a new ID and 
     }} /></>
   }
   const fetcher = vi.mocked(apiFetch)
-  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'not-saved', code: 'conflict', message: 'Priority changed; refresh and retry', saved_fields: [] } })))
+  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { ...serverResult, message: 'Review current state', saved_fields: [] } })))
   fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', code: 'saved', message: 'Priority saved', saved_fields: ['Priority'] } })))
   render(<Editor />)
   fireEvent.click(screen.getByLabelText('Change an ordinary property'))
   fill('Property', 'Priority'); fill('New value (relation IDs separated by commas)', 'High')
   fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not saved. Priority changed'))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Review current state'))
   const first = JSON.parse(String(fetcher.mock.calls[0]![1]!.body))
   expect(first.input.expected).toEqual({ Priority: 'Low' })
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh card' }))
-  await waitFor(() => expect(screen.getByText('Current priority: Medium')).toBeInTheDocument())
-  expect(refresh).toHaveBeenCalledTimes(1)
-  expect(fetcher).toHaveBeenCalledTimes(1)
-  fireEvent.click(screen.getByRole('button', { name: 'Re-issue with refreshed card' }))
+  if (serverResult.requires_new_operation_id) {
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh card' }))
+    await waitFor(() => expect(screen.getByText('Current priority: Medium')).toBeInTheDocument())
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Re-issue with refreshed card' }))
+  } else {
+    expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  }
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved. Priority saved'))
   const second = JSON.parse(String(fetcher.mock.calls[1]![1]!.body))
-  expect(second.input.operation_id).not.toBe(first.input.operation_id)
-  expect(second.input.expected).toEqual({ Priority: 'Medium' })
-  expect(second.input.properties).toEqual({ Priority: 'High' })
+  if (serverResult.requires_new_operation_id) {
+    expect(second.input.operation_id).not.toBe(first.input.operation_id)
+    expect(second.input.expected).toEqual({ Priority: 'Medium' })
+    expect(second.input.properties).toEqual({ Priority: 'High' })
+  } else expect(second).toEqual(first)
   expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
 })
 
@@ -155,7 +169,7 @@ it('explicitly re-issues a partial save after a direct edit, card-changed respon
   })
   fetcher.mockImplementationOnce(async () => {
     expect(remotePriority).toBe('Medium')
-    return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', code: 'card-changed', message: 'Card changed; review and re-issue', saved_fields: ['Priority'] } }))
+    return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', code: 'card-changed', requires_new_operation_id: true, message: 'Card changed; review and re-issue', saved_fields: ['Priority'] } }))
   })
   fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', code: 'saved', message: 'Priority and note saved', saved_fields: ['Priority', 'note'] } })))
   render(<Editor />)
