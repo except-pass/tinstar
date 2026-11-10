@@ -118,7 +118,7 @@ export function statusProjection(scene: FloorScene, state: PresentationState, no
     ? new Set([`card:${state.searchReveal.id}`])
     : directNeighbors(scene, state.searchFocus ?? (state.searchReveal ? [state.searchReveal] : []))
   const explicit = hasDonutFilter(selection) || searching || reveal.size > 0
-  const workers = [...new Map(scene.executions.filter(w => (activeWorker(w) || !!state.search?.patterns.length && seeds?.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
+  const workers = [...new Map(scene.executions.filter(w => (activeWorker(w, now) || !!state.search?.patterns.length && seeds?.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
   const cards = [...new Map(scene.cards.filter(c => !c.source.in_trash && (!c.source.archived || reveal.has(`card:${c.id}`)) && (!seeds || seeds.has(`card:${c.id}`) || reveal.has(`card:${c.id}`)) && (
     reveal.has(`card:${c.id}`) ||
     matchesStatus(c, state.statusFilter ?? defaultStatusFilter()) || !explicit && (

@@ -203,6 +203,24 @@ describe('card worker facts', () => {
     worker.source.current_state.state = state
     expect(fact()).toBeNull()
   })
+  it.each(['run-step', 'session-log', 'none', 'pane'])('counts an old done worker only with newer recorded execution evidence: %s', evidence => {
+    const { scene, worker, fact } = singleWorker()
+    worker.source.last_event = { state: 'done', raw: 'done: old completion', note: null, age_seconds: 86400 }
+    worker.liveness = 'finished'
+    worker.source.current_state = { ...worker.source.current_state, state: evidence === 'session-log' ? 'unknown' : 'working', source: evidence === 'session-log' ? 'none' : evidence }
+    worker.source.codex = evidence === 'session-log' ? { turn_open: true, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - 1000).toISOString(), session_file: 'resumed.jsonl' } : null
+    const resumed = evidence === 'run-step' || evidence === 'session-log'
+    expect(fact()).toBe(resumed ? '1 worker running' : null)
+    expect(workHealth(scene, fixtureId(1), now)).toMatchObject({ workerCount: resumed ? 1 : 0, running: resumed ? 1 : 0 })
+    const shown = organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers)
+    expect(shown.some(value => value.id === worker.id)).toBe(resumed)
+    if (resumed) {
+      expect(workerFact(worker, now, worker.observation)).toBe('running')
+      if (worker.source.codex) worker.source.codex.observed_at = new Date(now - 2 * 86400_000).toISOString()
+      else worker.source.current_state.observed_at = new Date(now - 2 * 86400_000).toISOString()
+      expect(fact()).toBeNull()
+    }
+  })
   it('counts only observed unfinished workers across headers, relationships and pattern health', () => {
     const sources = fixtureSources({ now })
     const home = sources.fleet[1]!
@@ -220,7 +238,7 @@ describe('card worker facts', () => {
     const scene = new SceneReconciler().reconcile(sources, now)
     expect(cardWorkerFact(scene, card.id, now)).toBe('1 worker, no update since 2026-11-07 21:00 UTC')
     const shown = new Map(organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers.map(worker => [worker.id, worker] as const)))
-    const linked = scene.executions.filter(worker => activeWorker(worker) && scene.claims.some(link => link.cardId === card.id && link.executionId === worker.id && link.verification === 'confirmed'))
+    const linked = scene.executions.filter(worker => activeWorker(worker, now) && scene.claims.some(link => link.cardId === card.id && link.executionId === worker.id && link.verification === 'confirmed'))
     expect(linked).toHaveLength(1)
     expect(shown.has(linked[0]!.id)).toBe(true)
     expect(workerFact(linked[0]!, now, home.observation)).toBe('no update since 2026-11-07 21:00 UTC')

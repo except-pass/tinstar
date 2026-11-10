@@ -25,7 +25,7 @@ export function workerLinkSourceHealth(scene: FloorScene, cardIds: Iterable<stri
 export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, readFailed = false): string | null {
   const links = scene.claims.filter(link => link.cardId === cardId && link.state !== 'historical')
   const ids = new Set(links.filter(verifiedLink).map(link => link.executionId))
-  const workers = scene.executions.filter(worker => ids.has(worker.id) && activeWorker(worker))
+  const workers = scene.executions.filter(worker => ids.has(worker.id) && activeWorker(worker, now))
   if (!workers.length) {
     return !links.length && scene.findings.some(finding => finding.kind === 'task-execution-gap' && finding.cardIds.includes(cardId)) &&
       !readFailed && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
