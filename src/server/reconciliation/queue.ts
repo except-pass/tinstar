@@ -1,5 +1,5 @@
 import { releasePull } from '../../shared/releases'
-import { queuePulls, type PullsRead } from '../../shared/pulls'
+import { inventoryPullState, queuePulls, type PullsRead } from '../../shared/pulls'
 import type { SourceSnapshot } from './index'
 import { parsePullUrl } from '../fleet/attention'
 import { sourceRequests } from '../fleet/requests'
@@ -134,8 +134,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
     const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
     const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
-    const resolvedMerge = tags.some(tag => normalize(tag) === 'merge') && pr?.status === 'fresh' &&
-      (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed')
+    const resolvedMerge = tags.some(tag => normalize(tag) === 'merge') && linkedPulls.length === 1 &&
+      (inventoryPullState(linkedPulls[0]!.url, inventory) === 'not-open' || pr?.status === 'fresh' &&
+      (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed'))
     if (resolvedMerge) {
       tags = tags.filter(tag => normalize(tag) !== 'merge')
       if (!tags.length && !waitingForWill) continue
@@ -239,14 +240,24 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const verifyPull = (item: QueueItem) => {
     const urls = pulls(item)
     if (item.kind === 'merge') {
-      if (urls.length !== 1) lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
+      if (urls.length !== 1) {
+        if (inventory) item.action = 'PR state unverified'
+        lower(item, 'needs-readiness-verification', 'PR state unverified')
+        lower(item, 'needs-readiness-verification', 'A merge request needs exactly one recognized PR evidence link')
+      }
       else {
+        const inventoryState = inventoryPullState(urls[0]!, inventory)
+        if (inventoryState === 'not-open') return false
+        if (inventory && inventoryState === 'unverified') {
+          item.action = 'PR state unverified'
+          lower(item, 'needs-readiness-verification', 'PR state unverified')
+        }
         const observed = pullStates.get(urls[0]!)
         const pr = observed?.expiresAt && Date.parse(observed.expiresAt) <= now ? { ...observed, status: 'stale' as const } : observed
         if (pr && !item.sources.some(source => source.kind === 'github' && source.id === urls[0])) item.sources.push({ kind: 'github', id: urls[0]!, field: 'pull/head/checks/mergeability', observedAt: pr.observedAt,
           expiresAt: pr.expiresAt, status: pr.status, coverage: pr.status === 'fresh' ? 'complete' : 'unknown' })
         if (pr?.status === 'fresh' && (pr.state === 'merged' || pr.state === 'closed')) return false
-        if (pr?.status !== 'fresh') lower(item, 'needs-readiness-verification', 'PR state/checks are unavailable or stale')
+        if (pr?.status !== 'fresh') lower(item, 'needs-readiness-verification', 'PR state unverified')
         else if (pr.draft || pr.checks === 'pending' || pr.checks === 'failed' || pr.mergeability === 'blocked') lower(item, 'future-or-conditional', 'PR is draft, blocked, or still requires passing checks')
         else if (pr.state !== 'open' || pr.checks !== 'passed' || pr.mergeability !== 'ready') lower(item, 'needs-readiness-verification', 'Current PR head/checks/mergeability do not yet prove merge readiness')
         else if (scene.executions.some(execution => item.executionIds.includes(execution.id) &&

@@ -91,3 +91,68 @@ it('resolves closed origins within owned/authored/associated scope and derives A
   await expect(api.origin('https://github.com/unconfigured/repo/pull/9')).rejects.toThrow('repository scope')
   expect(read.mock.calls.every(([path]) => !path.includes('state=all'))).toBe(true)
 })
+
+it.each(['complete', 'partial', 'stale', 'unavailable'] as const)('uses production open-only %s coverage for association-only merge asks without new PR lookups', async coverage => {
+  const { ReconciliationSources } = await import('../../reconciliation')
+  const { CardContextReader } = await import('../../reconciliation/cardContext')
+  const { fixtureSources } = await import('../../../../test-fixtures/reconciliation/scenes')
+  const root = await mkdtemp(join(process.cwd(), '.association-coverage-'))
+  cleanups.push(() => rm(root, { recursive: true, force: true }))
+  await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['owner/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+  let clock = Date.now(), phase = 'open'
+  const url = 'https://github.com/owner/repo/pull/9'
+  const row = (number: number) => ({ number, title: 'Private change', html_url: `https://github.com/owner/repo/pull/${number}`, user: { login: 'agent' }, draft: false, head: { sha: 'a'.repeat(40) }, base: { ref: 'main' }, created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-06T00:00:00Z' })
+  const read = vi.fn(async (path: string) => {
+    if (path === '/user') return { login: 'owner' }
+    if (path.startsWith('/user/orgs?')) return []
+    if (!path.startsWith('/repos/owner/repo/pulls?state=open&')) throw new Error('Unexpected PR lookup')
+    if (phase === 'open') return [row(9)]
+    if (coverage === 'complete') return []
+    if (coverage === 'partial' && path.endsWith('page=1')) return Array.from({ length: 100 }, (_, i) => row(1000 + i))
+    throw new Error('Fixture inventory unavailable')
+  })
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] }, undefined, undefined, root)
+  const snapshot = fixtureSources({ now: clock }), card = snapshot.intentions.data!.cards[0]!
+  snapshot.intentions.data!.cards = [card]; snapshot.fleet = []
+  delete card.properties.Link; delete card.properties.Evidence
+  card.properties['Will action'] = { id: 'actions', type: 'multi_select', value: ['Merge'], hasMore: false }
+  card.properties['Next action'] = { id: 'next', type: 'rich_text', value: 'Merge the reviewed change', hasMore: false }
+  const scene = { ...fixtureScene({ now: clock }), searchIndex: { documents: [], notes: [] } }
+  scene.cards = scene.cards.filter(item => item.id === card.id); scene.cards[0]!.source = card
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  vi.spyOn(sources, 'scene').mockResolvedValue(scene)
+  const context = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockResolvedValue({ outcome: 'available', blocks: [] })
+  try {
+    const store = new AssociationStore(root)
+    await store.append({ id: randomUUID(), pull: url, cardId: card.id, action: 'link', reason: 'Fixture association' }, 'owner')
+    const api = new PullsApi(sources, store, root, new PullReader(read, () => clock))
+    sources.authorizePulls = req => api.authorized(req)
+    const inventory = vi.fn(() => api.read())
+    sources.readPulls = inventory
+    sources.readPullReadiness = vi.fn(async () => new Map())
+    const owner = { headers: { 'tailscale-user-login': 'owner@example.test' }, socket: { remoteAddress: '127.0.0.1' } } as import('node:http').IncomingMessage
+    if (coverage !== 'unavailable') {
+      const open = await sources.queue(owner)
+      expect(open.needsWill[0]?.pulls[0]?.url).toBe(url)
+      clock += 61_000
+    }
+    phase = 'absent'
+    const listed = await api.read()
+    expect(listed.repositories[0]?.status).toBe(coverage === 'complete' ? 'fresh' : coverage)
+    expect(listed.associations[0]).toMatchObject({ url, links: [expect.objectContaining({ cardId: card.id, active: true })] })
+    if (coverage === 'complete' || coverage === 'unavailable') expect(listed.pulls).toEqual([])
+    const result = await sources.queue(owner)
+    if (coverage === 'complete') expect(result.needsWill).toEqual([])
+    else expect(result.needsWill[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
+    card.properties['Will action']!.value = ['Merge', 'Decision']
+    const mixed = await sources.queue(owner)
+    expect(mixed.needsWill).toHaveLength(1)
+    expect(mixed.needsWill[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(coverage === 'complete' ? ['Decision'] : ['Merge', 'Decision'])
+    expect(sources.readPullReadiness).toHaveBeenLastCalledWith([])
+    const reads = inventory.mock.calls.length
+    const restricted = await sources.queue()
+    expect(inventory).toHaveBeenCalledTimes(reads)
+    expect(restricted.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+    expect(read.mock.calls.every(([path]) => path === '/user' || path.startsWith('/user/orgs?') || path.startsWith('/repos/owner/repo/pulls?state=open&'))).toBe(true)
+  } finally { context.mockRestore() }
+})

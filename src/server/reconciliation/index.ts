@@ -23,7 +23,7 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
-import type { PullsRead } from '../../shared/pulls'
+import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 
 export type SourceSnapshot = Omit<Awaited<ReturnType<ReconciliationSources['snapshot']>>, 'diagnostics'>
@@ -177,6 +177,7 @@ export class ReconciliationSources {
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
+      .filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
     const states = authorized ? await (this.readPullReadiness?.(urls) ?? this.queuePulls.get(urls)) : new Map<string, PullReadiness>()
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
     // Detail reads are demand-only for this view, share the normal cache/limiter,
@@ -194,7 +195,7 @@ export class ReconciliationSources {
     queue.operationalExceptions = executionWarnings(scene)
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
     else if (!authorized) queue.warnings.push('PR details require owner authorization')
-    else queue.warnings.push('PR inventory unavailable; explicit merge requests retain their evidence and readiness, inventory coverage is unknown.')
+    else queue.warnings.push('PR state unverified: inventory unavailable; explicit asks are retained without a verified waiting-on-merge conclusion.')
     return workReadback(queue)
   }
 }

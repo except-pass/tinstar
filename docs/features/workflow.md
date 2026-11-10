@@ -403,3 +403,17 @@ owner refreshes the ChatGPT connector catalog. Queue PR details use the existing
 PR Operations owner check described above; other readers retain asks with
 authorization placeholders.
 
+
+Needs Will uses current active Releases/PR Operations associations independently
+of the open-only PR list. For an associated PR absent from a repository inventory
+reported fresh and complete, only its merge ask is suppressed. Other decisions,
+elevated actions and waits on Will remain. Partial, stale, unavailable or missing
+repository coverage retains the merge ask as **PR state unverified**, not as a
+verified wait for merge. Non-owner HTTP and MCP callers still receive owner
+authorization placeholders; they cannot infer private inventory state.
+
+This coverage rule infers only “not open”; it does not distinguish merged from
+closed or establish delivery/completion. It adds no per-PR requests, history scans,
+stores or replay. Association ambiguity, multiple linked PRs and unavailable
+association coverage may require owner verification; cleanup beyond this rule is
+an accepted limitation, without suppressing unrelated asks or exposing PR data.

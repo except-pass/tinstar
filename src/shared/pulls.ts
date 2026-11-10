@@ -15,6 +15,7 @@ export interface PullRepository {
 export interface PullsRead {
   account?: string
   authenticatedActor?: string; credentialProfile?: string
+  associations?: Array<PullIdentity & { links: ReleaseLink[] }>
   pulls: PullSummary[]; repositories: PullRepository[]; warnings: string[]; associationsComplete: boolean
 }
 export interface PullDetail {
@@ -28,6 +29,15 @@ export interface PullDetail {
 
 export function queuePulls(item: { cardIds: string[]; evidence: Array<{ kind: string; url: string }> }, inventory: PullsRead | null): PullIdentity[] {
   const urls = [...item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url),
-    ...(inventory?.pulls ?? []).filter(pull => pull.links.some(link => link.active && item.cardIds.includes(link.cardId))).map(pull => pull.url)]
+    ...[...(inventory?.associations ?? []), ...(inventory?.pulls ?? [])].filter(pull => pull.links.some(link => link.active && item.cardIds.includes(link.cardId))).map(pull => pull.url)]
   return [...new Map(urls.flatMap(url => { const pull = releasePull(url); return pull ? [[pull.id, pull] as const] : [] })).values()]
+}
+
+export function inventoryPullState(url: string, inventory: PullsRead | null): 'open' | 'not-open' | 'unverified' {
+  const identity = releasePull(url)
+  if (!identity || !inventory) return 'unverified'
+  const pull = inventory.pulls.find(pull => releasePull(pull.url)?.id === identity.id)
+  if (pull) return pull.freshness === 'fresh' ? 'open' : 'unverified'
+  const coverage = inventory.repositories.find(repository => repository.repository === identity.repository)
+  return coverage?.status === 'fresh' && coverage.complete ? 'not-open' : 'unverified'
 }

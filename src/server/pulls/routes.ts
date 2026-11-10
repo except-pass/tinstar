@@ -45,7 +45,7 @@ export class PullsApi {
     const identity = await this.reader.identity()
     const reads = await this.reader.inventory(repositories, { ...identity, associated })
     const links = new Map(associations.pulls.map(pull => [pull.id, pull.links]))
-    return { account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
+    return { associations: auditAvailable ? associations.pulls.filter(pull => activeReleaseLinks(pull).length > 0).map(({ id, repository, number, url, links }) => ({ id, repository, number, url, links })) : [], account: identity.account, authenticatedActor: identity.authenticatedActor, credentialProfile: identity.credentialProfile, pulls: reads.flatMap(read => read.pulls.map(pull => ({ ...pull, links: auditAvailable ? links.get(pull.id) ?? [] : [] }))),
       repositories: reads.map(read => read.coverage), warnings: [...warnings, ...(identity.authenticatedActor ? [`Authenticated as ${identity.authenticatedActor}; review author ${identity.account}. Repositories outside its verified installations are unavailable; no ambient-login fallback.`] : []), ...associations.warnings], associationsComplete: auditAvailable && associations.associationsComplete }
   }
   async origin(url: string) {
