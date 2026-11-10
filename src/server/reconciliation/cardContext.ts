@@ -3,6 +3,7 @@ import { record } from './values'
 
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
+  commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
   blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
@@ -12,26 +13,32 @@ export interface CardContextRead {
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private comments = new Map<string, { until: number; value: Promise<CardContextRead> }>()
+  private commentCache = new Map<string, { until: number; value: Promise<CardContextRead> }>()
   private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
-  invalidate(id: string) { this.cache.delete(id); this.comments.delete(id) }
+  invalidate(id: string) { this.cache.delete(id); this.commentCache.delete(id) }
   details(id: string, force = false): Promise<CardContextRead> {
-    const cached = this.comments.get(id)
-    if (!force && cached && cached.until > Date.now()) return cached.value
     if (force) this.invalidate(id)
-    if (this.comments.size >= 100) this.comments.delete(this.comments.keys().next().value!)
-    const value = this.readComments(id).catch((): CardContextRead => ({ outcome: 'unavailable', blocks: [], message: 'Card details unavailable' }))
-    this.comments.set(id, { until: Date.now() + 30_000, value })
+    return Promise.all([this.get(id), this.commentDetails(id, force)]).then(([body, comments]): CardContextRead => ({
+      ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
+      outcome: body.outcome === 'unavailable' ? 'unavailable' : body.outcome === 'partial' || comments.outcome !== 'available' ? 'partial' : 'available',
+      omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
+    }))
+  }
+  commentDetails(id: string, force = false): Promise<CardContextRead> {
+    const cached = this.commentCache.get(id)
+    if (!force && cached && cached.until > Date.now()) return cached.value
+    if (this.commentCache.size >= 100) this.commentCache.delete(this.commentCache.keys().next().value!)
+    const value = this.readComments(id)
+    this.commentCache.set(id, { until: Date.now() + 30_000, value })
     return value
   }
   private async readComments(id: string): Promise<CardContextRead> {
-    const body = await this.get(id)
-    const context = { ...body, blocks: [...body.blocks] }
-    if (!this.config) return context
+    const context: CardContextRead = { outcome: 'available', blocks: [] }
+    if (!this.config) return { outcome: 'unavailable', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
     let cursor: string | undefined, bytes = 0
     try {
@@ -69,7 +76,7 @@ export class CardContextReader {
         cursor = next
       }
     } catch { /* No comment access is not evidence of closure or missing data. */ }
-    return { ...context, outcome: context.outcome === 'unavailable' ? 'unavailable' : 'partial', omissions: `${context.omissions ?? ''} Comments unavailable or truncated.` }
+    return { ...context, outcome: 'partial', omissions: `${context.omissions ?? ''} Comments unavailable or truncated.` }
   }
   get(id: string, revision?: string) {
     const cached = this.cache.get(id)

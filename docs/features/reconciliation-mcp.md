@@ -1,6 +1,6 @@
 # Conversational Overview
 
-Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware start work](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
+Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware workflow operations](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
 
 ## Start and connect
 
@@ -44,7 +44,7 @@ TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel
   --caller-id owner-chatgpt --caller-token-file /absolute/private/facade-caller-header
 ```
 
-The facade binds only `127.0.0.1`, exposes `/mcp`, and exposes ten read tools plus the shared `start_work` mutation to authenticated consumers. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
+The facade binds only `127.0.0.1`, exposes `/mcp`, and exposes the read tools and shared workflow mutations listed below to authenticated consumers. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
 Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
 The approved caller boundary is the private org tunnel. Generate a separate opaque random token of at least 32 non-whitespace characters. Store the full Authorization header value in a single owner-only file shared by the facade and tunnel-client: `Bearer <opaque-random-token>` on one line, with an optional trailing newline. Raw tokens, extra lines and double prefixes are rejected by the CLI. Normal ChatGPT needs no extra authentication; tunnel-client injects the header from this file.
 Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
@@ -100,7 +100,7 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `search_work(...)` | Scoped, paginated work properties, UI search predicates, links, evidence and coverage without a browser |
 | `get_work(...)` | Exact configured-board card, bounded body/comments, linked worker/PR evidence and freshness without a browser |
 | `get_workflow_rules()` | Code-enforced workflow rules and deferred operations |
-| `start_work(...)` | Merge current tracked worker provenance, set In Progress and actor; confirm readback through the same policy as Inspector |
+| `start_work(...)`, `create_work(...)`, `update_work(...)` | [Shared workflow operations](workflow.md): contracts, enforced rules and partial-save handling |
 | `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
 | `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |

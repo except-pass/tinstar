@@ -1,9 +1,10 @@
-# Shared work reads and start work
+# Shared workflow operations
 
-Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
-**Start work** form and the authenticated MCP’s `start_work` tool call the same
-backend operation. Work tools require no open browser or `scene_id`. Explicit
-window selection and acknowledgment still govern presentation focus/flash.
+Tin Star owns workflow recording; Notion remains authoritative. Overview’s
+**Create work** and the Inspector’s **Update work** and **Start work** forms call
+the same backend operations as the authenticated MCP. Work tools require no open
+browser or `scene_id`. Explicit window selection and acknowledgment still govern
+presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
 the existing Notion reader, scene/link projection and Smart Search predicates.
@@ -100,17 +101,161 @@ remain with their existing helpers. `get_workflow_rules` exposes the enforced
 rules and identifies pending operations without needing separate Notion rules-page
 access.
 
-## Retained dependencies and delivery
+## Slice 1 delivery history
 
-Create/edit/assign/checkpoint/wait/decision/complete/park, pickup/update delivery,
-computed decision views and watchdog writer migration are later slices. Existing
-writers, the Mac Notion poller and PM Bot monitors/listeners remain until their
-replacements work. This slice retires none of them and restarts no paused routine.
-The watchdog keeps its independent Firstmate active eligibility census and current
-card checks; it no longer needs a historical board scan through the shared scene.
+At slice 1 delivery, remaining operations and pickup/update integration were
+reserved for slice 2 (now described below). See that section for current retained
+dependencies and the [watchdog reference](check-in-watchdog.md) for its scoped
+eligibility census and current-card verification.
 
 Catalog additions: `search_work`, `get_work`, `get_workflow_rules`, `start_work`.
-No existing MCP signature changes. After deploy, Firstmate must tell the owner to
-refresh the ChatGPT connector’s tool catalog. Deployment and one disposable-card
+No existing MCP signatures changed in slice 1. Deployment and one disposable-card
 live UI/MCP/Notion/First Mate acceptance run remain Firstmate-owned; local tests
 and screenshots use fixtures and do not establish live acceptance.
+
+## Slice 2: remaining operations and First Mate integration
+
+`create_work` and `update_work` extend `WorkflowOperations`, the existing
+`start_work` policy, the authenticated MCP/tunnel, and compact Overview/Inspector
+surfaces. The **Create work** action requires a name, owner and area; the
+Inspector's **Update work** form collects each operation's coupled inputs. Neither
+surface needs Notion open. Inspector details include bounded comments as well as
+body prose. A card leaving the current filter remains in the Inspector with its
+last confirmed readback so a partial save can still be seen and retried.
+
+`create_work({operation_id,name,owner,area,status?,properties?,content?})` creates
+one page in the configured data source. Initial status is Queued by default;
+Firstmate assignment always records Queued. `content` has optional `brief` and
+`acceptance_criteria`; ordinary properties preserve canonical Initiative/Epic
+relation IDs. No owner, execution or substantive card facts are inferred.
+
+`update_work({card_id,operation_id,kind,...,expected?})` accepts:
+
+| kind | Inputs / changes |
+| --- | --- |
+| `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
+| `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
+| `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
+| `wait` | `dependency`, `unblocks_when`, `follow_up_by`, optional `note`. Enters Waiting For and appends that wait while retaining other waits. |
+| `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. |
+| `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires all wait inputs; Done/Archived requires disposition/evidence. |
+| `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
+| `park` | Explicit `disposition`, status Backlog (default) or Archived. |
+
+Ordinary properties are Name, Area, Priority, Sub-area, Attention, Initiative,
+Epic, Link, Due Date, Start Date and Next action. The server uses the actual
+Notion property type; relation classifications accept canonical page ID arrays.
+An unsupported/truncated property fails only the operation that replaces it.
+Owner/Area are required on new assignments/starts/waits, while notes, ordinary
+edits and corrective closure remain possible on imperfect legacy cards. No
+existing unknown or stale worker state is silently repaired. External-worker
+support reuses slice 1's Delegated To report and exact native First Mate links.
+
+Answers preserve all other action tags and waits. Multiple tracked open asks
+sharing one action tag keep that tag until the last resolved request; tags that
+predated those requests remain unless the consumer explicitly resolves them.
+An older ask can use its actual Notion paragraph/comment ID as `request_id`.
+Optional `legacy_action` explicitly identifies the tag the caller judges resolved;
+omitting it preserves every legacy tag. The caller remains responsible for
+whether that legacy tag also represents another unresolved ask. `resolve_wait`
+must uniquely match the exact current wait text; Tin Star removes just that text.
+The original ask and answer remain in history. The UI offers source notes for
+selection alongside request ID entry.
+
+Brief and acceptance edits upsert two named paragraphs, preserving other body
+content and history. Existing unmanaged prose remains available; older asks
+retain their actual source IDs. Read/validate/recheck/write/confirm is one path
+for every operation, with a common per-card lock across start and update.
+`expected` compares only supplied property values. Replacement body paragraphs
+also compare their read-before-write text. Set-valued properties and checkpoint
+readback compare meaning, including timezone rendering, rather than ordering or
+formatting. Direct Notion edits can still race a multi-request operation.
+
+Updates confirm properties and managed sections before writing the history note.
+If only the note fails, the same process can repair it once, provided the card's
+last-edited time and properties remain unchanged. A changed card returns the
+confirmed partial result without another write; review current state and re-issue
+with a new operation ID. Definite results that require a fresh attempt set
+`requires_new_operation_id`; the UI offers refresh and explicit re-issue solely
+from that flag, including on cached results. Uncertain saves retain their identity.
+Other partial failures also require reconciliation by
+the caller. There is no property replay, note-first plan receipt or automatic
+restart recovery. A completed operation's note marker prevents duplicate notes.
+
+A receipt in the initial creation body recovers lost create responses, with a tiny durable local
+creation latch in `workflow-create-receipts.json` preventing an uncertain POST
+from being repeated if the card was renamed or its query receipt is not visible.
+That latch is not an offline queue or authoritative card. Reconcile an uncertain
+creation through current reads before intentionally creating with a new ID.
+
+Checkpoint prose normalizes line breaks to spaces in history, then validates the
+serialized report against the existing [watchdog report requirements](check-in-watchdog.md#notion-closure-and-repair)
+before any write. This applies to assessment, evidence, blocker and next action;
+invalid reports return `invalid-checkpoint` without saving. Checkpoint timestamps
+use the existing America/New_York, 9 AM date-only, DST and board ceiling helpers.
+In Progress appointments must be in the future and
+under the existing ceiling; Due Date remains a separate delivery deadline. Only
+an explicit checkpoint moves Next check-in. Provisional/owner-confirmed status
+is recorded in the checkpoint comment; neither ordinary edits nor a webhook
+upgrade it. Worker and request history survives completion/parking.
+
+`FirstmateUpdates` joins the existing source-refresh callback, shared targeted
+Notion reader, and **existing Ask bearer bridge**. It does not invoke First Mate
+source/scripts, dispatch workers, add a scheduler, or create another inbox.
+Authenticated operation actors drive self-edit suppression for confirmed writes.
+The observer excludes confirmed property, section and note effects. Body blocks
+are compared by ID: changed text requires a previously observed block, additions
+require a complete prior body observation, and removals require a complete current
+body read. Partial reads merge observed blocks into the in-memory baseline;
+previously unknown blocks are silently adopted. A changed page revision with no
+identified section change carries “card body changed (details unavailable)” instead.
+Complete comment reads advance their own baseline even when body content is
+partial; positively identified self-comments are retained independently as well.
+Matching edit times and property readbacks deduplicate scan notices. Direct
+Notion edits carry unknown attribution. Last touched by never suppresses them. A Firstmate-owned Queued card
+gets one pickup per observed outstanding assignment. Leaving that assignment
+clears its latch, so a later requeue is actionable. Active In Progress/Waiting For
+changes become contextual updates. Nearby changes by one actor coalesce for ten
+seconds in batches of up to twenty cards. An offered notice retains its inbox
+request ID, and failed wakes retry that same note. A pickup that is no longer
+eligible is removed from a pending batch; remaining items retain that identity.
+
+The safety scan queries only Owner Firstmate and Queued/In Progress/Waiting For,
+roughly once per minute on the existing callback. It does not require historical
+coverage or body reads. Changed active cards fetch bounded shared details on
+demand for available comments/authors and body section changes. Property/body
+diff baselines stay in memory; persisted state contains assignment latches,
+edit times, minimal deduplication and pending inbox notices, not a board mirror.
+Delivered notice payloads are discarded. After restart, unavailable prior diffs
+are disclosed with current context; no perfect historical replay is promised.
+Comment-only edits are checked without body reads on a rotating batch of four
+active Firstmate cards per minute, covering a stable set of N cards within
+ceil(N/4) sweeps. Explicit refresh checks comments immediately for the requested
+active cards; a forced feed sweep checks all active cards. These reads share the
+comment cache and API limiter. New comment IDs, including author, enter the
+existing coalesced update and retry path even when page revisions are unchanged. Failed or
+partial source reads retain prior assignment state and never imply deletion.
+New pickup delivery rechecks the exact card; source failure retains it for retry.
+Preview delivery follows the watchdog's existing disabled-by-default settings.
+
+The watchdog's census, exact verification and context use the same reader/cache
+and limiter. Its inbox request now directs consumer writes to `update_work` kind
+checkpoint, including its original request ID. Its mechanical appointments,
+bounded request/follow-up behavior and unknown-source semantics remain unchanged;
+the meaning-based readback fix from https://github.com/except-pass/tinstar/pull/354
+is retained. The watchdog itself still makes no autonomous Notion judgments or
+writes and does not treat an ordinary reply/status change as a checkpoint.
+
+Slice 2 catalog: added `create_work`, `update_work`; changed
+`get_workflow_rules` to expose enforced remaining-operation rules. Existing
+`start_work`, `search_work` and `get_work` signatures remain compatible; Inspector
+card context now includes comments. Both new tools traverse the existing
+single authenticated tunnel with the same network/credential boundary. After
+deploy, Firstmate must tell the owner to refresh the ChatGPT connector catalog.
+
+Retained for slice 3: the Mac Notion poller and PM Bot monitors/listeners,
+consumer reporting/judgment, shared computed decision/Needs Will PR view and
+staged writer/poller retirement. No paused routine is restarted. The new feed's
+live deployment and poller cutover must be coordinated by Firstmate to avoid
+duplicate pickup during the staged transition. This slice does not grant merge,
+deploy, shell, worker-lifecycle or production authority.

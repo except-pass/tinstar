@@ -2,24 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
+import { apiFetch } from '../../apiClient'
 import { overviewDensityKey } from '../overviewDensity'
 import type { FloorScene } from '../presentation'
 
-const observed = vi.hoisted(() => ({ scene: null as unknown }))
-vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
+const observed = vi.hoisted(() => ({ scene: null as unknown, refresh: undefined as (() => Promise<void>) | undefined }))
+vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now(), refreshAfterMutation: () => observed.refresh?.() ?? Promise.resolve() }) }))
 vi.mock('../useDeskQueue', () => ({ useDeskQueue: () => ({ queue: null, error: null }) }))
 vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
-vi.mock('../../apiClient', () => ({ apiFetch: () => new Promise(() => {}) }))
+vi.mock('../../apiClient', () => ({ apiFetch: vi.fn(() => new Promise(() => {})) }))
 
 let scene: FloorScene
 beforeEach(() => {
   localStorage.clear()
+  observed.refresh = undefined
+  vi.mocked(apiFetch).mockImplementation(() => new Promise(() => {}))
   scene = fixtureScene()
   observed.scene = scene
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
 })
-afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 const mount = (density: 'compact' | 'detailed') => {
   localStorage.setItem(overviewDensityKey, density)
@@ -160,7 +163,7 @@ describe('Copy Notion link', () => {
     installClipboard(writeText)
     let copied = ''
     Object.defineProperty(document, 'execCommand', { configurable: true, value: (command: string) => {
-      if (command === 'copy') copied = document.querySelector('textarea')?.value ?? ''
+      if (command === 'copy') copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly]')?.value ?? ''
       return true
     } })
     await openTask()
@@ -173,7 +176,7 @@ describe('Copy Notion link', () => {
   it.each(['success', 'refused', 'throws'] as const)('restores focus and removes the fallback textarea when copy %s', async outcome => {
     installClipboard(vi.fn().mockRejectedValue(new Error('denied')))
     Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
-      document.querySelector('textarea')!.focus()
+      document.querySelector<HTMLTextAreaElement>('textarea[readonly]')!.focus()
       if (outcome === 'throws') throw new Error('copy failed')
       return outcome === 'success'
     } })
@@ -183,7 +186,7 @@ describe('Copy Notion link', () => {
     fireEvent.keyDown(button, { key: 'Enter' })
     await waitFor(() => expect(button).toHaveFocus())
     await act(async () => { await Promise.resolve() })
-    expect(document.querySelector('textarea')).toBeNull()
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[readonly]')).toBeNull()
     expect(button).toHaveFocus()
     expect(screen.queryByText('Copied') !== null).toBe(outcome === 'success')
   })
@@ -200,4 +203,82 @@ describe('Copy Notion link', () => {
     expect(screen.queryByText('Copied')).toBeNull()
     expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
   })
+})
+
+
+it('retains the confirmed status and partial-save recovery when completion removes the card from the active view', async () => {
+  localStorage.setItem(overviewDensityKey, 'detailed')
+  const saved = structuredClone(scene.cards.find(card => card.id === fixtureId(1))!.source)
+  saved.properties.Status!.value = 'Done'
+  vi.mocked(apiFetch).mockImplementation(async path => {
+    if (String(path).endsWith('/workflow')) return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', message: 'Status saved; note failed', operation_id: 'test', saved_fields: ['Status'], card: saved } }))
+    return new Response(JSON.stringify({ ok: true, data: { outcome: 'available', blocks: [] } }))
+  })
+  const view = <Overview workers={[]} messages={[]} submit={vi.fn()} />
+  const mounted = render(view)
+  observed.refresh = async () => {
+    // Let the result render while the old scene is still on screen, as happens
+    // during the real shared refresh. It must not replace confirmed readback.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    observed.scene = { ...scene, generatedAt: new Date(Date.now() + 1000).toISOString(), cards: scene.cards.filter(card => card.id !== saved.id) }
+    mounted.rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+  }
+  fireEvent.click(inspectorButton(endpoint(mounted.container, 'task')))
+  const inspector = screen.getByLabelText('Inspector')
+  fireEvent.change(within(inspector).getByLabelText('Operation'), { target: { value: 'complete' } })
+  fireEvent.change(within(inspector).getByLabelText('Supported disposition'), { target: { value: 'Owner accepted the required behavior' } })
+  fireEvent.change(within(inspector).getByLabelText('Completion evidence'), { target: { value: 'Acceptance receipt in fixture' } })
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(within(inspector).getByText(/Outside the current view/)).toBeTruthy())
+  expect(within(inspector).getByText('Done')).toBeTruthy()
+  expect(within(inspector).getByText(/Partially saved. Status saved; note failed/)).toBeTruthy()
+  expect(within(inspector).getByRole('button', { name: 'Save update' })).toBeEnabled()
+})
+
+it('keeps Inspector identity when another card save finishes and applies matching readback', async () => {
+  const first = scene.cards.find(card => card.id === fixtureId(1))!
+  const second = scene.cards.find(card => card.id === fixtureId(4))!
+  const requests: Array<{ input: { card_id: string }; resolve: (response: Response) => void }> = []
+  vi.mocked(apiFetch).mockImplementation((path, init) => {
+    if (String(path).endsWith('/workflow')) return new Promise<Response>(resolve => requests.push({ ...JSON.parse(String(init?.body)), resolve }))
+    return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { outcome: 'available', blocks: [] } })))
+  })
+  observed.refresh = vi.fn(async () => {})
+  const { container } = mount('detailed')
+  const open = (id: string) => {
+    const row = [...container.querySelectorAll<HTMLElement>('.ov-card')].find(element => element.dataset.entityId === id)!
+    fireEvent.click(inspectorButton(row))
+  }
+  const finish = async (index: number, card: typeof first.source) => {
+    await act(async () => requests[index]!.resolve(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', message: 'Confirmed', saved_fields: ['Name', 'Status'], card } }))))
+    await waitFor(() => expect(observed.refresh).toHaveBeenCalledTimes(index + 1))
+  }
+  open(first.id)
+  fireEvent.click(within(screen.getByLabelText('Inspector')).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]!.input.card_id).toBe(first.id)
+  open(second.id)
+  const savedFirst = structuredClone(first.source)
+  savedFirst.properties.Name!.value = 'Confirmed first card'
+  savedFirst.properties.Status!.value = 'Done'
+  savedFirst.url = 'https://www.notion.so/confirmed-first'
+  await finish(0, savedFirst)
+  const inspector = screen.getByLabelText('Inspector')
+  expect(heading()).toHaveTextContent(String(second.source.properties.Name!.value))
+  expect(within(inspector).getByText('Waiting For', { exact: true, selector: 'dd' })).toBeTruthy()
+  expect(within(inspector).getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', second.source.url)
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(requests).toHaveLength(2))
+  expect(requests[1]!.input.card_id).toBe(second.id)
+  const savedSecond = structuredClone(second.source)
+  savedSecond.properties.Name!.value = 'Confirmed second card'
+  savedSecond.properties.Status!.value = 'Queued'
+  savedSecond.url = 'https://www.notion.so/confirmed-second'
+  await finish(1, savedSecond)
+  expect(heading()).toHaveTextContent('Confirmed second card')
+  expect(within(inspector).getByText('Queued', { exact: true })).toBeTruthy()
+  expect(within(inspector).getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', savedSecond.url)
+  open(first.id)
+  expect(heading()).toHaveTextContent(String(first.source.properties.Name!.value))
+  expect(screen.getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', first.source.url)
 })

@@ -7,6 +7,7 @@ import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import { ReconciliationMcp } from './reconciliation/mcp'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
+import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
 import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
 import { ReleasesApi } from './releases/routes'
 import { PullsApi } from './pulls/routes'
@@ -73,13 +74,16 @@ export function startServer(opts: ServerOptions) {
 
   const reconciliation = new ReconciliationSources()
   const checkIns = new CheckInWatchdog(reconciliation)
+  const workUpdates = new FirstmateUpdates(reconciliation)
+  reconciliation.onWorkRefresh = async cards => { for (const card of cards) await workUpdates.refreshComments(card) }
+  reconciliation.workflow.onChange = change => workUpdates.confirmed(change)
   reconciliation.checkInIndicators = () => checkIns.indicators()
-  const fleet = new CockpitFleet(() => { void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
+  const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
   const pulls = new PullsApi(reconciliation, releases.store)
   const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
-  const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns)
+  const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns, workUpdates)
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()

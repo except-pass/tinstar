@@ -7,7 +7,7 @@ import { CallToolRequestSchema, JSONRPCRequestSchema, ListToolsRequestSchema, Re
 import { z } from 'zod/v4'
 import { secretEquals } from './sessions'
 
-const commonTools = ['search_work', 'get_work', 'get_workflow_rules', 'start_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
+const commonTools = ['search_work', 'get_work', 'get_workflow_rules', 'start_work', 'create_work', 'update_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
 const views = ['present_view', 'next_queue_item']
 const modernVersion = '2026-07-28'
 const supportedVersions = [modernVersion, ...SUPPORTED_PROTOCOL_VERSIONS]
