@@ -4,7 +4,7 @@ Card: https://app.notion.com/p/40f50ce6d42281729453e9771630e63a
 
 Slice A is a repository CLI that proposes investigations of messy task cards. It
 uses the existing Tin Star Notion/fleet source snapshot and reconciliation
-projection. By default it makes no model calls, creates no Desk items, and has no Notion or First Mate writer.
+projection. By default it makes no model calls, creates no Discuss items, and has no Notion or First Mate writer.
 Slice B adds an opt-in local semantic pilot over the same candidate clusters.
 Review, persistent review decisions, application and automatic scheduling are later slices.
 
@@ -103,7 +103,7 @@ starts with a fresh feature cache; saved input avoids source network reads. Metr
 include comparisons, context reads/budget, cache hits/misses and runtime, with
 model calls/tokens, external inference calls and writes equal to zero in the
 deterministic report. Opt-in semantic metrics are reported separately below. There is
-no new persistent daemon or nag loop. The existing Desk queue is only projected
+no new persistent daemon or nag loop. The existing Decisions queue is only projected
 to record baseline decision counts; GitHub readiness is not refreshed or certified.
 
 ## Local semantic proposals (slice B)
@@ -143,7 +143,7 @@ These checks constrain references and available operations; semantic correctness
 Results include stable proposal identity, source versions, cited evidence with freshness, confidence, explicit abstention, optional survivor and plain-language description/current-state/next-action drafts.
 Previews show the exact cited source before and the separate proposed draft after; they are not executable Notion property patches.
 The deterministic protected fields and unauthorized apply preconditions accompany every semantic proposal.
-Nothing changes status, ownership, links, history, the Desk or Notion.
+Nothing changes status, ownership, links, history, Discuss or Notion.
 
 ### Resources, admission and cache
 

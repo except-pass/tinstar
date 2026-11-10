@@ -71,7 +71,7 @@ board-guide and PM-bot sweep updates.
 
 Releases now computes per-PR/component shipment and per-card **dry-run** eligibility.
 `GET /api/releases/reconciliation` returns the same inspectable report used by the
-page; GET never writes cards, comments, Desk requests or GitHub. Replaying the
+page; GET never writes cards, comments, Discuss requests or GitHub. Replaying the
 same observations produces the same report ID and decisions. The separately scheduled writer remains OFF unless the operator enables it;
 this endpoint never invokes that writer.
 
@@ -91,14 +91,14 @@ A card is eligible to **would-complete** only in `Waiting for Prod Release`, wit
 complete association sources and *all* linked PR/target requirements proven live.
 The optional existing Notion checkbox named exactly `Requires production
 verification`, when true, instead produces **would-verify**, including the owner.
-The read-only proposal appears in Verify in Prod and the drawer; generating it performs no Desk or status action.
+The read-only proposal appears in Verify in Prod and the drawer; generating it performs no Discuss or status action.
 Missing checkbox means no opt-in verification requirement; the reader does not
 create it. Other Notion statuses cannot be completed by this report; a confirmed
 unresolved verification route can remain visible after transition to In Progress.
 The writer requires the checkbox schema and fresh current production evidence;
 rollout requires coordinated board-guide/PM Bot updates.
 
-### Default-OFF transition and Desk review
+### Default-OFF transition and Decisions review
 
 `GET /api/releases/automation` and `automation` on the Releases collection return
 a pure, deterministic plan reporting the configured mode (`review-only` or
@@ -106,7 +106,7 @@ a pure, deterministic plan reporting the configured mode (`review-only` or
 → `Done` for eligible unflagged cards. An opted-in card instead proposes
 `Waiting for Prod Release` → `In Progress` with explicit production-check context
 and a draft for its current responsible owner. It never proposes completion of
-an opted-in card. Opening a drawer, navigating Desk, sending Ask, or replaying the
+an opted-in card. Opening a drawer, navigating Discuss, sending Ask, or replaying the
 report does not record a successful check. Verification remains open until the
 owner explicitly records the result through the existing card workflow. Cards in
 other statuses, archived cards and unresolved requirements cannot be transitioned.
@@ -144,15 +144,15 @@ current Status and the exact comment marker; completed operations never replay
 or flap status. See the [activation packet](../releases-activation.md#retry-audit-and-rollback)
 for the concurrent-edit limitation and recovery procedure.
 
-Confirmed verification routes are published through the existing shared Desk
-queue with the current card owner and direct card/PR/deployment links. Desk and
+Confirmed verification routes are published through the existing shared Decisions
+queue with the current card owner and direct card/PR/deployment links. Decisions and
 Verify in Prod use the latest completed, unresolved verification operation for
 each card, together with its current In Progress status and checked checkbox.
 Status and checkbox alone never resurrect a retired check. Checked waiting cards
 still propose verification normally. The owner records the result on the card
 and uses the existing workflow to finish it.
 
-Desk publication and scheduled retirement acquire fresh exact-card observations
+Decisions publication and scheduled retirement acquire fresh exact-card observations
 inside the writer's serialized boundary. Leaving In Progress, clearing the
 checkbox, archiving or trashing the card retires its verification operation;
 a newer completed route supersedes older routes. Retirement is durable, so

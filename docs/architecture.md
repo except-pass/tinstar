@@ -81,7 +81,7 @@ The backend is the standalone HTTP server in `src/server/standalone.ts`, started
 
 `index.html` → `main.tsx` → `App.tsx`
 
-`App.tsx` renders the V6 worker cockpit beside the Overview or worker view, with a persistent application-level Desk owned by `src/ask/DeskWorkspace.tsx`. The [Ask reference](./features/ask.md) owns Desk navigation, conversation visibility and unread-answer behavior; the [queue contract](./features/reconciliation-queue.md) owns source request inspection and response controls. Fleet reads and response delivery use the existing [First Mate integration](./features/firstmate-observer.md); `App.tsx` retains message polling for source response state. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
+`App.tsx` renders the V6 worker cockpit beside the Overview or worker view, with a persistent application-level Discuss owned by `src/ask/DeskWorkspace.tsx`. The [Ask reference](./features/ask.md) owns Discuss navigation, conversation visibility and unread-answer behavior; the [queue contract](./features/reconciliation-queue.md) owns source request inspection and response controls. Fleet reads and response delivery use the existing [First Mate integration](./features/firstmate-observer.md); `App.tsx` retains message polling for source response state. Each worker's terminal is a `public/terminal-wrapper.html` iframe opened through `GET /api/fleet/<key>/terminal`. The V5 canvas, widgets, frontend plugin host, Slate and Roundup surfaces, Focus mode and mobile mode have been removed.
 
 ### Shared data
 

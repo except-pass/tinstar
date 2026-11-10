@@ -56,7 +56,7 @@ asks whether the named dependency changed, not why coding has not progressed.
 
 System check-ins have their own private `check-in-requests.json` beside
 `ask-requests.json` under `getConfigRoot()`. They never create an owner Ask,
-owner approval, Desk conversation or worker dispatch. Records retain the exact
+owner approval, Discuss conversation or worker dispatch. Records retain the exact
 original checkpoint and use canonical card ID + appointment instant as the
 idempotency key (equivalent timezone renderings are the same epoch).
 

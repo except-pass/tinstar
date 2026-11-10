@@ -264,7 +264,7 @@ deploy, shell, worker-lifecycle or production authority.
 
 ## Slice 3: shared operational views and normal use
 
-`get_work_views({})` reads the same projection as Decisions and the Desk's ready
+`get_work_views({})` reads the same projection as Decisions and its ready
 request navigation. It requires no open UI, window ID or inherited browser
 filter. Its `needsWill` list joins current explicit card asks (Will action, a recorded open question for Will, or a named wait on Will)
 and exact owner-routed worker requests with the existing PR Operations inventory,
@@ -399,7 +399,7 @@ Firstmate's exact cutover sequence:
 
 Reused: shared reader/cache/limiter, workflow writer, external-worker representation,
 First Mate inbox notices, watchdog, PR Operations inventory/readiness and Releases
-associations, compact Inspector and Decisions/Desk. Removed from Tin Star: no
+associations, compact Inspector and Decisions/Discuss. Removed from Tin Star: no
 still-needed mechanism; the standalone duplicated Needs Will computation is
 avoided by using one projection. Retained: consumer judgment, First Mate worker
 management, security boundaries, and owner-operated poller/monitor cutover until
