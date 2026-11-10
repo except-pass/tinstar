@@ -52,6 +52,8 @@ export function taskFields(card: SceneCard, now: number, actionable = true) {
     ['Last touched by', propertyText(card, 'Last touched by') || 'Unknown'],
     ['Priority', propertyText(card, 'Priority')],
     ['Due Date', !complete && propertyDate(card, 'Due Date') ? dateLabel(propertyDate(card, 'Due Date')) : ''],
+    ['Waiting For Type', !complete ? propertyText(card, 'Waiting For Type') : ''],
+    ['Waiting For ID', !complete ? propertyText(card, 'Waiting For ID') : ''],
     ['Waiting For', !complete ? propertyText(card, 'Waiting For') : ''],
     ['Will action', !complete && actionable ? propertyText(card, 'Will action') : ''],
   ]

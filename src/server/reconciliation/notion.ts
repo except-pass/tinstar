@@ -11,7 +11,7 @@ export const notionPageId = (value: unknown): string | null =>
   typeof value === 'string' && UUID.test(value) ? value.replaceAll('-', '').toLowerCase() : null
 const PROPERTY_NAMES = [
   'Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item',
-  'Link', 'Waiting For', 'Delegated To', 'Next check-in', 'Due Date', 'Start Date', 'Priority', 'Area', 'Sub-area', 'Attention',
+  'Link', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Delegated To', 'Next check-in', 'Due Date', 'Start Date', 'Priority', 'Area', 'Sub-area', 'Attention',
   'Next action', 'Next Action', 'Evidence', 'Initiative', 'Epic', 'GitHub', 'GitHub PRs', 'Pull requests', 'Requires production verification', FIRST_MATE_TASKS,
 ]
 

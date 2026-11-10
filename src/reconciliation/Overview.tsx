@@ -13,14 +13,17 @@ import { workerFact as recordedWorkerFact } from '../shared/workerEvidence'
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from './overviewEvidence'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
+import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
 import { saveOverviewDensity } from './overviewDensity'
+import { WaitingForWork } from './WaitingForWork'
+import { waitingForActive, waitingForGroups, waitingForIssue, readWaitingForExpansion, saveWaitingForExpansion, type WaitingForType } from './waitingFor'
 import './overview.css'
+import './waitingFor.css'
 import './overviewActions.css'
 import { SwipeReveal } from '../ask/SwipeReveal'
 import { AskSurface } from '../ask/AskSurface'
@@ -39,7 +42,7 @@ function CreateWorkAction() {
 }
 
 type Dispatch = (action: PresentationAction) => void
-interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; patternResults?: ReadonlyMap<string, PatternResult>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
+interface View { restoringSearch?: boolean; scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; patternResults?: ReadonlyMap<string, PatternResult>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
 const target = (kind: Target['kind'], id: string): Target => ({ kind, id })
 const same = (a: Target | null, b: Target) => !!a && semanticId(a) === semanticId(b)
 const safeUrl = (value: string | null | undefined) => { try { const url = new URL(value ?? ''); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null } }
@@ -164,7 +167,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
     </button></span></SwipeReveal>{elementAffordance}
   </div>
 }
-export function Group({ view, group, hover, focus, allGroups }: { view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
+export function Group({ view, group, hover, focus, allGroups, workersOnly = false }: { workersOnly?: boolean; view: View; group: ReturnType<typeof overviewGroups>[number]; hover: (target: Target | null) => void; focus: Target | null; allGroups: ReturnType<typeof overviewGroups> }) {
   const { scene, state, send, now, readFailed } = view
   const body = useRef<HTMLDivElement>(null)
   const [paths, setPaths] = useState<Array<{ id: string; d: string; tone: string; worker?: string; card?: string }>>([])
@@ -236,12 +239,12 @@ export function Group({ view, group, hover, focus, allGroups }: { view: View; gr
   const displayLabel = group.label === 'Unassigned / Unknown' && ['initiative', 'epic', 'status'].includes(state.organizer?.inner === 'none' ? state.organizer.outer : state.organizer?.inner ?? '') ? 'Unassigned' : group.label
   return <section className={`ov-group${flashRelated(view, target('group', group.id)) ? ' flashed' : ''}`} data-group-id={group.id}>
     <header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${group.label}`} onClick={() => send({ type: 'set-expanded', target: target('group', group.id), expanded: collapsed })}>{collapsed ? '+' : '−'}</button>
-      <strong className="ov-group-name">{displayLabel}</strong><span>{workerSummary(workerHomes, now, readFailed, membership.workers.length, ws.length, true)} · {view.compact ? membership.cards.length : cs.length} T</span></header>
+      <strong className="ov-group-name">{displayLabel}</strong><span>{workerSummary(workerHomes, now, readFailed, membership.workers.length, ws.length, true)}{!workersOnly && <> · {view.compact ? membership.cards.length : cs.length} T</>}</span></header>
     {!collapsed && <div className={`ov-group-body${view.compact ? ' ov-compact-columns' : ''}`} ref={body}>
-      {view.compact ? <>
+      {view.compact || workersOnly ? <>
         <div className="ov-worker-stack">{ws.map(worker => <Entity key={worker.id} view={view} entity={worker} kind="execution" hover={hover} focus={focus} references={reference('execution', worker.id)} />)}{!ws.length && <div className="ov-empty-col">{group.executionIds.length ? 'Workers referenced in another group' : emptyLabels(ws, cs).worker}</div>}</div>
         <div className="ov-gutter" />
-        <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{group.cardIds.length ? 'Tasks referenced in another group' : emptyLabels(ws, cs).task}</div>}</div>
+        {!workersOnly && <div className="ov-card-stack">{cs.map(card => <Entity key={card.id} view={view} entity={card} kind="card" hover={hover} focus={focus} references={reference('card', card.id)} />)}{!cs.length && <div className="ov-empty-col">{group.cardIds.length ? 'Tasks referenced in another group' : emptyLabels(ws, cs).task}</div>}</div>}
       </> : rows.map((row, index) => {
         const workerClaims = scene.claims.filter(c => c.state !== 'historical' && row.workers.some(w => w.id === c.executionId))
         const taskClaims = scene.claims.filter(c => c.state !== 'historical' && row.cards.some(card => card.id === c.cardId))
@@ -267,7 +270,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const { refreshAfterMutation } = useDeskWorkspace()
   const { scene, state, send, now, readFailed } = view, selection = state.selection
   const close = useRef<HTMLButtonElement>(null)
-  useEffect(() => { if (selection) close.current?.focus({ preventScroll: true }) }, [selection])
+  useEffect(() => { if (selection && !view.restoringSearch) close.current?.focus({ preventScroll: true }) }, [selection])
   const selectedCardId = selection?.kind === 'card' ? selection.id : null
   const [contextRevision, setContextRevision] = useState(0)
   const retainedCard = useRef<SceneCard | null>(null)
@@ -314,7 +317,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <small className="ov-eyebrow">{card ? 'Notion card' : execution ? 'Worker' : home ? 'Manager' : 'Overview'}</small>
     <h3 {...(card || execution ? askElement('title') : {})}>{card ? cardTitle(card) : execution ? workerTitle(execution) : home ? managerName(scene, home.source.home) : group?.label ?? (selection.kind === 'firstMate' ? 'First Mate' : 'Selected record unavailable')}</h3>
     {execution && <><p><span {...askElement('machine', 'Machine')}>{execution.placement.machine ?? 'Unknown machine'}</span> · <span {...askElement('status', 'Worker status')}>{recordedWorkerFact(execution, now, scene.coverage.homes.find(home => home.source.home === execution.home)?.observation, readFailed)}</span></p><p>Manager: <span {...askElement('worker', 'Manager')}>{managerName(scene, execution.home)}</span> · <span {...askElement('last_edited', 'Last activity')}>Last activity {ageLabel(activityTimestamp(execution), now)}{(readFailed || stale(execution.observation, now)) && ' · Last known observation'}</span></p><h4>Latest activity</h4><p {...askElement('description', 'Latest activity')}>{String(execution.source.last_event.note ?? execution.source.lastEventText ?? 'No report published')}</p>{terminal && <a href={terminal} target="_blank" rel="noreferrer">Open worker terminal ↗</a>}</>}
-    {card && <>{!currentCard && <p role="status">Outside the current view. Last confirmed card retained for history and any remaining save steps.</p>}<AskCardAction cardId={card.id} /><WorkActions key={`actions-${card.id}`} card={card} sources={context?.blocks} onSaved={refreshWork} /><StartWork key={card.id} cardId={card.id} scene={scene} onSaved={refreshWork} /><p {...askElement('relationship', 'Work hierarchy')} className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd {...askElement(({ 'Next check-in': 'next_check_in', 'Last edited': 'last_edited', 'Due Date': 'due_date', 'Waiting For': 'waiting_for', 'Will action': 'will_action' } as Record<string, string>)[label] ?? label.toLowerCase().replaceAll(' ', '_'), label, value, label === 'Next check-in' && checkIn(card, now).state === 'overdue' ? 'overdue' : undefined)}>{value}</dd></div>)}</dl><p {...askElement('waiting_for', 'Next action')}>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p {...askElement('waiting_for', 'Prerequisite')} key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}{externalWorkers(card.source.properties['Delegated To']?.value, now).map(run => <p key={JSON.stringify([run.system, run.run_id, run.observed_at, run.reported_by])}><a href={run.reference} target="_blank" rel="noreferrer">{run.system} · {run.run_id} ↗</a> · {run.freshness === 'current-report' ? 'Reported running' : 'Execution unknown'} · reported by {run.reported_by} at {run.observed_at}</p>)}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text.split('\n').filter(line => !/^Tin Star (?:operation|section|request|answer):/.test(line)).join('\n')}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
+    {card && <>{waitingForIssue(card, scene.cards) && <p role="status">{waitingForIssue(card, scene.cards)}</p>}{!currentCard && <p role="status">Outside the current view. Last confirmed card retained for history and any remaining save steps.</p>}<AskCardAction cardId={card.id} /><WorkActions key={`actions-${card.id}`} card={card} sources={context?.blocks} onSaved={refreshWork} /><StartWork key={card.id} cardId={card.id} scene={scene} onSaved={refreshWork} /><p {...askElement('relationship', 'Work hierarchy')} className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd {...askElement(({ 'Next check-in': 'next_check_in', 'Last edited': 'last_edited', 'Due Date': 'due_date', 'Waiting For': 'waiting_for', 'Will action': 'will_action' } as Record<string, string>)[label] ?? label.toLowerCase().replaceAll(' ', '_'), label, value, label === 'Next check-in' && checkIn(card, now).state === 'overdue' ? 'overdue' : undefined)}>{value}</dd></div>)}</dl><p {...askElement('waiting_for', 'Next action')}>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting For a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p {...askElement('waiting_for', 'Prerequisite')} key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}{externalWorkers(card.source.properties['Delegated To']?.value, now).map(run => <p key={JSON.stringify([run.system, run.run_id, run.observed_at, run.reported_by])}><a href={run.reference} target="_blank" rel="noreferrer">{run.system} · {run.run_id} ↗</a> · {run.freshness === 'current-report' ? 'Reported running' : 'Execution unknown'} · reported by {run.reported_by} at {run.observed_at}</p>)}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text.split('\n').filter(line => !/^Tin Star (?:operation|section|request|answer):/.test(line)).join('\n')}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
       {card.parentIds.map(id => <button {...askElement('relationship', 'Parent')} key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{workerSummary(scene.coverage.homes.filter(h => h.source.home === home.source.home), now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e, now) && e.home === home.source.home).length, state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 0 : undefined)} · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
     {group && <><p>{workerSummary(groupHomes, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e, now) && group.executionIds.includes(e.id)).length)} · {group.cardIds.length} cards</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
@@ -344,7 +347,35 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const previousSelection = useRef<string | null>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => { setHovered(null) }, [state.revision])
-  const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded])
+  // The existing search can explicitly reveal a card outside its status scope.
+  // Preserve that temporary native result, then restore Waiting For on search exit.
+  const focusedContext = scene && state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
+  const outsideWaitingFor = scene?.cards.some(card => focusedContext?.has(`card:${card.id}`) && cardStatus(card) !== 'Waiting For')
+  const waiting = waitingForActive(state) && !outsideWaitingFor
+  const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
+  const [waitingOpen, setWaitingOpen] = useState<ReadonlySet<string> | null>(readWaitingForExpansion)
+  const waitingReveal = useRef('')
+  const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, !waiting && density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded, waiting])
+  const waitingProjection = useMemo(() => waitingForGroups(groups.flatMap(group => group.cards), scene?.cards ?? []), [groups, scene])
+  useEffect(() => { if (waiting) setWaitingType('All') }, [waiting])
+  useEffect(() => { if (waitingOpen) saveWaitingForExpansion(waitingOpen) }, [waitingOpen])
+  useEffect(() => { if (waiting && scene && waitingOpen === null) setWaitingOpen(new Set(waitingProjection.initial)) }, [waiting, scene, waitingOpen, waitingProjection])
+  // Waiting For changes the Work presentation only. Keep the worker organizer,
+  // status choices and relationship roots in the existing presentation state.
+  const waitingWorkerScope = useMemo(() => waiting ? { ...state, donutFilter: { ...state.donutFilter, cards: [], workers: state.donutFilter?.workers ?? [] },
+    ...(state.statusFilter?.preset === 'custom' && state.statusFilter.statuses.length === 1 && state.statusFilter.statuses[0] === 'Waiting For' ? { statusFilter: { preset: 'operational' as const, statuses: [] } } : {}) } : undefined, [waiting, state])
+  const waitingWorkers = useMemo(() => scene && waitingWorkerScope
+    ? canonicalOverviewGroups(overviewGroups(scene, waitingWorkerScope, now, !!error, expanded)).filter(group => group.workers.length > 0) : [], [scene, waitingWorkerScope, now, error, expanded])
+  useEffect(() => {
+    if (!waiting) { waitingReveal.current = ''; return }
+    if (hasSearch(state.search) || state.searchFocus?.length) return
+    const selected = state.selection?.kind === 'card' ? state.selection.id : null
+    const keys = waitingProjection.categories.flatMap(category => category.groups).filter(group => group.cards.some(card => expanded.has(`card:${card.id}`) || card.id === selected)).map(group => group.key)
+    const signature = JSON.stringify([openRelationships, selected, keys])
+    if (waitingReveal.current === signature) return
+    waitingReveal.current = signature
+    if (keys.length) setWaitingOpen(previous => new Set([...(previous ?? waitingProjection.initial), ...keys]))
+  }, [waiting, waitingProjection, expanded, openRelationships, state.selection, state.search, state.searchFocus])
   const searchMatches = useMemo(() => scene && state.searchFocus?.length ? new Set(state.searchFocus.map(targetKey)) : scene && hasSearch(state.search) ? new Set(searchSeeds(scene, state.search!, now).map(targetKey)) : undefined, [scene, state.search, state.searchFocus, now])
   const patternResults = useMemo(() => scene && state.search?.patterns.length ? new Map(sceneWorkHealth(scene, now).map(health => [health.cardId, combinedPatternResult(health, state.search!.patterns)])) : undefined, [scene, state.search, now])
   const displayGroups = useMemo(() => density === 'compact' ? canonicalOverviewGroups(groups) : groups, [groups, density])
@@ -382,7 +413,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
       }
     }
   }
-  const view: View = { scene, state, send, now, readFailed: !!error, searchMatches, patternResults, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
+  const view: View = { restoringSearch: search.isRestoring(), scene, state, send, now, readFailed: !!error, searchMatches, patternResults, detailed: { collapsed: detailedCollapsed, toggle: item => setDetailedCollapsed(values => values.includes(semanticId(item)) ? values.filter(value => value !== semanticId(item)) : [...values, semanticId(item)]) }, compact: density === 'compact' ? { expanded, toggle: toggleRelationship, roots: openRelationships } : undefined, actionableCardIds: new Set(queue && !queueError ? decisionItems(queue, now).flatMap(item => item.cardIds) : []) }
   const gaps = gapTargets(scene, now, !!error)
   const notionUnavailable = !!error || stale(scene.coverage.intentions, now)
   const fleetCoverage = workerSourceCoverage(scene.coverage.homes, now, !!error)
@@ -390,7 +421,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const checksSuspended = notionUnavailable || fleetCoverage !== 'available' || scene.coverage.absenceConclusions === 'suppressed'
   const coverageNotice = workerCoverageNotice(fleetCoverage)
   const unreadHomes = unreadableWorkerHomes(scene.coverage.homes, now)
-  const visibleWorkers = new Set(groups.flatMap(g => g.workers.map(w => w.id))).size
+  const visibleWorkers = new Set((waiting ? waitingWorkers : groups).flatMap(g => g.workers.map(w => w.id))).size
   const visibleCardIds = new Set(groups.flatMap(g => g.cards.map(c => c.id)))
   const visibleCards = visibleCardIds.size
   const linkHealth = workerLinkSourceHealth(scene, visibleCardIds, now, !!error)
@@ -399,7 +430,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
+      <FloorToolbar workerScope={waitingWorkerScope} patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
         const targets = patternCoverage?.unavailableCardIds.map(id => target('card', id)) ?? []
         if (targets.length) { search.choose(targets[0]!, targets); setOpenRelationships([]) }
       }} sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {
@@ -410,9 +441,25 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
           send({ type: 'clear-selection' })
         }
       }} />
-      <CreateWorkAction />
+      {!waiting && <CreateWorkAction />}
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
-      <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
+      <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${waiting ? ' ov-waiting-canvas' : ''}`}>{waiting ? <div className="ov-waiting-columns">
+          <section className="ov-waiting-workers" aria-label="Workers"><header className="ov-waiting-worker-head">WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</header>{[...new Set(waitingWorkers.map(group => group.outerId))].map(outerId => {
+            const children = waitingWorkers.filter(group => group.outerId === outerId), first = children[0]!
+            const workerView = view
+            const render = (group: typeof first) => <Group key={group.id} workersOnly view={workerView} group={group} allGroups={waitingWorkers} hover={setHovered} focus={hovered ?? state.selection} />
+            if (!state.organizer || state.organizer.inner === 'none') return render(first)
+            const collapsed = state.collapsed.includes(semanticId(target('group', outerId)))
+            return <section className="ov-outer" key={outerId} data-outer={first.outerLabel}><header className="ov-group-head"><button type="button" aria-expanded={!collapsed} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${first.outerLabel}`} onClick={() => send({ type: 'set-expanded', target: target('group', outerId), expanded: collapsed })}>{collapsed ? '+' : '−'}</button><strong>{first.outerLabel}</strong><small className="ov-group-field">{floorFields.find(field => field.id === state.organizer?.outer)?.label}</small></header>{!collapsed && <div className="ov-inner">{children.map(render)}</div>}</section>
+          })}</section>
+          <div className="ov-gutter" />
+          <WaitingForWork projection={waitingProjection} type={waitingType} onType={setWaitingType} open={waitingOpen ?? new Set(waitingProjection.initial)} onToggle={key => setWaitingOpen(previous => { const next = new Set(previous ?? waitingProjection.initial); if (next.has(key)) next.delete(key); else next.add(key); return next })} searchKey={hasSearch(state.search) || state.searchFocus?.length ? JSON.stringify([state.search, state.searchFocus]) : undefined} selected={state.selection?.kind === 'card' ? state.selection.id : undefined} revealed={expanded} flashed={id => flashRelated(view, target('card', id))} onSelect={id => {
+            const item = target('card', id)
+            setOpenRelationships(roots => roots.some(root => same(root, item)) ? roots : [...roots, item])
+            send({ type: 'navigate-card', cardId: id })
+            send({ type: 'focus', target: item })
+          }} onHover={card => setHovered(card ? target('card', card.id) : null)} partial={scene.coverage.intentions.coverage !== 'complete'} failed={notionUnavailable} observedAt={scene.coverage.intentions.observedAt} />
+        </div> : <><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
         {[...new Set(displayGroups.map(g => g.outerId))].map(outerId => {
           const children = displayGroups.filter(g => g.outerId === outerId), first = children[0]!
           const nested = state.organizer?.inner !== 'none' && !!state.organizer
@@ -422,9 +469,10 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
             {!collapsed && <div className="ov-inner">{children.map(group => <Group key={group.id} view={view} group={group} allGroups={groups} hover={setHovered} focus={hovered ?? state.selection} />)}</div>}
           </section>
         })}
-        {density === 'compact' && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} onInspect={id => send({ type: 'focus', target: target('claim', id) })} />}
-        {!groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? patternEmptyText[state.search.patterns[0]!] : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
-        {!hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
+        </>}
+        {(waiting || density === 'compact') && state.linksVisible !== false && <CompactConnections canvas={canvas} scene={scene} layout={waiting ? [waitingProjection, waitingWorkers, waitingType, waitingOpen] : displayGroups} expanded={expanded} collapsed={state.collapsed} now={now} readFailed={!!error} flash={state.flash} focus={hovered ?? state.selection ?? (state.searchFocus?.length === 1 ? state.searchFocus[0]! : null)} onInspect={id => send({ type: 'focus', target: target('claim', id) })} />}
+        {!waiting && !groups.length && <p className="ov-empty">{hasSearch(state.search) ? state.search?.patterns.length ? patternEmptyText[state.search.patterns[0]!] : 'No relationship clusters match these filters in this scope.' : state.exceptionsOnly ? checksSuspended ? 'Gap checks suspended until observations are complete.' : 'No confirmed gaps in this scope.' : hasDonutFilter(state.donutFilter) ? checksSuspended ? 'No matches in available records · source coverage incomplete.' : 'No linked records match these status selections.' : emptyWorkerScopeLabel(fleetCoverage)}</p>}
+        {!waiting && !hasSearch(state.search) && !hasDonutFilter(state.donutFilter) && history.length > 0 && <details className="ov-history"><summary>Worker history · {history.length}</summary>{history.map(e => <button type="button" key={e.id} onClick={() => send({ type: 'focus', target: target('execution', e.id) })}>{workerTitle(e)} · {workerState(e)}</button>)}</details>}
       </div></div>
     </div></div>{state.selection && <Inspector view={view} workers={workers} />}
     {diagnostics && <section className="ov-inspector" aria-label="Source health"><header><h2>Source health</h2><button type="button" onClick={() => setDiagnostics(false)}>Close source health</button></header><p>{notionUnavailable ? 'Notion unavailable. Last known cards remain visible; absence checks are suspended.' : 'Notion connected.'}</p>{coverageNotice && <p>{coverageNotice}{unreadHomes.length ? ` ${unreadHomes.map(home => `${managerName(scene, home.source.home)} · ${homeFreshness(home.observation, now)}`).join('; ')}` : ''}</p>}{checksSuspended && <><p>Gap checks are suspended until the required observations can be verified.</p><p>Worker links in this view: {linkHealth.unknown} cards with unknown workers; {linkHealth.unverified} cards with unverified links. Incomplete coverage does not establish missing workers or work exceptions.</p></>}{linkHealth.conflicting > 0 && <p>{linkHealth.conflicting} {linkHealth.conflicting === 1 ? 'card has' : 'cards have'} conflicting worker evidence. First Mate investigation is still required; select a card and open Evidence &amp; diagnostics.</p>}<p>{bridgeError ? 'Assistant connection unavailable.' : 'Assistant connected.'}</p><pre>{JSON.stringify({ coverage: scene.coverage, warnings: scene.warnings, error }, null, 2)}</pre></section>}

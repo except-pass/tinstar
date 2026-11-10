@@ -38,13 +38,17 @@ const technicalIds = (values: string[]) => [...new Set(values.flatMap(value => [
 export function sceneSearchDocuments(scene: FloorScene): SearchDocument[] {
   const cards: SearchDocument[] = scene.cards.filter(card => !card.source.in_trash).map(card => {
     const fields: SearchField[] = []
-    for (const name of ['Name', 'Status', 'Owner', 'Priority', 'Waiting For', 'Initiative', 'Epic', 'Next action', 'Next Action', 'Evidence', 'Link', 'Area', 'Sub-area']) {
+    for (const name of ['Name', 'Status', 'Owner', 'Priority', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Initiative', 'Epic', 'Next action', 'Next Action', 'Evidence', 'Link', 'Area', 'Sub-area']) {
       const property = card.source.properties[name]
       if (!property) continue
       const text = property.type === 'relation' && Array.isArray(property.value)
         ? property.value.map(id => scalar(scene.cards.find(parent => parent.id === id)?.source.properties.Name?.value) || String(id)).join(' · ')
         : scalar(property.value)
       if (text) fields.push({ name, source: 'Notion property', text: searchText(text) })
+      if (name === 'Waiting For ID' && card.source.properties['Waiting For Type']?.value === 'Work') {
+        const dependency = scene.cards.find(work => work.id.replaceAll('-', '').toLowerCase() === text.trim().replaceAll('-', '').toLowerCase())
+        if (dependency) fields.push({ name: 'Waiting For', source: 'Notion Work reference', text: searchText(scalar(dependency.source.properties.Name?.value)) })
+      }
     }
     return { key: `card:${card.id}`, target: { kind: 'card', id: card.id }, title: searchText(scalar(card.source.properties.Name?.value)) || 'Untitled card',
       identifiers: technicalIds([card.id, card.source.url ?? '', scalar(card.source.properties.Link?.value)]).map(searchText),

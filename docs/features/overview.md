@@ -54,7 +54,7 @@ history remains separate.
 Within the same status, Next check-in ascending, display
 name and canonical ID settle ties. Worker check-in ties use the earliest linked
 card checkpoint in that subdivision. In both densities and under every preset,
-tasks follow the mean row position of their visible workers with explicit,
+outside [Waiting For grouping](#waiting-for-dependency-groups), tasks follow the mean row position of their visible workers with explicit,
 confirmed, current links within each rendered group. Equal positions use the
 chosen Order then stable identity; tasks without such a link follow linked tasks
 in Order. Operational status and its tie-breakers remain the secondary task
@@ -67,7 +67,7 @@ matching the floor's left-to-right column order.
 The two labelled status donuts use unique canonical current endpoints from the
 base scope. Activate a slice with click, Enter or Space to toggle it; text status
 menus expose the same choices and counts. Multiple selections within one donut
-are OR; selections across donuts are AND. A card selection shows matching cards
+are OR; selections across donuts are AND. Except for [Waiting For grouping](#waiting-for-dependency-groups), a card selection shows matching cards
 and only their confirmed linked workers; a worker selection shows matching
 workers and only their confirmed linked cards. With both selected, only matching
 endpoints on valid current explicit confirmed links survive. Candidate,
@@ -181,14 +181,14 @@ invalid checkpoints using the calendar rules above.
 Task and worker headers carry an Inspect panel icon in both densities, including
 collapsed rows. It opens the separate Inspector while Desk remains available.
 For swipe entry, see the shared [Ask/Inspector gesture contract](ask.md).
-Clicking
+Outside [Waiting For grouping](#waiting-for-dependency-groups), clicking
 the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection
 and activity history, evidence and safe source links. Next to Open Notion card, Copy link
 copies that card's URL. Task prose loads on demand;
 partial content labels omissions and unavailable content offers the source link.
 Worker terminal links use the exact-home resolver and open the safe viewer
 separately. The Inspector exposes [Update work and Start work](workflow.md), and
-Overview offers Create work through the same shared workflow policy and readback.
+Overview offers Create work outside Waiting For grouping through the same shared workflow policy and readback.
 Closing the Inspector restores focus to the floor card.
 
 The [Ask reference](ask.md) owns the Desk inbox layout, question submission,
@@ -217,6 +217,48 @@ For a private development preview, build with `npm run build:all` and run the
 standalone backend with an isolated `TINSTAR_CONFIG_HOME`, explicit loopback host
 and preview port. Source access failures remain visible; they are never treated
 as an empty board. See the [source configuration reference](reconciliation-floor.md#run-and-configure).
+
+## Waiting For dependency groups
+
+Selecting only **Waiting For** in the card status donut/menu, or as the sole
+Custom status, replaces the Work organizer with dependency groups in either
+density. The Workers pane retains its organizer, worker status choices and
+relationship context instead of narrowing to workers linked to Waiting For cards.
+The existing toolbar and Search remain shared. Leaving this status selection
+returns to the saved Work organizer without resetting selection or relationships.
+Waiting for Prod Release is excluded.
+
+The Work header shows the current matching Waiting For scope count and inline
+All / Actor / Event / Work choices. All is selected on entry; these choices filter
+dependency groups only. Categories appear in Actor, Event, Work order. Each card
+contributes once by canonical Notion ID to its primary dependency. The deterministic
+projection and normalization rules live in
+[`waitingFor.ts`](../../src/reconciliation/waitingFor.ts). Within categories,
+groups sort by card count descending, then label; Will comes first in Actor.
+Children sort by priority, Next check-in, name and stable identity, independently
+of worker-position ordering.
+
+Category headings are 24px, dependency headings 32px and affected card rows 29px.
+Click a dependency heading to toggle its children. Initially up to three groups
+open, favoring Will and the largest groups. Expansion survives source refresh
+and reload within the browser session. Search matches dependency names/IDs and
+child titles, reveals matching groups temporarily, and restores prior expansion
+when cleared. A temporary search reveal outside Waiting For uses the ordinary
+floor until search exit.
+
+Click an affected card or press Enter/Space to open the existing Inspector and
+reveal its confirmed worker relationships. Dependency headings toggle only their
+own list; a separate link appears for a resolved Work card or an exact trusted
+GitHub PR/run URL. Work links use the same Inspector navigation; external links
+open in a new tab. Other dependency labels have no invented destination.
+
+Missing/invalid structured dependencies appear under **Needs classification**;
+Inspector explains the precise issue and retains the original Waiting For prose.
+Counts derive from the current loaded matching cards, with partial coverage and
+last-known refresh failure labels and timestamp. Grouping is a read-only
+projection of the shared source/cache and never fulfills dependencies or changes
+workflow state. The [source contract](reconciliation-floor.md)
+describes collected properties.
 
 ## Smart Search core
 
@@ -321,7 +363,7 @@ ordinary search shows bounded suggestions without a diagnostics panel. A no-hit
 message refers only to available records.
 
 Indexed metadata includes Notion names, IDs, URLs, Status/Owner/Priority/Waiting
-For/Initiative/Epic and useful published action/evidence fields; First Mate task
+For/Initiative/Epic, Waiting For Type/ID, resolved Work dependency names and useful published action/evidence fields; First Mate task
 and attempt IDs, worker/manager/machine names, branch and PR URL, current state,
 state explanation and bounded published activity/hold/blocker summaries. Known
 PR numbers are parsed from published URLs, never used to create relationships.

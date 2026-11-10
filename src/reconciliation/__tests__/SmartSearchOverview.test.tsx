@@ -129,7 +129,8 @@ describe('compact search palette and temporary graph focus', () => {
     viewport.scrollLeft = 0
     fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
     expect(cardIds(container)).toEqual([fixtureId(4)])
-    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveAttribute('aria-expanded', 'true')
+    expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveClass('selected')
+    expect(screen.getByRole('region', { name: 'Inspector' })).toBeTruthy()
     expect(container.querySelector(`.ov-card[data-entity-id="${fixtureId(4)}"]`)).toHaveFocus()
     expect(JSON.parse(localStorage.getItem(preferencesKey)!)).toEqual(saved)
     expect(viewport.scrollLeft).toBe(21)

@@ -1,0 +1,35 @@
+/* Reuse the Overview's columns, theme and measured connection layer. */
+.ov-waiting-columns{display:grid;grid-template-columns:minmax(0,1fr) 56px minmax(0,1fr);align-items:start}
+.ov-waiting-workers,.ov-waiting-work{min-width:0}
+.ov-waiting-workers .ov-group-body{display:block;padding:0;min-height:0}
+.ov-waiting-workers .ov-card-stack,.ov-waiting-workers .ov-gutter{display:none}
+.ov-waiting-worker-head,.ov-waiting-head{height:38px;display:flex;align-items:center;gap:7px;padding:0 6px;border-bottom:1px solid var(--ov-hair);font-size:12px}
+.ov-waiting-worker-head{font:10px var(--ov-mono);color:var(--ov-low);letter-spacing:.7px}
+.ov-waiting-head>strong{font-weight:650}
+.ov-waiting-head>small{font-size:11px;color:var(--ov-low);white-space:nowrap}
+.ov-waiting-head>div{display:flex;align-items:center;margin-left:auto;gap:1px}
+.ov-waiting-head button{border:0;background:none;padding:4px;font-size:11px;color:var(--ov-low)}
+.ov-waiting-head button[aria-pressed=true]{color:var(--ov-ink);background:var(--ov-hair)}
+.ov-waiting-category{margin-top:14px}
+.ov-waiting-category h3{height:24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--ov-hair);padding:0 30px 0 8px;margin:0 0 4px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.7px;color:var(--ov-low)}
+.ov-waiting-category h3>span:last-child{min-width:64px;text-align:right;font-weight:500;font-variant-numeric:tabular-nums}
+.ov-waiting-dependency{margin-top:5px}
+.ov-waiting-dependency-head{position:relative;padding-right:22px;height:32px;display:flex;align-items:center;border-bottom:1px solid var(--ov-hair)}
+.ov-waiting-dependency-head>button:first-child{border:0;background:none;padding:0 8px;height:32px;display:flex;align-items:center;gap:5px;flex:1;min-width:0;text-align:left}
+.ov-waiting-chevron{flex:none;width:15px;color:var(--ov-low)}
+.ov-waiting-dependency-head strong{font-size:12px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.ov-waiting-dependency-head small{font-size:11px;font-weight:500;min-width:64px;text-align:right;color:var(--ov-low);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ov-waiting-dependency-head>a,.ov-waiting-dependency-head>.ov-waiting-target{position:absolute;right:0;font-size:12px;width:22px;flex:none;text-align:center;border:0;background:none;padding:0;color:var(--ov-low);text-decoration:none}
+.ov-waiting-dependency-head:hover,.ov-waiting-card:hover{background:var(--ov-hair)}
+.ov-waiting-children{padding-left:24px}
+.ov .ov-item.ov-waiting-card{display:flex;flex-direction:row;justify-content:flex-start;align-items:center;height:29px;min-height:29px;max-height:29px;margin:0;padding:0 9px;border:0;border-bottom:1px solid color-mix(in srgb,var(--ov-hair) 45%,transparent);border-radius:0;background:transparent;box-shadow:none;text-align:left;font-size:12px;font-weight:500;width:100%;position:relative}
+.ov-waiting-card>span{display:block;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ov .ov-item.ov-waiting-card:hover,.ov .ov-item.ov-waiting-card.selected{background:var(--ov-hair)}
+.ov .ov-item.ov-waiting-card:focus-visible,.ov-waiting-work button:focus-visible,.ov-waiting-work a:focus-visible{outline:2px solid var(--ov-ink);outline-offset:-2px}
+.ov-waiting-notice{font-size:11px;color:var(--ov-low);padding:4px 8px;margin:0}
+.ov-waiting-notice time{display:block}
+/* The existing phone canvas scrolls natively between full readable columns. */
+.ov .ov-waiting-canvas{min-width:0}
+@media(max-width:1100px){.ov-waiting-head{gap:4px}.ov-waiting-head button{font-size:10px;padding:4px 3px}}
+@media(max-width:600px){.ov .ov-waiting-canvas{min-width:680px}}
+@media(pointer:coarse){.ov-waiting-work button,.ov-waiting-work a{position:relative}.ov-waiting-work button:after,.ov-waiting-work a:after{content:'';position:absolute;top:50%;left:50%;width:max(100%,44px);height:44px;transform:translate(-50%,-50%)}.ov-waiting-work button:focus-visible{z-index:2}}
