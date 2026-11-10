@@ -8,10 +8,14 @@ import { randomUUID } from 'node:crypto'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 import { ReleasesApi } from '../routes'
+import { acceptanceFixture } from '../../../../test-fixtures/releases/acceptance'
+import { ReleaseAcceptanceRunner, readAcceptanceRecords } from '../acceptance'
+import { ReleaseObjectReader } from '../objects'
+import { releaseChanges } from '../../../shared/releaseChanges'
 import { ReleasePullReader } from '../pulls'
 
 const cleanups: Array<() => Promise<void>> = []
-afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); resetOriginAllowlistForTests() })
+afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); resetOriginAllowlistForTests(); vi.restoreAllMocks() })
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'releases-api-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const read = vi.fn().mockResolvedValue({ title: 'Real merged PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: 'a'.repeat(40) })
@@ -27,6 +31,25 @@ async function setup() {
 }
 const headers = { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.com' }
 describe('Releases HTTP boundary', () => {
+  it('omits acceptance audits outside visible checks without changing persisted history', async () => {
+    const { root, scene, base } = await setup()
+    const fixture = acceptanceFixture('human')
+    fixture.pull.links = fixture.pull.links.slice(0, 1)
+    Object.assign(scene, fixture.scene)
+    vi.spyOn(ReleaseObjectReader.prototype, 'get').mockResolvedValue([fixture.release])
+    const github = vi.fn()
+    const runner = new ReleaseAcceptanceRunner(root, async () => ({ data: fixture.data, scene }), github)
+    const key = releaseChanges(fixture.release, fixture.data, scene)[0]!.checks![0]!.key
+    await runner.perform({ actor: 'reviewer', key, action: 'manual', reason: 'Observed exact assertion', outcome: 'passed', evidence: 'https://example.com/manual-proof' })
+    const history = await readAcceptanceRecords(root)
+    const visible = await (await fetch(`${base}/api/releases`)).json()
+    expect(visible.data.acceptanceRecords).toEqual(history)
+    scene.cards = scene.cards.filter(card => card.id !== fixture.pull.links[0]!.cardId)
+    const removed = await (await fetch(`${base}/api/releases`)).json()
+    expect(removed.data.acceptanceRecords).toEqual([])
+    expect(await readAcceptanceRecords(root)).toEqual(history)
+    expect(github).not.toHaveBeenCalled()
+  })
   it('requests history so a PR linked only to Done work remains visible', async () => {
     const { root, scene, read } = await setup()
     const card = scene.cards[0]!
