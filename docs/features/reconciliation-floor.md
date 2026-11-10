@@ -54,6 +54,8 @@ Read through the authorized discovery helper using API version `2025-09-03`, GET
 | `Parent item`, `Sub-item` | Reciprocal relations to this data source; observed card has neither. Parent item limit 1, Sub-item unbounded |
 | `Link` | `url`; observed card links the Tin Star repository |
 | `Next check-in`, `Due Date`, `Start Date` | `date`; check-in is an accountability checkpoint, not a completion deadline |
+| `Waiting For Type` | `select`: Work, Actor or Event; primary dependency category for [Overview grouping](overview.md#waiting-for-dependency-groups) |
+| `Waiting For ID` | `rich_text`; primary dependency identifier, retained exactly; Work uses a Notion page ID, Actor a stable name, Event a stable reference rather than necessarily a URL |
 | `Waiting For`, `Delegated To` | `rich_text`; retain source text without interpreting it as authorization |
 | `Priority`, `Area`, `Sub-area`, `Attention` | `select` |
 | `Last edited` | `last_edited_time`, also available as the page-level field |
