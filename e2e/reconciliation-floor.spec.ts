@@ -1084,3 +1084,53 @@ test('single-row toolbar link evidence boundaries keep pattern unknown separate 
     }
   }
 })
+
+for (const expanded of [false, true]) test(`single-row toolbar live roadmap coverage visibility ${expanded}`, async ({ page }) => {
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  const sources = fixtureSources({ now })
+  const planned = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+  planned.properties.Status!.value = 'Queued'
+  const scene = new SceneReconciler().reconcile(sources, now)
+  await page.clock.install({ time: now })
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.addInitScript(() => localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ search: { query: '', patterns: ['stale'], facets: [] }, statusFilter: { preset: 'all', statuses: [] } })))
+  let delivered = false
+  await page.route('**/api/reconciliation/ui', async route => {
+    const body = route.request().postDataJSON()
+    if (body.type === 'register') return route.fulfill({ json: { ok: true, data: { scene_id: 'visibility', key: 'disposable' } } })
+    const commands = delivered ? [] : [{ scene_id: 'visibility', command_id: 'roadmap', expires_at: now + 60000, action: { type: 'set-roadmap', expanded } }]
+    delivered = true
+    await route.fulfill({ json: { ok: true, data: { commands } } })
+  })
+  await page.goto(base)
+  await expect(page.locator('.ov-pattern-selected')).toContainText('Stale')
+  await page.clock.runFor(2500)
+  await expect.poll(() => delivered).toBe(true)
+  await expect(page.locator(`.ov-card[data-entity-id="${planned.id}"]`)).toHaveCount(expanded ? 1 : 0)
+  const cards = page.locator('.ov-card')
+  const ids = [...new Set(await cards.evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id'))))].sort()
+  expect(ids.includes(planned.id)).toBe(expanded)
+  const center = page.locator('.ov-pattern-selected')
+  await expect(center).toContainText(`Pattern unknown: ${ids.length}`)
+  await center.click()
+  const detail = page.getByRole('dialog', { name: 'Stale pattern coverage' })
+  await expect(detail).toContainText(`${ids.length} of ${ids.length} visible cards; 0 evaluated`)
+  await screenshot(page, `roadmap-coverage-${expanded}`)
+  await detail.getByRole('button', { name: /Inspect .* with unknown pattern/ }).click()
+  expect([...new Set(await cards.evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id'))))].sort()).toEqual(ids)
+})
+
+test('single-row toolbar live combined pattern coverage names all predicates', async ({ page }) => {
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  await page.clock.install({ time: now })
+  const scene = fixtureScene({ now })
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.addInitScript(() => localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ search: { query: '', patterns: ['blocked', 'stale'], facets: [] }, statusFilter: { preset: 'custom', statuses: ['Waiting For'] } })))
+  await page.goto(base)
+  const center = page.locator('.ov-pattern-selected')
+  await expect(center).toHaveAccessibleName(/Blocked \+ Stale.*Selected pattern combination \(Blocked \+ Stale\)/)
+  await expect(page.locator('.ov-card')).toHaveCount(1)
+  await center.click()
+  await expect(page.getByRole('dialog', { name: 'Blocked + Stale pattern coverage' })).toContainText('1 of 1 visible cards; 0 evaluated')
+  await screenshot(page, 'combined-pattern-coverage')
+})

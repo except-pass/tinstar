@@ -295,7 +295,10 @@ facets can hide cards. The reminder names unavailable evidence classes and home 
 When the selected pattern cannot evaluate visible cards, its dial shows
 `Pattern unknown: N`. Click the dial for the exact evaluated/unevaluated visible
 card counts and evidence reasons. **Inspect N cards with unknown pattern** focuses
-those unique cards on the existing floor; **Clear search focus** or Escape restores
+those unique cards on the existing floor. Both counts and inspection exclude
+planned cards while the roadmap is collapsed. Combined-pattern searches name all
+selected patterns with `+`; their rules apply together (AND), and coverage describes
+the combination. **Clear search focus** or Escape restores
 the previous view. Each card's Inspector → Evidence & diagnostics retains the
 selected verdict and source evidence. Unknown pattern coverage is separate from
 confirmed findings and does not establish a broken worker link or a request for you.
