@@ -513,7 +513,7 @@ describe('remaining shared workflow operations', () => {
       const f = fixture()
       const root = await mkdtemp(join(tmpdir(), 'workflow-create-readback-')); roots.push(root)
       const workflow = new WorkflowOperations(f.reader, async () => [], root)
-      const create = { operation_id: `create-readback-${status}`, name: 'Created before read failure', owner: 'Firstmate', area: 'Engineering', content: { brief: 'Preserve this card' } }
+      const create = { operation_id: `create-readback-${status}`, name: 'Created before read failure', owner: 'Firstmate', area: 'Engineering', status: 'Queued' as const, content: { brief: 'Preserve this card' } }
       const request = WorkflowContent.prototype.request
       const spy = vi.spyOn(WorkflowContent.prototype, 'request').mockImplementation(function (this: WorkflowContent, path, method, body) {
         if (path.startsWith(`blocks/${'c'.repeat(32)}/children?`)) return Promise.reject(new NotionWriteError(status))
@@ -778,7 +778,8 @@ it('observes comment-only edits through rotating and explicit refreshes without 
   const cardIds = [id, ...Array.from({ length: 8 }, (_, index) => (index + 1).toString(16).padStart(32, '0'))]
   for (const [index, cardId] of cardIds.entries()) {
     if (cardId === id) continue
-    const page = { ...structuredClone(f.raw), id: cardId }
+    const page = structuredClone(f.raw)
+    page.id = cardId
     page.properties.Status.status.name = index % 2 ? 'Waiting For' : 'In Progress'
     f.pages.set(cardId, page)
   }
