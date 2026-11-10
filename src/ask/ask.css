@@ -14,8 +14,9 @@
 .ask-desk .ask-archive{position:absolute;right:-44px;top:0;min-width:44px;min-height:44px;padding:4px;background:none;border:0;opacity:.7;display:grid;place-items:center}
 .ask-archive svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .ask-desk article:hover .ask-archive,.ask-desk article:focus-within .ask-archive{opacity:1}
-.ask-desk article[data-unread=true]::before{content:"";position:absolute;left:-4px;top:8px;bottom:8px;width:3px;background:#63cbd0;animation:ask-answer-pulse 2.5s ease-in-out infinite}
+.ask-desk article[data-unread=true]::before{content:"";position:absolute;left:-4px;top:8px;bottom:8px;width:3px;background:#63cbd0;animation:ask-unread-pulse 2.5s ease-in-out infinite}
 .ask-desk article[data-unread=true] .ask-preview small{color:#8ce5eb}
+@keyframes ask-unread-pulse{0%,100%{opacity:1}50%{opacity:.75}}
 @keyframes ask-answer-pulse{0%,100%{opacity:1}50%{opacity:.4}}
 /* Expand within the same retained thread. The message viewport owns scrolling;
    the header and shared composer stay reachable at both screen sizes. */
