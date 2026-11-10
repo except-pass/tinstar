@@ -120,7 +120,7 @@
 .ov-organizer{z-index:10}
 .ov-toolbar{height:48px;min-height:48px;padding:0 8px;gap:5px;flex-wrap:nowrap;border-top:0}
 .ov-toolbar>button{white-space:nowrap;flex:none;padding:5px}
-.ov-preset-scroll{display:flex;gap:3px;flex:none;overflow-x:auto;scrollbar-width:none;min-width:0}
+.ov-preset-scroll{display:flex;gap:3px;flex:0 1 auto;overflow-x:auto;scrollbar-width:none;min-width:0}
 .ov-preset-scroll>button{white-space:nowrap}
 .ov-donut{width:36px;height:36px;overflow:visible;flex:none}
 .ov-donut path{cursor:pointer;transition:stroke-width .1s}
