@@ -176,7 +176,10 @@ last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
 with a new operation ID. Definite results that require a fresh attempt set
 `requires_new_operation_id`; the UI offers refresh and explicit re-issue solely
-from that flag, including on cached results. Uncertain saves retain their identity.
+from that flag, including on cached results. For source-bound decision answers,
+a fresh operation ID still resumes the original immutable intent and its
+preconditions; see [decision recovery](#first-mate-decision-reconciliation).
+Uncertain saves retain their identity.
 Other partial failures also require reconciliation by
 the caller. For these other operations, there is no property replay, note-first plan receipt
 or automatic restart recovery. A completed operation's note marker prevents duplicate notes.
@@ -329,7 +332,9 @@ blocker/owner context, so human responses can close the same request without
 Notion. Until the human edits the ID, its displayed default follows the current
 card watchdog indicator on refresh, including newly created or replacement
 requests. Explicit edits remain intact. Submission and retry intent use that
-same displayed ID; a changed intent receives a new operation ID. Answer selection
+same displayed ID; ordinary changed inputs receive a new operation ID. A
+source-bound proposal with a durable answer intent rejects changed answer/effects,
+even under a new operation ID or actor. Answer selection
 omits known answered requests while retaining legacy source IDs and explicit ID entry. Create/edit/assign,
 start (native or external), checkpoint/wait, request/answer, complete and park
 continue to use the shared backend operations described above. State changes,
@@ -440,11 +445,23 @@ Answer that proposal with the existing `answer_decision` operation. UI and MCP
 use the same function. Source approvals leave implementation queued; starting or
 completing implementation is a separate workflow operation. Only the selected
 request's action and caller-specified exact wait are removed. Other asks survive.
-The selected answer is recorded in Notion before property writes, allowing an
-interrupted write to resume against its original preconditions after restart.
-An unrelated edit prevents replay. Refresh and submit a new explicit operation
-against the current card to supersede an interrupted operation; existing history
-is preserved.
+The first durable answer intent is recorded in Notion before property writes.
+It fixes the proposal's answer, source binding and effects. Identical retries,
+including another actor or operation ID, resume that original operation against
+its original preconditions after restart; conflicting answer/effects are rejected.
+A new operation ID cannot supersede the recorded intent or bypass its checks.
+
+If concurrent edits invalidate those preconditions, recovery preserves the edits
+and reports the conflict without replaying the remaining changes. Refresh the
+exact card with `get_work({card_id, refresh: true})` and inspect its current
+properties and Notion proposal, intent and answer history to verify which steps
+saved and which fields conflict. Through the existing card/workflow paths,
+reconcile those fields explicitly only after verifying the intended state; do not
+remove unrelated asks or waits to force a retry. Recovery can proceed when the
+checked fields match their original values or the original operation's intended
+values. If that cannot be established safely, leave the answer pending for
+verification. Keep the original intent and history; refresh retries the same
+scoped reconciliation rather than creating a replacement answer.
 
 The existing fleet outbox delivers the exact answer to that source. Its stable
 request ID is scoped to the source and immutable proposal answer, so retries and
