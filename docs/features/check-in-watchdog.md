@@ -137,9 +137,13 @@ First Mate replies through the ordinary inbox reply command, ideally with the
 same completed text. Tin Star records that immutable reply separately from
 resolution. It verifies an uncached Notion paragraph/comment with the original
 request ID, a parseable date, substantive progress/evidence,
-blocker/owner, next action, a required non-placeholder By, and next
-checkpoint matching the current property. A By value that differs from
-`Last touched by` is cosmetic: the verified row records
+blocker/owner, next action, a required non-placeholder By, and a
+parseable next checkpoint (`closed`, `none`, `n/a`, or `done` only when the
+card is Done/Archived). A next checkpoint whose instant differs from the
+card's Next check-in property does not fail the answer. The verified row
+records `answer says X; card property says Y`, the quiet card line stays
+clear, and that property remains the next appointment. A By value that
+differs from `Last touched by` is cosmetic: the verified row records
 `answered by X (last edited by Y)` and the answer still closes. The quiet
 card line does not show that difference. An offset-free next timestamp in the
 report uses that property's explicit timezone when comparing the instants.
@@ -151,10 +155,12 @@ author's Date only has to parse, including ISO timestamps with or without second
 and `YYYY-MM-DD HH:MM UTC`; clock guesses do not invalidate a real checkpoint.
 Next check-in reads the leading date/time and ignores trailing notes such as
 `(10 AM ET)`. Date-only values still mean 9 AM America/New_York.
-An active In Progress checkpoint
-must fit the board ceiling (four hours during business-day 8 AM–8 PM ET working
-hours, otherwise 10 AM the next business morning), comparing appointment and
-ceiling at minute precision. A real dependency date on
+An In Progress card’s Next check-in property must fit the board ceiling
+(four hours during business-day 8 AM–8 PM ET working hours, otherwise
+10 AM the next business morning), comparing the property appointment and
+ceiling at minute precision. A property beyond that ceiling fails verification
+even when the answer differs; the property remains the next appointment.
+A real dependency date on
 Waiting For may be later. Done/Archived can use `closed`, `none`, `n/a`, or
 `done` (case-insensitive, with trailing notes/punctuation) with a dated
 evidence-backed closing checkpoint.

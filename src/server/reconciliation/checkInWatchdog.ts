@@ -263,13 +263,20 @@ export class CheckInWatchdog {
         const next = checkInTime(reportedNext(report['Next check-in']), text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
         let failure: string | undefined
+        const notes: string[] = []
         if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
           failure = 'Checkpoint time: must be at or after the request and at or before now'
         } else if (!(closed && /^(?:closed|none|n\/a|done)(?=$|\s|[().,;!])/i.test(report['Next check-in']))) {
           if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
-          else if (next !== appointment(card)) failure = 'Next check-in: does not match the current property'
           else if (next <= at) failure = 'Next check-in: must be after the checkpoint'
-          else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
+          else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(appointment(card) / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
+          else {
+            if (next !== appointment(card)) {
+              const start = text(date(card).start)
+              const zone = text(date(card).time_zone)
+              notes.push(`answer says ${report['Next check-in']}; card property says ${start ? (zone ? `${start} (${zone})` : start) : 'none'}`)
+            }
+          }
         }
         if (failure) { correction = failure; continue }
         // By versus Last touched by is cosmetic metadata. A difference does not
@@ -277,8 +284,9 @@ export class CheckInWatchdog {
         const touched = word(card, 'Last touched by')
         const byNote = touched.toLowerCase() === report.By.trim().toLowerCase() ? ''
           : `; answered by ${report.By.trim()} (last edited by ${touched || 'unknown'})`
+        const nextNote = notes.length ? `; ${notes.join('; ')}` : ''
         row.state = 'resolved'; row.verifiedAt = new Date(this.now()).toISOString()
-        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}${byNote}`
+        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}${nextNote}${byNote}`
         return
       }
       return correction
