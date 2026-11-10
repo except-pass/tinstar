@@ -44,7 +44,7 @@ export class FirstmateUpdates {
   private nextSweep = 0
   private version = 0
   private mutations = new Map<string, number>()
-  private baselines = new Map<string, { properties: Record<string, unknown>; details?: CardContextRead['blocks']; comments?: CardContextRead['blocks'] }>()
+  private baselines = new Map<string, { properties: Record<string, unknown>; details?: CardContextRead['blocks']; bodyComplete?: boolean; comments?: CardContextRead['blocks'] }>()
   constructor(private sources: Sources, private root = getConfigRoot(), private settings = () => checkInSettings(root), private now = Date.now) {
     this.root = resolve(root); this.path = join(this.root, 'firstmate-work-updates.json')
   }
@@ -116,6 +116,12 @@ export class FirstmateUpdates {
         (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}
+      const body = context && !commentsOnly ? context.blocks.filter(block => block.type !== 'comment') : undefined
+      const bodyChanges = (body ?? []).filter(block => {
+        const previous = baseline?.details?.find(previous => previous.id === block.id)
+        return previous ? previous.text !== block.text : baseline?.bodyComplete === true
+      }).map(block => block.id)
+      if (body && context?.outcome === 'available') bodyChanges.push(...(baseline?.details ?? []).filter(block => !body.some(current => current.id === block.id)).map(block => block.id))
       if (own && old && baseline) {
         const effects = own.properties
         const external = { ...after }
@@ -132,13 +138,11 @@ export class FirstmateUpdates {
           (baseline.comments ? !baseline.comments.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !operationSeen
-        const sections = (context?.blocks ?? []).filter(block => block.type !== 'comment' && !ownSection(block.text) &&
-          (baseline.details ? baseline.details.find(previous => previous.id === block.id)?.text !== block.text : priorEdit)).map(block => block.id)
-        if (context?.outcome === 'available') sections.push(...(baseline.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
+        const sections = bodyChanges.filter(id => !body?.some(block => block.id === id && ownSection(block.text)))
         if ((active(card) || !!own.before && active(own.before)) && (Object.keys(externalChanges).length || comments.length || sections.length || priorEdit)) {
           this.add(state, 'Notion actor unknown', boundedItem({ kind: 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`,
             current: after, properties: externalChanges, comments, body_sections: sections,
-            ...(!context || context.outcome !== 'available' || !baseline.details ? { omissions: 'Body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed.' } : {}) }))
+            ...(priorEdit && !sections.length ? { omissions: 'card body changed (details unavailable)' } : !context || context.outcome !== 'available' || !baseline.details ? { omissions: 'Body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed.' } : {}) }))
         }
         for (const name of Object.keys(changes)) if (!(name in effects) || JSON.stringify(after[name]) !== JSON.stringify(effects[name])) delete changes[name]
       }
@@ -150,25 +154,21 @@ export class FirstmateUpdates {
         (!!own && (Object.keys(changes).length > 0 || !contentSeen && (!!own.notes?.length || !!own.sections?.length)) || !!old && (old.edited !== card.last_edited_time || Object.keys(changes).length > 0 || newComments.length > 0))
       if (newPickup || newUpdate || enrichPickup) {
         const comments = (contentSeen ? [] : own?.notes)?.map(text => ({ text, author: actor })) ?? newComments.map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
-        const sections = (contentSeen ? [] : own?.sections) ?? (context?.blocks ?? []).filter(block => block.type !== 'comment' && baseline?.details && baseline.details.find(previous => previous.id === block.id)?.text !== block.text).map(block => block.id)
-        if (!own && !commentsOnly && context?.outcome === 'available') sections.push(...(baseline?.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
+        const sections = (contentSeen ? [] : own?.sections) ?? bodyChanges
         const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections,
-          ...(!own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
+          ...(!own && old && old.edited !== card.last_edited_time && !sections.length ? { omissions: 'card body changed (details unavailable)' } : !own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
         // Redaction is an output boundary; raw current-state comparisons stay exact.
         const bounded = boundedItem(item)
         this.add(state, actor, bounded)
       }
-      const confirmedBaseline = (previous: CardContextRead['blocks'] | undefined, comments: boolean) => {
-        const confirmed = (context?.blocks ?? []).filter(block => own && (comments
-          ? block.type === 'comment' && own.notes?.some(note => noteMatches(block.text, note))
-          : block.type !== 'comment' && own.sectionTexts?.some(text => block.text === contextText(text))))
-        return confirmed.length ? [...new Map([...(previous ?? []), ...confirmed].map(block => [block.id, block])).values()] : previous
-      }
-      const details = context?.outcome === 'available' && !commentsOnly ? context.blocks : confirmedBaseline(baseline?.details, false)
-      const comments = context && (context.commentsOutcome ?? context.outcome) === 'available' ? context.blocks.filter(block => block.type === 'comment') : confirmedBaseline(baseline?.comments, true)
+      const details = body ? context?.outcome === 'available' ? body : [...new Map([...(baseline?.details ?? []), ...body].map(block => [block.id, block])).values()] : baseline?.details
+      const confirmedComments = (context?.blocks ?? []).filter(block => block.type === 'comment' && own?.notes?.some(note => noteMatches(block.text, note)))
+      const comments = context && (context.commentsOutcome ?? context.outcome) === 'available' ? context.blocks.filter(block => block.type === 'comment')
+        : confirmedComments.length ? [...new Map([...(baseline?.comments ?? []), ...confirmedComments].map(block => [block.id, block])).values()] : baseline?.comments
+      const bodyComplete = body ? context?.outcome === 'available' : baseline?.bodyComplete ?? false
       const operations = [...(old?.operations ?? []), ...(!operationSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
-      this.baselines.set(card.id, { properties: after, ...(details ? { details } : {}), ...(comments ? { comments } : {}) })
+      this.baselines.set(card.id, { properties: after, bodyComplete, ...(details ? { details } : {}), ...(comments ? { comments } : {}) })
     })
   }
   /** Called from the existing refresh callback, never a second scheduler. */

@@ -905,3 +905,39 @@ it.each(['brief', 'acceptance_criteria', 'both-sections', 'note', 'comment', 'pr
   expect(human).toHaveLength(1)
   expect(JSON.parse(human[0]!.body.split('\n').slice(1).join('')).changes[0].body_sections).toEqual(['body-1'])
 })
+
+it.each(['brief', 'acceptance_criteria'] as const)('adopts unknown cold-start body coverage before confirmed %s edits', async name => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  f.blocks.push({ id: 'unsupported-image', type: 'image', image: {} })
+  const root = await mkdtemp(join(tmpdir(), 'workflow-cold-partial-')); roots.push(root)
+  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  sources.workflow.onChange = change => feed.confirmed(change)
+  await feed.sweep(true)
+  for (let round = 0; round < 3; round++) {
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    expect(await sources.updateWork({ card_id: id, operation_id: `cold-${name}-${round}`, kind: 'edit',
+      ...(round === 0 ? { content: { [name]: 'Confirmed section content' } } : {}), note: `Confirmed note ${round}` }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    await feed.sweep(true)
+    vi.setSystemTime(new Date(Date.now() + 10_001))
+    expect((await feed.bridgeWork()).pending).toEqual([])
+  }
+  f.blocks[0].paragraph.rich_text = [{ plain_text: 'Human edit of covered paragraph' }]
+  vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
+  await feed.sweep(true)
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const human = (await feed.bridgeWork()).pending
+  expect(human).toHaveLength(1)
+  expect(JSON.parse(human[0]!.body.split('\n').slice(1).join('')).changes[0].body_sections).toEqual(['body-1'])
+  await feed.ingest({ request_id: human[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: human[0]!.request_id, request_id: inboxRequestId(human[0]!.request_id) } })
+  f.blocks.push({ id: 'unknown-paragraph', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Previously unknown paragraph' }] } })
+  vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
+  await feed.sweep(true)
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const unknown = (await feed.bridgeWork()).pending
+  expect(unknown).toHaveLength(1)
+  expect(JSON.parse(unknown[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ body_sections: [], omissions: 'card body changed (details unavailable)' })
+  await feed.sweep(true)
+  expect((await feed.bridgeWork()).pending).toEqual(unknown)
+})
