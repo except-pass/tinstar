@@ -16,6 +16,12 @@ const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ 
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
+const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, source?: Extract<UpdateWorkInput, { kind: 'answer_decision' }>['source_request']) => ({
+  request_id: input.request_id, answer: input.answer, option_id: input.option_id, next: input.next,
+  resolve_wait: input.resolve_wait, legacy_action: input.legacy_action,
+  source: input.source_request || source ? requestKey(input.source_request ?? source!) : null,
+})
+
 const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, card.properties, card.archived, card.in_trash])
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
@@ -176,9 +182,6 @@ export class WorkflowOperations {
       for (const intent of jsonLines('Tin Star decision intent: ')) {
         const input = updateWorkSchema.safeParse(intent.input)
         if (!input.success || input.data.card_id !== cardId || input.data.kind !== 'answer_decision' || typeof intent.actor !== 'string') continue
-        const requestId = input.data.request_id
-        if (notes.some(note => workflowNoteHasMarker(note, receiptMarker(intent.actor, input.data.operation_id)) ||
-          decisionRecordRows([note], 'Tin Star answer: ').includes(requestId) && workflowReceipt(note))) continue
         const result = await this.performUpdate(input.data, intent.actor)
         if (result.outcome !== 'saved') return { state: 'pending' as const, message: 'Decision recorded · First Mate not yet updated' }
       }
@@ -423,6 +426,23 @@ export class WorkflowOperations {
         // Prevent a stale or forged button from answering a different published choice.
         if (!option || option.label !== input.answer) throw new WorkflowError('decision-option-conflict', 'The selected option and exact answer must match this published proposal; refresh its choices')
       }
+      if (input.kind === 'answer_decision') {
+        const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
+          const parsed = updateWorkSchema.safeParse(row.input)
+          return parsed.success && parsed.data.kind === 'answer_decision' && parsed.data.card_id === input.card_id && parsed.data.request_id === input.request_id && typeof row.actor === 'string'
+            ? [{ actor: row.actor as string, input: parsed.data }] : []
+        })
+        const first = intents[0]
+        if (first) {
+          const source = first.input.source_request ?? decisionProposals(notes).find(row => row.id === input.request_id)?.source_request
+          const effects = decisionEffects(first.input, source)
+          if (!same(effects, decisionEffects(input, source)) || intents.some(intent => !same(effects, decisionEffects(intent.input, source)))) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer intent or effects')
+          if (first.actor !== actor || first.input.operation_id !== input.operation_id) {
+            const recovered = await this.performUpdate(first.input, first.actor)
+            return { ...recovered, operation_id: input.operation_id }
+          }
+        }
+      }
       const pendingMarker = `Tin Star decision pending: ${JSON.stringify([actor, input.operation_id])}`
       const pending = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.actor === actor && row.input?.operation_id === input.operation_id)
       const receipt = notes.find(note => workflowNoteHasMarker(note, marker))
@@ -464,7 +484,7 @@ export class WorkflowOperations {
           if (name !== 'Last touched by' && !this.matches(current, name, value) && !(pending && this.matches(current, name, plan.desired[name]))) throw new WorkflowError('conflict', `${name} changed during this operation; unrelated work was preserved. Refresh and re-issue with a new operation_id.`, true)
         }
         card = current
-        if (input.kind === 'answer_decision' && (input.source_request || notes.some(note => note.text.includes('"source_request":')))) {
+        if (!pending && input.kind === 'answer_decision' && (input.source_request || notes.some(note => note.text.includes('"source_request":')))) {
           attempted = true
           await this.content.note(card.id, `Tin Star decision intent: ${JSON.stringify({ actor, input, original: plan.original })}`, pendingMarker)
           saved.push('decision-answer')

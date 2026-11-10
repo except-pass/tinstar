@@ -1521,3 +1521,82 @@ it('does not let a quoted receipt suppress recovery of an interrupted answer', a
   expect(f.messages).toHaveLength(1)
   expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
 })
+
+it.each([
+  { answer: 'R1' },
+  { next: { owner: 'Will', status: 'Queued' } },
+  { resolve_wait: undefined },
+  { legacy_action: 'Merge' },
+  { source_request: { id: 'other-source' } },
+  { option_id: 'same-label' },
+])('rejects competing effects after the first durable intent: %j', async change => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, options: [{ id: 'r3', label: 'R3' }, { id: 'same-label', label: 'R3' }] } as UpdateWorkInput, 'Publisher')
+  const answer = { ...f.answer, ...(change.option_id ? { option_id: 'r3' } : {}) } as UpdateWorkInput
+  f.controls.failPatch()
+  expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['decision-answer'] })
+  f.controls.failPatch(false)
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  const competing = { ...answer, ...change, operation_id: 'competing-answer', ...(change.source_request ? { source_request: { ...f.source, ...change.source_request } } : {}) } as UpdateWorkInput
+  expect(await restarted.update(competing, 'Other owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain('Exact owner answer:\nR3\n')
+})
+
+it.each(['operation', 'actor', 'both', 'direct refresh'])('finishes the original incomplete intent on an identical %s retry', async retry => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  if (retry === 'direct refresh') f.comments.push({ id: 'identical-direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request' }] })
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  if (retry === 'direct refresh') expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  else {
+    const input = { ...f.answer, operation_id: retry === 'actor' ? f.answer.operation_id : 'new-operation' }
+    expect(await restarted.update(input, retry === 'operation' ? 'Owner' : 'Other owner')).toMatchObject({ operation_id: input.operation_id, decision_resolution: { state: 'pending' } })
+  }
+  expect(f.comments).toHaveLength(count + 1)
+  expect((await f.reader.card(id, true)).properties).toMatchObject({ 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } })
+  expect(f.messages).toHaveLength(1)
+  await restarted.reconcileDecisions(id, f.fleet)
+  expect(f.comments).toHaveLength(count + 1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('never treats a conflicting finalized answer as completion of the original intent', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  const data = { request_id: 'r3-proposal', answer: 'R1', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: 'Preserve another request' }
+  f.comments.push({ id: 'conflicting-final', rich_text: [{ plain_text: `Operation: answer_decision\nTin Star answer: "r3-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify(data)}\nTin Star operation: ["Other owner","other-answer"]` }] })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+})
+
+it('never delivers a conflicting direct Notion answer over an incomplete intent', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  f.comments.push({ id: 'competing-direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued' }] })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+})
