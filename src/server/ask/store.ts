@@ -44,6 +44,9 @@ export class AskStore {
     this.writing = task.catch(() => undefined)
     return task
   }
+  async proposalRecords() {
+    return structuredClone((await this.load()).filter(row => !row.synthetic_id && !row.voice_outage && !row.published_proposal && row.reply?.decision_proposal))
+  }
   async list(owner: string, syntheticId?: string) {
     await this.writing
     return structuredClone((await this.load()).filter(row => !row.voice_outage && row.owner === owner && row.synthetic_id === syntheticId))

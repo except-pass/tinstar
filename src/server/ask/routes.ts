@@ -51,8 +51,8 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
-    this.store = new AskStore(root)
+  constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue' | 'askStore' | 'proposalSource'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
+    this.store = sources.askStore ?? new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]!
@@ -139,7 +139,8 @@ export class AskApi {
             if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
             if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
             if (answer.published_proposal && !(item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === answer.request_id && JSON.stringify(published.value) === JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
-            if (currentDecisionProposal([...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))])?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded')
+            const publications = this.sources.proposalSource ? (await Promise.all(item.cardIds.map(id => this.sources.proposalSource!.read(id)))).flat().filter(entry => entry.value.request_key === item.id) : [...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))]
+            if (currentDecisionProposal(publications)?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded')
             if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
             return findSuggestedAction(proposal.actions, actionId)
           }

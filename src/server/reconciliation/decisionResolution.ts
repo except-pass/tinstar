@@ -54,7 +54,7 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export function decisionProposals(notes: WorkflowNote[]) {
+export function decisionProposals(notes: WorkflowNote[], publications: import('./proposalSource').ProposalPublication[] = []) {
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
@@ -79,7 +79,9 @@ export function decisionProposals(notes: WorkflowNote[]) {
     bound.set(key, [...(bound.get(key) ?? []), row])
   }
   const current = [...bound.values()].map(group => {
-    return currentDecisionProposal(group.map(row => ({ row, value: row.proposal })))?.row
+    const keys = new Set(group.flatMap(row => { const value = decisionProposalSchema.safeParse(row.proposal); return value.success ? [value.data.request_key] : [] }))
+    const current = currentDecisionProposal([...group.map(row => ({ value: row.proposal })), ...publications.filter(entry => keys.has(entry.value.request_key))])
+    return group.find(row => row.proposal && JSON.stringify(row.proposal) === JSON.stringify(current?.value))
   })
   return history.filter(row => !row.source_request || !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
 }
@@ -95,14 +97,14 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
-  confirm?: (text: string, marker: string) => Promise<void>): Promise<DecisionResolution | undefined> {
+  confirm?: (text: string, marker: string) => Promise<void>, publications: import('./proposalSource').ProposalPublication[] = []): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionProposals>
-  try { requests = decisionProposals(notes) } catch (error) { return verify((error as Error).message) }
+  try { requests = decisionProposals(notes, publications) } catch (error) { return verify((error as Error).message) }
   const bound = requests.filter(row => row && 'source_request' in row)
   if (!bound.length) {
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
-    return linkedSource && rows(notes, 'Tin Star answer: ').length ? verify('answered proposal has no explicit First Mate request binding') : undefined
+    return linkedSource && rows(notes, 'Tin Star answer: ').length && !rows(notes, 'Tin Star request: ').some(row => row.source_request) ? verify('answered proposal has no explicit First Mate request binding') : undefined
   }
   const results: DecisionResolution[] = []
   for (const row of bound) {

@@ -20,7 +20,7 @@ const tags = (value: unknown) => (Array.isArray(value) ? value : [value]).filter
 /** Current explicit asks only. Green GitHub evidence enriches a routed merge
  * request; repository membership and passing checks never create permission. */
 export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScene, contexts: Map<string, CardContextRead>, inventory: PullsRead | null,
-  readiness: ReadonlyMap<string, PullReadiness>, authorized = false): NeedsWillItem[] {
+  readiness: ReadonlyMap<string, PullReadiness>, authorized = false, publications: import('./proposalSource').ProposalPublication[] = []): NeedsWillItem[] {
   if (!authorized) { inventory = null; readiness = new Map() }
   const cards = new Map(scene.cards.map(card => [card.id, card]))
   return queue.items.flatMap(item => {
@@ -47,9 +47,9 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       (!request.proposal.card_id || item.cardIds.includes(request.proposal.card_id)) && request.sourceRequest &&
       item.sources.some(source => source.request?.kind !== 'notion-card' && source.request && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null)))
       .map(request => ({ answer_id: proposalAnswerId(request.proposal!), value: request.proposal! }))
-    const proposal = currentDecisionProposal(published)?.value
+    const proposal = currentDecisionProposal([...published, ...publications.filter(entry => entry.value.request_key === item.id)])?.value
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = since.length ? since.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null
-    return [{ ...item, proposals: published, ...(proposal ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
+    return [{ ...item, proposals: published, ...(proposal?.source.kind === 'firstmate-request' ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
   })
 }

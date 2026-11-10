@@ -1900,7 +1900,7 @@ it('never delivers a conflicting direct Notion answer over an incomplete intent'
   expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
 })
 
-it.each(['revision', 'unrelated', 'missing intermediate', 'legacy'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
+it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask supersession'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
   const { AskApi } = await import('../../ask/routes')
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -1920,6 +1920,31 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy'])('reconciles
   const port = (server.address() as { port: number }).port
   seedOriginAllowlist(port)
   const select = (proposal: typeof p) => fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
+  if (scenario === 'ask supersession') {
+    const { decisionContext } = await import('../../ask/decision')
+    const { inboxRequestId } = await import('../../../shared/ask')
+    sources.workflow.decisionDelivery = f.bridge
+    const turn = await asks.store.create('owner@example.test', crypto.randomUUID(), 'Revise this recommendation', decisionContext(item, { scene: 'decisions' }))
+    const askProposal = { ...q, proposal_id: turn.request_id, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: 'ask-q' }, supersedes: p.proposal_id }
+    await asks.store.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'ask-q', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
+    await asks.store.ingest({ request_id: turn.request_id, reply: { id: 'ask-q', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Choose the revised route', detail: '', references: [], suggested_actions: [], decision_proposal: askProposal }) } })
+    expect((await sources.proposalSource.read(id)).map(entry => entry.value.proposal_id)).toEqual(expect.arrayContaining([p.proposal_id, askProposal.proposal_id]))
+    const projected = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
+    expect(projected.readiness).toBe('ready-now')
+    expect(projected.proposal).toBeUndefined()
+    expect((await select(p)).status).toBe(409)
+    expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    f.comments.push({ id: 'obsolete-direct-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued' }] })
+    expect(await sources.workflow.reconcileDecisions(id, f.fleet)).toBeUndefined()
+    expect(f.bridge.submit).not.toHaveBeenCalled()
+    const newerWork = { ...r, supersedes: askProposal.proposal_id }
+    expect(await sources.updateWork({ ...f.request, request_id: 'publication-r', operation_id: 'publish-r', proposal: newerWork } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+    const response = await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: turn.request_id, action_id: 'proceed', client_key: crypto.randomUUID() }) })
+    expect(response.status).toBe(409)
+    expect((await select(newerWork)).status).toBe(200)
+    expect((await sources.queue()).needsWill!.find(row => row.id === item.id)?.proposal?.value.proposal_id).toBe(newerWork.proposal_id)
+    return
+  }
   if (scenario === 'missing intermediate') expect((await select(p)).status).toBe(200)
   expect(await sources.updateWork({ ...f.request, request_id: 'publication-q', operation_id: 'publish-q', proposal: q } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
   if (scenario === 'missing intermediate') {
