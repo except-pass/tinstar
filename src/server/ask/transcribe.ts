@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage } from 'node:http'
 import { getConfigRoot } from '../configRoot'
-import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_MIME_TYPES, VOICE_TIMEOUT_MS } from '../../shared/voice'
+import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_MIME_TYPES, VOICE_TIMEOUT_MS, VOICE_UNAVAILABLE, VOICE_TIMEOUT, VOICE_EMPTY } from '../../shared/voice'
 
 export class VoiceError extends Error {
   constructor(readonly code: 'BAD_REQUEST' | 'BACKEND_UNAVAILABLE' | 'CONFLICT', message: string) { super(message) }
@@ -25,6 +25,10 @@ function matchesContainer(audio: Buffer, type: string): boolean {
 
 export class LocalTranscriber {
   constructor(private root = getConfigRoot(), private infer: Inference = runLocalInference, private timeoutMs = VOICE_TIMEOUT_MS) {}
+  async modelAvailable(): Promise<boolean> {
+    try { await localModel(this.root); return true }
+    catch (error) { if (error instanceof MissingVoiceModel) return false; throw error }
+  }
   async transcribe(req: IncomingMessage, signal: AbortSignal): Promise<Transcript> {
     const type = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
     if (!VOICE_MIME_TYPES.some(mime => mime === type)) throw new VoiceError('BAD_REQUEST', 'Unsupported audio type. Record WebM, MP4, Ogg or WAV, or type your question.')
@@ -53,11 +57,11 @@ export class LocalTranscriber {
       if (!audio.length || !matchesContainer(audio, type)) throw new VoiceError('BAD_REQUEST', 'Audio does not match its declared type. Record again or type your question.')
       const result = await this.infer(audio, controller.signal, this.root)
       if (controller.signal.aborted) throw new Error('aborted')
-      if (!result.text.trim()) throw new VoiceError('BAD_REQUEST', 'No speech recognized. Record again or type your question.')
+      if (!result.text.trim()) throw new VoiceError('BAD_REQUEST', VOICE_EMPTY)
       if (result.text.length > 4000) throw new VoiceError('BAD_REQUEST', 'Transcript exceeds 4,000 characters. Try a shorter question.')
       return { text: result.text.trim() }
     } catch (error) {
-      if (controller.signal.aborted) throw new VoiceError('BACKEND_UNAVAILABLE', 'Local transcription timed out or was cancelled. Your text is preserved.')
+      if (controller.signal.aborted) throw new VoiceError('BACKEND_UNAVAILABLE', VOICE_TIMEOUT)
       throw error
     } finally {
       clearTimeout(timer); signal.removeEventListener('abort', abort)
@@ -71,20 +75,28 @@ function packagedRuntime() {
   let root = dirname(fileURLToPath(import.meta.url))
   while (!existsSync(join(root, 'bin/voice/transcribe.mjs'))) {
     const parent = dirname(root)
-    if (parent === root) throw new VoiceError('BACKEND_UNAVAILABLE', 'Local voice runtime is missing. Reinstall Tin Star; text remains available.')
+    if (parent === root) throw new VoiceError('BACKEND_UNAVAILABLE', VOICE_UNAVAILABLE)
     root = parent
   }
   return root
 }
 
-/** Child lifetime is the recording lifetime. A process group includes the audio
- * decoder so cancellation/timeout cannot leave work or raw audio behind. */
-export async function runLocalInference(audio: Buffer, signal: AbortSignal, root: string): Promise<Transcript> {
+class MissingVoiceModel extends VoiceError {
+  constructor() { super('BACKEND_UNAVAILABLE', VOICE_UNAVAILABLE) }
+}
+async function localModel(root: string) {
   const runtime = packagedRuntime()
   const manifest = JSON.parse(await readFile(join(runtime, 'bin/voice/model.json'), 'utf8')) as { directory: string; files: Record<string, string> }
   const model = join(root, 'voice', manifest.directory)
   try { await Promise.all(Object.keys(manifest.files).map(file => access(join(model, file)))) }
-  catch { throw new VoiceError('BACKEND_UNAVAILABLE', 'Local English voice model is unavailable. Run tinstar voice install on the Tin Star server; text remains available.') }
+  catch { throw new MissingVoiceModel() }
+  return { runtime, model }
+}
+
+/** Child lifetime is the recording lifetime. A process group includes the audio
+ * decoder so cancellation/timeout cannot leave work or raw audio behind. */
+export async function runLocalInference(audio: Buffer, signal: AbortSignal, root: string): Promise<Transcript> {
+  const { runtime, model } = await localModel(root)
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(new Error('aborted')); return }
     const child = spawn(process.execPath, [join(runtime, 'bin/voice/transcribe.mjs'), model, String(VOICE_MAX_SECONDS)], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'ignore'] })
@@ -102,7 +114,7 @@ export async function runLocalInference(audio: Buffer, signal: AbortSignal, root
       else text += chunk
     })
     child.stdin.on('error', () => undefined)
-    child.on('error', () => { signal.removeEventListener('abort', stop); reject(new VoiceError('BACKEND_UNAVAILABLE', 'Local voice runtime unavailable. Reinstall Tin Star or type your question.')) })
+    child.on('error', () => { signal.removeEventListener('abort', stop); reject(new VoiceError('BACKEND_UNAVAILABLE', VOICE_UNAVAILABLE)) })
     child.on('close', code => {
       signal.removeEventListener('abort', stop)
       if (signal.aborted) { reject(new Error('aborted')); return }
@@ -113,7 +125,7 @@ export async function runLocalInference(audio: Buffer, signal: AbortSignal, root
         if (result.error || code !== 0 || overflow || typeof result.text !== 'string') throw new Error('runtime failed')
         resolve(result)
       } catch (error) {
-        reject(error instanceof VoiceError ? error : new VoiceError('BACKEND_UNAVAILABLE', 'Local voice runtime/model unavailable. Run tinstar voice install or reinstall Tin Star; you can still type.'))
+        reject(error instanceof VoiceError ? error : new VoiceError('BACKEND_UNAVAILABLE', VOICE_UNAVAILABLE))
       }
     })
     child.stdin.end(audio)

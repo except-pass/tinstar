@@ -15,7 +15,7 @@ const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: '
 const script = resolve('scripts/deploy/floor-deploy.sh')
 // A deploy runs this suite with its own exported configuration. Never let those
 // unit names, live paths/URLs or shell/Node startup hooks leak into fixtures.
-const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'FAIL_TYPECHECK', 'MISSING_UNIT', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
+const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'FAIL_TYPECHECK', 'FAIL_VOICE', 'MISSING_UNIT', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
 const deploymentEnv = (key: string) => key.startsWith('TINSTAR_') || relatedEnv.has(key)
 beforeEach(async () => {
   for (const key of Object.keys(process.env)) if (deploymentEnv(key)) vi.stubEnv(key, undefined)
@@ -34,6 +34,16 @@ async function fixture() {
   await writeFile(join(root, 'approved.json'), '["get_scene"]')
   await writeFile(join(root, 'package.json'), '{}')
   await writeFile(join(root, 'package-lock.json'), '{}')
+  // The real deploy invokes Node with the service config. This executable CLI
+  // double records that interface without downloading anything in unit tests.
+  await mkdir(join(root, 'bin'))
+  await writeFile(join(root, 'bin/tinstar.js'), `
+const fs = require('node:fs');
+const command = process.argv.slice(2).join(' ');
+fs.appendFileSync(process.env.COMMAND_LOG, 'voice-cli ' + command + ' config=' + process.env.TINSTAR_CONFIG_HOME + '\\n');
+if (process.env.FAIL_VOICE === '1') process.exit(43);
+`)
+
   let ready = true, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
   const api = new AskApi({ scene: async () => { throw new Error('Smoke must not query First Mate') } }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   let base = ''
@@ -57,7 +67,7 @@ async function fixture() {
   servers.push(server)
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  const bin = join(root, 'bin'); await mkdir(bin)
+  const bin = join(root, 'bin')
   // Exercise real shell control flow with executable command doubles; no units
   // or git checkout outside the temporary fixture can be touched by these tests.
   const command = `#!/bin/bash
@@ -128,6 +138,22 @@ describe('floor deploy executable', () => {
     expect(commands).not.toContain('shim')
     expect(commands).toContain('sudo -n systemctl restart tinstar-floor')
     expect(commands).toContain('sudo -n systemctl restart tinstar-mcp-tunnel')
+  })
+  it.each(['0', '1'])('provisions voice after build with service config and continues on failure=%s', async failure => {
+    const { root, run } = await fixture()
+    const result = await run(false, { FAIL_VOICE: failure })
+    expect(result.code, result.stderr).toBe(0)
+    const commands = (await readFile(join(root, 'commands.log'), 'utf8')).trim().split('\n')
+    const build = commands.indexOf('npm run build:all')
+    expect(commands.slice(build, build + 4)).toEqual([
+      'npm run build:all', `voice-cli voice install config=${root}`, `voice-cli voice status config=${root}`,
+      'sudo -n systemctl restart tinstar-floor',
+    ])
+    if (failure === '1') {
+      expect(result.stderr).toContain('voice model install failed; continuing deploy')
+      expect(result.stderr).toContain('voice model status failed; continuing deploy')
+    }
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
   it('restarts a legacy shim only when the fixture explicitly opts in', async () => {
     const { root, run } = await fixture()

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
-import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_TIMEOUT_MS } from '../shared/voice'
+import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_TIMEOUT_MS, VOICE_UNAVAILABLE, VOICE_TIMEOUT, VOICE_EMPTY, voiceFailureMessage } from '../shared/voice'
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing'
 interface Capture {
@@ -76,14 +76,14 @@ export function VoiceInput({ disabled, onTranscript, onBusyChange }: { disabled:
             const response = await apiFetch('/api/ask/transcribe', { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': audio.type }, body: audio, signal: capture.upload!.signal })
             const result = await response.json()
             if (active.current !== capture) return
-            if (!response.ok || !result.ok) throw new Error(result.error?.message ?? 'Local transcription unavailable')
+            if (!response.ok || !result.ok) { fail(voiceFailureMessage(result.error)); return }
             const text = typeof result.data?.text === 'string' ? result.data.text.trim() : ''
-            if (!text) throw new Error('No speech was recognized. Try again or type your question.')
+            if (!text) { fail(VOICE_EMPTY); return }
             active.current = null; changePhase('idle')
             await callbacks.current.onTranscript(text)
           } catch (reason) {
             if (active.current !== capture) return
-            fail(reason instanceof Error && reason.name === 'AbortError' ? 'Transcription timed out or the connection was interrupted. Your text is preserved.' : `${(reason as Error).message}. Your text is preserved; you can type instead.`)
+            fail((reason as { name?: string } | null)?.name === 'AbortError' ? VOICE_TIMEOUT : VOICE_UNAVAILABLE)
           } finally { clearTimeout(timeout) }
         })()
       }

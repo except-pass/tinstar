@@ -27,7 +27,9 @@ shortening before Send.
 ## Installation and updates
 
 Install Tin Star normally with Node >=22.12 on Linux or macOS. On the **server
-running Tin Star**, enable local English transcription once:
+running Tin Star**, provisioning during the guarded floor deploy follows the
+[floor deploy runbook](floor-deploy.md). For other installations, enable local
+English transcription once:
 
 ```sh
 tinstar voice install
@@ -43,8 +45,14 @@ Normal npm updates refresh an already enabled voice installation on Linux and
 Mac; no Homebrew/Python/CMake or external provisioning scripts are needed.
 `TINSTAR_CONFIG_HOME` selects an isolated installation. Unconfigured clients do
 not download a model during updates. No inference occurs during installation,
-startup or idle polling. Missing model/runtime errors explicitly leave text
-available and give the install command.
+startup or idle polling. Missing model/runtime errors tell users voice input is temporarily unavailable
+and keep their draft available for typing. They never show server commands. A
+missing model at request time opens one labeled SYSTEM VOICE MODEL NOTICE to
+First Mate through the existing Ask bridge/outbox, deduped across clicks and
+restarts until a request sees the model available again. Failed capture/wake
+deliveries retry on the normal bridge poll using the same inbox request ID. The existing watchdog
+delivery setting also suppresses these notices on previews. No new scheduler
+or store is used.
 
 `@huggingface/transformers` provides ONNX CPU inference. `ffmpeg-static` provides
 the platform audio decoder during npm installation (its bundled binary and
@@ -57,7 +65,8 @@ normal npm dependency install scripts so the platform decoder is present.
 tailnet owner, origin and UI handshake checks as Ask. The browser never sees a
 bridge token. Keep the backend bound to loopback behind the existing tailnet
 HTTPS owner boundary; see [Ask setup](ask.md). This route returns a transcript,
-never creates an Ask record itself, and does not use the bridge or any provider.
+never creates an owner Ask turn itself, and uses no remote inference provider.
+Only a missing-model system notice uses the existing Ask delivery store/bridge.
 
 Uploads are limited to 8 MiB and WebM, MP4, Ogg or WAV containers, with matching
 container signatures. FFmpeg additionally validates actual decodability and

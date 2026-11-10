@@ -31,7 +31,7 @@ Open a Desk request's source inspector to answer or dismiss a ready First Mate r
 
 Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Desk**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 
-Expand a Desk conversation and use **Reply to First Mate** to continue inline with its prior questions and answers. Enter sends; Shift+Enter adds a line. The same composer is embedded in expanded Inspectors, PR details and Releases. Hold **Talk** and release to transcribe and send, or tap to start/stop; Cancel never sends. Enable the local English model on the server with `tinstar voice install`; see the [local voice runbook](docs/features/voice.md) for setup, limits and text fallback.
+Expand a Desk conversation and use **Reply to First Mate** to continue inline with its prior questions and answers. Enter sends; Shift+Enter adds a line. The same composer is embedded in expanded Inspectors, PR details and Releases. Hold **Talk** and release to transcribe and send, or tap to start/stop; Cancel never sends. See the [local voice runbook](docs/features/voice.md) for setup, limits and text fallback.
 
 Use **Open in ChatGPT** on an Overview work card or PR row for an external discussion. See the [Open in ChatGPT reference](docs/features/open-in-chatgpt.md) for URL prefill limits, copy-prompt recovery and metadata privacy.
 

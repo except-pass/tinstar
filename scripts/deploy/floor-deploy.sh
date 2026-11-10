@@ -128,6 +128,14 @@ if ! $check_only; then
   gate typecheck env -u NODE_ENV npm run typecheck
   gate unit-tests node "$support" unit-tests
   gate build env -u NODE_ENV npm run build:all
+  # Voice is provisioned on every normal deploy, including first installations.
+  # A download outage must not block shipping unrelated fixes or restart recovery.
+  if ! node bin/tinstar.js voice install; then
+    printf 'WARNING Tin Star deploy: voice model install failed; continuing deploy with text input available\n' >&2
+  fi
+  if ! node bin/tinstar.js voice status; then
+    printf 'WARNING Tin Star deploy: voice model status failed; continuing deploy\n' >&2
+  fi
   gate "restart:$floor_unit" sudo -n systemctl restart "$floor_unit"
   gate "restart:$facade_unit" sudo -n systemctl restart "$facade_unit"
   if [[ -n "$shim_unit" ]]; then gate "restart:$shim_unit" sudo -n systemctl restart "$shim_unit"; fi

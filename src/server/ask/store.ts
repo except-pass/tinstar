@@ -29,7 +29,8 @@ export class AskStore {
   private change<T>(operation: (rows: AskRecord[]) => T): Promise<T> {
     const task = this.writing.then(async () => {
       const rows = structuredClone(await this.load())
-      const result = operation(rows)
+      const before = JSON.stringify(rows), result = operation(rows)
+      if (before === JSON.stringify(rows)) return result
       await mkdir(this.root, { recursive: true })
       const path = join(this.root, 'ask-requests.json'), temp = `${path}.${randomUUID()}.tmp`
       await writeFile(temp, JSON.stringify(rows), { mode: 0o600 })
@@ -42,7 +43,7 @@ export class AskStore {
   }
   async list(owner: string, syntheticId?: string) {
     await this.writing
-    return structuredClone((await this.load()).filter(row => row.owner === owner && row.synthetic_id === syntheticId))
+    return structuredClone((await this.load()).filter(row => !row.voice_outage && row.owner === owner && row.synthetic_id === syntheticId))
   }
   async find(owner: string, requestId: string, syntheticId?: string) { return (await this.list(owner, syntheticId)).find(row => row.request_id === requestId) }
   create(owner: string, clientKey: string, question: string, context: AskContext, followUpTo?: string, capturedSelection?: AskCapturedSelection, syntheticId?: string) {
@@ -129,10 +130,33 @@ export class AskStore {
       return this.appendRequest(rows, owner, clientKey, selection.instruction, answer.context, answer, selection)
     })
   }
-  async bridgeWork(syntheticId?: string) {
+  /** Request-time availability drives one durable notice per outage. Replies
+   * and repeated clicks do not clear the latch; a present model does. */
+  voiceModelAvailable(available: boolean) {
+    return this.change(rows => {
+      const open = rows.find(row => row.voice_outage?.resolved_at === null)
+      if (available) {
+        if (open) { open.voice_outage!.resolved_at = this.now(); open.updated_at = this.now() }
+      } else if (!open) {
+        const row = this.appendRequest(rows, 'tinstar-system', randomUUID(), 'Local English voice model is missing.', {
+          anchor: { kind: 'work', page_id: 'voice-model', label: 'Voice input availability', url: null, observed_at: this.now(), freshness: 'fresh', expires_at: null },
+          view: { scene: 'overview' },
+        })
+        row.voice_outage = { resolved_at: null }
+        row.dispatch_body = `Tin Star SYSTEM VOICE MODEL NOTICE. This is a server availability notice, not an owner question or approval. The local English voice model is missing at request time. Restore it on the Tin Star server and verify voice input. Text input remains available; no user action is needed. First Mate owns investigation under its existing permissions; Tin Star grants no new permissions. Reply through the normal Ask bridge.\n${JSON.stringify({ request_id: row.request_id, problem: 'voice-model-missing', observed_at: row.created_at })}`
+      }
+    })
+  }
+  async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true) {
     // Persist legacy payloads on first dispatch too. Capturing under the writer
     // lock freezes each note body before a puller can save it and lose its ack.
-    const eligible = (row: AskRecord) => row.synthetic_id === syntheticId && (row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error)
+    const eligible = (row: AskRecord) => {
+      if (row.synthetic_id !== syntheticId) return false
+      // System notices have no owner Retry button. Reoffer failed capture/wake
+      // on the normal bridge poll with the same idempotent inbox request ID.
+      if (row.voice_outage) return systemDeliveryEnabled && row.voice_outage.resolved_at === null && !row.reply && row.announced !== true
+      return row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error
+    }
     const collect = (rows: AskRecord[]) => {
       const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
       for (const row of rows) {
@@ -143,7 +167,7 @@ export class AskStore {
         if (pending.length && (pending.length >= 50 || jsonBytes(pending) + jsonBytes(entry) > 1024 * 1024)) break
         pending.push(entry)
       }
-      return { pending, tracked: rows.filter(row => row.synthetic_id === syntheticId && row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
+      return { pending, tracked: rows.filter(row => row.synthetic_id === syntheticId && (!row.voice_outage || systemDeliveryEnabled && row.voice_outage.resolved_at === null) && row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
     }
     await this.writing
     const rows = await this.load()

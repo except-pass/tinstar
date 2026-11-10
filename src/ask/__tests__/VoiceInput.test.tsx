@@ -1,3 +1,4 @@
+import { VOICE_TIMEOUT } from '../../shared/voice'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { VoiceInput } from '../VoiceInput'
@@ -108,13 +109,17 @@ describe('local voice capture', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('HTTPS')
     expect(media).not.toHaveBeenCalled()
   })
-  it.each(['empty', 'server', 'network'])('preserves the text path after %s failure', async failure => {
+  it.each(['empty', 'server', 'network', 'timeout', 'missing', 'down', 'server-timeout'])('preserves the text path after %s failure', async failure => {
     vi.mocked(fetch).mockImplementation(async () => {
       if (failure === 'network') throw new Error('Network interrupted')
-      return new Response(JSON.stringify(failure === 'empty' ? { ok: true, data: { text: ' ' } } : { ok: false, error: { message: 'Transcriber unavailable' } }), { status: failure === 'server' ? 503 : 200 })
+      if (failure === 'timeout') throw new DOMException('Aborted', 'AbortError')
+      return new Response(JSON.stringify(failure === 'empty' ? { ok: true, data: { text: ' ' } } : { ok: false, error: { code: 'BACKEND_UNAVAILABLE', message: failure === 'server-timeout' ? VOICE_TIMEOUT : failure === 'missing' ? 'Local English voice model is unavailable. Run tinstar voice install on the Tin Star server; text remains available.' : 'Transcriber unavailable.' } }), { status: failure === 'server' ? 503 : 200 })
     })
     mount(); await begin(); fireEvent.click(mic(), { detail: 0 })
-    expect(await screen.findByRole('alert')).toHaveTextContent(/text is preserved/i)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/text is preserved/i)
+    if (failure === 'server-timeout' || failure === 'timeout') expect(alert).toHaveTextContent('timed out')
+    expect(alert.textContent).not.toMatch(/tinstar voice install|Tin Star server|\.\./i)
     expect(transcript).not.toHaveBeenCalled(); expect(mic()).toBeEnabled()
   })
   it('recording loss closes the microphone and does not upload', async () => {

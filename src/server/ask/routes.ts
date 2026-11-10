@@ -15,6 +15,8 @@ import { LocalTranscriber, VoiceError } from './transcribe'
 import { AskConflict, AskNotFound, AskStore } from './store'
 import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
 import type { FirstmateUpdates } from '../reconciliation/firstmateUpdates'
+import { checkInSettings } from '../reconciliation/checkInWatchdog'
+import { VOICE_UNAVAILABLE, voiceFailureMessage } from '../../shared/voice'
 import type { CheckInWatchdog } from '../reconciliation/checkInWatchdog'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
@@ -46,7 +48,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -75,7 +77,7 @@ export class AskApi {
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
           if (conversation) return ok(res, await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId), { headers })
-          const data = await this.store.bridgeWork(syntheticId)
+          const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled)
           const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
           const work = !syntheticId && this.workUpdates ? await this.workUpdates.bridgeWork() : { pending: [], tracked: [] }
           return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
@@ -108,7 +110,14 @@ export class AskApi {
         const abort = () => controller.abort()
         req.once('aborted', abort)
         res.once('close', abort)
-        try { return ok(res, await this.voice.transcribe(req, controller.signal), { headers }) }
+        try {
+          // Reuse the durable Ask outbox and the watchdog's delivery setting.
+          // A storage failure must not replace the voice fallback with Ask errors.
+          await this.store.voiceModelAvailable(await this.voice.modelAvailable()).catch(error => console.warn('Voice model notice could not be saved', error))
+          return ok(res, await this.voice.transcribe(req, controller.signal), { headers })
+        } catch (error) {
+          return fail(res, error instanceof VoiceError ? error.code : 'BACKEND_UNAVAILABLE', error instanceof VoiceError ? voiceFailureMessage(error) : VOICE_UNAVAILABLE, { headers })
+        }
         finally { req.off('aborted', abort); res.off('close', abort) }
       }
       if (path === '/api/ask/requests' && req.method === 'GET') return ok(res, (await this.store.list(login)).map(publicAsk), { headers })
@@ -172,7 +181,7 @@ export class AskApi {
     } catch (error) { return this.error(res, error, headers) }
   }
   private error(res: ServerResponse, error: unknown, headers: Record<string, string>) {
-    if (error instanceof VoiceError) return fail(res, error.code, error.message, { headers })
+    if (error instanceof VoiceError) return fail(res, error.code, voiceFailureMessage(error), { headers })
     if (error instanceof AskConflict) return fail(res, 'CONFLICT', error.message, { headers })
     if (error instanceof AskNotFound) return fail(res, 'NOT_FOUND', error.message, { headers })
     if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof Error && ['Expected JSON', 'Request too large'].includes(error.message)) return fail(res, 'BAD_REQUEST', 'Invalid Ask payload', { headers })
