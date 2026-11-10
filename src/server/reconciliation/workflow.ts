@@ -303,7 +303,7 @@ export class WorkflowOperations {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined
     const repair = this.noteRepairs.get(key)
-    const saved: string[] = [...(repair?.result.saved_fields ?? [])], sections: string[] = [], sectionTexts: string[] = []
+    const saved: string[] = [...(repair?.result.saved_fields ?? [])]
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields: [...saved], ...(card ? { card } : {}) })
     try {
       card = await this.reader.card(input.card_id, true)
@@ -345,7 +345,8 @@ export class WorkflowOperations {
         for (const [name, text] of Object.entries(plan.sections)) {
           attempted = true
           await this.content.section(card.id, name, text, plan.sectionOriginal[name])
-          saved.push(name); sections.push(name); sectionTexts.push(sectionText(name, text))
+          saved.push(name)
+          await this.changed({ before: card, card, actor, operationId: input.operation_id, properties: {}, sections: [name], sectionTexts: [sectionText(name, text)] })
         }
         card = await this.reader.card(card.id, true)
         notePending = plan.note
@@ -355,7 +356,7 @@ export class WorkflowOperations {
       saved.push('note')
       this.noteRepairs.delete(key)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
-      await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending], sections, sectionTexts })
+      await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
       return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
       if (error instanceof ManagedSectionConflict) return { ...result(saved.length ? 'partially-saved' : 'not-saved', 'conflict', `${error.message}. Review current state and re-issue with a new operation_id.`), requires_new_operation_id: true }

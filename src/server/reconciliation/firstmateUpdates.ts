@@ -91,7 +91,11 @@ export class FirstmateUpdates {
     return this.change(state => {
       const old = state.cards[card.id]
       const baseline = this.baselines.get(card.id)
-      const contentSeen = own && old?.operations?.includes(own.operationId)
+      const operationSeen = own && old?.operations?.includes(own.operationId)
+      const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
+      const noteMatches = (text: string, note: string) => !!own && (note.split('\n').includes(receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
+      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.details?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
+        (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}
       if (own && old && baseline) {
@@ -104,13 +108,12 @@ export class FirstmateUpdates {
           }
         }
         const externalChanges = diff(baseline.properties, external)
-        const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
-        const ownNote = (text: string) => own.notes?.some(note => note.split('\n').includes(receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
+        const ownNote = (text: string) => own.notes?.some(note => noteMatches(text, note))
         const ownSection = (text: string) => own.sectionTexts?.some(section => text === contextText(section))
         const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block.text) &&
           (baseline.details ? !baseline.details.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
-        const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !contentSeen
+        const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !operationSeen
         const sections = (context?.blocks ?? []).filter(block => block.type !== 'comment' && !ownSection(block.text) &&
           (baseline.details ? baseline.details.find(previous => previous.id === block.id)?.text !== block.text : priorEdit)).map(block => block.id)
         if (context?.outcome === 'available') sections.push(...(baseline.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
@@ -136,7 +139,7 @@ export class FirstmateUpdates {
         const bounded = boundedItem(item)
         this.add(state, actor, bounded)
       }
-      const operations = [...(old?.operations ?? []), ...(!contentSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
+      const operations = [...(old?.operations ?? []), ...(!operationSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
       this.baselines.set(card.id, { properties: after, ...(context ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}) })
     })

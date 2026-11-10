@@ -298,3 +298,20 @@ it.each(['property', 'body', 'deleted-body', 'comment', 'identical-comment'] as 
   f.advance()
   expect((await f.feed.bridgeWork()).pending).toEqual([])
 })
+
+it('includes successive section confirmations and the final note in one consumer update', async () => {
+  const f = await fixture(); f.card.properties.Status!.value = 'In Progress'
+  await f.feed.sweep(true)
+  for (const name of ['brief', 'acceptance_criteria']) {
+    const text = `Tin Star section: ${name}\nConfirmed content`
+    f.context.blocks.push({ id: name, type: 'paragraph', text })
+    await f.feed.confirmed({ before: structuredClone(f.card), card: structuredClone(f.card), actor: 'Consumer', operationId: 'content-edit', properties: {}, sections: [name], sectionTexts: [text] })
+  }
+  const note = 'Final history note'
+  f.context.blocks.push({ id: 'note', type: 'comment', text: `${note}\n${receiptMarker('Consumer', 'content-edit')}` })
+  await f.feed.confirmed({ before: structuredClone(f.card), card: structuredClone(f.card), actor: 'Consumer', operationId: 'content-edit', properties: {}, notes: [note] })
+  f.advance()
+  const notices = (await f.feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  expect(payload(notices[0]!.body)).toMatchObject({ actor: 'Consumer', changes: [{ body_sections: ['brief', 'acceptance_criteria'], comments: [{ text: note, author: 'Consumer' }] }] })
+})

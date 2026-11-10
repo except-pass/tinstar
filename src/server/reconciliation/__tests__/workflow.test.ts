@@ -705,3 +705,45 @@ it.each(['property', 'body', 'comment'] as const)('preserves an unobserved human
   expect(await f.workflow.update({ kind: 'edit', card_id: id, operation_id: 'another-self-note', note: 'Self-only follow-up' }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
   expect(JSON.parse(await readFile(feed.path, 'utf8')).batches).toHaveLength(1)
 })
+
+
+it.each(['brief', 'acceptance_criteria'] as const)('observes confirmed %s before a failed note and repairs only the note without self-waking', async name => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  const root = await mkdtemp(join(tmpdir(), 'workflow-section-repair-')); roots.push(root)
+  const sources = f.sources(root)
+  const feed = new FirstmateUpdates({
+    firstmateWork: async () => ({ status: 'fresh', coverage: 'complete', data: { cards: [await f.reader.card(id, true)] } }) as any,
+    currentCard: cardId => f.reader.card(cardId, true), updateContext: cardId => sources.updateContext(cardId),
+  }, root, async () => ({ deliveryEnabled: true }))
+  const changes: Array<{ sections?: string[]; notes?: string[] }> = []
+  f.workflow.onChange = async change => { changes.push(change); await feed.confirmed(change) }
+  await feed.sweep(true)
+  const initial = await f.reader.card(id, true)
+  await feed.confirmed({ before: initial, card: initial, properties: {}, actor: 'Firstmate', operationId: 'baseline' })
+  const input = { kind: 'edit', card_id: id, operation_id: 'section-repair', content: { [name]: 'Confirmed self section' }, note: 'History for section' } as UpdateWorkInput
+  f.controls.failNote()
+  expect(await f.workflow.update(input, 'Firstmate')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['Last touched by', name] })
+  expect(changes.filter(change => change.sections?.includes(name))).toHaveLength(1)
+  vi.setSystemTime(new Date('2026-11-10T15:01:00Z'))
+  expect((await feed.bridgeWork()).pending).toEqual([])
+  const sectionWrites = () => f.requests.filter(request => request.method === 'PATCH' && request.url.includes('/blocks/')).length
+  const writes = sectionWrites()
+  f.controls.failNote(false)
+  expect(await f.workflow.update(input, 'Firstmate')).toMatchObject({ outcome: 'saved', saved_fields: ['Last touched by', name, 'note'] })
+  expect(sectionWrites()).toBe(writes)
+  expect(changes.filter(change => change.sections?.includes(name))).toHaveLength(1)
+  expect(changes.filter(change => change.notes?.length)).toHaveLength(1)
+  await feed.sweep(true)
+  vi.setSystemTime(new Date('2026-11-10T15:02:00Z'))
+  expect((await feed.bridgeWork()).pending).toEqual([])
+  f.raw.last_edited_time = new Date().toISOString()
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Unrelated human dependency' }]
+  await feed.sweep(true)
+  vi.setSystemTime(new Date('2026-11-10T15:03:00Z'))
+  const notices = (await feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  const batch = JSON.parse(notices[0]!.body.split('\n').slice(1).join('\n'))
+  expect(batch.actor).toBe('Notion actor unknown')
+  expect(batch.changes[0].properties['Waiting For'].after).toBe('Unrelated human dependency')
+})
