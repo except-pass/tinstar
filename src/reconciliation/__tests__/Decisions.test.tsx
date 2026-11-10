@@ -160,3 +160,19 @@ it('uses the shared Needs Will projection and shows advisory unknowns and honest
   expect(screen.getByText('Linked home snapshot expired')).toBeInTheDocument()
   expect(document.querySelectorAll('.decisions-row, .decisions-request')).toHaveLength(1)
 })
+
+it('answers a typed published choice through the shared workflow without dismissing the request', async () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, cardIds: [fixtureId(5)] }
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [{ cardId: fixtureId(5), id: 'published-mailbox', action: 'Decision', preserveAction: false, requestedFrom: 'Will', question: 'Choose replication', since: null, sourceId: 'proposal-note', answered: false, options: [{ id: 'r1', label: 'One copy' }, { id: 'r3', label: 'Three copies' }] }] }]
+  workspace.value.queue = queue
+  state.selection = { kind: 'card', id: fixtureId(5) }
+  const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', saved_fields: ['note'], decision_resolution: { state: 'pending', message: 'Decision recorded · First Mate not yet updated' } } })))
+  vi.stubGlobal('fetch', fetch)
+  render(<Decisions />)
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Three copies' })) })
+  const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body))
+  expect(body).toMatchObject({ operation: 'update', input: { kind: 'answer_decision', card_id: fixtureId(5), request_id: 'published-mailbox', option_id: 'r3', answer: 'Three copies', next: { owner: 'Firstmate', status: 'Queued' } } })
+  expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Decision recorded · First Mate not yet updated')
+  expect(document.querySelectorAll('.decisions-row')).toHaveLength(1)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})

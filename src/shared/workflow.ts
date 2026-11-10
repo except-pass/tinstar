@@ -40,14 +40,16 @@ const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Pr
 const checkpointSchema = z.object({ assessment: prose, evidence: prose, next_action: prose,
   next_check_in: z.string().min(1).max(100), confirmation: z.enum(['provisional', 'owner-confirmed']),
   request_id: z.string().uuid().optional(), blocker: prose.optional() }).strict()
+export const decisionOptionsSchema = z.array(z.object({ id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters'), label }).strict()).min(1).max(5)
+  .refine(options => new Set(options.map(option => option.id)).size === options.length, 'Option ids must be unique')
 export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
   z.object({ ...base, kind: z.literal('wait'), dependency: prose, unblocks_when: prose, follow_up_by: label, note: prose.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose,
+  z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(),
     action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose,
+  z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose, option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
     next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
   z.object({ ...base, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
   z.object({ ...base, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
@@ -75,7 +77,7 @@ export const workflowRules = {
   operations: {
     read: ['search_work: current assigned cards, independent of UI filters; history is explicit', 'get_work: exact card, properties/worker evidence and optional bounded body/comments', 'get_work_views: shared Needs Will/PR evidence and advisory execution warnings; no window required'],
     write: ['create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (edit,assign,checkpoint,wait,request_decision,answer_decision,complete,park); use tool schema for coupled fields'],
-    decisions: 'request_decision records request_id, question, requested_from and action. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
+    decisions: 'request_decision records request_id, question, requested_from and action; optional options [{id,label}] publishes up to five choices. answer_decision option_id must match the published choice and answer its exact label. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
     checkpoints: 'checkpoint requires assessment, evidence, next_action, next_check_in, confirmation (provisional or owner-confirmed); include the original watchdog request_id when responding, and blocker when applicable. Business days 8 AM–8 PM Eastern: at most four hours; otherwise no later than 10 AM next business morning. Date-only is 9 AM Eastern; Due Date is a separate delivery deadline.',
     repair: 'Retry identical operation_id and intent after an uncertain response. A definite result with requires_new_operation_id means refresh and explicitly re-issue. Only a missing history note can be repaired in-process while its confirmed card state is unchanged; no automatic replay.',
   },

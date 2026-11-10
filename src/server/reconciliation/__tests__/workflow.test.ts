@@ -1320,3 +1320,28 @@ it('reports a lost intent-write response as uncertain and recovers its durable a
   expect(f.comments.filter(note => note.rich_text.map((part: any) => part.plain_text ?? part.text?.content).join('').startsWith('Tin Star decision intent: '))).toHaveLength(1)
   expect(f.bridge.submit).toHaveBeenCalledTimes(1)
 })
+
+it('persists typed proposal choices and validates exact option identity before any answer write', async () => {
+  const f = decisionFixture(), options = [{ id: 'r1', label: 'R1' }, { id: 'r3', label: 'R3' }]
+  expect(await f.workflow.update({ ...f.request, options } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const notes = f.comments.length
+  for (const choice of [{ option_id: 'missing', answer: 'R3' }, { option_id: 'r1', answer: 'R3' }]) {
+    expect(await f.workflow.update({ ...f.answer, ...choice } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-option-conflict' })
+  }
+  expect(f.comments).toHaveLength(notes)
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  const input = { ...f.answer, option_id: 'r3' } as UpdateWorkInput
+  expect(await f.workflow.update(input, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(await f.workflow.update({ ...input, operation_id: 'another-option-attempt' }, 'MCP')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect(f.comments.some(note => JSON.stringify(note).includes('option_id'))).toBe(true)
+})
+
+it('rejects duplicate or excessive option ids while preserving free-text answers to proposals', async () => {
+  const f = decisionFixture()
+  for (const options of [[{ id: 'one', label: 'A' }, { id: 'one', label: 'B' }], Array.from({ length: 6 }, (_, index) => ({ id: String(index), label: String(index) }))]) {
+    expect(await f.workflow.update({ ...f.request, options } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'not-saved', code: 'invalid-input' })
+  }
+  expect(await f.workflow.update({ ...f.request, options: [{ id: 'r3', label: 'R3' }] } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  expect(await f.workflow.update(f.answer, 'Legacy MCP')).toMatchObject({ decision_resolution: { state: 'pending' } })
+})

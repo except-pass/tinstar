@@ -10,7 +10,7 @@ export interface NeedsWillItem extends QueueItem {
   prDetails?: string
   requestSince: string | null
   ageBasis: 'request-history' | 'unknown'
-  requests: ReturnType<typeof decisionRequests>
+  requests: Array<ReturnType<typeof decisionRequests>[number] & { cardId: string }>
   pulls: Array<PullSummary & { readiness: PullReadiness | null }>
 }
 const tags = (value: unknown) => (Array.isArray(value) ? value : [value]).filter((tag): tag is string => typeof tag === 'string' && !!tag.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(tag.trim()))
@@ -22,7 +22,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
   const cards = new Map(scene.cards.map(card => [card.id, card]))
   return queue.items.flatMap(item => {
     let real = !!item.decisionResolution && item.decisionResolution.state !== 'resolved' || item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action)
-    const since: string[] = [], requests: ReturnType<typeof decisionRequests> = []
+    const since: string[] = [], requests: Array<ReturnType<typeof decisionRequests>[number] & { cardId: string }> = []
     for (const id of item.cardIds) {
       const card = cards.get(id)
       if (!card || card.source.archived || card.source.in_trash || ['Done', 'Archived'].includes(String(card.source.properties.Status?.value))) continue
@@ -30,7 +30,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id), history = decisionRequests(context?.blocks ?? [])
       const open = history.filter(request => !request.answered && request.requestedFrom?.trim().toLowerCase() === 'will' && actionTags.includes(request.action))
-      requests.push(...open)
+      requests.push(...open.map(request => ({ ...request, cardId: id })))
       if (/\bWill\b/.test(wait) || actionTags.length) real = true
       for (const request of open) if (request.since && Number.isFinite(Date.parse(request.since))) since.push(request.since)
     }

@@ -1,3 +1,4 @@
+import { decisionOptionsSchema } from './workflow'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
 export interface RequestNote { id: string; text: string; createdAt?: string | null; created_time?: string }
@@ -12,8 +13,9 @@ export function decisionRequests(notes: RequestNote[]) {
     try {
       const row = JSON.parse(line.slice('Tin Star request: '.length))
       if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
+      const options = decisionOptionsSchema.safeParse(row.options)
       const lines = note.text.split('\n')
-      return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true,
+      return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true, options: options.success ? options.data : undefined,
         requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) }]

@@ -478,3 +478,5 @@ comment or paragraph ID, `source_request` set to the exact originating request,
 This binds and reconciles the old approval without creating another Will request
 or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` when
 those asks were already removed; never clear an unrelated remaining action.
+
+Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.
