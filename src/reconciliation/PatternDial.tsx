@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { dialNames, dialPatterns, freshObservation, patternReminders, sceneWorkHealth, type DialPattern } from '../shared/workHealth'
+import { dialNames, dialPatterns, freshObservation, patternReminders, sceneWorkHealth, patternNames, patternDefinitions, type DialPattern, type Pattern } from '../shared/workHealth'
 import { emptySearch } from '../shared/smartSearch'
 import { isPlanned, type FloorScene, type PresentationAction, type PresentationState } from './presentation'
 import { overviewGroups } from './overviewModel'
+import type { PatternCoverage } from './overviewEvidence'
 import './smartSearch.css'
 
 const HOLD_MS = 500
@@ -20,13 +21,13 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
   const health = sceneWorkHealth(scene, now).filter(item => ids.has(item.cardId))
   const sourceUnknown = !!scene.searchReadFailed || !freshObservation(scene.coverage.intentions, now)
   const workersUnknown = !scene.coverage.homes.length || scene.coverage.homes.some(home => !freshObservation(home.observation, now))
-  return Object.fromEntries(dialPatterns.map(pattern => {
+  return Object.fromEntries(([...dialPatterns, 'idle'] as const).map(pattern => {
     const unavailable = pattern === 'all' ? [] : health.filter(item => item.patterns[pattern].outcome === 'unavailable')
     const needsHomes = !!state.donutFilter?.workers.length || !!state.search?.query.trim() ||
       !!state.search?.facets.some(facet => facet.field === 'machine' || facet.field === 'manager' || facet.field === 'entity')
     const reasons = [...new Set([
       ...(sourceUnknown ? [scene.searchReadFailed ? 'Source read failed; showing last known work' : 'Notion source is unavailable, stale or incomplete'] : []),
-      ...unavailable.flatMap(item => item.patterns[pattern as Exclude<DialPattern, 'all'>].reason.split('; ')),
+      ...unavailable.flatMap(item => item.patterns[pattern as Pattern].reason.split('; ')),
       ...(needsHomes ? scene.coverage.homes.filter(home => !freshObservation(home.observation, now)).map(home => `Home snapshot stale or unreadable: ${home.source.home}`) : []),
       ...(needsHomes && !scene.coverage.homes.length ? ['Home snapshot unavailable: no configured home'] : []),
     ])]
@@ -34,13 +35,17 @@ export function patternPreviews(scene: FloorScene, state: PresentationState, now
       count: pattern === 'all' ? ids.size : health.filter(item => item.patterns[pattern].outcome === 'match').length,
       unknown: sourceUnknown || unavailable.length > 0 || (needsHomes && workersUnknown), reasons,
     }]
-  })) as Record<DialPattern, { count: number; unknown: boolean; reasons: string[] }>
+  })) as Record<DialPattern | 'idle', { count: number; unknown: boolean; reasons: string[] }>
 }
 
-export function PatternDial({ scene, state, send, now }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; now: number }) {
-  const selected: DialPattern = dialPatterns.find(pattern => pattern === state.search?.patterns[0]) ?? 'all'
+export function PatternDial({ scene, state, send, now, coverage, onInspectCoverage }: { coverage?: PatternCoverage | null; onInspectCoverage?: () => void; scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; now: number }) {
+  const selected: DialPattern | Pattern = state.search?.patterns[0] ?? 'all'
   const counts = useMemo(() => patternPreviews(scene, state, now), [scene, state, now])
-  const index = dialPatterns.indexOf(selected), previous = dialPatterns[(index + dialPatterns.length - 1) % dialPatterns.length]!, next = dialPatterns[(index + 1) % dialPatterns.length]!
+  const selectedName = selected === 'idle' ? patternNames.idle : dialNames[selected]
+  const selectedReminder = selected === 'idle' ? patternDefinitions.idle.rule : patternReminders[selected]
+  const scopedCoverage = selected !== 'all' ? coverage : null
+  const coverageDescription = scopedCoverage ? `Selected pattern could not evaluate ${scopedCoverage.unavailableCardIds.length} of ${scopedCoverage.total} visible cards; ${scopedCoverage.evaluated} evaluated. ${scopedCoverage.reasons.join('; ')}.` : ''
+  const index = Math.max(0, dialPatterns.indexOf(selected as DialPattern)), previous = dialPatterns[(index + dialPatterns.length - 1) % dialPatterns.length]!, next = dialPatterns[(index + 1) % dialPatterns.length]!
   const host = useRef<HTMLDivElement>(null), center = useRef<HTMLButtonElement>(null), tip = useRef<HTMLDivElement>(null), menuEl = useRef<HTMLDivElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout>>(), holdTimer = useRef<ReturnType<typeof setTimeout>>(), wheelAt = useRef(-Infinity), wheelAcc = useRef(0), wheelHeld = useRef(false), wheelDelta = useRef(0)
   const touch = useRef<{ x: number; y: number } | null>(null), holdOrigin = useRef<{ x: number; y: number } | null>(null)
@@ -56,8 +61,8 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
   const choose = (pattern: DialPattern, restore = false) => { hide(); closeMenu(restore); send({ type: 'set-pattern', pattern: pattern === 'all' ? null : pattern }) }
   const step = (direction: number) => choose(dialPatterns[(index + direction + dialPatterns.length) % dialPatterns.length]!)
   const openMenu = () => { hide(); setActive(index); setMenu(true) }
-  const count = (pattern: DialPattern) => counts[pattern].unknown ? counts[pattern].count ? `${counts[pattern].count}+` : '?' : String(counts[pattern].count)
-  const label = (pattern: DialPattern) => `${dialNames[pattern]}, ${count(pattern)} matching tasks${counts[pattern].unknown ? ', incomplete evidence' : ''}`
+  const count = (pattern: DialPattern | Pattern) => counts[pattern].unknown ? counts[pattern].count ? `${counts[pattern].count}+` : '?' : String(counts[pattern].count)
+  const label = (pattern: DialPattern | Pattern) => `${pattern === 'idle' ? patternNames.idle : dialNames[pattern]}, ${count(pattern)} matching tasks${counts[pattern].unknown ? ', incomplete evidence' : ''}`
   const reminder = (pattern: DialPattern) => `${patternReminders[pattern]}${counts[pattern].unknown ? ` ${counts[pattern].reasons.join('; ')}. ? means unknown; + means confirmed matches with incomplete coverage.` : ''}`
   useEffect(() => () => { clearTimeout(timer.current); clearTimeout(holdTimer.current) }, [])
   useEffect(() => {
@@ -101,12 +106,12 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
       if (event.key !== 'Escape' || document.querySelector('.ov-search-panel')) return
       event.preventDefault(); event.stopPropagation()
       if (menu) { closeMenu(true); return }
-      hide()
+      hide(); if (scopedCoverage && pinned) focusDial()
     }
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape, true)
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape, true) }
-  }, [shown, menu])
+  }, [shown, menu, pinned, !!scopedCoverage])
   useLayoutEffect(() => {
     if (!shown) return
     const place = () => {
@@ -115,7 +120,10 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
     }
     place(); window.addEventListener('resize', place); window.addEventListener('scroll', place, true)
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
-  }, [shown, selected])
+  }, [shown, selected, coverageDescription])
+  useLayoutEffect(() => {
+    if (shown && pinned && scopedCoverage) tip.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [shown, pinned])
   useLayoutEffect(() => {
     if (!menu) return
     const place = () => {
@@ -138,7 +146,7 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
     if (event.key === 'Enter' || (event.altKey && event.key === 'ArrowDown')) { event.preventDefault(); event.stopPropagation(); openMenu(); return }
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); step(event.key === 'ArrowRight' ? 1 : -1) }
   }} onPointerDown={event => {
-    if (menuEl.current?.contains(event.target as Node)) return
+    if (menuEl.current?.contains(event.target as Node) || tip.current?.contains(event.target as Node)) return
     swiped.current = false
     if (menuRef.current) { setMenu(false); return }
     const primary = event.button === 0 || event.button == null
@@ -165,10 +173,10 @@ export function PatternDial({ scene, state, send, now }: { scene: FloorScene; st
     if (swiped.current || held.current) { swiped.current = false; held.current = false; event.preventDefault(); event.stopPropagation() }
   }}>
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(previous)}`} onClick={() => choose(previous)}><span>{dialNames[previous]}</span><small>{count(previous)}</small></button>
-    <button ref={center} type="button" className="ov-pattern-selected" aria-label={`${label(selected)}. Show explanation`} aria-describedby="ov-pattern-description" aria-expanded={menu} aria-haspopup="listbox" aria-controls="ov-pattern-list" onMouseEnter={showLater} onMouseLeave={() => { stopTimer(); if (!pinned) setShown(false) }} onFocus={() => { if (!restoring.current) showLater() }} onBlur={() => { stopTimer(); if (!pinned) setShown(false) }} onClick={() => { stopTimer(); setPinned(!pinned); setShown(!pinned) }}><strong>{dialNames[selected]}</strong><small>{count(selected)}</small><span aria-hidden="true">ⓘ</span></button>
+    <button ref={center} type="button" className="ov-pattern-selected" aria-label={`${label(selected)}. ${coverageDescription} Show explanation`} aria-describedby="ov-pattern-description" aria-expanded={menu || shown && pinned} aria-haspopup="listbox" aria-controls="ov-pattern-list" onMouseEnter={showLater} onMouseLeave={() => { stopTimer(); if (!pinned) setShown(false) }} onFocus={() => { if (!restoring.current) showLater() }} onBlur={() => { stopTimer(); if (!pinned) setShown(false) }} onClick={() => { stopTimer(); setPinned(!pinned); setShown(!pinned) }}><span className="ov-pattern-value"><span><strong>{selectedName}</strong> <small>{count(selected)}</small></span>{scopedCoverage && <small className="ov-pattern-coverage">{scopedCoverage.label}</small>}</span><span aria-hidden="true">ⓘ</span></button>
     <button type="button" className="ov-pattern-neighbor" aria-label={`Select ${label(next)}`} onClick={() => choose(next)}><span>{dialNames[next]}</span><small>{count(next)}</small></button>
-    <span id="ov-pattern-description" className="ov-sr-only">{patternReminders[selected]}{counts[selected].unknown ? ` ${counts[selected].reasons.join('; ')}. ? means unknown, + means confirmed matches with incomplete coverage.` : ''} Swipe sideways, scroll, or use Left and Right arrow keys to change pattern. Enter or Alt+Down lists every pattern.</span>
-    {shown && !menu && createPortal(<div ref={tip} role="tooltip" className="ov-pattern-tooltip" style={position}><strong>{dialNames[selected]} · {count(selected)} matching tasks</strong><p>{patternReminders[selected]}</p>{counts[selected].unknown && <small>{counts[selected].reasons.join("; ")}. ? means unknown; + means confirmed matches with incomplete coverage.</small>}</div>, document.body)}
+    <span id="ov-pattern-description" className="ov-sr-only">{selectedReminder} {coverageDescription}{counts[selected].unknown ? ` ${counts[selected].reasons.join('; ')}. ? means unknown, + means confirmed matches with incomplete coverage.` : ''} Swipe sideways, scroll, or use Left and Right arrow keys to change pattern. Enter or Alt+Down lists every pattern.</span>
+    {shown && !menu && createPortal(<div ref={tip} role={scopedCoverage && pinned ? 'dialog' : 'tooltip'} aria-label={scopedCoverage && pinned ? `${selectedName} pattern coverage` : undefined} className={`ov-pattern-tooltip${scopedCoverage && pinned ? ' ov-pattern-popover' : ''}`} style={position} onKeyDown={event => event.stopPropagation()}><strong>{selectedName} · {count(selected)} matching tasks</strong><p>{selectedReminder}</p>{scopedCoverage ? <><p>{coverageDescription}</p><p>Unknown is missing pattern evidence, not a confirmed problem or request for you.</p>{pinned && <button type="button" onClick={() => { hide(); onInspectCoverage?.() }}>Inspect {scopedCoverage.unavailableCardIds.length} {scopedCoverage.unavailableCardIds.length === 1 ? 'card' : 'cards'} with unknown pattern</button>}</> : counts[selected].unknown && <small>{counts[selected].reasons.join("; ")}. ? means unknown; + means confirmed matches with incomplete coverage.</small>}</div>, document.body)}
     {menu && createPortal(<div ref={menuEl} id="ov-pattern-list" role="listbox" aria-label="Operational patterns" aria-activedescendant={`ov-pattern-option-${dialPatterns[active]}`} tabIndex={-1} className="ov-pattern-menu" style={menuPos} onKeyDown={onMenuKey}>
       {dialPatterns.map(pattern => <button type="button" tabIndex={-1} key={pattern} id={`ov-pattern-option-${pattern}`} role="option" aria-selected={pattern === selected} aria-label={label(pattern)} title={reminder(pattern)} data-active={pattern === dialPatterns[active] ? 'true' : undefined} onMouseEnter={() => setActive(dialPatterns.indexOf(pattern))} onClick={() => choose(pattern, true)}><span>{dialNames[pattern]}</span><small>{count(pattern)}</small></button>)}
     </div>, document.body)}

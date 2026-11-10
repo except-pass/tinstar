@@ -264,8 +264,8 @@ session. All also clears the pattern; other search/facet, donut and base-scope
 conditions remain. Pattern selection uses the existing search-filter reducer and persists
 with the ordinary view preferences. Non-matches are hidden. Matches retain only
 their direct linked counterparts as secondary context; uncertain cards stay
-visible. One line above the list counts unchecked cards and names the missing
-evidence. Cards show known worker facts in their existing metadata, such as
+visible. Scoped coverage lives inside the selected pattern dial (details below).
+Cards show known worker facts in their existing metadata, such as
 1 worker running or 1 worker, no update since 2026-11-08 12:22 UTC. Headers,
 worker chips, relationships and pattern counts share the same observed, unfinished
 worker membership; finished tasks and declared links with no observed execution
@@ -291,6 +291,18 @@ neighbors retain touch targets.
 An unrelated stale home does not make conclusive visible predicates unknown.
 Home coverage still matters when worker filters, text search or machine/manager/entity
 facets can hide cards. The reminder names unavailable evidence classes and home paths.
+
+When the selected pattern cannot evaluate visible cards, its dial shows
+`Pattern unknown: N`. Click the dial for the exact evaluated/unevaluated visible
+card counts and evidence reasons. **Inspect N cards with unknown pattern** focuses
+those unique cards on the existing floor; **Clear search focus** or Escape restores
+the previous view. Each card's Inspector → Evidence & diagnostics retains the
+selected verdict and source evidence. Unknown pattern coverage is separate from
+confirmed findings and does not establish a broken worker link or a request for you.
+No pattern, or no unavailable results, adds no coverage indicator or floor row.
+A current tracked external-worker report rules out Unstaffed/Stalled; a stale report
+keeps execution unknown. External reports retain their consumer-reported provenance
+and do not establish independently verified runtime evidence for Active.
 
 Search and patterns are read-only and never send Ask requests or change Notion,
 assignment or execution state.

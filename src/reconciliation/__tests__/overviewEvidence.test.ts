@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import { workHealth, type PatternResult } from '../../shared/workHealth'
+import { workHealth, combinedPatternResult, sceneWorkHealth, type PatternResult } from '../../shared/workHealth'
 import { activeWorker, workerFact } from '../../shared/workerEvidence'
 import { organizedGroups } from '../../shared/floorOrganization'
 import { initialPresentation } from '../presentation'
+import { readWorkerLinks } from '../../server/reconciliation/workerLinks'
 import type { WorkerLinkDetector } from '../../server/reconciliation/scene'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
@@ -291,17 +292,54 @@ describe('card worker facts', () => {
 })
 
 const result = (reason: string, outcome: PatternResult['outcome'] = 'unavailable'): PatternResult => ({ outcome, reason, evidence: [] })
-describe('one pattern explanation', () => {
-  it('counts unchecked cards, groups plain reasons, and omits evaluable cards', () => {
-    expect(patternCheckSummary([
-      result('Running state unknown for /home/a: task-a (pane)'),
-      result('Running state unknown for /home/b: task-b (pane); Runnable state unknown for /home/b: task-b'),
-      result('Meaningful progress time is not published; heartbeat/check-in age is not progress'),
-      result('match', 'match'), result('no-match', 'no-match'), undefined,
-    ])).toBe('3 cards not checked: workers have no current update; progress time unknown')
+describe('selected pattern coverage', () => {
+  it('counts unique visible cards, groups reasons and keeps evaluated results separate', () => {
+    const results = new Map([
+      ['a', result('Running state unknown for /home/a: task-a (pane)')],
+      ['b', result('Running state unknown for /home/b: task-b (pane); Runnable state unknown for /home/b: task-b')],
+      ['c', result('Meaningful progress time is not published; heartbeat/check-in age is not progress')],
+      ['d', result('match', 'match')], ['e', result('no-match', 'no-match')],
+      ['outside', result('Notion source unavailable')],
+    ])
+    expect(patternCheckSummary(['a', 'a', 'b', 'c', 'd', 'e', 'not-evaluated'], results)).toEqual({
+      unavailableCardIds: ['a', 'b', 'c'], total: 5, evaluated: 2, label: 'Pattern unknown: 3',
+      reasons: ['worker state unknown', 'progress time unknown'],
+    })
+    expect(results.get('d')!.outcome).toBe('match')
+    expect(results.get('e')!.outcome).toBe('no-match')
+    expect(results.get('a')!.outcome).toBe('unavailable')
   })
-  it('omits the explanation when all cards are evaluable', () => {
-    expect(patternCheckSummary([])).toBeNull()
-    expect(patternCheckSummary([result('match', 'match'), result('no-match', 'no-match')])).toBeNull()
+  it('omits coverage when no visible cards are unavailable', () => {
+    const results = new Map([['a', result('match', 'match')], ['b', result('no-match', 'no-match')]])
+    expect(patternCheckSummary([], results)).toBeNull()
+    expect(patternCheckSummary(['a', 'b'], results)).toBeNull()
   })
+  it('describes 127 unavailable cards without implying broken links or requests', () => {
+    const results = new Map(Array.from({ length: 127 }, (_, id) => [String(id), result('Worker decision requests or assignment coverage are incomplete')]))
+    expect(patternCheckSummary(results.keys(), results)).toMatchObject({
+      total: 127, evaluated: 0, label: 'Pattern unknown: 127', reasons: ['worker decision evidence unavailable'],
+    })
+  })
+  it.each(['blank', 'empty', 'verified', 'conflict', 'missing-home', 'stale-home', 'partial-home'] as const)(
+    'preserves %s evidence and keeps link findings out of selected pattern coverage', condition => {
+      const sources = fixtureSources({ now })
+      const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(1))!
+      if (condition === 'blank') {
+        card.properties['First Mate tasks']!.value = ''
+        card.properties['First Mate tasks']!.workerLinks = readWorkerLinks({ type: 'rich_text', rich_text: [] })
+      }
+      if (condition === 'empty') card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] })
+      if (condition === 'conflict') card.properties['First Mate tasks']!.value = '{'
+      if (condition === 'missing-home') sources.fleet = []
+      if (condition === 'stale-home') sources.fleet[1]!.observation.status = 'stale'
+      if (condition === 'partial-home') sources.fleet[0]!.observation.coverage = 'partial'
+      const scene = new SceneReconciler().reconcile(sources, now)
+      // Stale progress is unavailable in the existing producer for every card;
+      // even a positive conflict is independent of this pattern verdict.
+      const results = new Map(sceneWorkHealth(scene, now).map(health => [health.cardId, combinedPatternResult(health, ['stale'])]))
+      expect(results.get(card.id)!.outcome).toBe('unavailable')
+      expect(patternCheckSummary([card.id, card.id], results)).toMatchObject({ unavailableCardIds: [card.id], total: 1, evaluated: 0 })
+      expect(workerLinkSourceHealth(scene, [card.id], now).conflicting).toBe(condition === 'conflict' ? 1 : 0)
+    },
+  )
 })
