@@ -181,7 +181,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     next.queueOpen = false; next.queueCardId = null
     if (action.type !== 'flash') { next.donutFilter = emptyDonutFilter(); next.search = emptySearch(); next.collapsed = [] }
     if (action.type !== 'flash' && target && (target.kind === 'card' || target.kind === 'execution')) { next.searchReveal = target; next.searchFocus = action.type === 'reveal-search' ? targets : [target]; next.selection = target }
-    if (action.type !== 'flash' && target) next.flash = { ids: [semanticId(target)], until: now + 4000 }
+    if (action.type !== 'flash' && target) next.flash = { ids: (action.type === 'reveal-search' ? targets : [target]).map(semanticId), until: now + 4000 }
   }
   // Regrouping/focus reveal the selected item without changing its identity.
   const revealTargets = action.type === 'navigate-card' ? [{ kind: 'card' as const, id: action.cardId }] : action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []
