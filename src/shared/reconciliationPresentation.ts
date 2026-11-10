@@ -35,7 +35,7 @@ export interface PresentationState {
   collapsed: string[]
   exceptionsOnly: boolean
   roadmapExpanded: boolean
-  flash: { ids: string[]; until: number } | null
+  flash: { ids: string[]; until: number; revealTargets?: boolean } | null
   assistantChangedView: boolean
   queueOpen?: boolean
   queueCardId?: string | null
@@ -155,7 +155,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'focus': next.selection = action.target; next.queueOpen = false; next.queueCardId = null; next.exceptionsOnly = false; break
     case 'set-exceptions': next.exceptionsOnly = action.enabled; break
     case 'set-roadmap': next.roadmapExpanded = action.expanded; break
-    case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)) }; break
+    case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)), ...(action.origin === 'assistant' ? { revealTargets: true } : {}) }; break
     case 'clear-transient': next.flash = null; next.assistantChangedView = false; break
     case 'close-queue': next.queueOpen = false; next.queueCardId = null; break
     case 'open-queue':
@@ -173,13 +173,13 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     }
     case 'clear-selection': next.selection = null; break
   }
-  if (action.origin === 'assistant' && ['navigate-card', 'reveal-search', 'flash', 'focus'].includes(action.type)) {
+  if (action.origin === 'assistant' && ['navigate-card', 'reveal-search', 'flash'].includes(action.type)) {
     // A queued filter/overlay hid the owner's ECR decision despite state acks.
     // Explicit assistant targeting must reveal its destination in this tab.
     const target = action.type === 'navigate-card' ? { kind: 'card' as const, id: action.cardId } : targets[0]
     next.queueOpen = false; next.queueCardId = null
-    next.donutFilter = emptyDonutFilter(); next.search = emptySearch(); next.collapsed = []
-    if (target && (target.kind === 'card' || target.kind === 'execution')) { next.searchReveal = target; next.searchFocus = action.type === 'flash' ? action.targets : action.type === 'reveal-search' ? action.targets ?? [target] : [target]; if (action.type !== 'flash') next.selection = target }
+    if (action.type !== 'flash') { next.donutFilter = emptyDonutFilter(); next.search = emptySearch(); next.collapsed = [] }
+    if (action.type !== 'flash' && target && (target.kind === 'card' || target.kind === 'execution')) { next.searchReveal = target; next.searchFocus = action.type === 'reveal-search' ? action.targets ?? [target] : [target]; next.selection = target }
     if (action.type !== 'flash' && target) next.flash = { ids: [semanticId(target)], until: now + 4000 }
   }
   // Regrouping/focus reveal the selected item without changing its identity.

@@ -143,7 +143,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
           // Replay the visual effect, not the semantic command/revision. User
           // input cancels this pending delivery before it can steal focus.
           waiting.needsReplay = false
-          const next = { ...current.current, flash: { ids: waiting.targets, until: Date.now() + 4000 } }
+          const next = { ...current.current, flash: { ids: waiting.targets, until: Date.now() + 4000, revealTargets: true } }
           current.current = next; setState(next)
           // Wait for this replay to commit before claiming visual delivery.
           return

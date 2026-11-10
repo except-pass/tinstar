@@ -54,7 +54,7 @@ export const stateSchema = z.object({
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),
   revision: z.number().int().nonnegative(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), selection: targetSchema.nullable(),
   collapsed: z.array(z.string().max(2048)).max(4096), exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(),
-  flash: z.object({ ids: z.array(z.string().max(2048)).max(4096), until: z.number() }).nullable(), assistantChangedView: z.boolean(),
+  flash: z.object({ ids: z.array(z.string().max(2048)).max(4096), until: z.number(), revealTargets: z.boolean().optional() }).nullable(), assistantChangedView: z.boolean(),
   queueOpen: z.boolean().optional(), queueCardId: z.string().nullable().optional(), queueItemId: z.string().max(4096).nullable().optional(),
 }).strict()
 export type CommandOutcome = 'queued' | 'applied' | 'expired' | 'disconnected' | 'unknown-id' | 'unauthorized' | 'stale-revision' | 'conflict' | 'queue-source-unavailable' | 'ambiguous-session'

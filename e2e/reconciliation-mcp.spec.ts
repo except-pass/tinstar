@@ -208,14 +208,17 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   await present(page, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }, 'hide-desk-task')
   await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`)).toHaveCount(0)
   const navigation = await present(page, { type: 'navigate-card', cardId: linkedCardId }, 'navigate-desk-task')
-  expect(navigation.ack.state.selection).toBeNull()
+  expect(navigation.ack.state.selection).toEqual({ kind: 'card', id: linkedCardId })
   expect(navigation.ack.state.navigation.cardId).toBe(linkedCardId)
   expect(navigation.ack.state.queueItemId).toBe(queue.items[1]!.id)
   expect(navigation.ack.state.statusFilter).toEqual({ preset: 'custom', statuses: ['Waiting For'] })
-  await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`).first()).toBeFocused()
-  await expect(page.locator('.ov-line.desk-target')).toHaveCount(2)
-  await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('Selected decision')).toHaveCount(0)
+  await expect(page).toHaveURL(/view=decisions/)
+  await expect(page.locator(`.decisions-row[data-card-id="${linkedCardId}"]`).first()).toHaveClass(/selected/)
+  expect(await windowId(page)).toBe(first)
+  // Return manually before exercising the Overview organizer race.
+  await page.getByRole('button', { name: 'Overview', exact: true }).click()
+  await expect(page.locator('.ov')).toBeVisible()
+  await expect.poll(async () => (await call('get_scene', { scene_id: first })).state.revision).toBe(Number(await page.locator('.ov').getAttribute('data-revision')))
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
   // Hold command delivery; a direct click occurs after enqueue and before receipt.
