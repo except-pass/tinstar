@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
@@ -12,6 +13,12 @@ const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ 
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
+const updateReceiptPrefix = 'Tin Star update plan: '
+const updateReceiptSchema = z.object({
+  signature: z.string(), desired: z.record(z.unknown()), properties: z.record(z.unknown()), original: z.record(z.unknown()),
+  sections: z.record(z.string()), sectionOriginal: z.record(z.string()), note: z.string(), at: z.string(),
+})
+
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
 class WorkflowError extends Error { constructor(readonly code: string, message: string) { super(message) } }
 export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; notes?: string[]; sections?: string[] }
@@ -19,14 +26,13 @@ export class WorkflowOperations {
   onChange?: (change: WorkflowChange) => Promise<void>
   private content: WorkflowContent
   private creations: CreationReceipts
-  private pending = new Map<string, { signature: string; desired: Record<string, unknown>; properties: Record<string, unknown>; original: Record<string, unknown>; sections: Record<string, string>; sectionOriginal: Record<string, string>; note: string; at: string }>()
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
   constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string) { this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
   private serialize(cardId: string, input: { operation_id: string }, actor: string, perform: () => Promise<StartWorkResult>) {
     const failed = (code: string, message: string): StartWorkResult => ({ outcome: 'not-saved', code, message, operation_id: input.operation_id, saved_fields: [] })
     if (!actor.trim()) return Promise.resolve(failed('unauthenticated', 'Authenticated caller identity required'))
-    for (const [key, receipt] of this.receipts) if (receipt.until < Date.now()) { this.receipts.delete(key); this.pending.delete(key) }
+    for (const [key, receipt] of this.receipts) if (receipt.until < Date.now()) { this.receipts.delete(key) }
     const key = JSON.stringify([actor, cardId, input.operation_id]), signature = JSON.stringify(input)
     const previous = this.receipts.get(key)
     if (previous && previous.input !== signature) return Promise.resolve(failed('operation-conflict', 'operation_id was used with different input'))
@@ -35,7 +41,7 @@ export class WorkflowOperations {
     const result = prior.catch(() => {}).then(perform)
     this.locks.set(cardId, result)
     void result.finally(() => { if (this.locks.get(cardId) === result) this.locks.delete(cardId) }).catch(() => {})
-    if (this.receipts.size >= 1000) { const oldest = this.receipts.keys().next().value!; this.receipts.delete(oldest); this.pending.delete(oldest) }
+    if (this.receipts.size >= 1000) { const oldest = this.receipts.keys().next().value!; this.receipts.delete(oldest) }
     this.receipts.set(key, { input: signature, until: Date.now() + 600_000, result })
     void result.then(value => { if (value.outcome !== 'saved') this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
     return result
@@ -280,7 +286,7 @@ export class WorkflowOperations {
       const blocks = await this.content.sections(card.id)
       for (const name of Object.keys(sections)) sectionOriginal[name] = blocks.find(block => block.text.split('\n')[0] === sectionMarker(name))?.text ?? ''
     }
-    const original = Object.fromEntries([...reads].map(name => [name, card.properties[name]?.value ?? null]))
+    const original = { ...input.expected, ...Object.fromEntries([...reads].map(name => [name, card.properties[name]?.value ?? null])) }
     return { signature: JSON.stringify(input), desired, properties, original, sections, sectionOriginal, note, at }
   }
   private matches(card: WorkCard, name: string, value: unknown) {
@@ -294,7 +300,7 @@ export class WorkflowOperations {
     return same(actual, value)
   }
   private async performUpdate(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
-    const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
+    const marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields: saved, ...(card ? { card } : {}) })
@@ -302,20 +308,29 @@ export class WorkflowOperations {
       card = await this.reader.card(input.card_id, true)
       const before = card, notes = await this.content.notes(card.id)
       const receipt = notes.find(note => note.text.split('\n').includes(marker))
-      if (receipt) { this.reader.confirm(card); await this.changed({ before: card, card, actor, operationId: input.operation_id, notes: [receipt.text.split('\n').filter(line => line !== marker).join('\n')] }); return result('saved', 'already-saved', 'This operation is already recorded; current card returned') }
-      let plan = this.pending.get(key)
-      if (plan && plan.signature !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input during a partially saved operation')
-      if (!plan) {
+      let plan: z.infer<typeof updateReceiptSchema>
+      if (receipt) {
+        saved.push('note')
+        const encoded = receipt.text.split('\n').filter(line => line.startsWith(updateReceiptPrefix)).at(-1)
+        if (!encoded) throw new WorkflowError('receipt-unreadable', 'This operation note has no recoverable update plan; reconcile the card before another write')
+        const parsed = updateReceiptSchema.safeParse(JSON.parse(encoded.slice(updateReceiptPrefix.length)))
+        if (!parsed.success) throw new WorkflowError('receipt-unreadable', 'This operation note has an invalid update plan; no properties submitted')
+        plan = parsed.data
+        if (plan.signature !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input')
+      } else {
         if (input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh the card and retry')
         plan = await this.updatePlan(card, input, actor, notes)
-        this.pending.set(key, plan)
+        attempted = true
+        await this.content.note(card.id, `${plan.note}\n${updateReceiptPrefix}${JSON.stringify(plan)}`, marker)
+        saved.push('note')
       }
       const current = await this.reader.card(card.id, true)
-      for (const [name, value] of Object.entries(plan.original)) {
+      const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
+      const needsProperties = Object.keys(missing).some(name => name !== 'Last touched by')
+      for (const [name, value] of Object.entries(needsProperties ? plan.original : {})) {
         if (name === 'Last touched by') continue
         if (!this.matches(current, name, value) && !(name in plan.desired && this.matches(current, name, plan.desired[name]))) throw new WorkflowError('conflict', `${name} changed during this operation; unrelated work was preserved`)
       }
-      const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
       card = current
       saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
       if (Object.keys(missing).length) {
@@ -330,27 +345,23 @@ export class WorkflowOperations {
         card = await this.reader.card(card.id, true)
       }
       this.reader.confirm(card)
-      saved.splice(0, saved.length, ...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
+      saved.splice(0, saved.length, 'note', ...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan!.desired[name])))
       await this.changed({ before, card, actor, operationId: input.operation_id })
-      if (saved.length !== Object.keys(plan.desired).length) return result('partially-saved', 'readback-mismatch', 'Only listed properties are confirmed; retry the same operation to repair missing steps')
+      if (saved.length !== Object.keys(plan.desired).length + 1) return result('partially-saved', 'readback-mismatch', 'Only listed properties are confirmed; retry the same operation to repair missing steps')
       for (const [name, text] of Object.entries(plan.sections)) {
         attempted = true
         await this.content.section(card.id, name, text, plan.sectionOriginal[name])
         saved.push(name)
       }
-      attempted = true
-      await this.content.note(card.id, plan.note, marker)
-      saved.push('note')
       // Notes/body edits may update last_edited_time. Publish exact readback too.
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
       await this.changed({ before: card, card, actor, operationId: input.operation_id, notes: [plan.note], sections: Object.keys(plan.sections) })
-      this.pending.delete(key)
-      return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
+      return result('saved', receipt && !Object.keys(missing).length ? 'already-saved' : 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
       if (error instanceof NotionWriteError && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
-      if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
+      if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, `${saved.includes('note') ? 'Note saved; remaining workflow steps pending. ' : ''}${error.message}`)
       return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'save-unconfirmed' : 'source-unavailable',
-        saved.length ? 'Listed fields saved; remaining content or readback is unconfirmed. Retry identical input to repair only missing steps.' : attempted ? 'Write submitted; saving is unconfirmed. Refresh and retry identical input; no offline write is queued.' : 'Current source read failed; nothing submitted')
+        saved.includes('note') ? 'Note saved; remaining properties or content are pending or unconfirmed. Retry identical input to repair only missing steps.' : saved.length ? 'Listed fields saved; remaining content or readback is unconfirmed. Retry identical input to repair only missing steps.' : attempted ? 'Write submitted; saving is unconfirmed. Refresh and retry identical input; no offline write is queued.' : 'Current source read failed; nothing submitted')
     }
   }
   private async performCreate(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
