@@ -53,7 +53,7 @@ function requestContext(answered = false): CardContextRead {
   ] }
 }
 describe('one Needs Will projection', () => {
-  it('omits owner-only, empty tags and an already answered tag; retains other unresolved requests and explicit waits', () => {
+  it('retains current tags despite historical answers and omits empty tags', () => {
     const snapshot = fixtureSources({ now }), card = snapshot.intentions.data!.cards.find(card => card.id === fixtureId(1))!
     card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision'], hasMore: false }
     card.properties['Next action'] = { id: 'action', type: 'rich_text', value: 'Accept the result', hasMore: false }
@@ -62,7 +62,7 @@ describe('one Needs Will projection', () => {
     const open = needsWill(queue, scene, new Map([[card.id, requestContext()]]), null, new Map())
     expect(open.map(item => item.cardIds)).toEqual([[card.id]])
     expect(open[0]).toMatchObject({ requestSince: '2026-11-09T12:00:00Z', ageBasis: 'request-history' })
-    expect(needsWill(queue, scene, new Map([[card.id, requestContext(true)]]), null, new Map())).toEqual([])
+    expect(needsWill(queue, scene, new Map([[card.id, requestContext(true)]]), null, new Map())[0]).toMatchObject({ requestSince: null, ageBasis: 'unknown', requests: [] })
     card.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: 'Will to supply approval; unblocks deployment; Firstmate follows up', hasMore: false }
     expect(needsWill(queue, scene, new Map([[card.id, requestContext(true)]]), null, new Map())[0]).toMatchObject({ requestSince: null, ageBasis: 'unknown' })
     delete card.properties['Waiting For']
@@ -85,6 +85,17 @@ describe('one Needs Will projection', () => {
     expect(items).toHaveLength(1)
     expect(items[0]?.pulls[0]).toMatchObject({ title: 'Requested change', readiness: { checks: 'passed' } })
     expect(items[0]).toMatchObject({ requestSince: null, ageBasis: 'unknown' })
+    delete card.properties.Link
+    inventory.pulls[0]!.links = [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }]
+    const associated = buildQueue(snapshot, readiness, now, inventory)
+    expect(associated.items.find(item => item.cardIds.includes(card.id))?.evidence.filter(link => link.kind === 'pull-request')).toEqual([{ kind: 'pull-request', url }])
+    expect(needsWill(associated, scene, new Map(), inventory, readiness)[0]?.pulls).toHaveLength(1)
+    inventory.pulls[0]!.url = url.replace('except-pass', 'EXCEPT-PASS') + '?tab=checks'
+    card.properties.Link = { id: 'link', type: 'url', value: url, hasMore: false }
+    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness)[0]?.pulls).toHaveLength(1)
+    delete card.properties.Link
+    inventory.pulls[0]!.links[0]!.active = false
+    expect(needsWill(buildQueue(snapshot, readiness, now, inventory), scene, new Map(), inventory, readiness)[0]?.pulls).toEqual([])
     delete card.properties['Will action']; delete card.properties['Next action']
     expect(needsWill(buildQueue(snapshot, readiness, now), scene, new Map(), inventory, readiness)).toEqual([])
   })

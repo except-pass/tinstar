@@ -1,3 +1,5 @@
+import { releasePull } from '../../shared/releases'
+import { queuePulls, type PullsRead } from '../../shared/pulls'
 import type { SourceSnapshot } from './index'
 import { parsePullUrl } from '../fleet/attention'
 import { sourceRequests } from '../fleet/requests'
@@ -63,7 +65,7 @@ const safeUrl = (value: string | null) => {
 const pulls = (item: QueueItem) => item.evidence.filter(e => e.kind === 'pull-request').map(e => e.url)
 function link(item: QueueItem, value: string | null, kind: 'card' | 'reference' = 'reference') {
   const url = safeUrl(value)
-  const pull = url ? parsePullUrl(url) : null
+  const pull = url ? releasePull(url) : null
   const canonical = pull ? `https://github.com/${pull.repository}/pull/${pull.number}` : url
   if (canonical && !item.evidence.some(e => e.url === canonical)) item.evidence.push({ url: canonical, kind: pull ? 'pull-request' : kind })
 }
@@ -104,7 +106,7 @@ function context(item: QueueItem, card: Card, observation: SourceSnapshot['inten
 }
 
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */
-export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now()) {
+export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string, PullReadiness> = new Map(), now = Date.now(), inventory: PullsRead | null = null) {
   const intentions = ageObservation(input.intentions, now)
   const fleet = input.fleet.map(home => ({ ...home, observation: ageObservation(home.observation, now) }))
   const scene = reconcileScene({ ...input, intentions, fleet }, now)
@@ -114,7 +116,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const identities = new Map<QueueItem, string[]>()
   const explicitPulls = new Map<QueueItem, string[]>()
   const pullIds = (values: Array<string | null>) => unique(values.flatMap(value => {
-    const pull = value && parsePullUrl(value)
+    const pull = value && releasePull(value)
     return pull ? [`pr:https://github.com/${pull.repository}/pull/${pull.number}`] : []
   }))
   const blank = (id: string, title: string, action: string | null, kind: QueueItem['kind']): QueueItem => ({
@@ -246,6 +248,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   // cannot promote an unverified worker question into an actionable response.
   const retained: QueueItem[] = []
   for (const item of candidates) {
+    for (const pull of queuePulls(item, inventory)) link(item, pull.url)
     if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
     const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'

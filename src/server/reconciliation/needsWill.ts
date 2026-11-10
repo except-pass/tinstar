@@ -1,7 +1,8 @@
 import type { QueueItem, buildQueue } from './queue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import type { CardContextRead } from './cardContext'
-import type { PullsRead, PullSummary } from '../../shared/pulls'
+import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
+import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
 import { decisionRequests } from '../../shared/workflowRequests'
 
@@ -28,18 +29,15 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const context = contexts.get(id), history = decisionRequests(context?.blocks ?? [])
       const open = history.filter(request => !request.answered && request.requestedFrom?.trim().toLowerCase() === 'will' && actionTags.includes(request.action))
       requests.push(...open)
-      // A complete answer history suppresses only its own old tag. A tag that
-      // predates the tracked request may represent another outstanding ask.
-      const outstandingTags = actionTags.filter(tag => {
-        const requests = history.filter(request => request.action === tag)
-        return context?.outcome !== 'available' || !requests.length || requests.some(request => request.preserveAction || !request.answered && request.requestedFrom?.trim().toLowerCase() === 'will')
-      })
-      if (/\bWill\b/.test(wait) || open.length || outstandingTags.length) real = true
+      if (/\bWill\b/.test(wait) || actionTags.length) real = true
       for (const request of open) if (request.since && Number.isFinite(Date.parse(request.since))) since.push(request.since)
     }
     if (!real) return []
-    const urls = new Set(item.evidence.filter(evidence => evidence.kind === 'pull-request').map(evidence => evidence.url))
-    const pulls = (inventory?.pulls ?? []).filter(pull => urls.has(pull.url)).map(pull => ({ ...pull, readiness: readiness.get(pull.url)?.head === pull.head ? readiness.get(pull.url)! : null }))
+    const ids = new Set(queuePulls(item, inventory).map(pull => pull.id))
+    const pulls = [...new Map((inventory?.pulls ?? []).flatMap(pull => {
+      const identity = releasePull(pull.url)
+      return identity && ids.has(identity.id) ? [[identity.id, { ...pull, ...identity, readiness: readiness.get(identity.url)?.head === pull.head ? readiness.get(identity.url)! : null }] as const] : []
+    })).values()]
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = since.length ? since.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null
     return [{ ...item, ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]

@@ -173,11 +173,11 @@ export class ReconciliationSources {
 
   async queue() {
     const [snapshot, pullRead] = await Promise.all([this.snapshot(), this.readPulls?.().catch(() => null)])
-    const candidates = buildQueue(snapshot)
+    const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
     const states = await (this.readPullReadiness?.(urls) ?? this.queuePulls.get(urls))
-    const queue = buildQueue(snapshot, states)
+    const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is
     // disclosed; it never becomes a fabricated request age or answer.

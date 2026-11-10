@@ -978,3 +978,18 @@ it('serves one current Needs Will projection through UI and authenticated MCP wi
   expect(answer.outcome).toBe('saved')
   expect((await sources.queue()).needsWill).toEqual([])
 })
+
+it('requests readiness for active association-only PRs through the shared queue', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'tinstar-associated-view-')); roots.push(root)
+  const sources = f.sources(root), snapshot = fixtureSources({ now: Date.now() })
+  const card = snapshot.intentions.data!.cards[0]!
+  card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Merge'], hasMore: false }
+  const url = 'https://github.com/except-pass/tinstar/pull/100'
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  sources.readPulls = async () => ({ pulls: [{ id: 'except-pass/tinstar#100', repository: 'except-pass/tinstar', number: 100, url, title: 'Associated PR', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), observedAt: new Date().toISOString(), freshness: 'fresh', links: [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }] }], repositories: [], warnings: [], associationsComplete: true })
+  const read = vi.fn(async () => new Map())
+  sources.readPullReadiness = read
+  const view = await sources.queue()
+  expect(read).toHaveBeenCalledWith([url])
+  expect(view.needsWill?.find(item => item.cardIds.includes(card.id))?.pulls).toEqual([expect.objectContaining({ url, readiness: null })])
+})

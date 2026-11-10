@@ -1,4 +1,4 @@
-import type { PullIdentity, ReleaseLink } from './releases'
+import { releasePull, type PullIdentity, type ReleaseLink } from './releases'
 
 export interface PullSummary extends PullIdentity {
   state?: 'open' | 'closed' | 'merged'
@@ -24,4 +24,10 @@ export interface PullDetail {
   reviews: Array<{ author: string; state: string; url: string }>
   review: string; reviewsComplete: boolean
   observedAt: string; freshness: 'fresh' | 'stale'; error: string | null
+}
+
+export function queuePulls(item: { cardIds: string[]; evidence: Array<{ kind: string; url: string }> }, inventory: PullsRead | null): PullIdentity[] {
+  const urls = [...item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url),
+    ...(inventory?.pulls ?? []).filter(pull => pull.links.some(link => link.active && item.cardIds.includes(link.cardId))).map(pull => pull.url)]
+  return [...new Map(urls.flatMap(url => { const pull = releasePull(url); return pull ? [[pull.id, pull] as const] : [] })).values()]
 }

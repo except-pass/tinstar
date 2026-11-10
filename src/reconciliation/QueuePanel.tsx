@@ -17,7 +17,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   const ready = (item: QueueItem) => !error && item.readiness === 'ready-now' && item.sources.every(s => ['fresh', 'partial'].includes(s.status) && (!s.expiresAt || Date.parse(s.expiresAt) > now))
   const items = queue ? decisionItems(queue, now) : []
   const actionable = items.filter(ready)
-  const selected = queue?.items.find(item => item.id === state.queueItemId) ?? (!state.queueItemId ? actionable[0] : undefined)
+  const selected = (queue?.needsWill ?? queue?.items)?.find(item => item.id === state.queueItemId) ?? (!state.queueItemId ? actionable[0] : undefined)
   const index = items.findIndex(item => item.id === selected?.id)
   const cardId = state.queueCardId
   const requestText = (value: string) => {
