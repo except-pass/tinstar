@@ -117,8 +117,9 @@ expandable history, including last-known final reports after source expiry.
 
 Date groups use America/New_York calendar buckets: Overdue, Today, Tomorrow,
 This week (through Sunday), Later, Not scheduled, plus Unknown for invalid dates.
-A timed Next check-in before the current instant is Overdue, including earlier
-today. Date-only values use the New York calendar date, including DST boundaries.
+Next check-in uses the [watchdog's appointment and timezone rules](check-in-watchdog.md):
+an appointment before the current instant is Overdue, including earlier today.
+Other date-only fields use the New York calendar date, including DST boundaries.
 Order uses timestamps, never bucket labels or displayed date text.
 
 Operational is the default status preset: In Progress, Queued, Waiting,

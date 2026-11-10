@@ -257,10 +257,13 @@ Tin Star's retained request or the inbox's durable note. Direct adapter invocati
 report their exit status; managed service health is described in the runbook.
 
 1. `GET /api/ask/bridge` with server-side bearer returns up to 50 pending
-   requests (`request_id`, `inbox_request_id`, text `body`) plus tracked note
+   owner requests (`request_id`, `inbox_request_id`, text `body`) plus tracked note
    mappings. Sent requests are retried on the next pass. Capture failures await
    the owner's **Retry delivery**; saved-but-unannounced failures also expose
    retry. An uncertain HTTP response is retried with the same ID.
+   The same response also carries system check-ins; their separate persistence,
+   batch bounds and automatic retry policy are owned by the
+   [watchdog reference](check-in-watchdog.md#delivery-and-persistence).
 2. For each pending request the puller invokes, locally and with body on stdin:
    `FM_HOME=<home> <home>/bin/fm-inbox.sh note --request-id
    tinstar-ask-<request-UUID> --json -`. Exit 0 is captured; exit 3 is saved but

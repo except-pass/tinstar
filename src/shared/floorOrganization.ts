@@ -1,4 +1,5 @@
 import { activityTimestamp } from './workerTimestamps'
+import { checkInTime } from './checkIn'
 import { codexTurn } from './codexActivity'
 import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
@@ -62,10 +63,10 @@ export function dateTimestamp(value: string): number {
 export const dateBuckets = ['Overdue', 'Today', 'Tomorrow', 'This week', 'Later', 'Not scheduled', 'Unknown']
 export function dateBucket(value: string | null, now: number, checkIn = false) {
   if (!value) return 'Not scheduled'
-  const time = dateTimestamp(value)
+  const time = checkIn ? checkInTime(value) : dateTimestamp(value)
   if (!Number.isFinite(time)) return 'Unknown'
   const today = calendarDay(now), day = calendarDay(time), diff = day - today
-  if (diff < 0 || checkIn && value.length > 10 && time < now) return 'Overdue'
+  if (diff < 0 || checkIn && time < now) return 'Overdue'
   if (!diff) return 'Today'
   if (diff === 1) return 'Tomorrow'
   const weekday = new Date(today * 86400000).getUTCDay()
@@ -89,6 +90,11 @@ export function floorFieldValues(scene: FloorScene, pair: Pair, id: FloorField):
     }
     case 'edited': raw = c?.source.last_edited_time; break
     default: raw = c?.source.properties[({ status: 'Status', owner: 'Owner', priority: 'Priority', checkIn: 'Next check-in', due: 'Due Date', area: 'Area', subArea: 'Sub-area' } as const)[id]]?.value
+  }
+  if (id === 'checkIn' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const value = raw as { start?: unknown; time_zone?: unknown }
+    const time = checkInTime(typeof value.start === 'string' ? value.start : null, typeof value.time_zone === 'string' ? value.time_zone : null)
+    return Number.isFinite(time) ? [new Date(time).toISOString()] : typeof value.start === 'string' && value.start ? ['Unknown'] : []
   }
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) raw = (raw as { start?: unknown }).start
   return (Array.isArray(raw) ? raw : [raw]).filter((v): v is string => typeof v === 'string' && !!v.trim()).map(v => v.trim())

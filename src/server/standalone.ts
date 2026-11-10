@@ -7,6 +7,7 @@ import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import { ReconciliationMcp } from './reconciliation/mcp'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
+import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
 import { ReleasesApi } from './releases/routes'
 import { PullsApi } from './pulls/routes'
 import { ActionsApi } from './actions/routes'
@@ -70,13 +71,15 @@ export function startServer(opts: ServerOptions) {
   }
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
-  const fleet = new CockpitFleet()
   const reconciliation = new ReconciliationSources()
+  const checkIns = new CheckInWatchdog(reconciliation)
+  reconciliation.checkInIndicators = () => checkIns.indicators()
+  const fleet = new CockpitFleet(() => { void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
   const pulls = new PullsApi(reconciliation, releases.store)
   const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation)
-  const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() })
+  const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns)
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()

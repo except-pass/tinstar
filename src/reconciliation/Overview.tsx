@@ -27,6 +27,7 @@ import { combinedPatternResult, sceneWorkHealth, patternEmptyText } from '../sha
 
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { OpenInChatGPT } from '../ask/OpenInChatGPT'
+import { checkInIndicatorText } from '../shared/checkIn'
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
@@ -143,6 +144,7 @@ function Entity({ view, entity, kind, hover, focus, references }: { view: View; 
       <span className="ov-record-foot"><span {...nextCheckIn} className={`ov-check check-${checkIn(card!, now).state}`} title={`Next check-in: ${checkIn(card!, now).label}. Right-click or long-press to ask.`}>◷ {compactCheckIn(card!, now)}</span><span className="ov-age" {...askElement('last_edited', 'Last edited', card!.source.last_edited_time)} title={`Last touched by ${propertyText(card!, 'Last touched by') || 'Unknown'}. Right-click or long-press to ask.`}>Edited {ageLabel(Date.parse(card!.source.last_edited_time), now)}</span></span>
       {taskFields(card!, now, view.actionableCardIds.has(card!.id)).filter(([label]) => ['Due Date', 'Waiting For', 'Will action'].includes(label)).map(([label, value]) => <span key={label} {...askElement(label === 'Waiting For' ? 'waiting_for' : label === 'Due Date' ? 'due_date' : 'will_action', label, value)} className="ov-context-field" title={`${label}: ${value}. Right-click or long-press to ask.`}>{label}: {value}</span>)}
     </>)}
+    {card?.checkInRequest && <span className="ov-context-field ov-check-in-request" title={`Original overdue check-in: ${card.checkInRequest.originalCheckpoint}; request ${card.checkInRequest.requestId}`}>{checkInIndicatorText(card.checkInRequest)} · Original check-in {card.checkInRequest.originalCheckpoint}</span>}
     {compact && expanded && <span {...askElement('relationship', 'Relationship view')} className="ov-expansion-hint">{openRoot ? '− Collapse this relationship' : '+ Expand this relationship'}</span>}
     {references.length > 0 && <span className="ov-reference" title={`Same ${kind === 'card' ? 'card' : 'worker'} also in ${references.join(', ')}`} aria-label={`Also in ${references.join(', ')}`}>↗{references.length}</span>}
     <span className="ov-port" aria-hidden="true" />

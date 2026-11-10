@@ -23,6 +23,8 @@ For actions on selected PRs in PRs or Releases, see the [installed PR actions gu
 
 The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only operational-card audit, offline JSON replay and opt-in local semantic pilot.
 
+The [Next check-in watchdog](docs/features/check-in-watchdog.md) requests overdue status updates through First Mate and shows a quiet line on the relevant card until Notion readback verifies the answer.
+
 Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
 Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Desk**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.

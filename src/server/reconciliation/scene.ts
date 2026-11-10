@@ -7,6 +7,7 @@ import { ageObservation, type Observation } from './observation'
 import type { CardReference } from './references'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, parseWorkerLinks } from './workerLinks'
+import { checkInTime, type CheckInIndicator } from '../../shared/checkIn'
 
 type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
@@ -53,6 +54,7 @@ export interface Execution {
   observation: Omit<Observation<unknown>, 'data'>
 }
 export interface SceneCard {
+  checkInRequest?: CheckInIndicator
   id: string
   source: SourceCard
   parentIds: string[]
@@ -101,7 +103,7 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
   const wait = word(card, 'Waiting For')?.trim() || null
   const start = text(record(property(card, 'Start Date')).start)
   const checkpointAt = text(record(property(card, 'Next check-in')).start)
-  const checkpointTime = checkpointAt ? Date.parse(checkpointAt) : NaN
+  const checkpointTime = checkInTime(checkpointAt, text(record(property(card, 'Next check-in')).time_zone))
   const checkpoint: SceneCard['checkpoint'] = { at: checkpointAt, state: !checkpointAt ? 'missing' :
     !Number.isFinite(checkpointTime) ? 'unknown' : checkpointTime < now ? 'overdue' : 'upcoming' }
   const common = { nextAction: wait ?? word(card, 'Delegated To'), checkpoint }
