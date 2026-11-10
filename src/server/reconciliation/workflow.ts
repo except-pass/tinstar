@@ -1,4 +1,4 @@
-import type { ClawsonMergeInput } from '../../shared/clawsonMerge'
+import { clawsonMergeTitle, type ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
@@ -155,7 +155,7 @@ export class WorkflowOperations {
       }
       if (previous) {
         try {
-          const card = await this.findCreation(actor, input.operation_id)
+          const card = await this.findCreation(actor, input.operation_id, clawsonMergeTitle(input))
           if (!card) return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation remains unconfirmed; this retry will not create a duplicate.', operation_id: input.operation_id, saved_fields: [] }
           await this.creations.put(JSON.stringify([actor, input.operation_id]), signature, card.id)
           const current = await this.reader.card(card.id, true)
@@ -398,15 +398,23 @@ export class WorkflowOperations {
       return partial
     }
   }
-  private async findCreation(actor: string, operationId: string, name?: string): Promise<WorkCard | undefined> {
+  private async findCreation(actor: string, operationId: string, name: string): Promise<WorkCard | undefined> {
     const config = this.reader.config
     if (!config) throw new Error('Not configured')
-    const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, ...(name === undefined ? {} : { filter: { property: 'Name', title: { equals: name } } }) })
-    if (!Array.isArray(candidates.results) || candidates.has_more !== false) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
     const marker = receiptMarker(actor, operationId)
-    for (const raw of candidates.results) {
-      const candidate = notionCard(raw)
-      if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
+    let cursor: string | undefined
+    const cursors = new Set<string>()
+    for (;;) {
+      const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, filter: { property: 'Name', title: { equals: name } }, ...(cursor ? { start_cursor: cursor } : {}) })
+      if (!Array.isArray(candidates.results)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+      for (const raw of candidates.results) {
+        const candidate = notionCard(raw)
+        if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
+      }
+      if (candidates.has_more === false) return
+      if (candidates.has_more !== true || typeof candidates.next_cursor !== 'string' || !candidates.next_cursor || cursors.has(candidates.next_cursor)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+      cursor = candidates.next_cursor
+      cursors.add(cursor)
     }
   }
   private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown> }): Promise<StartWorkResult> {

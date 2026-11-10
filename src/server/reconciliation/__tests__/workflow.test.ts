@@ -36,6 +36,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const comments: any[] = [{ id: 'comment-1', created_by: { id: 'author-1' }, created_time: '2026-11-10T00:00:00Z', rich_text: [{ plain_text: prose.comment }] }]
   const blocks: any[] = [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: prose.body }] } }]
   const pages = new Map<string, any>([[id, raw]])
+  let queryPageSize = 100
   let onRead: (() => void) | undefined
   const requests: Array<{ url: string; method: string; body?: any }> = []
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -75,7 +76,9 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
         if (test?.does_not_equal !== undefined) return value !== test.does_not_equal
         return true
       }
-      return json({ results: [...pages.values()].filter(candidate => matches(body.filter, candidate)), has_more: false })
+      const matching = [...pages.values()].filter(candidate => matches(body.filter, candidate))
+      const offset = Number(body.start_cursor ?? 0), end = offset + Math.min(queryPageSize, body.page_size ?? 100)
+      return json({ results: matching.slice(offset, end), has_more: end < matching.length, next_cursor: end < matching.length ? String(end) : null })
     }
     if (path === '/v1/comments' && method === 'POST') {
       if (failNote) return json({}, 503)
@@ -108,7 +111,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
     sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
-    controls: { failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
+    controls: { queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 afterEach(async () => {
@@ -1046,17 +1049,29 @@ it('creates a bounded Clawson card for green PRs across all ten Reader repositor
 })
 
 
-it.each(['already merged', 'head changed', 'GitHub unavailable'])('recovers an uncertain Clawson creation before preflight reports %s', async reason => {
+it.each(['already merged', 'head changed', 'GitHub unavailable'].flatMap(reason => [0, 1].map(page => ({ reason, page }))))('recovers an uncertain Clawson creation on page $page before preflight reports $reason', async ({ reason, page }) => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-lost-create-')); roots.push(root)
   const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
   const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection' }))
   f.controls.lostCreate()
   const workflow = new WorkflowOperations(f.reader, async () => [], root)
   expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
+  const created = f.pages.get('c'.repeat(32))!
+  const decoyId = 'd'.repeat(32)
+  const decoy = { ...structuredClone(created), id: decoyId }
+  if (page === 1) f.pages.delete(created.id)
+  f.pages.set(decoyId, decoy)
+  if (page === 1) f.pages.set(created.id, created)
+  f.controls.queryPageSize(1)
+  const beforeRetry = f.requests.length
   prepare.mockRejectedValue(new Error(reason))
   const restarted = new WorkflowOperations(f.reader, async () => [], root)
   expect(await restarted.createClawsonMerge({ ...input, targets: [{ ...input.targets[0]!, head: 'b'.repeat(40) }] }, 'owner@example.test', prepare)).toMatchObject({ code: 'operation-conflict' })
   expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32), url: `https://www.notion.so/${'c'.repeat(32)}` } })
   expect(prepare).toHaveBeenCalledTimes(1)
+  const searches = f.requests.slice(beforeRetry).filter(request => request.url.endsWith('/query'))
+  expect(searches).toHaveLength(page + 1)
+  for (const search of searches) expect(search.body.filter).toEqual({ property: 'Name', title: { equals: 'Admin merge 1 PR: owner/repo' } })
+  if (page === 1) expect(searches[1]!.body.start_cursor).toBe('1')
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
 })
