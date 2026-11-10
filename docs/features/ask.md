@@ -332,14 +332,17 @@ Malformed structured reply content is accepted with `reply.degraded: true`.
 String summaries and details are truncated to their schema limits; a missing or
 invalid summary falls back to the first 240 characters of the reply body, and a
 non-string detail falls back to the full bounded reply body. Only the first 20
-valid references are retained. An invalid suggested-action collection is dropped
-as a whole, so it creates no buttons and cannot delay other answers in the
-installed puller. `reply.rejected_actions` records a reason for each omitted entry,
-with its index and string ID when available, or a collection-level reason when
-the field is not an array. Desk displays a small rejection note, and
-subsequent conversation history retains the details. Bridge POST receipts return
-the same details in `data.reply_warnings` (including on delivery retries), so
-pullers can surface them. The published 6.0.0 puller ignores this extra field;
+valid references are retained. A suggestion that fails on its own, such as a
+URL in the instruction, is omitted and the remaining valid suggestions stay
+buttons. Duplicate IDs and lists over 10 are dropped as a whole, so they create
+no buttons and cannot promote an ambiguous recommendation. Either omission
+cannot delay other answers in the installed puller. `reply.rejected_actions`
+records a reason for each omitted entry, with its index and string ID when
+available, or a collection-level reason when the field is not an array. Desk
+shows the answer and the valid buttons. The stored reply and later conversation
+history keep the rejection details. Bridge POST receipts return the same
+details in `data.reply_warnings` (including on delivery retries), so pullers
+can surface them to First Mate. The published 6.0.0 puller ignores this extra field;
 updated adapters deliver them through the
 [First Mate warning-receipt flow](ask-puller-service.md#rejected-action-receipts-for-first-mate).
 Request/note correlation and immutable-answer conflicts still

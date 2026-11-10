@@ -614,17 +614,31 @@ function recommendedAnswer(): AskItem {
   return { ...original, question: 'Why is this overdue?', reply: { ...original.reply!, suggested_actions: recommendationChoices } }
 }
 
-it('shows rejected suggested actions and their reasons in the Desk answer', async () => {
+it('shows the reply and the valid action, and hides rejection reasons from the owner', async () => {
   const original = seed()
-  original.reply!.rejected_actions = [
-    { index: 0, id: 'bad-link', reason: 'instruction: URLs and link syntax are not allowed; put URLs in references' },
-    { index: 1, reason: 'id: Required' },
-  ]
+  const valid = { id: 'keep-open', label: 'Keep open', instruction: 'Retain the card until the review lands' }
+  original.reply = {
+    ...original.reply!,
+    summary: 'Review can proceed',
+    detail: 'The valid choice is still available.',
+    suggested_actions: [valid],
+    rejected_actions: [
+      { index: 0, id: 'merge-3359', reason: 'instruction: URLs and link syntax are not allowed; put URLs in references' },
+      { index: 2, id: 'merge-3360', reason: 'instruction: URLs and link syntax are not allowed; put URLs in references' },
+    ],
+  }
   records = [original]
   mount()
+  const hidden = /suggested actions were rejected|URLs and link syntax|merge-3359|merge-3360/
+  expect(document.body.textContent).not.toMatch(hidden)
   fireEvent.click(await screen.findByRole('button', { name: /New answer/ }))
-  expect(screen.getByRole('note')).toHaveTextContent('2 suggested actions were rejected: bad-link: instruction: URLs and link syntax are not allowed; put URLs in references; #2: id: Required')
-  expect(screen.getByText(original.reply!.detail)).toBeVisible()
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  expect(thread).toHaveTextContent('Review can proceed')
+  expect(thread).toHaveTextContent('The valid choice is still available.')
+  expect(within(thread).getByRole('button', { name: 'Keep open: Retain the card until the review lands' })).toBeEnabled()
+  expect(within(thread).getAllByRole('button', { name: /Keep open/ })).toHaveLength(1)
+  expect(document.body.textContent).not.toMatch(hidden)
+  expect(document.querySelector('.ask-action-rejections')).toBeNull()
 })
 
 // Remounting the answered thread exceeds 5s beside another suite.

@@ -274,7 +274,6 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
       {turn.captured_selection && <blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote>}
       {turn.reply ? <><h3 {...askElement('answer', 'First Mate answer')}>{turn.reply.summary}</h3><p {...askElement('answer', 'Answer detail')} className="ask-detail">{turn.reply.detail}</p>
         {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
-        {!!turn.reply.rejected_actions?.length && <p role="note" className="ask-action-rejections">{turn.reply.rejected_actions.length} suggested actions were rejected: {turn.reply.rejected_actions.map(action => `${action.id ?? (action.index === undefined ? 'suggested_actions' : `#${action.index + 1}`)}: ${action.reason}`).join('; ')}</p>}
         <AskActions answerId={turn.request_id} suggestions={turn.reply.suggested_actions} superseded={latestAnswer?.request_id !== turn.request_id}
           selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, error: selected.error } : null} onSelect={controls.selectAction} />
       </> : <AskDelivery item={turn} controls={controls} now={now} />}
