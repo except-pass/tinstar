@@ -53,7 +53,7 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
     }, { timeout: 15_000 }).toBe(1)
 
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=scribe`)
     await openWorkerSwitcher(page)
     await page.locator('.cockpit-worker-button', { hasText: 'scribe' }).click()
     const composer = page.getByTestId('prompt-composer')

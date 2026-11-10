@@ -2,7 +2,16 @@
 
 ## Browser regression (Playwright)
 
-Run `npx playwright test`. Each backend test uses an isolated config and, where needed, a private tmux socket and First Mate test home. Never point these at a live home.
+Build the shipped client before running the suite; the browser fixtures serve `dist/client`:
+
+```bash
+npm ci
+npx playwright install --with-deps chromium
+npm run build:all
+npm run test:e2e -- --workers=1
+```
+
+Use the Node version in `.nvmrc`, plus tmux, ttyd >=1.7.4, lsof and Python 3 on PATH. Playwright's Chromium install includes the headless shell and FFmpeg used for video proof. The default config runs all cockpit, Discuss, PR, Overview and MCP browser specs with one worker and zero retries. Keep the single worker on memory-constrained hosts. Each backend test uses an isolated config and, where needed, a private tmux socket and First Mate test home. Never point these at a live home.
 
 The v8 Overview suites (`reconciliation-floor.spec.ts`, retaining its historical filename, and `reconciliation-mcp.spec.ts`) cover independent source stacks, many-to-many links across machines/managers, group/selection preservation, two-sided gaps, safe terminal routes, Discuss position, stale/failed reads, realistic volume, keyboard/mobile/reduced motion, and real targeted MCP acknowledgments/retries/expiry/user-click precedence. The old status/project grouping and fused-card browser suites were replaced by these tests plus the source-liveness and Overview model tests.
 

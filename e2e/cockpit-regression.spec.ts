@@ -216,7 +216,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
       await delay(200)
     }
     const page = await browser.newPage()
-    await page.goto(base)
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(2)
     await expect(page.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
@@ -312,7 +312,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     try {
       const motionPage = await motionContext.newPage()
       const video = motionPage.video()
-      await motionPage.goto(base)
+      await motionPage.goto(`${base}/?worker=alpha`)
       await openWorkerSwitcher(motionPage)
       await motionPage.getByRole('button', { name: /alpha .*WORKING/i }).click()
       await expect(motionPage.getByRole('heading', { name: 'alpha' })).toBeVisible()
@@ -342,7 +342,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     console.log(`private iframe sizes before=${frameSizes.join(',')} after=${frameSizesAfter.join(',')}`)
     await page.reload()
     const second = await browser.newPage()
-    await second.goto(base)
+    await second.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(second)
     await second.getByRole('button', { name: /alpha .*WORKING/i }).click()
     await expect(second.frameLocator('iframe[title="alpha terminal"]').frameLocator('#term').getByRole('textbox', { name: 'Terminal input' })).toHaveCount(1, { timeout: 15_000 })

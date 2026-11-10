@@ -586,6 +586,11 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
     await expect(page.locator(waiting ? '.ov-waiting-head' : '.ov-headings')).toContainText(waiting ? `Waiting For · ${cards}` : `NOTION TASKS · ${cards}`)
   }
   await counts(5, 5)
+  // The scrolling toolbar must leave its connection menu usable at every width.
+  await page.getByTitle('ChatGPT tab connection', { exact: true }).click()
+  await page.getByRole('button', { name: 'Copy session ID', exact: true }).click()
+  await expect(page.locator('.session-connection-menu')).toContainText(/Full session ID copied|Session ID:/)
+  await page.getByTitle('ChatGPT tab connection', { exact: true }).click()
   for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'manager']]) {
     await page.getByRole('button', { name: label!, exact: true }).click()
     await expect(page.locator('.ov')).toHaveAttribute('data-outer', outer!)
@@ -1157,7 +1162,7 @@ for (const width of [1440, 390]) test(`single-row toolbar live combined pattern 
     })
     return { fits: lines.every(Boolean), selectedVisible: !button.classList.contains('ov-pattern-selected') || bounds.left >= 0 && bounds.right <= innerWidth + 1 }
   }))
-  expect(geometry).toHaveLength(3)
+  expect(geometry).toHaveLength(4)
   expect(geometry.every(button => button.fits && button.selectedVisible)).toBe(true)
   await expect(page.locator('.ov-card')).toHaveCount(1)
   await center.click()

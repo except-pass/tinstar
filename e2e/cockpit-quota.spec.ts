@@ -56,7 +56,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
 
     await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     const rail = page.getByRole('region', { name: 'Provider quota' })
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
@@ -233,7 +233,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
 
     await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     const rail = page.getByRole('region', { name: 'Provider quota' })
     // The Grok Bot week is its own strip; Cursor's meter stays on the all-models cycle.

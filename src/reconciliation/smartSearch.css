@@ -43,6 +43,9 @@
   .ov-preset-scroll { flex-shrink:1; }
 }
 @media(max-width:850px) {
+  /* Keep presets clickable when the session code and dial need more than one viewport. */
+  .ov-toolbar { overflow-x:auto; scrollbar-width:none; }
+  .ov-toolbar .ov-preset-scroll { flex:none; width:76px; }
   .ov-search-trigger span { display:none; }
   .ov-search-panel { position:fixed; top:60px; left:78px; width:calc(100vw - 88px); max-height:calc(100dvh - 76px); overflow:auto; }
 }
@@ -50,8 +53,6 @@
   .ov-pattern-neighbor { font-size:8px!important; flex-direction:column; gap:1px!important; }
   .ov-pattern-selected { font-size:10px!important; gap:3px!important; }
 
-  .ov-toolbar { overflow-x:auto; scrollbar-width:none; }
-  .ov-toolbar .ov-preset-scroll { flex:none; width:76px; }
   .ov-toolbar .ov-filter-chips { flex:none; max-width:none; }
   .ov-toolbar .ov-donut-key { display:none; }
   .ov-search-panel { top:12px; padding-top:0; }

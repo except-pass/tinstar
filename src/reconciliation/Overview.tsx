@@ -343,14 +343,14 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const previousSelection = useRef<string | null>(null)
   const selectedId = state.selection ? semanticId(state.selection) : null
   useEffect(() => { setHovered(null) }, [state.revision])
-  // The existing search can explicitly reveal a card outside its status scope.
-  // Preserve that temporary native result, then restore Waiting For on search exit.
+  // Search and Decisions navigation can reveal a card outside its status scope.
+  // Keep that target visible without changing the saved Waiting For filters.
   const focusedContext = scene && state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
   const flashContext = scene && state.flash?.revealTargets && state.flash.until > now ? directNeighbors(scene, state.flash.ids.map(id => {
     const separator = id.indexOf(':')
     return { kind: id.slice(0, separator) as Target['kind'], id: id.slice(separator + 1) }
   })) : null
-  const outsideWaitingFor = scene?.cards.some(card => (focusedContext?.has(`card:${card.id}`) || flashContext?.has(`card:${card.id}`)) && cardStatus(card) !== 'Waiting For')
+  const outsideWaitingFor = scene?.cards.some(card => (focusedContext?.has(`card:${card.id}`) || flashContext?.has(`card:${card.id}`) || state.searchReveal?.kind === 'card' && state.searchReveal.id === card.id) && cardStatus(card) !== 'Waiting For')
   const waitingScope = waitingForActive(state)
   const waiting = waitingScope && !outsideWaitingFor
   const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
