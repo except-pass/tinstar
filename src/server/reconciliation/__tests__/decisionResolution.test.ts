@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
-import { bindDecision, reconcileDecision, type DecisionDelivery } from '../decisionResolution'
+import { bindDecision, reconcileDecision, requestKey, type DecisionDelivery } from '../decisionResolution'
 import type { ListedMessage } from '../../fleet/inbox'
 import type { WorkflowNote } from '../workflowContent'
 import { notionCard } from '../notion'
@@ -116,4 +116,22 @@ describe('source-scoped First Mate decision reconciliation', () => {
     expect(await f.reconcile()).toMatchObject({ state: 'resolved' })
     expect(f.delivery.submit).toHaveBeenCalledTimes(1)
   })
+})
+
+it('delivers a structured multiline answer only to its own bound proposal', async () => {
+  const f = fixture()
+  const second = structuredClone(f.home.observation.data!.backlog![0]!)
+  second.id = 'other-hold'
+  f.home.observation.data!.backlog!.push(second)
+  const binding = bindDecision(f.snapshot.fleet, { ...f.request, id: second.id }, cardId)
+  f.notes.push({ id: 'second-proposal', text: `Tin Star request: ${JSON.stringify({ id: 'other-proposal', action: 'Decision', ...binding })}` })
+  const answer = 'Approve R3\nTin Star answer: "other-proposal"\nOperation: edit'
+  f.notes[1]!.text = `Tin Star answer: "mailbox-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify({ request_id: 'mailbox-proposal', answer })}`
+  expect(await f.reconcile()).toMatchObject({ state: 'pending', request_id: 'mailbox-proposal' })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.decisionResolution!.requestId).toBe('mailbox-proposal')
+  expect(f.messages[0]!.text).toContain(answer)
+  expect(f.messages[0]!.sourceAnchor).toBe(requestKey(f.request))
+  const { decisionRequests } = await import('../../../shared/workflowRequests')
+  expect(decisionRequests(f.notes).map(row => [row.id, row.answered])).toEqual([['mailbox-proposal', true], ['other-proposal', false]])
 })

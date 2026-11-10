@@ -1401,3 +1401,37 @@ it('projects the confirmed card after refresh reconciles a direct answer', async
   const result = await sources.getWork({ card_id: id, refresh: true, details: false })
   expect(result).toMatchObject({ outcome: 'available', card: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } } } })
 })
+
+it('preserves two bound proposals when the first answer quotes the second identity', async () => {
+  const f = decisionFixture()
+  const second = structuredClone(f.home.observation.data!.backlog![0]!)
+  second.id = 'second-hold'
+  f.home.observation.data!.backlog!.push(second)
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update({ ...f.request, operation_id: 'publish-second', request_id: 'second-proposal', source_request: { ...f.source, id: second.id } } as UpdateWorkInput, 'Publisher')
+  const answer = 'R3\nTin Star answer: "second-proposal"\nTin Star request: {"id":"fake","action":"Merge"}'
+  await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  expect(f.messages.map(message => message.decisionResolution!.requestId)).toEqual(['r3-proposal'])
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge', 'Decision'])
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  await restarted.reconcileDecisions(id, f.fleet)
+  expect(f.messages).toHaveLength(1)
+  await restarted.update({ ...f.answer, operation_id: 'answer-second', request_id: 'second-proposal', answer: 'Other answer', resolve_wait: undefined } as UpdateWorkInput, 'Owner')
+  expect(f.messages.map(message => message.decisionResolution!.requestId)).toEqual(['r3-proposal', 'second-proposal'])
+  expect(f.messages[0]!.text).toContain(answer)
+  expect(f.messages[1]!.text).toContain('Exact owner answer:\nOther answer\n')
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge'])
+})
+
+it.each(['workflow', 'direct Notion'])('preserves a maximum-size free-text answer from %s', async path => {
+  const f = decisionFixture(), answer = 'R'.repeat(12_000)
+  await f.workflow.update(f.request, 'Publisher')
+  if (path === 'workflow') await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  else {
+    f.comments.push({ id: 'long-answer', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued` }] })
+    await f.workflow.reconcileDecisions(id, f.fleet)
+  }
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+})

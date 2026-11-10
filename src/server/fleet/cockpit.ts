@@ -139,7 +139,7 @@ export class CockpitFleet {
     const value = input as Record<string, unknown>
     const { requestId, anchorKey, kind, text } = value
     if (typeof requestId !== 'string' || !/^tinstar-[a-f0-9-]{36}$/.test(requestId) ||
-      typeof text !== 'string' || !text.trim() || text.length > 10_000 ||
+      typeof text !== 'string' || !text.trim() || text.length > (decisionResolution && kind === 'answer' ? 13_000 : 10_000) ||
       (kind !== 'answer' && kind !== 'message')) return null
     const previous = await this.outbox.get(requestId)
     if (previous) {

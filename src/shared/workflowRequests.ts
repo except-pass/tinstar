@@ -3,7 +3,9 @@ import { decisionOptionsSchema } from './workflow'
  * page edit time. Missing or partial history cannot establish that none exist. */
 export interface RequestNote { id: string; text: string; createdAt?: string | null; created_time?: string }
 export const decisionRecordRows = (notes: { text: string }[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
-  const lines = note.text.split('\n'), operation = lines.find(line => line.startsWith('Operation: '))
+  const lines = note.text.split('\n')
+  const recordStart = lines.findIndex(line => line.startsWith('Tin Star answer: ') || line.startsWith('Tin Star request: '))
+  const operation = lines.slice(0, recordStart < 0 ? lines.length : recordStart).find(line => line.startsWith('Operation: '))
   if (prefix === 'Tin Star request: ' && operation === 'Operation: answer_decision') {
     const data = lines.filter(line => line.startsWith('Tin Star answer data: ')).at(-1)
     try { const row = data && JSON.parse(data.slice('Tin Star answer data: '.length)); return row?.binding ? [row.binding] : [] } catch { return [] }

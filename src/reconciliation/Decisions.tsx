@@ -118,14 +118,25 @@ function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('
 /** Formal published choices use the same workflow operation as MCP. A saved
  * answer does not dismiss this source request; only reconciliation can do so. */
 function DecisionChoices({ entry }: { entry: DecisionEntry }) {
-  const { busy, result, save } = useWorkSave(async () => {})
+  const [saved, setSaved] = useState<{ item: QueueItem; result: import('../shared/workflow').StartWorkResult } | null>(null)
   const requests = (entry.item as Partial<NeedsWillItem>).requests ?? []
   const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length)
-  const status = result?.decision_resolution?.message ?? (result ? result.message : entry.item.decisionResolution?.message)
-  return <>{proposals.map(proposal => <div className="ask-recommendations ask-action-choices" key={proposal.id} role="group" aria-label={proposal.question ?? 'Decision choices'}>
+  const localStatus = saved?.result.decision_resolution?.message ?? saved?.result.message
+  const status = saved?.item === entry.item ? localStatus : entry.item.decisionResolution?.message ?? localStatus
+  return <>{proposals.map(proposal => <ProposalChoices key={proposal.id} cardId={entry.id!} proposal={proposal} onResult={result => setSaved({ item: entry.item, result })} />)}{status && <small role="status">{status}</small>}</>
+}
+
+function ProposalChoices({ cardId, proposal, onResult }: { cardId: string; proposal: NeedsWillItem['requests'][number]; onResult: (result: import('../shared/workflow').StartWorkResult) => void }) {
+  const { busy, result, save } = useWorkSave(async () => {})
+  const shownResult = useRef(result)
+  useLayoutEffect(() => {
+    if (result && shownResult.current !== result) onResult(result)
+    shownResult.current = result
+  }, [result, onResult])
+  return <div className="ask-recommendations ask-action-choices" role="group" aria-label={proposal.question ?? 'Decision choices'}>
     {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={busy || !!result?.decision_resolution} onClick={() => void save('update', {
-      kind: 'answer_decision', card_id: entry.id!, request_id: proposal.id, option_id: option.id, answer: option.label,
+      kind: 'answer_decision', card_id: cardId, request_id: proposal.id, option_id: option.id, answer: option.label,
       next: { owner: 'Firstmate', status: 'Queued' },
     })}>{option.label}</button>)}
-  </div>)}{status && <small role="status">{status}</small>}</>
+  </div>
 }
