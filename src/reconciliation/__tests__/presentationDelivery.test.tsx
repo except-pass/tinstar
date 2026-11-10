@@ -4,16 +4,16 @@ import { useState } from 'react'
 import { SceneSessions } from '../../server/reconciliation/sessions'
 import { fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { usePresentation } from '../usePresentation'
-import { actionSchema } from '../../shared/reconciliationCommands'
-import { deliverySchema, presentationTargets } from '../../shared/presentationObservation'
+import { actionSchema, stateSchema } from '../../shared/reconciliationCommands'
+import { deliverySchema, renderedObservationSchema, presentationTargets } from '../../shared/presentationObservation'
 import { observeTargets, revealTargets } from '../presentationVisibility'
 
 const scene = fixtureScene(), queue = fixtureQueue(), cardId = queue.items[0]!.cardIds[0]!
 let broker: SceneSessions, hidden = false, focused = true
 let latest: ReturnType<typeof usePresentation>
-function Browser() {
+function Browser({ source = scene }: { source?: typeof scene }) {
   const [surface, setSurface] = useState('overview')
-  latest = usePresentation(scene, queue, false, true, surface === 'decisions', false, () => setSurface('decisions'))
+  latest = usePresentation(source, queue, false, true, surface === 'decisions', false, () => setSurface('decisions'))
   return <div className={surface === 'decisions' ? 'decisions' : 'ov'} data-revision={latest.state.revision}>
     <button className={`decisions-row${latest.state.selection?.id === cardId ? ' selected' : ''}${latest.state.flash && latest.state.flash.until > Date.now() ? ' flashed' : ''}`} data-card-id={cardId} data-semantic-id={`card:${cardId}`}>Target decision</button>
     <button onClick={() => latest.send({ type: 'clear-selection' })}>Browse manually</button>
@@ -74,6 +74,28 @@ describe('browser delivery and replay', () => {
     expect(latest.pendingFocus).toBe(false)
     expect(broker.enqueue(input, scene)).toMatchObject({ outcome: 'applied', delivery: { stage: 'foreground-visible', pending: false } })
     expect(broker.sync(input.scene_id, latest.state, [])).toEqual([])
+  })
+  it('replays all 4097 reveal targets and serializes the foreground state at the original revision', async () => {
+    hidden = true; focused = false
+    const source = fixtureScene(), template = source.cards[0]!
+    source.cards = Array.from({ length: 4097 }, (_, index) => ({ ...template, id: index === 0 ? 'primary'.padEnd(2048, 'x') : index.toString(16).padStart(32, '0') }))
+    render(<Browser source={source} />); await tick()
+    const tab = broker.list()[0]!, target = { kind: 'card' as const, id: source.cards[0]!.id }
+    const action = { type: 'reveal-search' as const, target, targets: source.cards.slice(1).map(card => ({ kind: 'card' as const, id: card.id })) }
+    expect(broker.enqueue({ scene_id: tab.scene_id, command_id: 'large-replay', expected_revision: tab.revision, ttl_ms: 8000, action }, source).outcome).toBe('queued')
+    await tick(); await tick(5500)
+    const ids = presentationTargets(action).map(target => `${target.kind}:${target.id}`)
+    expect(latest.state.searchFocus).toEqual(presentationTargets(action))
+    expect(latest.pendingFocus).toBe(true)
+    const revision = latest.state.revision
+    hidden = false; focused = true
+    act(() => window.dispatchEvent(new Event('focus')))
+    await tick()
+    expect(latest.state.flash?.ids).toEqual(ids)
+    expect(latest.state.revision).toBe(revision)
+    expect(stateSchema.parse(JSON.parse(JSON.stringify(latest.state))).flash?.ids).toEqual(ids)
+    expect(renderedObservationSchema.parse(broker.read(tab.scene_id).rendered_scene).selection).toBe(ids[0])
+    expect(broker.read(tab.scene_id).state?.flash?.ids).toEqual(ids)
   })
   it('lets manual interaction cancel background replay', async () => {
     hidden = true; focused = false

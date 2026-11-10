@@ -37,13 +37,13 @@ export function privatePeer(address = '') {
   const match = /^100\.(\d+)\.\d+\.\d+$/.exec(ip)
   return !!match && Number(match[1]) >= 64 && Number(match[1]) <= 127 || /^fd7a:115c:a1e0:/i.test(ip)
 }
-async function body(req: IncomingMessage) {
+async function body(req: IncomingMessage, limit = 2 * 1024 * 1024) {
   const chunks: Buffer[] = []; let size = 0
   const timeout = setTimeout(() => req.destroy(), 10_000)
   try {
     for await (const chunk of req) {
       size += Buffer.byteLength(chunk)
-      if (size > 2 * 1024 * 1024) throw new Error('request too large')
+      if (size > limit) throw new Error('request too large')
       chunks.push(Buffer.from(chunk))
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
@@ -200,7 +200,7 @@ export class ReconciliationMcp {
         z.object({ type: z.literal('sync'), scene_id: z.string().uuid(), key: z.string().max(128), state: stateSchema, acknowledgments: z.array(ackSchema).max(32), rendered_scene: renderedSchema.optional() }).strict(),
         z.object({ type: z.literal('designate'), scene_id: z.string().uuid(), key: z.string().max(128) }).strict(),
         z.object({ type: z.literal('disconnect'), scene_id: z.string().uuid(), key: z.string().max(128) }).strict(),
-      ]).parse(await body(req))
+      ]).parse(await body(req, 16 * 1024 * 1024))
       if (parsed.type === 'register') return ok(res, this.sessions.register(parsed.state, parsed.rendered_scene), { headers })
       if (!this.sessions.authorized(parsed.scene_id, parsed.key)) return fail(res, 'FORBIDDEN', 'unauthorized', { headers })
       if (parsed.type === 'designate') { this.sessions.designate(parsed.scene_id); return ok(res, { designated: true }, { headers }) }

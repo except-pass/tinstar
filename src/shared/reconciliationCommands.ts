@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { PresentationAction, PresentationState } from './reconciliationPresentation'
-import type { PresentationDelivery } from './presentationObservation'
+import { semanticIdSchema, type PresentationDelivery } from './presentationObservation'
 import { patterns } from './workHealth'
 
 export const searchFilterSchema = z.object({ query: z.string().max(512), patterns: z.array(z.enum([patterns[0]!, ...patterns.slice(1)])).max(8), facets: z.array(z.object({ field: z.enum(['initiative', 'machine', 'manager', 'entity']), value: z.string().min(1).max(2048) }).strict()).max(32) }).strict()
@@ -13,7 +13,7 @@ export const donutFilterSchema = z.object({ cards: z.array(z.string().max(256)).
 
 export const targetSchema = z.object({ kind: z.enum(['card', 'execution', 'claim', 'manager', 'group', 'you', 'firstMate']), id: z.string().min(1).max(2048) }).strict()
 const searchViewSchema = z.object({
-  searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4096).optional(),
+  searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4097).optional(),
   search: searchFilterSchema.optional(),
   selection: targetSchema.nullable(), collapsed: z.array(z.string().max(2048)).max(4096),
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
@@ -48,13 +48,13 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('clear-selection') }).strict(),
 ])
 export const stateSchema = z.object({
-  search: searchFilterSchema.optional(), searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4096).optional(),
+  search: searchFilterSchema.optional(), searchReveal: targetSchema.nullable().optional(), searchFocus: z.array(targetSchema).max(4097).optional(),
   navigation: z.object({ cardId: z.string().min(1).max(64), revision: z.number().int().nonnegative() }).nullable().optional(),
   donutFilter: donutFilterSchema.optional(), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   sort: z.enum(['activity', 'priority']).optional(), linksVisible: z.boolean().optional(),
   revision: z.number().int().nonnegative(), arrangement: z.enum(['initiative', 'secondMate', 'machine']), selection: targetSchema.nullable(),
   collapsed: z.array(z.string().max(2048)).max(4096), exceptionsOnly: z.boolean(), roadmapExpanded: z.boolean(),
-  flash: z.object({ ids: z.array(z.string().max(2048)).max(4096), until: z.number(), revealTargets: z.boolean().optional() }).nullable(), assistantChangedView: z.boolean(),
+  flash: z.object({ ids: z.array(semanticIdSchema).max(4097), until: z.number(), revealTargets: z.boolean().optional() }).nullable(), assistantChangedView: z.boolean(),
   queueOpen: z.boolean().optional(), queueCardId: z.string().nullable().optional(), queueItemId: z.string().max(4096).nullable().optional(),
 }).strict()
 export type CommandOutcome = 'queued' | 'applied' | 'expired' | 'disconnected' | 'unknown-id' | 'unauthorized' | 'stale-revision' | 'conflict' | 'queue-source-unavailable' | 'ambiguous-session'

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { PresentationAction, Target } from './reconciliationPresentation'
 
+export const semanticIdSchema = z.string().max(2060)
+
 /** Source generation, React commit, and browser visibility are separate facts. */
 export const renderedObservationSchema = z.object({
   scene_generated_at: z.string().datetime().nullable(), scene_read_failed: z.boolean(),
@@ -8,16 +10,16 @@ export const renderedObservationSchema = z.object({
   surface: z.enum(['overview', 'decisions', 'other']).optional(),
   route: z.string().max(2048).optional(), title: z.string().max(256).optional(),
   visibility: z.enum(['visible', 'hidden']).optional(), focused: z.boolean().optional(),
-  selection: z.string().max(2048).nullable().optional(), pending_command: z.string().max(128).nullable().optional(),
+  selection: semanticIdSchema.nullable().optional(), pending_command: z.string().max(128).nullable().optional(),
 }).strict()
 export type RenderedObservation = z.infer<typeof renderedObservationSchema>
 export const deliverySchema = z.object({
   stage: z.enum(['accepted', 'applied-to-state', 'rendered', 'foreground-visible', 'not-visible', 'not-supported']),
   reason: z.string().max(256).optional(), observed_at: z.string().datetime().optional(),
   surface: z.enum(['overview', 'decisions', 'other']).optional(), route: z.string().max(2048).optional(),
-  targets: z.array(z.string().max(2060)).max(4097).optional(),
-  rendered_targets: z.array(z.string().max(2060)).max(4097).optional(),
-  visible_targets: z.array(z.string().max(2060)).max(4097).optional(), pending: z.boolean().optional(),
+  targets: z.array(semanticIdSchema).max(4097).optional(),
+  rendered_targets: z.array(semanticIdSchema).max(4097).optional(),
+  visible_targets: z.array(semanticIdSchema).max(4097).optional(), pending: z.boolean().optional(),
 }).strict()
 export type PresentationDelivery = z.infer<typeof deliverySchema>
 export function presentationTargets(action: PresentationAction): Target[] {

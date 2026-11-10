@@ -158,7 +158,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     }
     async function tick() {
       inspect()
-      const batch = ready.current.splice(0, 32)
+      const batch = ready.current.splice(0, 1)
       try {
         if (!credentials) {
           credentials = await post({ type: 'register', state: current.current, rendered_scene: observation() })
