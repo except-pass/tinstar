@@ -36,7 +36,7 @@ outside channel is bounded typed broker IPC. Seccomp denies process creation and
 limits bound CPU, memory, tasks, files, descriptors, output and wall clock. There is
 one source slot to protect shared host capacity. Unsupported isolation refuses to run.
 
-Admin Merge is **globally disabled**, including when a fixture CI matrix is complete.
+The installed-action Admin Merge capability is **globally disabled**, including when a fixture CI matrix is complete.
 No live Merge App profile, key reader or adapter is reachable. The existing
 [cmsandbox check inventory](../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json)
 still enforces its incomplete-workload holds; completing it does not activate Merge.
@@ -96,5 +96,10 @@ gh pr merge <url> --squash --admin --match-head-commit <sha>
 Clawson must recheck every head and required check immediately before merging,
 stop and report any red check, changed head or conflict, and post each result on
 the card. The button shows the card link and preserves selection. Double-clicks
-and retries of the same selection reuse the same operation receipt. Tin Star
+and retries of the same selection in the mounted view reuse the same operation receipt.
+If a creation response is lost, retrying recovers the existing card before fresh
+GitHub preflight, even if a selected PR has since merged or changed or GitHub is
+unavailable. Recovery searches all pages matching the selection-derived title for
+the exact owner and operation receipt; an unconfirmed creation is never repeated.
+Fresh preflight is required before a new creation. Tin Star
 does not execute these commands; its Admin Merge capability remains disabled.
