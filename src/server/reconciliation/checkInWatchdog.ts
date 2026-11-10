@@ -232,7 +232,10 @@ export class CheckInWatchdog {
         if (!report) continue
         const at = Date.parse(report.Date), next = checkInTime(report['Next check-in'], text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
-        if (!Number.isFinite(at) || at < Date.parse(row.createdAt) || at > this.now() || Date.parse(card.last_edited_time) < at ||
+        // Notion returns last_edited_time truncated to the minute, so a report
+        // later in that same minute is this edit. A later minute is still newer.
+        const reportedMinute = Math.floor(at / 60_000) * 60_000
+        if (!Number.isFinite(at) || at < Date.parse(row.createdAt) || at > this.now() || Date.parse(card.last_edited_time) < reportedMinute ||
           word(card, 'Last touched by').toLowerCase() !== report.By.toLowerCase()) continue
         if (!(closed && report['Next check-in'].toLowerCase() === 'closed') &&
           (!Number.isFinite(next) || next <= at || next !== appointment(card) ||

@@ -133,6 +133,10 @@ request ID, a valid date after the request, substantive progress/evidence,
 blocker/owner, next action, attribution matching `Last touched by`, and next
 checkpoint matching the current property. An offset-free next timestamp in the
 report uses that property's explicit timezone when comparing the instants.
+The report date must not be in the future. For comparison with Notion's
+minute-truncated `last_edited_time`, verification rounds the report date down
+to the start of its minute: a report later in the same minute is accepted,
+but one in a later minute than the page edit remains pending.
 An active In Progress checkpoint
 must fit the board ceiling (four hours during business-day 8 AM–8 PM ET working
 hours, otherwise 10 AM the next business morning). A real dependency date on
