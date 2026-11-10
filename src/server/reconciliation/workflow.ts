@@ -462,6 +462,7 @@ export class WorkflowOperations {
         }
         card = current
         if (input.kind === 'answer_decision' && (input.source_request || notes.some(note => note.text.includes('"source_request":')))) {
+          attempted = true
           await this.content.note(card.id, `Tin Star decision intent: ${JSON.stringify({ actor, input, original: plan.original })}`, pendingMarker)
           saved.push('decision-answer')
         }

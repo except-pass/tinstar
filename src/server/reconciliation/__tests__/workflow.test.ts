@@ -1307,3 +1307,16 @@ it('binds an already-recorded legacy R3 approval without publishing a new owner 
   expect(f.comments).toHaveLength(count)
   expect(f.bridge.submit).toHaveBeenCalledTimes(1)
 })
+
+it('reports a lost intent-write response as uncertain and recovers its durable answer without another intent comment', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher'); f.controls.lostNote()
+  const uncertain = await f.workflow.update(f.answer, 'Tin Star UI')
+  expect(uncertain).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  expect(uncertain.message).not.toContain('nothing submitted')
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet); restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.comments.filter(note => note.rich_text.map((part: any) => part.plain_text ?? part.text?.content).join('').startsWith('Tin Star decision intent: '))).toHaveLength(1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
