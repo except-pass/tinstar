@@ -174,21 +174,15 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Updates save their history note before changing properties or managed sections.
-The note records the operation ID, original preconditions, target values and
-provenance such as whether a decision tag pre-existed. If properties fail, the
-result reports the saved note and pending steps. Identical retries, including
-after restart, read that note and repair only missing effects without posting
-another note. Only still-missing transitions recheck execution evidence or
-appointment timing. A saved note alone does not mean the operation completed.
+Updates confirm properties and managed sections before writing the history note.
+If only the note fails, the same process can repair it once, provided the card's
+last-edited time and properties remain unchanged. A changed card returns the
+confirmed partial result without another write; review current state and re-issue
+with a new operation ID. Other partial failures also require reconciliation by
+the caller. There is no property replay, note-first plan receipt or automatic
+restart recovery. A completed operation's note marker prevents duplicate notes.
 
-Results report each confirmed field/section/note;
-not-saved and partially-saved are visible, never concealed as an offline success.
-Identical retries use minimal operation receipts, comment markers and named body
-sections to skip saved effects. If a property changed after a partial save,
-recovery preserves it and returns a conflict. Reuse the original input/operation
-ID for missing-step recovery; changed intent gets a new ID. A receipt in the
-initial creation body recovers lost create responses, with a tiny durable local
+A receipt in the initial creation body recovers lost create responses, with a tiny durable local
 creation latch in `workflow-create-receipts.json` preventing an uncertain POST
 from being repeated if the card was renamed or its query receipt is not visible.
 That latch is not an offline queue or authoritative card. Reconcile an uncertain

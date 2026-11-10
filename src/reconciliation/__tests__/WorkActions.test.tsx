@@ -1,3 +1,4 @@
+import { updateWorkSchema } from '../../shared/workflow'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { WorkActions, CreateWork } from '../WorkActions'
@@ -65,4 +66,34 @@ it('retains edit preconditions and identity across refreshed props until intent 
   const changed = JSON.parse(String(fetcher.mock.calls[2]![1]!.body))
   expect(changed.input.operation_id).not.toBe(original.input.operation_id)
   expect(changed.input.expected).toEqual({ Priority: 'High' })
+})
+
+it.each(['Waiting For', 'In Progress', 'external', 'Done', 'Archived'])('answers directly into %s with the same state-specific evidence contract as MCP', async state => {
+  const card = fixtureScene().cards[0]!
+  const fetcher = vi.mocked(apiFetch)
+  fetcher.mockResolvedValue(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', message: 'Answer saved', saved_fields: ['note'] } })))
+  render(<WorkActions card={card} onSaved={vi.fn(async () => {})} />)
+  fill('Operation', 'answer_decision'); fill('Decision request ID', 'request-one'); fill('Answer', 'Proceed with this supported disposition')
+  const status = state === 'external' ? 'In Progress' : state
+  fill('Next status', status)
+  if (state === 'Waiting For') {
+    fill('Named dependency', 'Security approval'); fill('What unblocks it', 'Owner accepts evidence'); fill('Who follows up', 'Owner')
+  } else if (state === 'In Progress') {
+    fill('First Mate home', '/fixture/home'); fill('Task ID', 'native-task'); fill('Spawn generation', 'exact-generation')
+  } else if (state === 'external') {
+    fill('Worker system', 'external'); fill('Execution system', 'Build runner'); fill('Run ID', 'run-one'); fill('Run reference', 'https://runner.example/run-one')
+    fill('Observed at (ISO timestamp with timezone)', '2026-11-10T12:00:00Z'); fill('Execution evidence', 'Runner reports compiling this card')
+    fireEvent.click(screen.getByLabelText('This tracked run is currently executing this card'))
+  } else {
+    fill('Supported disposition', 'Owner accepted the supported outcome'); fill('Disposition evidence', 'Owner acceptance receipt')
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+  const input = updateWorkSchema.parse(JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).input)
+  expect(input).toMatchObject({ kind: 'answer_decision', next: { status } })
+  if (input.kind !== 'answer_decision') throw new Error('Expected decision answer')
+  if (state === 'Waiting For') expect(input.next.wait).toEqual({ dependency: 'Security approval', unblocks_when: 'Owner accepts evidence', follow_up_by: 'Owner' })
+  else if (state === 'In Progress') expect(input.next.worker).toEqual({ kind: 'firstmate', fm_home: '/fixture/home', task_id: 'native-task', first_observed_spawn_gen: 'exact-generation' })
+  else if (state === 'external') expect(input.next.worker).toMatchObject({ kind: 'external', card_id: card.id, run_id: 'run-one', state: 'running' })
+  else expect(input.next).toMatchObject({ disposition: 'Owner accepted the supported outcome', evidence: 'Owner acceptance receipt' })
 })

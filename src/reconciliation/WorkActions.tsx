@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
-import type { CreateWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
+import type { CreateWorkInput, StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
 type WithoutOperation<T> = T extends unknown ? Omit<T, 'operation_id'> : never
 const actions = [['edit', 'Edit / note'], ['assign', 'Assign / handoff'], ['checkpoint', 'Record checkpoint'], ['wait', 'Record wait'], ['request_decision', 'Request decision'], ['answer_decision', 'Answer decision'], ['complete', 'Complete'], ['park', 'Park']] as const
@@ -38,6 +38,9 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const [evidence, setEvidence] = useState(''), [nextAction, setNextAction] = useState(''), [appointment, setAppointment] = useState(''), [confirmation, setConfirmation] = useState('provisional')
   const [dependency, setDependency] = useState(''), [unblocks, setUnblocks] = useState(''), [followUp, setFollowUp] = useState('')
   const [requestId, setRequestId] = useState(''), [requestedFrom, setRequestedFrom] = useState('Will'), [action, setAction] = useState('Decision'), [resolvedWait, setResolvedWait] = useState(''), [legacyAction, setLegacyAction] = useState('')
+  const [disposition, setDisposition] = useState(''), [workerKind, setWorkerKind] = useState('firstmate')
+  const [home, setHome] = useState(''), [task, setTask] = useState(''), [generation, setGeneration] = useState('')
+  const [system, setSystem] = useState(''), [run, setRun] = useState(''), [reference, setReference] = useState(''), [observed, setObserved] = useState(''), [running, setRunning] = useState(false)
   const { save, busy, result } = useWorkSave(onSaved)
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -51,7 +54,16 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     else if (kind === 'checkpoint') input = { ...base, kind, checkpoint: { assessment: note, evidence, next_action: nextAction, next_check_in: appointment, confirmation } } as UpdateWorkInput
     else if (kind === 'wait') input = { ...base, kind, dependency, unblocks_when: unblocks, follow_up_by: followUp, ...(note ? { note } : {}) }
     else if (kind === 'request_decision') input = { ...base, kind, request_id: requestId, question: note, action, requested_from: requestedFrom }
-    else if (kind === 'answer_decision') input = { ...base, kind, request_id: requestId, answer: note, next: { owner, status }, ...(resolvedWait ? { resolve_wait: resolvedWait } : {}), ...(legacyAction ? { legacy_action: legacyAction } : {}) } as UpdateWorkInput
+    else if (kind === 'answer_decision') {
+      const worker: StartWorkInput['worker'] = workerKind === 'firstmate'
+        ? { kind: 'firstmate', fm_home: home, task_id: task, first_observed_spawn_gen: generation }
+        : { kind: 'external', system, run_id: run, reference, card_id: card.id, observed_at: observed, state: 'running', evidence }
+      input = { ...base, kind, request_id: requestId, answer: note, next: { owner, status,
+        ...(status === 'In Progress' ? { worker } : {}),
+        ...(status === 'Waiting For' ? { wait: { dependency, unblocks_when: unblocks, follow_up_by: followUp } } : {}),
+        ...(['Done', 'Archived'].includes(status) ? { disposition, evidence } : {}) },
+        ...(resolvedWait ? { resolve_wait: resolvedWait } : {}), ...(legacyAction ? { legacy_action: legacyAction } : {}) } as UpdateWorkInput
+    }
     else if (kind === 'complete') input = { ...base, kind, disposition: note, evidence }
     else input = { ...base, kind, disposition: note, status: status === 'Archived' ? 'Archived' : 'Backlog' }
     await save('update', input)
@@ -63,14 +75,20 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
       {changeProperty && <><label>Property<select value={property} onChange={e => setProperty(e.target.value as typeof property)}>{ordinary.map(name => <option key={name}>{name}</option>)}</select></label>{field('New value (relation IDs separated by commas)', value, setValue, false)}</>}
       {field('Brief (leave blank to preserve)', brief, setBrief, false, true)}{field('Acceptance criteria (leave blank to preserve)', acceptance, setAcceptance, false, true)}
     </>}
-    {(kind === 'assign' || kind === 'answer_decision') && <>{field('Next owner', owner, setOwner)}<label>Next status<select value={status} onChange={e => setStatus(e.target.value)}><option>Queued</option><option>Todo</option><option>Backlog</option></select></label><p>Assignment to Firstmate queues work. Use Start work when a tracked worker is executing.</p></>}
+    {(kind === 'assign' || kind === 'answer_decision') && <>{field('Next owner', owner, setOwner)}<label>Next status<select value={status} onChange={e => setStatus(e.target.value)}><option>Queued</option><option>Todo</option><option>Backlog</option>{kind === 'answer_decision' && ['In Progress', 'Waiting For', 'Done', 'Archived'].map(state => <option key={state}>{state}</option>)}</select></label>{kind === 'assign' && <p>Assignment to Firstmate queues work. Use Start work when a tracked worker is executing.</p>}</>}
     {kind === 'checkpoint' && <>{field('Evidence', evidence, setEvidence, true, true)}{field('Next action', nextAction, setNextAction, true, true)}{field('Next check-in (date or timestamp with timezone)', appointment, setAppointment)}<label>Appointment<select value={confirmation} onChange={e => setConfirmation(e.target.value)}><option value="provisional">Provisional</option><option value="owner-confirmed">Owner confirmed</option></select></label><p>Date-only means 9 AM Eastern. In Progress uses the board ceiling.</p></>}
-    {kind === 'wait' && <>{field('Named dependency', dependency, setDependency, true, true)}{field('What unblocks it', unblocks, setUnblocks, true, true)}{field('Who follows up', followUp, setFollowUp)}</>}
+    {(kind === 'wait' || kind === 'answer_decision' && status === 'Waiting For') && <>{field('Named dependency', dependency, setDependency, true, true)}{field('What unblocks it', unblocks, setUnblocks, true, true)}{field('Who follows up', followUp, setFollowUp)}</>}
     {(kind === 'request_decision' || kind === 'answer_decision') && field('Decision request ID', requestId, setRequestId)}
     {kind === 'request_decision' && <>{field('Requested from', requestedFrom, setRequestedFrom)}{field('Will action', action, setAction)}</>}
     {kind === 'answer_decision' && sources.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{sources.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text.slice(0, 100)}</option> })}</select></label>}
     {kind === 'answer_decision' && field('Legacy action tag explicitly resolved (optional)', legacyAction, setLegacyAction, false)}
     {kind === 'answer_decision' && field('Exact wait text resolved (optional; preserves other waits)', resolvedWait, setResolvedWait, false, true)}
+    {kind === 'answer_decision' && status === 'In Progress' && <>
+      <label>Worker system<select value={workerKind} onChange={event => setWorkerKind(event.target.value)}><option value="firstmate">First Mate</option><option value="external">External tracked run</option></select></label>
+      {workerKind === 'firstmate' ? <>{field('First Mate home', home, setHome)}{field('Task ID', task, setTask)}{field('Spawn generation', generation, setGeneration)}</>
+        : <>{field('Execution system', system, setSystem)}{field('Run ID', run, setRun)}{field('Run reference', reference, setReference)}{field('Observed at (ISO timestamp with timezone)', observed, setObserved)}{field('Execution evidence', evidence, setEvidence, true, true)}<label><input type="checkbox" required checked={running} onChange={event => setRunning(event.target.checked)} /> This tracked run is currently executing this card</label></>}
+    </>}
+    {kind === 'answer_decision' && ['Done', 'Archived'].includes(status) && <>{field('Supported disposition', disposition, setDisposition, true, true)}{field('Disposition evidence', evidence, setEvidence, true, true)}</>}
     {kind === 'complete' && field('Completion evidence', evidence, setEvidence, true, true)}
     {kind === 'park' && <label>Park status<select value={status === 'Archived' ? 'Archived' : 'Backlog'} onChange={e => setStatus(e.target.value)}><option>Backlog</option><option>Archived</option></select></label>}
     {field(kind === 'request_decision' ? 'Question' : kind === 'answer_decision' ? 'Answer' : kind === 'checkpoint' ? 'Assessment' : kind === 'complete' || kind === 'park' ? 'Supported disposition' : 'Note', note, setNote, !['edit', 'assign', 'wait'].includes(kind), true)}
