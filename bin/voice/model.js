@@ -1,4 +1,4 @@
-import { readFile, access, mkdir, mkdtemp, rm, rename, writeFile } from 'node:fs/promises'
+import { readFile, mkdir, mkdtemp, rm, rename, writeFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { getConfigRoot } from '../configRoot.js'
@@ -6,7 +6,15 @@ import { getConfigRoot } from '../configRoot.js'
 export const manifest = JSON.parse(await readFile(new URL('./model.json', import.meta.url), 'utf8'))
 export const voiceModelPath = (root = getConfigRoot()) => join(root, 'voice', manifest.directory)
 export async function modelInstalled(root = getConfigRoot()) {
-  try { await Promise.all(Object.keys(manifest.files).map(file => access(join(voiceModelPath(root), file)))); return true }
+  try {
+    // Installation/status checks can repair a damaged cache. Inference only
+    // checks availability and never rehashes model files on each recording.
+    for (const [file, expected] of Object.entries(manifest.files)) {
+      const bytes = await readFile(join(voiceModelPath(root), file))
+      if (createHash('sha256').update(bytes).digest('hex') !== expected) return false
+    }
+    return true
+  }
   catch { return false }
 }
 /** Install assets, never inference, from the model runtime publisher. Checksums

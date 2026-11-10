@@ -1,7 +1,7 @@
 # Local voice questions
 
 The same First Mate composer appears in Desk threads, the Overview Inspector
-(cards, workers and connections), PR details and Releases details. Compact rows
+(cards, workers and connections), worker terminal details, PR details and Releases details. Compact rows
 keep their existing Ask icons, semantic right-click and swipe gestures. Typed
 questions use Enter to send and Shift+Enter for a newline.
 

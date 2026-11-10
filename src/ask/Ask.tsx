@@ -232,6 +232,15 @@ export function AskContextComposer({ subject }: { subject: AskSubject }) {
   return <div className="ask-context-composer"><AskComposer key={JSON.stringify(subject)} embedded scene={controls.scene} state={controls.state}
     seed={subject} parent={parent} clientKey={clientKey} submit={controls.submit} close={() => undefined} /></div>
 }
+/** Resolve the fleet terminal against the same canonical scene used by Ask.
+ * A same-named worker in another home must never acquire this conversation. */
+export function AskWorkerComposer({ home, taskId }: { home: string; taskId: string }) {
+  const controls = useAskControls()
+  const matches = controls?.scene?.executions.filter(execution => execution.home === home && execution.identity.task_id === taskId) ?? []
+  if (matches.length !== 1) return <p role="status">Worker conversation context is unavailable or ambiguous. Reconnect sources to ask about this worker.</p>
+  const execution = matches[0]!
+  return <AskContextComposer key={execution.id} subject={{ target: { kind: 'execution', id: execution.id }, label: taskId, view: { scene: 'overview', worker: { home, task_id: taskId } } }} />
+}
 function sourceAvailable(item: AskItem, scene: FloorScene | null) {
   const target = item.context.target
   if (isArtifactTarget(target)) return true // The authorized section resolves current artifact availability.

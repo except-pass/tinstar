@@ -135,12 +135,14 @@ export class AskApi {
           context = { anchor: { kind: 'work', page_id: input.card_id, label: 'Deploy smoke', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: input.view }
         }
         else if (isArtifactTarget(input.target)) {
+          if (input.view.worker) throw new AskConflict('Worker view requires a canonical execution')
           if (!this.artifacts) throw new AskNotFound('Artifact sources unavailable')
           context = await artifactContext(input.target, input.view, { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
         } else {
           const scene = await this.sources.scene()
           const claim = input.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === input.target!.id) : undefined
           const worker = input.target?.kind === 'execution' ? scene.executions.find(worker => worker.id === input.target!.id) : undefined
+          if (input.view.worker && (input.view.scene !== 'overview' || !worker || worker.home !== input.view.worker.home || worker.identity.task_id !== input.view.worker.task_id)) throw new AskConflict('Worker view does not match the canonical execution')
           if (input.target && !(claim || worker)) throw new AskNotFound('Entity unavailable in the authorized source')
           const card = scene.cards.find(card => card.id === (claim?.cardId ?? input.card_id))
           if (!card && !worker) throw new AskNotFound('Card unavailable in the authorized source')

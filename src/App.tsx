@@ -4,7 +4,7 @@ import { findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOver
 import { directLabel } from './cockpit/groupWorkers'
 import { ActivityBar } from './cockpit/shell/ActivityBar'
 import { ContextPanel } from './cockpit/shell/ContextPanel'
-import { Composer, WorkerNotes, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
+import { WorkerNotes, Face, MateBadge, StateChip, identityColor } from './cockpit/shell/present'
 import { WorkerSwitcherPanel } from './cockpit/shell/WorkerSwitcherPanel'
 import { DRAWER_MEDIA, isDrawerLayout, type AttentionCard, type ContextPanelMode, type Draft, type OutboxMessage, type SubmitResult, type Worker } from './cockpit/shell/types'
 import { ComposerInput } from './components/PromptComposer/PromptComposer'
@@ -12,6 +12,7 @@ import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
 import { Decisions } from './reconciliation/Decisions'
+import { AskWorkerComposer } from './ask/Ask'
 import { DeskWorkspace } from './ask/DeskWorkspace'
 import { useWorkspaceHistory } from './ask/workspaceHistory'
 import { Pulls } from './pulls/Pulls'
@@ -303,7 +304,14 @@ export default function App() {
 
       <div hidden={panelMode !== 'workers'}><WorkerSwitcherPanel workers={workers} currentKey={current?.key ?? null} query={jumpText} onQuery={setJumpText} onOpen={openWorker} /></div>
     </ContextPanel>
-    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} workers={workers} messages={messages} submit={submit}>
+    <DeskWorkspace views={views} onClearOrigin={() => { if (overviewRef.current.origin) applyOverviewLocation({ ...overviewRef.current, origin: undefined }, 'replace') }} origin={overviewLocation.origin} onNavigate={origin => {
+      const source = origin.view?.worker
+      const matches = source && origin.target.kind === 'execution' ? workers.filter(worker => worker.home === source.home && worker.id === source.task_id) : []
+      const worker = matches.length === 1 ? matches[0] : undefined
+      applyOverviewLocation(worker
+        ? { worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q, origin: { ...origin } }
+        : { worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')
+    }} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {overviewLocation.page === 'decisions' ? <Decisions /> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">
@@ -335,7 +343,7 @@ export default function App() {
               <div className="cockpit-status-detail"><StateChip state={current.state} /><MateBadge kind={current.kind} /><span className="cockpit-status-text" title={current.detail}>{current.detail}</span><small>{current.freshness} · observed {displayTime(current.observedAt)}</small></div>
               <section className="cockpit-objective"><span className="cockpit-eyebrow">OBJECTIVE</span><p>{current.objective}</p></section>
               <div className="cockpit-facts"><div><span>PROJECT</span><strong title={current.project}>{current.project}</strong></div><div><span>WORKTREE</span><strong title={current.worktree}>{current.worktree}</strong></div><div><span>BRANCH</span><strong title={current.branch}>{current.branch}</strong></div><div><span>PR</span>{current.prUrl ? <a href={current.prUrl} target="_blank" rel="noopener noreferrer">Open pull request ↗</a> : <strong>unknown</strong>}</div></div>
-              <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><Composer anchorKey={current.key} kind="message" submit={submit} /><WorkerNotes messages={messages.filter(message => message.kind === 'message' && message.home === current.home && message.taskId === current.id)} submit={submit} /></details>
+              <details key={current.key} className="cockpit-worker-message"><summary>Tell First Mate about this</summary><AskWorkerComposer home={current.home} taskId={current.id} /><WorkerNotes messages={messages.filter(message => message.kind === 'message' && message.home === current.home && message.taskId === current.id)} submit={submit} /></details>
             </div>
           </div>
         </aside>

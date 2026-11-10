@@ -127,7 +127,7 @@ export function VoiceInput({ disabled, onTranscript, onBusyChange }: { disabled:
       <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" /></svg><span>{recording ? 'Stop' : 'Talk'}</span>
     </button>
     <div><p id={helpId}>{phase === 'requesting' ? 'Allow microphone access…' : phase === 'transcribing' ? 'Transcribing locally…' : recording ? `Recording · ${elapsed}s / ${VOICE_MAX_SECONDS}s` : 'Hold to talk; release to send. Or tap to start and stop.'}</p>
-      <span className="ask-voice-status" role="status" aria-live="polite">{recording ? 'Microphone recording. Stop to transcribe and send.' : phase === 'transcribing' ? 'Transcribing locally.' : ''}</span>
+      <span className="ask-voice-status" role="status" aria-live="polite">{phase === 'requesting' ? 'Waiting for microphone permission.' : phase === 'recording' ? 'Microphone recording. Stop to transcribe and send.' : phase === 'transcribing' ? 'Transcribing locally.' : ''}</span>
       {phase !== 'idle' && <button type="button" onClick={cancel}>Cancel recording</button>}
     </div>
     {error && <p role="alert">{error}</p>}

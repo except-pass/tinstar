@@ -6,6 +6,8 @@ import { emptySearch } from '../../shared/smartSearch'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema, type AskItem, type AskTarget } from '../../shared/ask'
 import type { ReleasesRead } from '../../shared/releases'
+import type { Worker } from '../../cockpit/shell/types'
+import { homeName } from '../../cockpit/overviewQuery'
 import type { PullSummary } from '../../shared/pulls'
 const fixture = vi.hoisted(() => ({ scene: null as unknown }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: fixture.scene, error: null, now: Date.now() }) }))
@@ -14,15 +16,16 @@ vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
 const head = 'a'.repeat(40), date = '2026-11-08T12:00:00.000Z'
 const receipt = { id: 'receipt-17', repository: 'owner/repo', environment: 'production', target: 'production', component: 'web', deployedSha: head, artifactDigest: null, version: '6.0', deployedAt: date, workflowUrl: 'https://github.com/owner/repo/actions/runs/17', receiptUrl: 'https://github.com/owner/repo/releases/tag/v6', outcome: 'succeeded' as const, exceptions: [] }
 const pull: PullSummary = { id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', title: 'Exact artifact title', author: 'owner', draft: false, head, base: 'main', createdAt: date, updatedAt: date, observedAt: date, freshness: 'fresh', links: [] }
+let fleetWorkers: Worker[] = []
 let inventory: PullSummary[], originResult: PullSummary | null
 let records: AskItem[], requests: Array<Record<string, unknown>>, releases: ReleasesRead
-function item(target: AskTarget, section: 'pulls' | 'releases'): AskItem {
-  return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
+function item(target: AskTarget, section: 'overview' | 'pulls' | 'releases'): AskItem {
+  return askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'What is the artifact evidence?', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind === 'execution' ? 'worker' : target.kind === 'claim' ? 'link' : target.kind, page_id: target.id, label: 'Captured artifact', url: pull.url, observed_at: date }, target, view: { scene: section, query: 'a filter hiding this row' }, return_to: { section, target, view: { scene: section, query: 'a filter hiding this row' } } }, created_at: date, updated_at: date, status: 'answered', reply: { summary: 'Real-shaped test answer', detail: 'Evidence detail', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null })
 }
 beforeEach(() => {
   // App paint misses the 1s testing-library default when another suite is running.
   configure({ asyncUtilTimeout: 10_000 })
-  localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
+  fleetWorkers = []; localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
@@ -33,7 +36,7 @@ beforeEach(() => {
     const path = String(input), body = init?.body ? JSON.parse(String(init.body)) : null
     let data: unknown = {}
     if (path === '/api/quota') return new Response(JSON.stringify({ providers: [], checkedAt: null, fetchedAt: null, commandError: null }))
-    if (path === '/api/fleet') data = { ready: true, workers: [], attention: [], errors: [] }
+    if (path === '/api/fleet') data = { ready: true, workers: fleetWorkers, attention: [], errors: [] }
     if (path === '/api/fleet/messages') data = []
     if (path === '/api/releases') data = releases
     if (path === '/api/pulls') data = { pulls: inventory, repositories: [], warnings: [], associationsComplete: true }
@@ -42,7 +45,7 @@ beforeEach(() => {
     if (path.startsWith('/api/pulls/detail')) data = { head, state: 'open', body: 'PR description', additions: 3, deletions: 1, files: 2, checks: 'failed', review: 'Changes requested', reviews: [], reviewsComplete: true, freshness: 'fresh', observedAt: date, error: null }
     if (path === '/api/reconciliation/ui') data = body?.type === 'register' ? { scene_id: 'artifact-ui', key: 'key' } : { commands: [] }
     if (path === '/api/ask/requests') {
-      if (body) { requests.push(body); const saved = { ...item(body.target, body.view.scene), question: body.question, status: 'sent' as const, reply: null }; records.push(saved); data = saved }
+      if (body) { requests.push(body); const saved = { ...item(body.target, body.view.scene), question: body.question, status: 'sent' as const, reply: null }; saved.context.view = body.view; saved.context.return_to = { section: body.view.scene, target: body.target, view: body.view }; records.push(saved); data = saved }
       else data = records
     }
     if (path.endsWith('/read')) { const saved = records.find(record => path.includes(record.request_id))!; saved.read_at = date; data = saved }
@@ -469,4 +472,28 @@ it('sends directly from the PR detail shared form with its exact head and view',
   await waitFor(() => expect(requests).toHaveLength(1))
   expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, question: 'Explain the pending review.', view: { scene: 'pulls' } })
   expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+
+it('uses the shared composer in worker terminal details and returns to its exact home/task while retaining legacy notes', async () => {
+  const scene = fixtureScene(), execution = scene.executions.find(item => item.identity.task_id === 'linked-worker')!
+  fixture.scene = scene
+  const taskId = execution.identity.task_id!
+  fleetWorkers = [{ key: 'test-worker-key', id: taskId, home: execution.home, kind: 'worker', state: 'working', detail: 'Working', observedAt: date, freshness: 'fresh', objective: 'Fixture worker objective', project: '/tmp/project', direct: false, worktree: '/tmp/project', branch: 'fm/worker', prUrl: null, terminalAvailable: false, terminalPid: null }]
+  fleetWorkers.push({ ...fleetWorkers[0]!, key: 'other-worker-key', home: '/fixture/other-home' })
+  history.replaceState(null, '', `/?worker=${encodeURIComponent(taskId)}&home=${encodeURIComponent(homeName(execution.home))}`)
+  render(<App />)
+  await screen.findByRole('heading', { name: taskId })
+  fireEvent.click(screen.getByText('Tell First Mate about this', { selector: 'summary' }))
+  const question = await screen.findByRole('textbox', { name: `Question about ${taskId}` })
+  fireEvent.change(question, { target: { value: 'Why is this worker waiting?' } })
+  fireEvent.keyDown(question, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'execution', id: execution.id }, view: { scene: 'overview', worker: { home: execution.home, task_id: taskId } } })
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Activity' })).getByRole('button', { name: 'PRs' }))
+  await screen.findByRole('region', { name: 'Pull requests' })
+  fireEvent.click(await screen.findByRole('button', { name: 'Return to source' }))
+  expect(await screen.findByRole('heading', { name: taskId })).toBeTruthy()
+  expect(new URLSearchParams(location.search).get('worker')).toBe(taskId)
+  expect(new URLSearchParams(location.search).get('home')).toBe(homeName(execution.home))
 })

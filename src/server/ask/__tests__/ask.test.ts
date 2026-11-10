@@ -910,3 +910,16 @@ it('archives and restores all owned conversation turns from one request', async 
   rows = (await call('requests')).data.data
   expect(rows.every((row: { dismissed_at: string | null }) => row.dismissed_at === null)).toBe(true)
 })
+
+it('retains authenticated worker terminal view identity and rejects a different home/task', async () => {
+  const { call } = await setup()
+  const execution = fixtureScene().executions.find(item => item.identity.task_id === 'linked-worker')!
+  const body = { client_key: randomUUID(), target: { kind: 'execution', id: execution.id }, question: 'Why is this worker waiting?', view: { scene: 'overview', worker: { home: execution.home, task_id: execution.identity.task_id } } }
+  const saved = await call('requests', body)
+  expect(saved.status).toBe(200)
+  expect(saved.data.data.context.return_to.view.worker).toEqual(body.view.worker)
+  const wrongHome = await call('requests', { ...body, client_key: randomUUID(), view: { ...body.view, worker: { ...body.view.worker, home: '/another/home' } } })
+  expect(wrongHome.status).toBe(409)
+  const wrongTask = await call('requests', { ...body, client_key: randomUUID(), view: { ...body.view, worker: { ...body.view.worker, task_id: 'different-worker' } } })
+  expect(wrongTask.status).toBe(409)
+})

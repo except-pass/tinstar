@@ -19,6 +19,7 @@
     "scripts/ask-puller-service.py",
     "services/ask-puller/",
     "docs/features/ask-puller-service.md",
+    "docs/features/voice.md",
     "README.md",
     "scripts/collectors/codex-activity.py",
     "services/codex-activity/",
