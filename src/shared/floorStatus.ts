@@ -1,5 +1,5 @@
 import type { Execution } from '../server/reconciliation/scene'
-import { executionStatus } from './executionLiveness'
+import { currentActivity, recordedState } from './workerEvidence'
 
 /** Attention order, preserving source labels. New source options follow the
  * known options alphabetically; blank/unknown is always last. */
@@ -10,16 +10,16 @@ export const cardStatusOrder = [
 ] as const
 export const workerStatusOrder = ['Blocked', 'Error', 'Running', 'Queued', 'Waiting', 'Idle', 'Stopped', 'Finished'] as const
 export const unknownStatus = 'Status unknown'
-/** Keep the existing observation/event precedence. Only otherwise unknown
- * states expose additional actual publisher states; this never changes liveness. */
-export function floorWorkerStatus(worker: Execution): string {
-  const status = executionStatus(worker)
-  if (status !== 'Unknown') return status
-  const raw = String(worker.source.current_state.state).trim().toLowerCase()
-  return ({ error: 'Error', queued: 'Queued', idle: 'Idle', stopped: 'Stopped' } as Record<string, string>)[raw] ?? status
+/** Status categories use the same recorded evidence as card and chip facts. */
+export function floorWorkerStatus(worker: Execution, now = Date.now()): string {
+  const activity = currentActivity(worker, now)
+  if (activity === 'terminal') return 'Finished'
+  if (activity === 'working') return 'Running'
+  if (activity === 'waiting') return recordedState(worker, now) === 'blocked' ? 'Blocked' : 'Waiting'
+  return ({ error: 'Error', queued: 'Queued', idle: 'Idle', stopped: 'Stopped' } as Record<string, string>)[recordedState(worker, now) ?? ''] ?? 'No update'
 }
 export function statusRank(status: string, domain: 'cards' | 'workers') {
-  if (!status.trim() || /^(?:unknown|status unknown|unassigned \/ unknown)$/i.test(status)) return 10000
+  if (!status.trim() || /^(?:unknown|status unknown|no update|unassigned \/ unknown)$/i.test(status)) return 10000
   const order: readonly string[] = domain === 'cards' ? cardStatusOrder : workerStatusOrder
   const index = order.findIndex(value => value.toLowerCase() === status.toLowerCase())
   return index < 0 ? order.length : index

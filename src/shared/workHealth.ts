@@ -1,5 +1,6 @@
 import type { FloorScene } from './reconciliationPresentation'
 import { currentActivity, readinessContext, workReadiness } from './workReadiness'
+import { activeWorker } from './workerEvidence'
 import type { Claim } from '../server/reconciliation/scene'
 
 export const verifiedLink = (link: Claim) => link.basis === 'explicit' && link.verification === 'confirmed' && link.state === 'current'
@@ -60,9 +61,12 @@ export function sceneWorkHealth(scene: FloorScene, now: number, readFailed = sce
 /** Shared read-only execution-health contract. No scheduler or prose inference. */
 export function workHealth(scene: FloorScene, cardId: string, now: number, readFailed = scene.searchReadFailed ?? false, context = healthContext(scene, now)): WorkHealth {
   const card = context.cards.get(cardId)!
-  const links = context.links.get(cardId) ?? []
+  const links = (context.links.get(cardId) ?? []).filter(link => {
+    const execution = context.workers.get(link.executionId)
+    return !execution || activeWorker(execution, now)
+  })
   const workerIds = new Set(links.filter(verifiedLink).map(link => link.executionId))
-  const workers = [...workerIds].flatMap(id => context.workers.get(id) ?? [])
+  const workers = [...workerIds].flatMap(id => context.workers.get(id) ?? []).filter(worker => activeWorker(worker, now))
   const sourceFresh = !readFailed && freshObservation(scene.coverage.intentions, now)
   const complete = sourceFresh && scene.coverage.absenceConclusions === 'sufficient-configured-sources' &&
     scene.coverage.homes.every(home => freshObservation(home.observation, now)) &&

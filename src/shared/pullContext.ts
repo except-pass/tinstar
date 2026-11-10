@@ -13,7 +13,7 @@ export function pullContext(scene: FloorScene | null, pull: Pick<PullSummary, 'i
     id: worker.id, task: worker.identity.task_id ?? 'Unknown', home: worker.home, attempt: worker.identity.spawn_gen,
     manager: worker.home, managerBasis: `Current home accountability; parent ${worker.parentHome ?? 'Unknown'}`,
     machine: worker.placement.machine, machineBasis: worker.placement.basis,
-    state: historyRecord(worker) ? 'Historical' : freshness(worker.observation) === 'fresh' && worker.observation.coverage === 'complete' ? 'Confirmed' : 'Last known',
+    state: historyRecord(worker, now) ? 'Historical' : freshness(worker.observation) === 'fresh' && worker.observation.coverage === 'complete' ? 'Confirmed' : 'Last known',
     freshness: freshness(worker.observation), source: String(worker.source.pr.source ?? 'tasks[].pr.url'), observedAt: worker.observation.observedAt,
     registeredHead: typeof worker.source.pr.head === 'string' ? worker.source.pr.head : null,
     claims: [...(scene?.claims ?? []), ...(scene?.claimHistory ?? [])].filter(claim => claim.executionId === worker.id).map(claim => ({ ...claim,

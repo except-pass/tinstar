@@ -358,8 +358,12 @@ it('choosing All exits the palette focus session without Escape restoring the pr
 
 describe('worker facts in existing card metadata', () => {
   it.each(['compact', 'detailed'] as const)('renders concrete facts without an extra card row in %s', density => {
+    const finished = scene.executions.find(worker => worker.identity.task_id === 'helper-worker')!
+    finished.source.last_event.state = 'done'
+    finished.source.current_state.state = 'done'
+    finished.liveness = 'finished'
     const claim = scene.claims.find(link => link.cardId === fixtureId(1))!
-    scene.claims = scene.claims.filter(link => link.cardId !== fixtureId(1) || link.executionId === claim.executionId)
+    scene.claims.push({ ...claim, id: 'declared-absent', executionId: 'not-observed', verification: 'unverified', state: 'last-known' })
     const worker = scene.executions.find(worker => worker.id === claim.executionId)!
     worker.source.harness = 'codex'
     worker.source.current_state.state = 'unknown'
@@ -369,7 +373,12 @@ describe('worker facts in existing card metadata', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
     }
     const card = container.querySelector<HTMLElement>(`.ov-card[data-entity-id="${fixtureId(1)}"]`)!
-    expect(within(card).getByText('Worker state unknown (codex pane)')).toHaveClass('ov-link-label')
+    expect(within(card).getByText(/1 worker, no update since/)).toHaveClass('ov-link-label')
+    expect(card).not.toHaveTextContent(/codex pane|state unknown/i)
+    const shownWorkers = [...container.querySelectorAll<HTMLElement>('.ov-execution')]
+    const shown = shownWorkers.find(element => element.dataset.entityId === worker.id)!
+    expect(shown).toHaveTextContent(/No update since/)
+    expect(shownWorkers.some(element => element.dataset.entityId === finished.id)).toBe(false)
     expect(container.querySelector('.ov-pattern-summary')).toBeNull()
     expect(card).not.toHaveTextContent("Can't tell")
   })

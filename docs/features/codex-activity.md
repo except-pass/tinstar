@@ -36,16 +36,25 @@ No matching log produces `codex: null` and a `codex_reason` such as
 `no_matching_session_modified_within_7_days` or `worker_folder_missing`. A log without
 turn events retains its activity timestamp with `turn_open: null` and
 `codex_reason: "no_turn_events"`. An unreadable log leaves the signal unknown.
-Known crew state takes precedence. Unknown crew state uses a known turn only
-while the collector observation is less than five minutes old and the home
-observation is fresh. Open means running; closed means waiting. A fresh known
-turn also takes precedence over historical completion reports when deciding
-whether a worker belongs in History. An explicit unavailable collector signal
-leaves liveness unknown instead of reviving a historical status report; legacy
-snapshots without a `codex` field retain their prior status-report fallback. Log mtime is
-shown as **Last activity**, independently of turn state; there is no hung-worker
-timeout. This is evidence for the normal worker counts, Active/Stalled readiness
-and per-card unavailable facts, without changing the existing readiness census.
+For owner-facing worker membership and activity, fresh recorded `run-step` state
+takes precedence. Unknown or unusable crew state (including a stale run-step
+or an ignored pane-derived state) permits the session fallback.
+It uses a known turn only while the collector observation is less than five minutes
+old and the home observation is fresh. Open means running; closed means waiting.
+Pane contents and pane-derived states never establish activity or completion.
+Historical working status events date the last report but do not prove current
+activity.
+
+A historical completion report keeps a worker in History unless fresh recorded
+execution proves resumption: an open session-log turn with `last_activity_at`
+newer than the completion report, or a `working`/`running` run-step recorded after
+that report. A closed session reread later is not resumption; `observed_at` dates
+collection, not session activity.
+The shared boundary is [`workerEvidence.ts`](../../src/shared/workerEvidence.ts);
+[Overview](overview.md) owns the displayed facts and count behavior.
+Log mtime is shown as **Last activity**, independently of turn state; there is no
+hung-worker timeout. This evidence supplies Active/Stalled readiness and per-card
+unavailable facts.
 
 ## Private machine config
 

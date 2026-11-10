@@ -124,7 +124,10 @@ describe('Ultra Compact Overview', () => {
     expect(group).not.toHaveTextContent('No linked task')
   })
   it('labels a confirmed worker hidden from the current view', () => {
-    for (const w of scene.executions) w.liveness = 'finished'
+    for (const w of scene.executions) {
+      w.liveness = 'finished'
+      w.source.current_state.state = 'done'
+    }
     const { container } = mount()
     const group = task(container, 1).closest('.ov-group')!
     expect(group.querySelector('.ov-worker-stack .ov-empty-col')).toHaveTextContent('Linked worker outside this view')

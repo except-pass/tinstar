@@ -10,6 +10,7 @@ it('shows multiple exact contributors and retained retired registration without 
   one!.source.pr = { url: pull.url, head: pull.head, source: 'task metadata' }
   two!.source.pr = { url: pull.url, head: 'b'.repeat(40), source: 'task metadata' }
   two!.liveness = 'finished'
+  two!.source.current_state.state = 'done'
   scene.backlog.push({ id: 'retained', home: '/retired/home', source: { ...scene.backlog[0]!.source, id: 'retired-task', state: 'done', pr_url: pull.url }, observation: one!.observation })
   const context = pullContext(scene, pull)
   expect(context.contributors).toHaveLength(3)

@@ -209,7 +209,8 @@ describe('fleet collection', () => {
       expect(worker.liveness).toBe(missingSignal ? 'liveness-not-observed' : legacyLiveness)
       expect(retainedExecutionLiveness(worker.source, Date.parse(timestamp))).toBe(worker.liveness)
       expect(executionStatus(worker)).toBe(missingSignal ? 'Unknown' : legacyStatus)
-      expect(floorWorkerStatus(worker)).toBe(missingSignal ? 'Unknown' : legacyStatus)
+      // Display uses recorded outcomes; pane state never supplies current activity.
+      expect(floorWorkerStatus(worker)).toBe(report === 'done' ? 'Finished' : 'No update')
       const normalized = result.fleet[0]!.observation.data!.tasks.find(task => task.id === worker.identity.task_id)!
       if (published) {
         expect(normalized).toHaveProperty('codex', null)

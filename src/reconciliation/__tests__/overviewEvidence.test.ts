@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
-import type { PatternResult } from '../../shared/workHealth'
+import { workHealth, type PatternResult } from '../../shared/workHealth'
+import { activeWorker, workerFact } from '../../shared/workerEvidence'
+import { organizedGroups } from '../../shared/floorOrganization'
+import { initialPresentation } from '../presentation'
 import type { WorkerLinkDetector } from '../../server/reconciliation/scene'
 
 const now = Date.parse('2026-11-09T21:00:00Z')
@@ -126,23 +129,23 @@ describe('card worker facts', () => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = 'working'
     worker.source.current_state.source = 'run-step'
-    expect(fact()).toBe('Worker running')
+    expect(fact()).toBe('1 worker running')
     expect(cardWorkerFact(fixtureScene({ now }), fixtureId(1), now)).toBe('2 workers running')
   })
-  it.each(['parked', 'paused', 'blocked'])('shows %s as waiting, with only the matching report age', state => {
+  it.each(['parked', 'paused', 'blocked'])('shows recorded %s as waiting, with only the matching report age', state => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = state
     worker.source.last_event.state = state
     worker.source.last_event.age_seconds = 3 * 3600
-    expect(fact()).toBe('Worker waiting · reported 3h ago')
+    expect(fact()).toBe('1 worker waiting · reported 3h ago')
     worker.source.last_event.state = 'working'
-    expect(fact()).toBe('Worker waiting')
+    expect(fact()).toBe('1 worker waiting')
   })
   it.each(['waiting', 'held', 'needs-decision'])('keeps unsupported crew-state %s unknown', state => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = state
     worker.source.last_event.state = state
-    expect(fact()).toContain('Worker state unknown')
+    expect(fact()).toContain('1 worker, no update since')
   })
   it.each([true, false])('uses a fresh Codex turn (%s) without dating it from an old report', turn => {
     const { scene, worker, fact } = singleWorker()
@@ -153,15 +156,15 @@ describe('card worker facts', () => {
     worker.source.last_event.age_seconds = 2 * 86400
     worker.source.codex = { turn_open: turn, observed_at: new Date(now).toISOString(),
       last_activity_at: new Date(now - 1000).toISOString(), session_file: 'rollout-test.jsonl' }
-    expect(fact()).toBe(turn ? 'Worker running' : 'Worker waiting')
+    expect(fact()).toBe(turn ? '1 worker running' : '1 worker waiting')
     worker.source.codex.observed_at = new Date(now - 300_000).toISOString()
-    expect(fact()).toContain('state unknown')
+    expect(fact()).toContain('no update since')
     worker.source.codex.observed_at = new Date(now).toISOString()
     worker.observation.status = 'stale'
-    expect(fact()).toContain('state unknown')
+    expect(fact()).toContain('no update since')
     worker.observation.status = 'fresh'
     scene.coverage.homes.find(home => home.source.home === worker.home)!.observation.status = 'stale'
-    expect(fact()).toContain('state unknown')
+    expect(fact()).toBe('1 worker, home unreachable')
   })
   it('dates waiting reports independently of recent log activity', () => {
     const { worker, fact } = singleWorker()
@@ -170,40 +173,120 @@ describe('card worker facts', () => {
     worker.source.last_event.age_seconds = 2 * 86400
     worker.source.codex = { turn_open: false, observed_at: new Date(now).toISOString(),
       last_activity_at: new Date(now - 1000).toISOString(), session_file: 'rollout-test.jsonl' }
-    expect(fact()).toBe('Worker waiting · reported 2d ago')
+    expect(fact()).toBe('1 worker waiting · reported 2d ago')
   })
-  it('names the unknown pane source and harness without treating a working history event as current', () => {
+  it('ignores pane state and dates the last recorded status event', () => {
     const { worker, fact } = singleWorker()
     worker.source.harness = 'codex'
     worker.source.current_state.state = 'unknown'
     worker.source.last_event.state = 'working'
-    expect(fact()).toBe('Worker state unknown (codex pane)')
+    worker.source.current_state.source = 'pane'
+    worker.source.last_event.age_seconds = 2 * 86400
+    expect(fact()).toBe('1 worker, no update since 2026-11-07 21:00 UTC')
     worker.source.current_state.source = 'none'
-    expect(fact()).toBe('Worker state unknown')
+    expect(fact()).toBe('1 worker, no update since 2026-11-07 21:00 UTC')
   })
   it('does not present stale state as currently running, or use other homes to discredit a fresh worker', () => {
     const { scene, worker, fact } = singleWorker()
     const home = scene.coverage.homes.find(home => home.source.home === worker.home)!
     scene.coverage.homes.find(value => value !== home)!.observation.status = 'stale'
-    expect(fact()).toBe('Worker running')
+    expect(fact()).toBe('1 worker running')
     worker.observation.observedAt = new Date(now - 3 * 3600_000).toISOString()
     worker.observation.status = 'stale'
-    expect(fact()).toBe('Worker state unknown · last seen 3h ago')
+    expect(fact()).toBe('1 worker, no update since 2026-11-09 17:59 UTC')
     worker.observation.status = 'fresh'
     home.observation.status = 'stale'
-    expect(fact()).toBe('Worker state unknown · last seen 3h ago')
+    expect(fact()).toBe('1 worker, home unreachable')
   })
-  it.each(['done', 'failed'])('reports current terminal state %s', state => {
+  it.each(['done', 'failed'])('omits recorded terminal state %s', state => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = state
-    expect(fact()).toBe(`Worker ${state}`)
+    expect(fact()).toBeNull()
+  })
+  it.each([
+    { source: 'run-step', state: 'working', turn: null, resumed: true },
+    { source: 'run-step', state: 'running', turn: null, resumed: true },
+    { source: 'none', state: 'unknown', turn: true, resumed: true },
+    { source: 'none', state: 'unknown', turn: false, resumed: false },
+    { source: 'none', state: 'unknown', turn: null, resumed: false },
+    { source: 'pane', state: 'working', turn: null, resumed: false },
+    { source: 'run-step', state: 'paused', turn: null, resumed: false },
+    { source: 'run-step', state: 'parked', turn: null, resumed: false },
+    { source: 'run-step', state: 'blocked', turn: null, resumed: false },
+  ])('counts an old done worker only with newer execution: $source/$state/$turn', ({ source, state, turn, resumed }) => {
+    const { scene, worker, fact } = singleWorker()
+    worker.source.last_event = { state: 'done', raw: 'done: old completion', note: null, age_seconds: 86400 }
+    worker.liveness = 'finished'
+    worker.source.current_state = { ...worker.source.current_state, state, source }
+    worker.source.codex = turn === null ? null : { turn_open: turn, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - (turn ? 1000 : 2 * 86400_000)).toISOString(), session_file: 'resumed.jsonl' }
+    expect(fact()).toBe(resumed ? '1 worker running' : null)
+    expect(workHealth(scene, fixtureId(1), now)).toMatchObject({ workerCount: resumed ? 1 : 0, running: resumed ? 1 : 0 })
+    const shown = organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers)
+    expect(shown.some(value => value.id === worker.id)).toBe(resumed)
+    expect(workerFact(worker, now, worker.observation)).toBe(resumed ? 'running' : 'finished')
+    if (turn === false) {
+      worker.source.codex!.last_activity_at = new Date(now).toISOString()
+      expect(fact()).toBeNull()
+    }
+    if (resumed) {
+      if (worker.source.codex) worker.source.codex.last_activity_at = new Date(now - 2 * 86400_000).toISOString()
+      else worker.source.current_state.observed_at = new Date(now - 2 * 86400_000).toISOString()
+      expect(fact()).toBeNull()
+    }
+  })
+  it('counts a newer open turn after a done report and stale run-step', () => {
+    const { scene, worker, fact } = singleWorker()
+    worker.source.last_event = { state: 'done', raw: 'done: old completion', note: null, age_seconds: 86400 }
+    worker.liveness = 'finished'
+    worker.source.current_state = { ...worker.source.current_state, state: 'done', source: 'run-step', freshness: 'stale' }
+    worker.source.codex = { turn_open: true, observed_at: new Date(now).toISOString(),
+      last_activity_at: new Date(now - 1000).toISOString(), session_file: 'resumed.jsonl' }
+    expect(fact()).toBe('1 worker running')
+    expect(activeWorker(worker, now)).toBe(true)
+    expect(workHealth(scene, fixtureId(1), now)).toMatchObject({ workerCount: 1, running: 1 })
+    expect(organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers).some(value => value.id === worker.id)).toBe(true)
+    expect(workerFact(worker, now, worker.observation)).toBe('running')
+  })
+  it('counts only observed unfinished workers across headers, relationships and pattern health', () => {
+    const sources = fixtureSources({ now })
+    const home = sources.fleet[1]!
+    const live = home.observation.data!.tasks.find(task => task.id === 'linked-worker')!
+    live.current_state = { ...live.current_state, state: 'working', source: 'pane' }
+    live.last_event = { state: 'paused', raw: null, note: 'Build dependencies', age_seconds: 2 * 86400 }
+    const finished = structuredClone(live)
+    finished.id = finished.identity.task_id = 'finished-worker'
+    finished.last_event = { state: 'done', raw: 'done: cancelled scope', note: 'Cancelled', age_seconds: 7 * 86400 }
+    home.observation.data!.tasks.push(finished)
+    sources.fleet[2]!.observation.data!.tasks = []
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(1))!
+    card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks:
+      ['linked-worker', 'finished-worker', 'not-found-worker'].map(task_id => ({ fm_home: home.source.home, task_id, first_observed_spawn_gen: 'attempt-1' })) })
+    const scene = new SceneReconciler().reconcile(sources, now)
+    expect(cardWorkerFact(scene, card.id, now)).toBe('1 worker, no update since 2026-11-07 21:00 UTC')
+    const shown = new Map(organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers.map(worker => [worker.id, worker] as const)))
+    const linked = scene.executions.filter(worker => activeWorker(worker, now) && scene.claims.some(link => link.cardId === card.id && link.executionId === worker.id && link.verification === 'confirmed'))
+    expect(linked).toHaveLength(1)
+    expect(shown.has(linked[0]!.id)).toBe(true)
+    expect(workerFact(linked[0]!, now, home.observation)).toBe('no update since 2026-11-07 21:00 UTC')
+    expect(workHealth(scene, card.id, now)).toMatchObject({ workerCount: 1, running: 0, unknown: 1 })
+    home.observation.status = 'stale'
+    scene.coverage.homes.find(value => value.source.home === home.source.home)!.observation.status = 'stale'
+    expect(cardWorkerFact(scene, card.id, now)).toBe('1 worker, home unreachable')
+    expect(workerFact(linked[0]!, now, undefined)).toBe('home unreachable')
+  })
+  it.each(['working', 'paused', 'done'])('never treats pane %s as recorded activity', state => {
+    const { worker, fact } = singleWorker()
+    worker.source.current_state.state = state
+    worker.source.current_state.source = 'pane'
+    worker.source.last_event.age_seconds = 2 * 86400
+    expect(fact()).toBe('1 worker, no update since 2026-11-07 21:00 UTC')
   })
   it('retains both running and unknown facts on mixed assignments', () => {
     const scene = fixtureScene({ now })
     const helper = scene.executions.find(worker => worker.identity.task_id === 'helper-worker')!
     helper.source.harness = 'codex'
     helper.source.current_state.state = 'unknown'
-    expect(cardWorkerFact(scene, fixtureId(1), now)).toBe('Worker running · Worker state unknown (codex pane)')
+    expect(cardWorkerFact(scene, fixtureId(1), now)).toBe('1 worker running · 1 worker, no update since 2026-11-09 20:59 UTC')
   })
 })
 
@@ -215,7 +298,7 @@ describe('one pattern explanation', () => {
       result('Running state unknown for /home/b: task-b (pane); Runnable state unknown for /home/b: task-b'),
       result('Meaningful progress time is not published; heartbeat/check-in age is not progress'),
       result('match', 'match'), result('no-match', 'no-match'), undefined,
-    ])).toBe('3 cards not checked: worker state unknown; progress time unknown')
+    ])).toBe('3 cards not checked: workers have no current update; progress time unknown')
   })
   it('omits the explanation when all cards are evaluable', () => {
     expect(patternCheckSummary([])).toBeNull()

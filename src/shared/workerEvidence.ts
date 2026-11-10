@@ -1,0 +1,62 @@
+import type { Execution } from '../server/reconciliation/scene'
+import { codexTurn } from './codexActivity'
+import { ageLabel, reportTimestamp } from './workerTimestamps'
+
+type Observation = Execution['observation']
+const fresh = (observation: Observation, now: number) => observation.status === 'fresh' && observation.coverage === 'complete' &&
+  (!observation.expiresAt || Date.parse(observation.expiresAt) > now)
+const terminal = new Set(['done', 'landed', 'failed'])
+
+function recordedOutcome(worker: Execution, now: number): string | null {
+  const activity = recordedActivity(worker, now)
+  const state = recordedState(worker, now)
+  const evidenceAt = Date.parse(String(['working', 'running'].includes(String(state)) ? worker.source.current_state.observed_at ?? '' : worker.source.codex?.last_activity_at ?? ''))
+  if (activity === 'working' && evidenceAt > reportTimestamp(worker)) return null
+  const event = String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')
+  const verb = event.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase() ?? String(worker.source.last_event.state)
+  const current = worker.source.current_state
+  if (terminal.has(verb)) return verb
+  if (current.source !== 'pane' && terminal.has(String(current.state))) return String(current.state)
+  return worker.liveness === 'finished' && !(current.source === 'pane' && terminal.has(String(current.state))) ? 'done' : null
+}
+export const historyRecord = (worker: Execution, now = Date.now()) => recordedOutcome(worker, now) !== null || worker.liveness === 'absent' || worker.source.endpoint.exists === false
+export const activeWorker = (worker: Execution, now = Date.now()) => worker.kind !== 'secondmate' && !historyRecord(worker, now)
+
+export function recordedState(worker: Execution, now: number): string | null {
+  const state = worker.source.current_state
+  return fresh(worker.observation, now) && state.freshness === 'fresh' && state.source === 'run-step' ? String(state.state) : null
+}
+
+/** Crew-state and session logs are current evidence. Status events date the last
+ * update; a historical working event never claims that work is still running. */
+function recordedActivity(worker: Execution, now: number): 'working' | 'waiting' | 'unknown' {
+  if (!fresh(worker.observation, now)) return 'unknown'
+  const recorded = recordedState(worker, now)
+  const turn = codexTurn(recorded === null ? { ...worker.source, current_state: { state: 'unknown' } } : worker.source, now)
+  if (turn !== null) return turn ? 'working' : 'waiting'
+  if (recorded === 'working' || recorded === 'running') return 'working'
+  if (['parked', 'paused', 'blocked'].includes(String(recorded))) return 'waiting'
+  return 'unknown'
+}
+
+export function currentActivity(worker: Execution, now: number): 'working' | 'waiting' | 'terminal' | 'unknown' {
+  if (recordedOutcome(worker, now)) return 'terminal'
+  if (historyRecord(worker, now)) return 'unknown'
+  return recordedActivity(worker, now)
+}
+
+/** Shared owner-facing fact for card headers and worker chips. Source names stay
+ * in the existing inspector evidence, never in this text. */
+export function workerFact(worker: Execution, now: number, home: Observation | undefined, readFailed = false): string {
+  if (readFailed || !home || !fresh(home, now)) return 'home unreachable'
+  const activity = currentActivity(worker, now)
+  if (activity === 'working') return 'running'
+  if (activity === 'terminal') return recordedOutcome(worker, now) === 'failed' ? 'failed' : 'finished'
+  if (activity === 'waiting') {
+    const state = recordedState(worker, now)
+    const age = state === worker.source.last_event.state ? ageLabel(reportTimestamp(worker), now) : 'Unknown'
+    return `waiting${age === 'Unknown' ? '' : ` · reported ${age}`}`
+  }
+  const reported = reportTimestamp(worker)
+  return Number.isFinite(reported) ? `no update since ${new Date(reported).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'no update recorded'
+}
