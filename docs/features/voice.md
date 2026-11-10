@@ -27,10 +27,9 @@ shortening before Send.
 ## Installation and updates
 
 Install Tin Star normally with Node >=22.12 on Linux or macOS. On the **server
-running Tin Star**, the guarded floor deploy installs the local English model
-after building, then prints voice status. Installation is idempotent. Download
-or status failures warn clearly and continue the deploy; text input stays
-available. For other installations, enable local English transcription once:
+running Tin Star**, provisioning during the guarded floor deploy follows the
+[floor deploy runbook](floor-deploy.md). For other installations, enable local
+English transcription once:
 
 ```sh
 tinstar voice install
