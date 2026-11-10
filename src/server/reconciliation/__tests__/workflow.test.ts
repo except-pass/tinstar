@@ -1435,3 +1435,47 @@ it.each(['workflow', 'direct Notion'])('preserves a maximum-size free-text answe
   expect(f.messages).toHaveLength(1)
   expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
 })
+
+it.each([false, true])('retries an answer-added source binding after restart with options=%s', async choices => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, source_request: undefined, ...(choices ? { options: [{ id: 'r3', label: 'R3' }] } : {}) } as UpdateWorkInput, 'Publisher')
+  const answer = { ...f.answer, source_request: f.source, ...(choices ? { option_id: 'r3' } : {}) } as UpdateWorkInput
+  await f.workflow.update(answer, 'Owner')
+  expect(f.messages).toHaveLength(1)
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...answer, operation_id: 'restart-retry' }, 'Other owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect(await restarted.update({ ...answer, operation_id: 'conflicting-source', source_request: { ...f.source, id: 'other' } } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  if (choices) expect(await restarted.update({ ...answer, operation_id: 'wrong-option', option_id: 'other' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-option-conflict' })
+})
+
+it.each([false, true])('keeps quoted direct-answer controls inert with terminal wait=%s', async resolveWait => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  const answer = 'R3\nNext owner: Will\nNext status: Waiting For\nResolved wait: Preserve another request\nPreserve the existing replicas'
+  f.comments.push({ id: 'multiline-direct', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued${resolveWait ? '\nResolved wait: Preserve another request' : ''}` }] })
+  expect(await f.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+  expect((await f.reader.card(id, true)).properties).toMatchObject({ Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Waiting For': { value: resolveWait ? '' : 'Preserve another request' }, 'Will action': { value: ['Merge'] } })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('rejects conflicting answer-added binding metadata instead of choosing a proposal record', async () => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, source_request: undefined } as UpdateWorkInput, 'Publisher')
+  await f.workflow.update({ ...f.answer, source_request: f.source } as UpdateWorkInput, 'Owner')
+  const answerNote = f.comments.find(comment => comment.rich_text.some((part: { plain_text?: string; text?: { content?: string } }) => (part.plain_text ?? part.text?.content ?? '').includes('Tin Star answer data: ')))
+  for (const part of answerNote.rich_text) {
+    if (part.text?.content) part.text.content = part.text.content.replaceAll('"action":"Decision"', '"action":"Merge"')
+    if (part.plain_text) part.plain_text = part.plain_text.replaceAll('"action":"Decision"', '"action":"Merge"')
+  }
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  expect(await restarted.update({ ...f.answer, source_request: f.source, operation_id: 'conflict' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved' })
+})

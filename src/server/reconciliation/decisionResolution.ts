@@ -53,17 +53,39 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export const decisionAnswerText = (note: WorkflowNote) => {
-  const data = rows([note], 'Tin Star answer data: ')[0]
-  if (data && typeof data.answer === 'string') return data.answer
-  const start = note.text.indexOf('\nAnswer: '), end = note.text.indexOf('\nNext owner: ', start)
-  return start >= 0 ? note.text.slice(start + '\nAnswer: '.length, end >= 0 ? end : undefined).trim() : null
+export function decisionProposals(notes: WorkflowNote[]) {
+  const entries = notes.flatMap(note => {
+    const data = rows([note], 'Tin Star answer data: ')[0]
+    return rows([note], 'Tin Star request: ').map(row => {
+      if (data?.binding && row.id !== data.request_id) throw new DecisionSourceError('answer binding does not match its proposal identity')
+      return { row, added: !!data?.binding }
+    })
+  })
+  return [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
+    const matching = entries.filter(entry => entry.row.id === id)
+    if (matching.length === 1) return [matching[0]!.row]
+    const published = matching.filter(entry => !entry.added), added = matching.filter(entry => entry.added)
+    if (published.length !== 1 || added.length !== 1) throw new DecisionSourceError('proposal identity has conflicting records')
+    const original = published[0]!.row, binding = added[0]!.row
+    if (original.source_request || !binding.source_request || original.action !== binding.action || original.preserve_action !== binding.preserve_action) throw new DecisionSourceError('proposal identity has conflicting binding metadata')
+    return [{ ...original, source_request: binding.source_request, source_question: binding.source_question, source_spawn_gen: binding.source_spawn_gen }]
+  })
 }
+export function decisionAnswer(note: WorkflowNote) {
+  const data = rows([note], 'Tin Star answer data: ')[0]
+  if (data && typeof data.answer === 'string') return { answer: data.answer as string, owner: data.next?.owner as string | undefined, status: data.next?.status as string | undefined, wait: data.resolve_wait as string | undefined }
+  const start = note.text.indexOf('\nAnswer: ')
+  const footer = /\nNext owner: ([^\r\n]+)\nNext status: ([^\r\n]+)(?:\nResolved wait: ([^\r\n]+))?(?:\nTin Star operation: [^\r\n]+)?\n?$/.exec(note.text)
+  if (start < 0 || !footer || footer.index <= start) return null
+  return { answer: note.text.slice(start + '\nAnswer: '.length, footer.index).trim(), owner: footer[1], status: footer[2], wait: footer[3] }
+}
+export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.answer ?? null
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
   confirm?: (text: string, marker: string) => Promise<void>): Promise<DecisionResolution | undefined> {
-  const requests = rows(notes, 'Tin Star request: ')
+  let requests: ReturnType<typeof decisionProposals>
+  try { requests = decisionProposals(notes) } catch (error) { return verify((error as Error).message) }
   const bound = requests.filter(row => row && 'source_request' in row)
   if (!bound.length) {
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>

@@ -135,3 +135,10 @@ it('delivers a structured multiline answer only to its own bound proposal', asyn
   const { decisionRequests } = await import('../../../shared/workflowRequests')
   expect(decisionRequests(f.notes).map(row => [row.id, row.answered])).toEqual([['mailbox-proposal', true], ['other-proposal', false]])
 })
+
+it('preserves multiline legacy answers carrying a terminal workflow receipt', async () => {
+  const f = fixture(), answer = 'R3\nNext owner: Will\nPreserve existing replicas'
+  f.notes[1]!.text = `Tin Star answer: "mailbox-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued\nTin Star operation: ["Owner","legacy-answer"]`
+  expect(await f.reconcile()).toMatchObject({ state: 'pending' })
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+})
