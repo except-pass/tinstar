@@ -4,6 +4,7 @@
   "get_queue",
   "get_scene",
   "get_work",
+  "get_work_views",
   "get_worker_link_report",
   "get_workflow_rules",
   "list_ui_sessions",
