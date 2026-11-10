@@ -120,7 +120,10 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
         { cardId: card.id, requestId: row.id, answerId: row.id })
         if (!submitted?.saved) return { ...pending(), delivery_id: deliveryId }
       }
-      if (!current && previous?.state === 'done') {
+      // Origin freshness/closure was checked above. Fleet-wide readiness can
+      // remain unknown because of an unrelated home; its error must not veto
+      // this source's own acknowledged receipt.
+      if (!current && previous && ['done', 'acknowledged'].includes(previous.state)) {
         if (!confirm) return pending()
         await confirm('First Mate acknowledged this exact answer and its source request is closed.', marker)
         await delivery.completeDecision(deliveryId)

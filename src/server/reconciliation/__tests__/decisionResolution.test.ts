@@ -49,13 +49,26 @@ describe('source-scoped First Mate decision reconciliation', () => {
     f.messages[0]!.state = 'acknowledged'
     expect(await f.reconcile()).toMatchObject({ state: 'pending' })
     f.home.observation.data!.backlog = []
-    expect(await f.reconcile()).toMatchObject({ state: 'pending' })
+    expect(await f.reconcile()).toMatchObject({ state: 'resolved' })
     f.messages[0]!.state = 'done'
     expect(await f.reconcile()).toMatchObject({ state: 'resolved' })
     expect(await f.reconcile()).toMatchObject({ state: 'resolved' })
     expect(f.confirm).toHaveBeenCalledTimes(1)
     expect(f.delivery.submit).toHaveBeenCalledTimes(1)
     expect(f.card.properties.Status!.value).toBe('Queued')
+  })
+  it('uses only the originating acknowledgment and fresh closure when another home is unavailable', async () => {
+    const f = fixture()
+    await f.reconcile()
+    const unrelated = structuredClone(f.home)
+    unrelated.source.home = '/fixture/unrelated-offline'
+    unrelated.observation.status = 'unknown'; unrelated.observation.coverage = 'unknown'; unrelated.observation.data = null
+    f.snapshot.fleet.push(unrelated)
+    f.home.observation.data!.backlog = []
+    expect(await f.reconcile()).toMatchObject({ state: 'pending' }) // source closed but receipt is only saved
+    f.messages[0]!.state = 'acknowledged' // fleet-wide done is intentionally unavailable
+    expect(await f.reconcile()).toMatchObject({ state: 'resolved' })
+    expect(f.confirm).toHaveBeenCalledTimes(1)
   })
   it('records a truthful partial failure and retries the same delivery identity', async () => {
     const f = fixture()
