@@ -106,7 +106,7 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
-| `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors (read only), or `queue-source-unavailable` |
+| `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors, or `queue-source-unavailable`; see [queue reconciliation effects](workflow.md#first-mate-decision-reconciliation) |
 | `get_worker_link_report()` | Read-only [worker-link backfill report](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report); no open window or `scene_id` required |
 | `list_prs(offset?, limit?)` | Shared PR Operations open inventory, captured heads, card links and coverage; requires a verified owner binding |
 | `get_pr(url, head, include_files?, offset?, limit?)` | Shared exact-head description, checks, reviews, optional file metadata and card/worker attribution; requires a verified owner binding |

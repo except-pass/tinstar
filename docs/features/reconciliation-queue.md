@@ -45,7 +45,7 @@ npm run typecheck
 npm run build:all
 ```
 
-The controlled tests cover source deduplication, independent decisions, real source keys, resolved/answered/completed filtering, no-op repeated reads, future/conditional/multistep actions, release dependencies, missing/unknown/stale sources, PR closure/draft/check failures/truncation/head conflicts, read bounds/cache/coalescing, and the read-only origin/method/envelope boundary. Test data is explicit fixture data; it creates no production incidents.
+The controlled tests cover source deduplication, independent decisions, real source keys, resolved/answered/completed filtering, idempotent repeated reads, future/conditional/multistep actions, release dependencies, missing/unknown/stale sources, PR closure/draft/check failures/truncation/head conflicts, read bounds/cache/coalescing, and the origin/method/envelope boundary. Test data is explicit fixture data; it creates no production incidents.
 
 The live discovery proof is saved outside the repository at `/home/farm/fm-home/data/tinstar-recon-s4/live-proof.json`, with its rerunnable `live-proof.ts`. It reads this Hulk home through the documented snapshot interface and authenticates Notion GET/schema plus POST/query via the authorized discovery helper, which keeps its credential. It records the exact tested git head, source coverage, current queue and relevant real card/task observations. Production Notion credentials, other homes' publication routes, floor UI and conversational MCP are separate integration prerequisites/slices; this server/API proof does not claim their delivery.
 

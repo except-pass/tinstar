@@ -136,7 +136,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
 | `wait` | `dependency`, `unblocks_when`, `follow_up_by`, optional `note`. Enters Waiting For and appends that wait while retaining other waits. |
-| `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. |
+| `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. For source binding and published choices, see [First Mate decision reconciliation](#first-mate-decision-reconciliation). |
 | `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires all wait inputs; Done/Archived requires disposition/evidence. |
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
@@ -170,7 +170,7 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Updates confirm properties and managed sections before writing the history note.
+Except for [source-bound decision answers](#first-mate-decision-reconciliation), updates confirm properties and managed sections before writing the history note.
 If only the note fails, the same process can repair it once, provided the card's
 last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
@@ -178,8 +178,8 @@ with a new operation ID. Definite results that require a fresh attempt set
 `requires_new_operation_id`; the UI offers refresh and explicit re-issue solely
 from that flag, including on cached results. Uncertain saves retain their identity.
 Other partial failures also require reconciliation by
-the caller. There is no property replay, note-first plan receipt or automatic
-restart recovery. A completed operation's note marker prevents duplicate notes.
+the caller. For these other operations, there is no property replay, note-first plan receipt
+or automatic restart recovery. A completed operation's note marker prevents duplicate notes.
 
 A receipt in the initial creation body recovers lost create responses, with a tiny durable local
 creation latch in `workflow-create-receipts.json` preventing an uncertain POST
@@ -302,7 +302,8 @@ observed running worker. Blank/unreadable links stay unknown. These observations
 never change status, invent worker links or prevent corrective edits. They are
 not business-progress or completion judgments, and no new watchdog is introduced.
 
-The queue endpoint retains read-only GET and allowed-Origin checks. Card asks
+The queue endpoint retains GET and allowed-Origin checks; its bounded reconciliation
+side effects follow [First Mate decision reconciliation](#first-mate-decision-reconciliation). Card asks
 remain visible without owner authorization, with “PR details require owner
 authorization” placeholders instead of PR inventory metadata. PR inventory and
 readiness are collected only after the same check as `/api/pulls`: a loopback
@@ -455,15 +456,22 @@ There is no independent poller or request store.
 
 Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
 `get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
-answer can use the same published proposal and these explicit lines:
+answer can use the same published proposal and this format:
 
 ```text
 Tin Star answer: "the-published-proposal-id"
 Answer: R3
 Next owner: Firstmate
 Next status: Queued
-Resolved wait: exact single wait entry (optional; omit this line to preserve waits)
+Resolved wait: exact single wait entry
 ```
+
+Start the note with `Tin Star answer:` as shown. `Answer:` may contain multiple
+lines. End with consecutive `Next owner:` and `Next status:` lines, optionally
+followed by `Resolved wait:` with one exact wait entry; omit that final line to
+preserve waits. Control-looking lines inside the answer remain prose; only the
+terminal footer supplies the transition and wait. For workflow-generated answers,
+the persisted structured answer data owns the proposal identity and answer.
 
 Refresh records the scoped effects through the same workflow operation and
 retries delivery. A general approval comment, missing binding, contradictory
