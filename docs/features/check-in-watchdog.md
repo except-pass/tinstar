@@ -15,10 +15,10 @@ exact appointment instant a card is not yet overdue.
 Eligibility uses a separate Notion query filtered to `Owner: Firstmate` and
 `Status: In Progress` or `Waiting For`. Its cached census must be complete and
 fresh; it does not inherit the full board's pagination or unrelated relation
-coverage. The full-board reader permits up to 20 pages (2,000 cards) under its
-existing shared 20-second deadline and 30-second cache TTL. Hitting that bound
-still reports `hasMore` and partial coverage. The worker identity graph retains
-that truthful full-board coverage: if incomplete, requests go to First Mate for
+coverage. The [source reference](reconciliation-floor.md#run-and-configure)
+owns the full-board reader's bounds, caching and coverage rules. The worker
+identity graph retains that truthful full-board coverage: if incomplete,
+requests go to First Mate for
 reconciliation rather than selecting an unverified worker. Before delivery,
 the existing uncached exact-page read rechecks scope, status and appointment.
 
