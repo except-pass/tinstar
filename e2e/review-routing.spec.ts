@@ -64,9 +64,9 @@ for (const mobile of [false, true]) test(`existing review drawer supports ${mobi
   const panel = page.getByRole('complementary', { name: 'Review Ready' })
   await expect(panel).toBeVisible()
   await expect(panel.getByRole('article')).toHaveCount(2)
-  await expect(panel.getByRole('link', { name: 'Open live feature ↗' }).first()).toHaveAttribute('href', /page=decisions/)
+  await expect(panel.getByRole('article', { name: 'Discuss and Decisions acceptance (fixture)' }).getByRole('link', { name: 'Open live feature ↗' })).toHaveAttribute('href', /page=decisions/)
   if (process.env.TINSTAR_REVIEW_PROOF_DIR) await page.screenshot({ path: join(process.env.TINSTAR_REVIEW_PROOF_DIR, `review-${mobile ? 'mobile' : 'desktop'}-before.png`), fullPage: true })
-  const first = panel.getByRole('article').first()
+  const first = panel.getByRole('article', { name: 'Discuss and Decisions acceptance (fixture)' })
   await first.getByRole('checkbox').check()
   if (!mobile) { await first.getByRole('button', { name: 'Approve deliverable' }).focus(); await page.keyboard.press('Enter') }
   else await first.getByRole('button', { name: 'Approve deliverable' }).tap()
