@@ -4,7 +4,10 @@ Use `scripts/deploy/floor-deploy.sh` for each floor deploy, including unattended
 invocations. It replaces the manual fetch/checkout/install/test/build/restart
 sequence. It fetches `origin/main`, checks it out detached, installs dev dependencies,
 runs **typecheck and the complete unit suite**, builds the shipped client/server,
-then restarts the floor, facade and tunnel in that order. No unit
+then idempotently installs the English voice model and prints voice status using
+the service’s `TINSTAR_CONFIG_HOME`, before restarting the floor, facade and
+tunnel in that order. Voice install/status failures print a warning and continue;
+they never latch a deploy block or roll back a deployment. No unit
 is restarted if a build gate fails, unless an operator supplies an audited override.
 The source checkout must be clean. If the full suite fails, the wrapper uses the
 Vitest JSON report to rerun **only failed files**, once each in fresh processes,
