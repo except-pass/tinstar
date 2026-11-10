@@ -10,6 +10,8 @@ import { ReconciliationSources, handleReconciliationRequest } from './index'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../api/originAllowlist'
 import { buildQueue } from './queue'
 import { QueuePullReader, type PullReadiness } from './queuePulls'
+import { PullsApi } from '../pulls/routes'
+import { CardContextReader } from './cardContext'
 import { queueSignals } from './queueInputs'
 import type { Observation } from './observation'
 
@@ -623,7 +625,9 @@ it('serves queue through the same read-only HTTP boundary and never calls domain
   seedOriginAllowlist(address.port)
   const url = `http://127.0.0.1:${address.port}/api/reconciliation/queue`
   try {
-    expect((await fetch(url)).status).toBe(403)
+    const restricted = await fetch(url)
+    expect(restricted.status).toBe(200)
+    expect(await restricted.json()).toMatchObject({ ok: true, data: { warnings: expect.arrayContaining(['PR details require owner authorization']) } })
     const response = await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.json()).toMatchObject({ ok: true, data: { readOnly: true, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
@@ -632,6 +636,35 @@ it('serves queue through the same read-only HTTP boundary and never calls domain
     expect((await fetch(url, { method: 'OPTIONS' })).status).toBe(204)
     // This home has only a read executable: a hidden write would fail this route.
     expect((await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })).status).toBe(200)
+    await writeFile(join(dir, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+    const api = new PullsApi(sources, undefined, dir)
+    sources.authorizePulls = req => api.authorized(req)
+    vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot([mergeCard()]), diagnostics: { notion: sources.notionApi.diagnostics } })
+    const context = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockResolvedValue({ outcome: 'available', blocks: [] })
+    const read = vi.fn(async () => ({ pulls: [{ id: 'except-pass/tinstar#999', repository: 'except-pass/tinstar', number: 999, url: pull, title: 'Private PR title', author: 'private-author', head: 'a'.repeat(40), base: 'private-branch', draft: false, createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh' as const, links: [] }], repositories: [], warnings: [], associationsComplete: true }))
+    const readiness = vi.fn(async () => new Map<string, PullReadiness>())
+    sources.readPulls = read
+    sources.readPullReadiness = readiness
+    try {
+      for (const headers of [{}, { 'X-Tinstar-UI': '1' }, { 'Tailscale-User-Login': 'stranger@example.test' }] as Record<string, string>[]) {
+        const response = await fetch(url, { headers })
+        expect(response.status).toBe(200)
+        const body = await response.json()
+        expect(body.data.needsWill).toEqual([expect.objectContaining({ cardIds: [a], pulls: [], prDetails: 'PR details require owner authorization' })])
+        expect(JSON.stringify(body)).not.toContain('Private PR title')
+      }
+      expect(read).not.toHaveBeenCalled()
+      expect(readiness).not.toHaveBeenCalled()
+      const owner = await fetch(url, { headers: { 'Tailscale-User-Login': 'owner@example.test' } })
+      expect(owner.status).toBe(200)
+      const body = await owner.json()
+      expect(body.data.needsWill[0].pulls).toEqual([expect.objectContaining({ title: 'Private PR title', author: 'private-author', head: 'a'.repeat(40), base: 'private-branch' })])
+      expect(body.data.needsWill[0].prDetails).toBeUndefined()
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(readiness).toHaveBeenCalledWith([pull])
+    } finally {
+      context.mockRestore()
+    }
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     await rm(dir, { recursive: true, force: true })

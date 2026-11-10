@@ -301,11 +301,16 @@ observed running worker. Blank/unreadable links stay unknown. These observations
 never change status, invent worker links or prevent corrective edits. They are
 not business-progress or completion judgments, and no new watchdog is introduced.
 
-The existing queue endpoint now requires the existing private UI handshake
-(`X-Tinstar-UI: 1`, trusted private peer and allowed Origin) because its projection
-includes private PR metadata. Agents use the authenticated `get_work_views` tool;
-the authenticated tunnel advertises it under the existing credential/network
-boundary. There are no consumer write modes or new permission settings.
+The queue endpoint retains read-only GET and allowed-Origin checks. Card asks
+remain visible without owner authorization, with “PR details require owner
+authorization” placeholders instead of PR inventory metadata. PR inventory and
+readiness are collected only after the same check as `/api/pulls`: a loopback
+proxy peer (`::1` or `127.*`, including IPv4-mapped addresses) and a trusted
+`Tailscale-User-Login` matching `ask.ownerLogins`. `X-Tinstar-UI`, loopback alone,
+tailnet origin, caller IDs and install tokens do not grant owner authority.
+Agents use authenticated `get_work_views` under the existing tunnel boundary;
+MCP work-view callers receive the same placeholders, pending a separate owner
+decision on PR-read authorization. There are no new permission settings.
 
 Views reuse the shared property reader, source caches/expiry, PR inventory and
 readiness caches, and comment reader/Notion limiter. No body reads are added to
@@ -394,7 +399,7 @@ acceptance, connector refresh, disabling external jobs and consumer writer migra
 Slice 3 MCP catalog: added **`get_work_views`**; changed **`get_workflow_rules`**
 (output now documents the complete enforced workflow). Existing mutation/read and
 explicit-window presentation signatures remain compatible. After deployment the
-owner refreshes the ChatGPT connector catalog. The queue HTTP UI read now uses
-the existing explicit private-UI handshake as described above.
+owner refreshes the ChatGPT connector catalog. Queue PR details use the existing
+PR Operations owner check described above; other readers retain asks with
+authorization placeholders.
 
-Needs Will preserves the PR Operations owner boundary: only the trusted Tailscale identity in `ask.ownerLogins` can collect PR inventory and readiness. Other HTTP callers and MCP work-view callers retain card asks with “PR details require owner authorization”; no PR inventory metadata is collected or returned. UI headers, install tokens and caller IDs do not grant owner authority.
