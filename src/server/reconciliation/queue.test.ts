@@ -13,6 +13,8 @@ import { QueuePullReader, type PullReadiness } from './queuePulls'
 import { PullsApi } from '../pulls/routes'
 import { CardContextReader } from './cardContext'
 import { queueSignals } from './queueInputs'
+import { needsWill } from './needsWill'
+import { reconcileScene } from './scene'
 import type { Observation } from './observation'
 
 type FleetData = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>
@@ -684,4 +686,47 @@ it('retains canonical PR selection as corroborating sources join and leave', () 
   expect(retainedQueueItemId(withoutPull, combined, withoutPull.items[0]!.id)).toBe(combined.items[0]!.id)
   const unrelated = build(snapshot([card({ Owner: 'Will', 'Next action': 'Choose color' }, b)]))
   expect(retainedQueueItemId(withoutPull, unrelated, withoutPull.items[0]!.id)).toBe(withoutPull.items[0]!.id)
+})
+
+
+it.each(['merged', 'closed'] as const)('suppresses only the merge ask when a linked PR is %s', state => {
+  for (const associationOnly of [false, true]) for (const remaining of ['Decision', 'Elevated command', 'wait']) {
+    const mixed = mergeCard({ 'Will action': remaining === 'wait' ? ['Merge'] : ['Merge', remaining],
+      'Waiting For': remaining === 'wait' ? 'Will to approve access; Firstmate follows up' : '',
+      ...(associationOnly ? { Link: '' } : {}) })
+    const s = snapshot([mixed])
+    const inventory = { pulls: [{ id: 'except-pass/tinstar#999', repository: 'except-pass/tinstar', number: 999, url: pull,
+      title: 'Linked PR', author: 'agent', draft: false, head: 'a'.repeat(40), base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh' as const,
+      links: [{ cardId: a, active: true, sources: ['Manual association'], events: [] }] }], repositories: [], warnings: [], associationsComplete: true }
+    const readiness = new Map([[pull, readyPull({ state })]])
+    const queue = buildQueue(s, readiness, now, inventory)
+    expect(queue.items).toHaveLength(1)
+    const item = queue.items[0]!
+    expect(item.kind).toBe('decision')
+    expect(item.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(remaining === 'wait' ? [] : [remaining])
+    expect(item.action).not.toMatch(/^merge/i)
+    const contexts = new Map([[a, { outcome: 'available' as const, blocks: ['Merge', 'Decision', 'Elevated command'].map(action => ({
+      id: action, type: 'comment', text: `Requested from: Will\nQuestion: ${action} question\nTin Star request: ${JSON.stringify({ id: action, action, preserve_action: false })}`,
+    })) }]])
+    const view = needsWill(queue, reconcileScene(s, now), contexts, inventory, readiness, true)
+    expect(view).toHaveLength(1)
+    expect(view[0]!.requests.map(request => request.action)).toEqual(remaining === 'wait' ? [] : [remaining])
+    expect(view[0]!.cardIds).toEqual([a])
+    if (remaining === 'Elevated command') expect(item.readiness).toBe('needs-readiness-verification')
+    if (remaining === 'wait') expect(item.readiness).toBe('future-or-conditional')
+    for (const unknown of [readyPull({ state, status: 'stale' }), readyPull({ state, status: 'unknown' }), readyPull({ state, expiresAt: at })]) {
+      const retained = buildQueue(s, new Map([[pull, unknown]]), now, inventory)
+      expect(retained.items[0]!.kind).toBe('merge')
+      expect(retained.items[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toContain('Merge')
+    }
+  }
+})
+
+it.each(['merged', 'closed'] as const)('retains an independent worker question after its card merge ask is %s', state => {
+  const worker = task([{ key: 'accept', verb: 'needs-decision', summary: `Choose the acceptance outcome for ${pull}` }])
+  const result = build(snapshot([mergeCard()], [worker]), new Map([[pull, readyPull({ state })]]))
+  expect(result.items).toHaveLength(1)
+  expect(result.items[0]!.kind).toBe('decision')
+  expect(result.items[0]!.sources.some(source => source.kind === 'firstmate' && source.request?.id === 'accept')).toBe(true)
+  expect(result.items[0]!.sources.some(source => source.request?.kind === 'notion-card')).toBe(false)
 })

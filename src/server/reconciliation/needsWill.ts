@@ -26,7 +26,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     for (const id of item.cardIds) {
       const card = cards.get(id)
       if (!card || card.source.archived || card.source.in_trash || ['Done', 'Archived'].includes(String(card.source.properties.Status?.value))) continue
-      const actionTags = tags(card.source.properties['Will action']?.value)
+      const actionTags = item.sources.find(source => source.kind === 'notion' && source.request?.kind === 'notion-card' && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id), history = decisionRequests(context?.blocks ?? [])
       const open = history.filter(request => !request.answered && request.requestedFrom?.trim().toLowerCase() === 'will' && actionTags.includes(request.action))

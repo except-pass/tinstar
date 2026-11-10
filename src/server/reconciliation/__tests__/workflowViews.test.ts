@@ -58,7 +58,7 @@ describe('one Needs Will projection', () => {
     card.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision'], hasMore: false }
     card.properties['Next action'] = { id: 'action', type: 'rich_text', value: 'Accept the result', hasMore: false }
     const scene = fixtureScene({ now }); scene.cards.find(row => row.id === card.id)!.source = card
-    const queue = buildQueue(snapshot, new Map(), now)
+    let queue = buildQueue(snapshot, new Map(), now)
     const open = needsWill(queue, scene, new Map([[card.id, requestContext()]]), null, new Map())
     expect(open.map(item => item.cardIds)).toEqual([[card.id]])
     expect(open[0]).toMatchObject({ requestSince: '2026-11-09T12:00:00Z', ageBasis: 'request-history' })
@@ -67,8 +67,10 @@ describe('one Needs Will projection', () => {
     expect(needsWill(queue, scene, new Map([[card.id, requestContext(true)]]), null, new Map())[0]).toMatchObject({ requestSince: null, ageBasis: 'unknown' })
     delete card.properties['Waiting For']
     card.properties['Will action']!.value = ['Decision', 'Merge']
+    queue = buildQueue(snapshot, new Map(), now)
     expect(needsWill(queue, scene, new Map([[card.id, requestContext(true)]]), null, new Map())).toHaveLength(1)
     card.properties['Will action']!.value = ['None']
+    queue = buildQueue(snapshot, new Map(), now)
     expect(needsWill(queue, scene, new Map(), null, new Map())).toEqual([])
   })
   it('joins explicitly requested PRs through the existing canonical evidence, never every green PR or a fabricated wait age', () => {

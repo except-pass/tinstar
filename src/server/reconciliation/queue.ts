@@ -13,6 +13,7 @@ import type { ExecutionWarning } from './workflowViews'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  actions?: string[]
   request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
   /** Readiness and response belong to this source, never inherited from another source. */
   readiness?: QueueReadiness
@@ -112,6 +113,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const scene = reconcileScene({ ...input, intentions, fleet }, now)
   const cards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const candidates: QueueItem[] = []
+  const resolvedMerges = new Set<QueueItem>()
   const tagOnlyCandidates = new Set<QueueItem>()
   const identities = new Map<QueueItem, string[]>()
   const explicitPulls = new Map<QueueItem, string[]>()
@@ -126,17 +128,29 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const card of cards.values()) {
     if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
-    const tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
+    let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
     // A mention in a title is not an owner request. Tags only create candidates.
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
+    const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
+    const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
+    const resolvedMerge = tags.some(tag => normalize(tag) === 'merge') && pr?.status === 'fresh' &&
+      (!pr.expiresAt || Date.parse(pr.expiresAt) > now) && (pr.state === 'merged' || pr.state === 'closed')
+    if (resolvedMerge) {
+      tags = tags.filter(tag => normalize(tag) !== 'merge')
+      if (!tags.length && !waitingForWill) continue
+    }
     if (owner !== 'will' && !tags.length && !waitingForWill) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
-    const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, action, merge ? 'merge' : 'decision')
+    const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
+      ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
+    const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
+    if (resolvedMerge) resolvedMerges.add(item)
     context(item, card, intentions, now)
+    if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
     item.sources.push({ ...source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
-      request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
+      actions: tags, request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
     identities.set(item, [item.id])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (owner !== 'will' || !action) {
@@ -250,7 +264,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const item of candidates) {
     for (const pull of queuePulls(item, inventory)) link(item, pull.url)
     if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
-    const merge = item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
+    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
     if (!verifyPull(item)) continue
     for (const source of item.sources) if (source.request) Object.assign(source, { readiness: item.readiness, action: item.action, reasons: [...item.reasons] })
