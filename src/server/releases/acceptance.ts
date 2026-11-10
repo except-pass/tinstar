@@ -68,6 +68,17 @@ function deliveryGap({ release, change }: Selection, data: ReleasesRead) {
     const current = data.reconciliation?.targets.filter(row => row.repository.toLowerCase() === release.repository.toLowerCase() && row.component === target.component && row.target === target.target) ?? []
     return !receipt || current.length !== 1 || current[0]!.deployedSha !== receipt.deployedSha || current[0]!.artifactDigest !== receipt.artifactDigest
   })) return 'Selected release no longer matches current production target source and artifact evidence.'
+  if (change.requiredPulls.some(url => {
+    const current = data.pulls.filter(pull => pull.url === url && pull.repository.toLowerCase() === release.repository.toLowerCase())
+    const pull = current[0]
+    return current.length !== 1 || !pull || pull.exceptions.length || pull.deployment?.state !== 'shipped' || !pull.deployment.targets.length || pull.deployment.targets.some(target => {
+      const receipt = target.receipt
+      return target.state !== 'live' || target.ancestry !== 'ancestor' || !receipt || receipt.outcome !== 'succeeded' || receipt.exceptions.length ||
+        receipt.environment !== 'production' || receipt.repository.toLowerCase() !== release.repository.toLowerCase() ||
+        !change.targets.some(selected => selected.component === target.component && selected.target === target.target &&
+          receipt.component === target.component && receipt.target === target.target && selected.receipt?.deployedSha === receipt.deployedSha && selected.receipt?.artifactDigest === receipt.artifactDigest)
+    })
+  })) return 'Safe current production target reconciliation is required for every required PR.'
   return null
 }
 function request(selection: Selection, settings: AcceptanceSettings) {

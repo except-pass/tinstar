@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os'
 import { acceptanceFixture } from '../../../../test-fixtures/releases/acceptance'
 import { acceptanceKey, readAcceptanceContract } from '../../../shared/releaseAcceptance'
 import { releaseChanges } from '../../../shared/releaseChanges'
+import { reconcileReleases } from '../reconcile'
+import type { EvidenceRead } from '../evidence'
 import { ReleaseAcceptanceRunner, acceptanceGithub, readAcceptanceRecords, readAcceptanceSettings, type AcceptanceSettings } from '../acceptance'
 
 const roots: string[] = []
@@ -93,6 +95,35 @@ describe('release acceptance safe checks', () => {
     expect(await readAcceptanceRecords(f.root)).toEqual([])
     await f.runner.perform({ actor: 'owner', key: f.key, action: 'skip', reason: 'Superseded deployment' })
     expect((await readAcceptanceRecords(f.root))[0]!.events.at(-1)?.outcome).toBe('skipped')
+  })
+  it.each(['partial', 'rollback', 'exception'] as const)('holds historical acceptance for newer unsafe %s evidence with unchanged source and artifact', async variant => {
+    const f = await setup(); await f.configure()
+    await f.runner.perform({ actor: 'owner' })
+    const history = await readAcceptanceRecords(f.root)
+    const receipt = structuredClone(f.release.targets[0]!.receipt!)
+    const newer = { ...receipt, id: 'newer-attempt', deployedAt: now,
+      outcome: variant === 'exception' ? 'succeeded' as const : variant,
+      exceptions: variant === 'exception' ? ['Runtime configuration is unverified'] : [] }
+    const evidence: EvidenceRead = { status: 'fresh', collectedAt: now, warnings: [], receipts: [receipt, newer],
+      repositories: new Map([[f.pull.repository, 'github']]),
+      requirements: new Map([[f.pull.id, { targets: [{ component: receipt.component, target: receipt.target }], exceptions: [] }]]) }
+    const observed = { ...f.data, pulls: structuredClone(f.data.pulls) }
+    Object.assign(f.data, await reconcileReleases(observed, f.scene, evidence, async () => ({ state: 'ancestor' })))
+    expect(releaseChanges(f.release, f.data, f.scene)[0]!.delivery).toBe('Deployed')
+    expect((await f.runner.plan()).checks[0]!.held).toContain('current production')
+    await f.runner.perform({ actor: 'owner' })
+    for (const action of ['retry', 'attach', 'manual'] as const) {
+      await expect(f.runner.perform({ actor: 'owner', key: f.key, action, reason: 'Audited recovery', runId: 42, outcome: 'passed', evidence: 'https://example.com/evidence' })).rejects.toThrow('current production')
+    }
+    expect(f.github).toHaveBeenCalledTimes(1)
+    expect(await readAcceptanceRecords(f.root)).toEqual(history)
+    await f.runner.perform({ actor: 'owner', key: f.key, action: 'skip', reason: 'Unsafe current deployment' })
+    newer.outcome = 'succeeded'; newer.exceptions = []
+    Object.assign(f.data, await reconcileReleases(observed, f.scene, evidence, async () => ({ state: 'ancestor' })))
+    expect((await f.runner.plan()).checks[0]!.held).toBeNull()
+    await f.runner.perform({ actor: 'owner', key: f.key, action: 'retry', reason: 'Current deployment verified' })
+    expect(f.github).toHaveBeenCalledTimes(2)
+    expect((await readAcceptanceRecords(f.root))[0]!.events.slice(0, history[0]!.events.length)).toEqual(history[0]!.events)
   })
   it('requires every selected target while allowing unrelated production replacements', async () => {
     const f = await setup(); await f.configure()
