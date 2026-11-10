@@ -106,6 +106,9 @@ unmatched endpoints and its intentional hidden-task labels. Opening a relationsh
 reveal direct tasks through the base status scope; it never overrides explicit
 donut or search predicates. Selecting a Smart Search suggestion uses the temporary
 reveal described below. Filtering never changes claim evidence or absence findings.
+Assistant flash temporarily reveals its targets through saved search and donut
+masks, including in compact mode, without changing saved filters or expansion.
+The exception ends when the flash expires or is cleared.
 Both donuts and the floor use the same canonical projection and presentation
 reducer; selections and organizer overrides persist in the existing browser
 preferences. Source refreshes recompute candidates from the current graph. The compact
@@ -269,7 +272,9 @@ child titles, reveals matching groups temporarily, and restores prior expansion
 when cleared. A temporary search reveal outside Waiting For uses the ordinary
 floor until search exit or entry through the Waiting For chip or dropdown.
 Those entry controls clear temporary search focus and reveal while retaining
-the Search filters.
+the Search filters. An assistant flash outside Waiting For likewise uses
+the ordinary floor until expiry; within Waiting For it temporarily exposes the
+target's category and collapsed dependency group without saving that expansion.
 
 Click an affected card or press Enter/Space to open the existing Inspector and
 reveal its confirmed worker relationships. Dependency headings toggle only their
