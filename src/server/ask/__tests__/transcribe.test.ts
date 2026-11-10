@@ -160,7 +160,14 @@ it('dedupes missing-model notices across requests and restart, suppresses previe
   expect(notice.body).toContain('SYSTEM VOICE MODEL NOTICE')
   expect((await bridge()).data.pending).toHaveLength(1)
   const note = { schema: 'fm-inbox-note.v1' as const, outcome: 'created' as const, id: 'voice-notice', request_id: notice.inbox_request_id, saved: true as const, announced: true, acknowledged: true }
-  await api.store.ingest({ request_id: notice.request_id, note })
+  const update = (value: unknown) => fetch(base + '/bridge', { method: 'POST', headers: { Authorization: `Bearer ${settings.bridgeToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(value) }).then(r => r.json())
+  expect((await update({ request_id: notice.request_id, error: 'capture-failed' })).ok).toBe(true)
+  expect((await bridge()).data.pending).toEqual([notice])
+  expect((await update({ request_id: notice.request_id, note: { ...note, announced: false } })).ok).toBe(true)
+  expect((await update({ request_id: notice.request_id, error: 'wake-failed' })).ok).toBe(true)
+  expect((await bridge()).data.pending).toEqual([notice])
+  expect(await rows()).toHaveLength(1) // Delivery repair reuses the same notice.
+  expect((await update({ request_id: notice.request_id, note })).ok).toBe(true)
   expect((await bridge()).data.pending).toEqual([])
   await post()
   expect(await rows()).toHaveLength(1) // A delivered notice never creates another per click.

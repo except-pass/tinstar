@@ -150,7 +150,13 @@ export class AskStore {
   async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true) {
     // Persist legacy payloads on first dispatch too. Capturing under the writer
     // lock freezes each note body before a puller can save it and lose its ack.
-    const eligible = (row: AskRecord) => row.synthetic_id === syntheticId && (!row.voice_outage || systemDeliveryEnabled && row.voice_outage.resolved_at === null) && (row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error)
+    const eligible = (row: AskRecord) => {
+      if (row.synthetic_id !== syntheticId) return false
+      // System notices have no owner Retry button. Reoffer failed capture/wake
+      // on the normal bridge poll with the same idempotent inbox request ID.
+      if (row.voice_outage) return systemDeliveryEnabled && row.voice_outage.resolved_at === null && !row.reply && row.announced !== true
+      return row.status === 'sent' || row.status === 'delivered' && row.announced === false && !row.error
+    }
     const collect = (rows: AskRecord[]) => {
       const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
       for (const row of rows) {

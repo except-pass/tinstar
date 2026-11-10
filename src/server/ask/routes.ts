@@ -16,7 +16,7 @@ import { AskConflict, AskNotFound, AskStore } from './store'
 import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
 import type { FirstmateUpdates } from '../reconciliation/firstmateUpdates'
 import { checkInSettings } from '../reconciliation/checkInWatchdog'
-import { VOICE_UNAVAILABLE } from '../../shared/voice'
+import { VOICE_UNAVAILABLE, voiceFailureMessage } from '../../shared/voice'
 import type { CheckInWatchdog } from '../reconciliation/checkInWatchdog'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
@@ -116,7 +116,7 @@ export class AskApi {
           await this.store.voiceModelAvailable(await this.voice.modelAvailable()).catch(error => console.warn('Voice model notice could not be saved', error))
           return ok(res, await this.voice.transcribe(req, controller.signal), { headers })
         } catch (error) {
-          return fail(res, error instanceof VoiceError ? error.code : 'BACKEND_UNAVAILABLE', error instanceof VoiceError ? error.message : VOICE_UNAVAILABLE, { headers })
+          return fail(res, error instanceof VoiceError ? error.code : 'BACKEND_UNAVAILABLE', error instanceof VoiceError ? voiceFailureMessage(error) : VOICE_UNAVAILABLE, { headers })
         }
         finally { req.off('aborted', abort); res.off('close', abort) }
       }
@@ -181,7 +181,7 @@ export class AskApi {
     } catch (error) { return this.error(res, error, headers) }
   }
   private error(res: ServerResponse, error: unknown, headers: Record<string, string>) {
-    if (error instanceof VoiceError) return fail(res, error.code, error.message, { headers })
+    if (error instanceof VoiceError) return fail(res, error.code, voiceFailureMessage(error), { headers })
     if (error instanceof AskConflict) return fail(res, 'CONFLICT', error.message, { headers })
     if (error instanceof AskNotFound) return fail(res, 'NOT_FOUND', error.message, { headers })
     if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof Error && ['Expected JSON', 'Request too large'].includes(error.message)) return fail(res, 'BAD_REQUEST', 'Invalid Ask payload', { headers })

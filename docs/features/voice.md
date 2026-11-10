@@ -50,7 +50,8 @@ startup or idle polling. Missing model/runtime errors tell users voice input is 
 and keep their draft available for typing. They never show server commands. A
 missing model at request time opens one labeled SYSTEM VOICE MODEL NOTICE to
 First Mate through the existing Ask bridge/outbox, deduped across clicks and
-restarts until a request sees the model available again. The existing watchdog
+restarts until a request sees the model available again. Failed capture/wake
+deliveries retry on the normal bridge poll using the same inbox request ID. The existing watchdog
 delivery setting also suppresses these notices on previews. No new scheduler
 or store is used.
 

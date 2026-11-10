@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { preferencesKey } from '../../reconciliation/presentationPreferences'
+import { VOICE_TIMEOUT } from '../../shared/voice'
 import { askItemSchema, type AskItem } from '../../shared/ask'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 
@@ -1129,7 +1130,7 @@ it('auto-sends local voice in the current Desk conversation and preserves its dr
   vi.mocked(fetch).mockImplementation(async (url, init) => {
     if (String(url) !== '/api/ask/transcribe') return original(url, init)
     transcriptions++
-    return new Response(JSON.stringify(transcriptions === 1 ? { ok: false, error: { message: 'Local transcription timed out' } } : { ok: true, data: { text: 'Can it proceed now?' } }), { status: transcriptions === 1 ? 503 : 200 })
+    return new Response(JSON.stringify(transcriptions === 1 ? { ok: false, error: { code: 'BACKEND_UNAVAILABLE', message: VOICE_TIMEOUT } } : { ok: true, data: { text: 'Can it proceed now?' } }), { status: transcriptions === 1 ? 503 : 200 })
   })
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))

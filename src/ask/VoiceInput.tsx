@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
-import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_TIMEOUT_MS, VOICE_UNAVAILABLE, VOICE_TIMEOUT, VOICE_EMPTY } from '../shared/voice'
+import { VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_TIMEOUT_MS, VOICE_UNAVAILABLE, VOICE_TIMEOUT, VOICE_EMPTY, voiceFailureMessage } from '../shared/voice'
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'transcribing'
 interface Capture {
@@ -76,14 +76,14 @@ export function VoiceInput({ disabled, onTranscript, onBusyChange }: { disabled:
             const response = await apiFetch('/api/ask/transcribe', { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': audio.type }, body: audio, signal: capture.upload!.signal })
             const result = await response.json()
             if (active.current !== capture) return
-            if (!response.ok || !result.ok) { fail(result.error?.code === 'BAD_REQUEST' || result.error?.code === 'CONFLICT' ? result.error.message : VOICE_UNAVAILABLE); return }
+            if (!response.ok || !result.ok) { fail(voiceFailureMessage(result.error)); return }
             const text = typeof result.data?.text === 'string' ? result.data.text.trim() : ''
             if (!text) { fail(VOICE_EMPTY); return }
             active.current = null; changePhase('idle')
             await callbacks.current.onTranscript(text)
           } catch (reason) {
             if (active.current !== capture) return
-            fail(reason instanceof Error && reason.name === 'AbortError' ? VOICE_TIMEOUT : VOICE_UNAVAILABLE)
+            fail((reason as { name?: string } | null)?.name === 'AbortError' ? VOICE_TIMEOUT : VOICE_UNAVAILABLE)
           } finally { clearTimeout(timeout) }
         })()
       }
