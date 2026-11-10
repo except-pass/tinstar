@@ -203,15 +203,22 @@ upgrade it. Worker and request history survives completion/parking.
 Notion reader, and **existing Ask bearer bridge**. It does not invoke First Mate
 source/scripts, dispatch workers, add a scheduler, or create another inbox.
 Authenticated operation actors drive self-edit suppression for confirmed writes.
-The observer excludes only confirmed property, section and note effects; other
-unobserved changes are delivered with unknown attribution before advancing its
-baseline. Matching edit times and property readbacks deduplicate scan notices. Direct
+The observer excludes confirmed property, section and note effects. Body blocks
+are compared by ID: changed text requires a previously observed block, additions
+require a complete prior body observation, and removals require a complete current
+body read. Partial reads merge observed blocks into the in-memory baseline;
+previously unknown blocks are silently adopted. A changed page revision with no
+identified section change carries “card body changed (details unavailable)” instead.
+Complete comment reads advance their own baseline even when body content is
+partial; positively identified self-comments are retained independently as well.
+Matching edit times and property readbacks deduplicate scan notices. Direct
 Notion edits carry unknown attribution. Last touched by never suppresses them. A Firstmate-owned Queued card
 gets one pickup per observed outstanding assignment. Leaving that assignment
 clears its latch, so a later requeue is actionable. Active In Progress/Waiting For
 changes become contextual updates. Nearby changes by one actor coalesce for ten
-seconds in batches of up to twenty cards; an offered notice freezes its original
-inbox request ID/body, and failed wakes retry that same note.
+seconds in batches of up to twenty cards. An offered notice retains its inbox
+request ID, and failed wakes retry that same note. A pickup that is no longer
+eligible is removed from a pending batch; remaining items retain that identity.
 
 The safety scan queries only Owner Firstmate and Queued/In Progress/Waiting For,
 roughly once per minute on the existing callback. It does not require historical

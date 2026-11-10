@@ -273,7 +273,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   renderedScene.current = scene.generatedAt
   const confirmedInScene = useRef<string | null>(null)
   const refreshWork = async (result?: StartWorkResult) => {
-    if (retainedCard.current && result?.card && retainedCard.current.id === result.card.id) {
+    if (retainedCard.current && result?.card && retainedCard.current.id === (result.card as SceneCard['source']).id) {
       retainedCard.current = { ...retainedCard.current, source: result.card as SceneCard['source'] }
       confirmedInScene.current = renderedScene.current
     }
