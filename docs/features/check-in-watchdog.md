@@ -137,8 +137,11 @@ First Mate replies through the ordinary inbox reply command, ideally with the
 same completed text. Tin Star records that immutable reply separately from
 resolution. It verifies an uncached Notion paragraph/comment with the original
 request ID, a parseable date, substantive progress/evidence,
-blocker/owner, next action, attribution matching `Last touched by`, and next
-checkpoint matching the current property. An offset-free next timestamp in the
+blocker/owner, next action, a required non-placeholder By, and next
+checkpoint matching the current property. A By value that differs from
+`Last touched by` is cosmetic: the verified row records
+`answered by X (last edited by Y)` and the answer still closes. The quiet
+card line does not show that difference. An offset-free next timestamp in the
 report uses that property's explicit timezone when comparing the instants.
 Timing uses the checkpoint's Notion `last_edited_time` (or `created_time`),
 which must be in the request's minute or later and at or before the current time.

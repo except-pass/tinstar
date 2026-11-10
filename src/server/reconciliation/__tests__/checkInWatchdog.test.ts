@@ -211,9 +211,6 @@ describe('durable lifecycle on the existing bridge', () => {
     expect((await h.watchdog.rows())[0]!.state).toBe('acknowledged')
     expect((await h.watchdog.rows())[0]!.verifiedAt).toBeNull()
     h.publish(id)
-    h.card.properties['Last touched by']!.value = 'Someone else'
-    await h.watchdog.sweep(true); expect((await h.watchdog.rows())[0]!.verifiedAt).toBeNull()
-    h.card.properties['Last touched by']!.value = 'Firstmate'
     await h.make().sweep(true)
     expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', verifiedAt: new Date(h.time()).toISOString() })
     expect((await h.make().indicators()).size).toBe(0)
@@ -339,14 +336,34 @@ describe('durable lifecycle on the existing bridge', () => {
     h.setContext({ outcome: 'available', blocks: [{ id: 'date-only', type: 'paragraph',
       last_edited_time: new Date(h.time()).toISOString(), text: h.report(id, '2026-11-11 (tomorrow)') }] })
     await h.watchdog.sweep(true)
-    expect((await h.watchdog.rows())[0]!.state).toBe('resolved')
+    const row = (await h.watchdog.rows())[0]!
+    expect(row.state).toBe('resolved')
+    expect(row.verification).not.toContain('last edited by')
+  })
+  it('verifies when By differs from Last touched by and keeps the difference as a note', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.publish(id)
+    h.card.properties['Last touched by']!.value = 'kdf'
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    const row = (await h.watchdog.rows())[0]!
+    expect(row).toMatchObject({
+      state: 'resolved', verifiedAt: new Date(h.time()).toISOString(), followUp: null,
+      verification: expect.stringContaining('answered by Firstmate (last edited by kdf)'),
+    })
+    expect(row.verification).not.toContain('must match')
+    expect((await h.watchdog.indicators()).size).toBe(0)
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
   })
   it.each([
     ['Date', 'not a date', 'Date: unparseable timestamp'],
     ['Progress', 'still working', 'Progress: substantive update required'],
     ['Evidence', 'no evidence', 'Evidence: substantive evidence required'],
     ['Next action', '<next action>', 'Next action: missing value or placeholder'],
-    ['By', 'Another coordinator', 'By: must match Last touched by'],
+    ['By', '<acting coordinator>', 'By: missing value or placeholder'],
+    ['By', '', 'By: missing value or placeholder'],
     ['Next check-in', '2026-11-10T18:00Z (newer edit)', 'Next check-in: does not match the current property'],
     ['Next check-in', 'none (Done).', 'Next check-in: unparseable appointment'],
   ])('shows a quiet %s correction and never sends a no-answer follow-up', async (field, value, issue) => {

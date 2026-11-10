@@ -144,7 +144,7 @@ function requestBody(row: CheckInRow, followUp = false, current?: Card): string 
     JSON.stringify({ request_id: requestId, original_request_id: row.request.requestId, card_id: row.cardId, card_url: row.url, original_checkpoint: row.originalCheckpoint, current_checkpoint: current ? text(date(current).start) : row.originalCheckpoint, status, owner: current ? word(current, 'Owner') : row.owner, dependency: row.dependency.slice(0, 2000), route: row.route, last_relevant_checkpoint: row.lastRelevantCheckpoint.slice(0, 2000) }) +
     `\n${status.toLowerCase() === 'waiting for' ? `Ask whether the named dependency has changed: ${JSON.stringify(row.dependency || 'Dependency not named; First Mate must reconcile it')}. Do not ask why coding has not progressed.` : 'Request a short checkpoint from the exact named worker via First Mate if the route is still valid; otherwise First Mate reconciles the execution.'} What changed? Evidence/PR/receipt? Any blocker? What happens next? What is the next meaningful check-in?\n` +
     `Re-read the original card before updating and preserve newer edits. Through the existing authorized writer, post one concise dated checkpoint on that same card and set Last touched by. Include the cause of the miss if relevant in Progress. Only a meaningful evidence-backed assessment can advance Next check-in. In Progress ceiling: 4 hours during 8 AM–8 PM ET working hours, otherwise next business morning 10 AM ET; Waiting For names the actual dependency/date. Tin Star never writes Notion.\n` +
-    `For deterministic readback, put the following labeled lines together in one card paragraph (or the same text in a card comment), using the ORIGINAL request ID even for this follow-up. Fill every field with real observations, not placeholders. Date is an ISO timestamp; By equals Last touched by; Next check-in equals the property (or "closed" only if the card is Done/Archived). Evidence can be a PR/receipt/report or concrete substantive finding. Keep the update concise.\n` +
+    `For deterministic readback, put the following labeled lines together in one card paragraph (or the same text in a card comment), using the ORIGINAL request ID even for this follow-up. Fill every field with real observations, not placeholders. Date is an ISO timestamp; By is required attribution identifying the acting coordinator and need not equal Last touched by; Next check-in equals the property (or "closed" only if the card is Done/Archived). Evidence can be a PR/receipt/report or concrete substantive finding. Keep the update concise.\n` +
     `Check-in request: ${row.request.requestId}\nDate: <timestamp>\nBy: <acting coordinator>\nProgress: <outcome and cause of miss if relevant>\nEvidence: <evidence>\nBlocker/owner: <blocker and owner, or none>\nNext action: <next action>\nNext check-in: <timestamp or date>\n` +
     `Reply using fm-inbox.sh reply <this-note-id> - with that same completed checkpoint text, or a short honest acknowledgement if the Notion update is pending. Merely replying or changing Status does not resolve this request. ${followUp ? 'This is the single unresolved follow-up; supply the missing acknowledgement/readback. No repeat nagging or routine owner escalation.' : ''}`
 }
@@ -265,8 +265,6 @@ export class CheckInWatchdog {
         let failure: string | undefined
         if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
           failure = 'Checkpoint time: must be at or after the request and at or before now'
-        } else if (word(card, 'Last touched by').toLowerCase() !== report.By.trim().toLowerCase()) {
-          failure = 'By: must match Last touched by'
         } else if (!(closed && /^(?:closed|none|n\/a|done)(?=$|\s|[().,;!])/i.test(report['Next check-in']))) {
           if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
           else if (next !== appointment(card)) failure = 'Next check-in: does not match the current property'
@@ -274,8 +272,13 @@ export class CheckInWatchdog {
           else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
         }
         if (failure) { correction = failure; continue }
+        // By versus Last touched by is cosmetic metadata. A difference does not
+        // fail the answer; the row keeps a short note and the quiet card line stays clear.
+        const touched = word(card, 'Last touched by')
+        const byNote = touched.toLowerCase() === report.By.trim().toLowerCase() ? ''
+          : `; answered by ${report.By.trim()} (last edited by ${touched || 'unknown'})`
         row.state = 'resolved'; row.verifiedAt = new Date(this.now()).toISOString()
-        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}`
+        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}${byNote}`
         return
       }
       return correction
