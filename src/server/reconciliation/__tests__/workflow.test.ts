@@ -1,3 +1,5 @@
+import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
+import { readerRepositories } from '../../../shared/actions'
 import { checkInReport } from '../checkInWatchdog'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -1011,4 +1013,34 @@ it('creates one Clawson merge card with the owner click properties and deduplica
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
   expect(f.blocks.some(block => JSON.stringify(block).includes('Owner gave the merge word'))).toBe(true)
   expect(await restarted.createClawsonMerge({ ...input, targets: [input.targets[0]!] }, 'owner@example.test', prepared)).toMatchObject({ code: 'operation-conflict' })
+})
+
+
+it('creates a bounded Clawson card for green PRs across all ten Reader repositories', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-ten-repos-')); roots.push(root)
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  const head = 'a'.repeat(40)
+  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: readerRepositories.map((repository, index) => ({ url: `https://github.com/${repository}/pull/${index + 1}`, head })) }
+  const read = async (path: string): Promise<unknown> => {
+    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: false, draft: false, mergeable: true }
+    if (path.includes('/rules/')) return []
+    if (path.includes('/branches/')) return { protection: { required_status_checks: { contexts: ['CI'] } } }
+    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: 'completed', conclusion: 'success', app: { id: 1 } }] }
+    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
+    throw new Error(`Unexpected read: ${path}`)
+  }
+  const result = await workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))
+  expect(result).toMatchObject({ outcome: 'saved', card: { properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' } } } })
+  const creates = f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))
+  expect(creates).toHaveLength(1)
+  const body = creates[0]!.body
+  const title = body.properties.Name.title.map((part: any) => part.text.content).join('')
+  expect(title).toBe('Admin merge 10 PRs across 10 repositories')
+  expect(title.length).toBeLessThanOrEqual(200)
+  const brief = body.children.flatMap((block: any) => block[block.type].rich_text.map((part: any) => part.text.content)).join('\n')
+  for (const [index, target] of input.targets.entries()) {
+    expect(brief).toContain(readerRepositories[index])
+    expect(brief).toContain(`${index + 1}. ${target.url}\nExact head SHA: ${target.head}`)
+    expect(brief).toContain(`Command: gh pr merge ${target.url} --squash --admin --match-head-commit ${target.head}`)
+  }
 })

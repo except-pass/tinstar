@@ -54,7 +54,9 @@ export async function prepareClawsonMerge(input: ClawsonMergeInput, actor: strin
     } catch (error) { problems.push(`${identity.url}: ${error instanceof z.ZodError ? 'GitHub returned incomplete merge evidence' : (error as Error).message}.`) }
   }
   if (problems.length) throw new Error(`Nothing sent to Clawson. ${problems.join(' ')}`)
-  const repos = [...new Set(pulls.map(pull => pull.repository))].join(', ')
-  return { at, name: `Admin merge ${pulls.length} PR${pulls.length === 1 ? '' : 's'}: ${repos}`,
+  const repos = [...new Set(pulls.map(pull => pull.repository))]
+  const title = `Admin merge ${pulls.length} PR${pulls.length === 1 ? '' : 's'}`
+  const detailedTitle = `${title}: ${repos.join(', ')}`
+  return { at, name: detailedTitle.length <= 200 ? detailedTitle : `${title} across ${repos.length} repositories`,
     brief: `Owner merge word\n${actor} gave the Merge action via Tin Star’s “Send to Clawson for admin merge” button at ${at}. This authorizes only the PR URLs at the exact heads listed below. Nothing else is authorized.\n\nSteps\nBefore EACH merge, re-read the PR head and all required checks at that exact head. All required checks must be green. Stop and report on this card if any check is red, pending, missing or unknown, the head has changed, or there is a conflict. Do not update branches, change heads, bypass failed checks, substitute PRs, or retry with a different head.\n\n${pulls.map((pull, index) => `${index + 1}. ${pull.url}\nExact head SHA: ${pull.head}\nRequired checks verified green at this head when sent.\nCommand: gh pr merge ${pull.url} --squash --admin --match-head-commit ${pull.head}`).join('\n\n')}\n\nReturn\nPost one comment per PR on this card with its PR URL, exact head SHA, command result, and merge result (including the resulting commit URL on success). On any stop, post the reason and do not continue the batch.` }
 }
