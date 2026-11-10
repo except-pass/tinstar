@@ -22,6 +22,25 @@ export const decisionRecordRows = (notes: { text: string }[], prefix: string): R
   const records = lines.filter(line => line.startsWith(prefix))
   return (kind === 'answer_decision' && prefix === 'Tin Star answer: ' ? records.slice(0, 1) : records.slice(-1)).flatMap(line => { try { return [JSON.parse(line.slice(prefix.length))] } catch { return [] } })
 })
+export function workflowReceipt(note: { text: string }): string | null {
+  const lines = note.text.trimEnd().split('\n'), terminal = lines.at(-1)!
+  if (!terminal.startsWith('Tin Star operation: ')) return null
+  try {
+    const identity: unknown = JSON.parse(terminal.slice('Tin Star operation: '.length))
+    if (!Array.isArray(identity) || identity.length !== 2 || !identity.every(value => typeof value === 'string' && value.length > 0)) return null
+  } catch { return null }
+  const answer = decisionRecordRows([note], 'Tin Star answer: ')[0]
+  if (typeof answer === 'string') {
+    const data = decisionRecordRows([note], 'Tin Star answer data: ')[0]
+    if (data) {
+      if (data.request_id !== answer || !lines.at(-2)?.startsWith('Tin Star answer data: ')) return null
+    } else if (!/\nNext owner: [^\r\n]+\nNext status: [^\r\n]+(?:\nResolved wait: [^\r\n]+)?$/.test(lines.slice(0, -1).join('\n'))) return null
+  }
+  return terminal
+}
+export function workflowNoteHasMarker(note: { text: string }, marker: string): boolean {
+  return marker.startsWith('Tin Star operation: ') ? workflowReceipt(note) === marker : note.text.trimEnd().split('\n').at(-1) === marker
+}
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()
   for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)

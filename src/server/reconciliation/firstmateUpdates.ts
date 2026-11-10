@@ -1,3 +1,4 @@
+import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -111,7 +112,7 @@ export class FirstmateUpdates {
       const baseline = this.baselines.get(card.id)
       const operationSeen = own && old?.operations?.includes(own.operationId)
       const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
-      const noteMatches = (text: string, note: string) => !!own && (note.split('\n').includes(receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
+      const noteMatches = (text: string, note: string) => !!own && (workflowNoteHasMarker({ text: note }, receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
       const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
         (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)

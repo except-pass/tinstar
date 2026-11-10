@@ -1,3 +1,4 @@
+import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -176,15 +177,15 @@ export class WorkflowOperations {
         const input = updateWorkSchema.safeParse(intent.input)
         if (!input.success || input.data.card_id !== cardId || input.data.kind !== 'answer_decision' || typeof intent.actor !== 'string') continue
         const requestId = input.data.request_id
-        if (notes.some(note => note.text.split('\n').includes(receiptMarker(intent.actor, input.data.operation_id)) ||
-          decisionRecordRows([note], 'Tin Star answer: ').includes(requestId) && note.text.split('\n').some(line => line.startsWith('Tin Star operation: ')))) continue
+        if (notes.some(note => workflowNoteHasMarker(note, receiptMarker(intent.actor, input.data.operation_id)) ||
+          decisionRecordRows([note], 'Tin Star answer: ').includes(requestId) && workflowReceipt(note))) continue
         const result = await this.performUpdate(input.data, intent.actor)
         if (result.outcome !== 'saved') return { state: 'pending' as const, message: 'Decision recorded · First Mate not yet updated' }
       }
       // Explicit direct Notion answers use the same scoped workflow plan. A
       // prose approval without proposal/answer/next-state fields is ambiguous.
       for (const request of decisionProposals(notes).filter(row => row.source_request)) {
-        const direct = notes.filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(request.id) && !note.text.split('\n').some(line => line.startsWith('Tin Star operation: ')))
+        const direct = notes.filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(request.id) && !workflowReceipt(note))
         if (!direct.length) continue
         if (new Set(direct.map(note => JSON.stringify(decisionAnswer(note)))).size !== 1) return { state: 'verification-needed' as const, message: 'Decision reconciliation needs verification: contradictory direct answers' }
         const parsedAnswer = decisionAnswer(direct[0]!)
@@ -424,9 +425,9 @@ export class WorkflowOperations {
       }
       const pendingMarker = `Tin Star decision pending: ${JSON.stringify([actor, input.operation_id])}`
       const pending = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-      const receipt = notes.find(note => note.text.split('\n').includes(marker))
+      const receipt = notes.find(note => workflowNoteHasMarker(note, marker))
       if (input.kind === 'answer_decision' && decisionProposals(notes).some(row => row.id === input.request_id && row.source_request)) {
-        const existing = notes.find(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id) && note.text.split('\n').some(line => line.startsWith('Tin Star operation: ')))
+        const existing = notes.find(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id) && workflowReceipt(note))
         if (existing) {
           const data = decisionRecordRows([existing], 'Tin Star answer data: ')[0]
           const proposal = decisionProposals(notes).find(row => row.id === input.request_id)
@@ -518,7 +519,7 @@ export class WorkflowOperations {
       if (!Array.isArray(candidates.results)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
       for (const raw of candidates.results) {
         const candidate = notionCard(raw)
-        if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
+        if ((await this.content.sections(candidate.id)).some(section => workflowNoteHasMarker(section, marker))) return candidate
       }
       if (candidates.has_more === false) return
       const nextCursor = candidates.next_cursor

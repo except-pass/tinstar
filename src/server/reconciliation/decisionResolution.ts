@@ -1,4 +1,4 @@
-import { decisionRecordRows } from '../../shared/workflowRequests'
+import { decisionRecordRows, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
 import type { StartWorkResult } from '../../shared/workflow'
@@ -117,7 +117,7 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
     try {
       const current = sourceState(fleet, request, card.id)
       if (current && (current.source_question !== row.source_question || current.source_spawn_gen !== row.source_spawn_gen)) return verify('source request changed since the proposal was published')
-      if (notes.some(note => note.text.split('\n').includes(marker))) {
+      if (notes.some(note => workflowNoteHasMarker(note, marker))) {
         if (current) return verify('a previously reconciled request is open again')
         await delivery?.completeDecision(deliveryId)
         return { state: 'resolved', message: 'Resolved', delivery_id: deliveryId }

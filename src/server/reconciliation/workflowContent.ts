@@ -1,3 +1,4 @@
+import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
 
 export const richText = (content: string) => {
@@ -91,7 +92,7 @@ export class WorkflowContent {
   }
   async note(id: string, text: string, marker: string) {
     const before = await this.notes(id)
-    if (before.some(note => note.text.split('\n').includes(marker))) return
+    if (before.some(note => workflowNoteHasMarker(note, marker))) return
     await this.request('comments', 'POST', { parent: { page_id: id }, ...richText(`${text}\n${marker}`) })
     if (!(await this.notes(id)).some(note => note.text === `${text}\n${marker}`)) throw new Error('Note readback differs')
   }
