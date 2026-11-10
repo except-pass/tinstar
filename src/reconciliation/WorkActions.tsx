@@ -49,7 +49,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
   const requests = decisionRequests(sources)
   const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
-  const choices = sources.filter(source => !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
+  const choices = sources.filter(source => !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }
