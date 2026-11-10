@@ -197,7 +197,7 @@ launchd, clavis, the bridge or the inbox. They validate the origin and required
 reason before attempting the same nonblocking lock as a poll. A busy poll produces
 a visible warning and an audit entry; retry the same command afterward.
 
-Retire atomically moves matching entries into private operation directories under
+Retire atomically moves each matching entry into private operation directories under
 `<home>/state/tinstar-ask-reply-receipts-retired/`. Retired answers are skipped by
 automatic polling until resumed, including if the server still tracks the answer.
 Resume restores the original filenames and inbox IDs, allowing ordinary same-ID
@@ -211,8 +211,8 @@ Both commands append time, OS user/UID, origin, action, operation ID, count and
 operator reason to mode-0600 `<home>/state/tinstar-ask-reply-journal-audit.jsonl`.
 A started record is flushed before any move and a completed/partial record reports
 how many moved. Replies, warning bodies and credentials are excluded from the
-audit; keep credentials out of the operator reason too. An audit write failure
-moves no entries before the initial record. Interrupted or partial moves leave
+audit; keep credentials out of the operator reason too. If writing the initial
+audit record fails, no entries move. Interrupted or partial moves leave
 entries in their original or retired directories; status lists both and the same
 command can be retried. No hand-edited records or deleted lock files are needed.
 `--origin unknown` supplies the same audited close/resume path for unreadable
