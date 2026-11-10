@@ -70,6 +70,30 @@ async function expectAdvanced(page: Page, label: string, value: string) {
   await closeCustomize(page)
 }
 // These regressions exercise the preserved rich presentation.
+test('session code remains accessible after reveal with Discuss open', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto(`${base}/?view=floor`)
+  await expect(page.getByRole('button', { name: 'Collapse Discuss', exact: true })).toBeVisible()
+  await present(page, { type: 'reveal-search', target: { kind: 'card', id: fixtureId(1) }, targets: [{ kind: 'card', id: fixtureId(4) }] }, 'toolbar-reveal')
+  const summary = page.locator('.ov-toolbar .session-connection summary')
+  await expect(summary).toHaveAttribute('aria-label', /^ChatGPT tab [A-Z0-9]+$/)
+  const geometry = await summary.evaluate(node => {
+    const rect = node.getBoundingClientRect()
+    const toolbar = node.closest('.ov-toolbar')!.getBoundingClientRect()
+    return {
+      contained: rect.left >= toolbar.left && rect.right <= toolbar.right,
+      accessible: [rect.left + 2, rect.left + rect.width / 2, rect.right - 2].every(x => {
+        const hit = document.elementFromPoint(x, rect.top + rect.height / 2)
+        return !!hit && (hit === node || node.contains(hit))
+      }),
+      height: toolbar.height,
+    }
+  })
+  expect(geometry).toEqual({ contained: true, accessible: true, height: 48 })
+  await summary.click()
+  await expect(page.getByRole('button', { name: 'Use this tab with ChatGPT', exact: true })).toBeVisible()
+})
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
 })

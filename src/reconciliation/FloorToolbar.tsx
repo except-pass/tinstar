@@ -38,13 +38,13 @@ export function FloorToolbar({ scene, state, workerScope, send, gaps, density, o
   }
   return <div ref={host} className="ov-organizer" onKeyDown={e => { if (e.key === 'Escape' && panel) { close(); setChosen(null); e.stopPropagation() } }}>
     <div className="ov-toolbar" role="toolbar" aria-label="Arrange work">
+      {sessionControl}
       <div className="ov-preset-scroll" role="group" aria-label="Organizer presets">{(Object.keys(organizerPresets) as Array<keyof typeof organizerPresets>).map(preset => <button type="button" key={preset} aria-pressed={organizerPreset(organizer) === preset} onClick={() => send({ type: 'set-organizer', organizer: { ...organizerPresets[preset] } })}>By {preset === 'initiative' ? 'Initiative' : preset === 'machine' ? 'Machine' : 'Manager'}</button>)}</div>
       <button type="button" className="ov-customize-trigger" aria-label="Customize" aria-expanded={panel === 'customize'} aria-controls="floor-customize" onClick={event => { trigger.current = event.currentTarget; setPanel(panel === 'customize' ? null : 'customize') }}>⚙<span> Customize{!organizerPreset(organizer) ? ' •' : ''}</span></button>
       {searchControl}
       {sync && <FloorRefresh sync={sync} scene={scene} now={now} />}
       <button type="button" className="ov-waiting-entry" aria-pressed={waitingForActive(state)} onClick={() => send({ type: 'enter-waiting-for' })}>Waiting For</button>
       <PatternDial coverage={patternCoverage} onInspectCoverage={onInspectPatternCoverage} scene={scene} state={state} send={send} now={now} />
-      {sessionControl}
       {onSourceDetails && <button type="button" className={`ov-source-indicator ${sourceLabel === 'Sources connected' ? 'ov-signal' : 'ov-warning'}`} title={sourceLabel} aria-label={`${sourceLabel} · Details`} onClick={onSourceDetails}>◉</button>}
     </div>
     <div className="ov-filter-shelf">
