@@ -19,7 +19,7 @@ Links and controls outside these targets keep their native context menus.
 Enter sends unless IME composition is active, Shift+Enter inserts a newline,
 and Escape closes. Send question is available for touch. Right-click never
 sends. See [shared element entry points](#shared-element-entry-points) for
-hover, focus, touch and selection gestures; voice is outside this refinement.
+hover, focus, touch and selection gestures; see [local voice](voice.md) for microphone input.
 
 The existing create endpoint still accepts `card_id` for work. An optional typed
 `target` identifies a canonical execution, claim or artifact instead (see
@@ -122,10 +122,14 @@ Link items retain the exact claim ID, reveal its endpoints and scroll to its car
 the flash targets that relationship, including unverified Detailed lines, rather
 than every confirmed connection on the card. Inbox questions and answer previews
 wrap legibly. Worker
-answers reveal and highlight the exact originating execution. Active and
+answers reveal and highlight the exact originating execution. Questions from a
+worker terminal also retain its home/task identity in `view.worker`; Return to
+source reopens that terminal only when exactly one current worker matches.
+Otherwise it returns to Overview with the captured origin. Active and
 history items use the same return path. A task that cannot be shown gets the
 captured canonical source link rather than another object. Follow-up creates a new request in the same
-conversation and retains the original captured context. No raw audio is stored.
+conversation and retains the original captured context. Audio handling is documented
+in [local voice retention](voice.md#boundary-resource-use-and-retention).
 
 ## Typed artifact origins and returns
 
@@ -133,8 +137,8 @@ The same composer supports PRs, action receipts, deployment targets and deployme
 PR rows in both PRs and Releases ask about the actual GitHub PR. Right-click a
 PR CI/review/changes field or deployment/receipt text to prepare an editable
 question. Blank Ask icons remain blank, and native links outside semantic Ask
-fields, selection, inspection, table scrolling and unavailable voice behavior
-retain their existing interaction rules.
+fields, selection, inspection and table scrolling retain their existing
+interaction rules.
 
 PR inspection uses the same editable semantic Ask surface for description,
 footprint, card links and contributor evidence. Focus a semantic field and use
@@ -381,13 +385,9 @@ and MCP behavior remains part of the regression suite.
 
 The remaining parent-card items are follow-up slices:
 
-- Worker context enriched with observed attempt/home beyond the execution ID
-  anchor; removable additional context chips beyond the single originating
+- Worker context enriched with observed attempt beyond the execution ID
+  anchor and terminal home/task identity; removable additional context chips beyond the single originating
   Work, Worker or Link context.
-- Discoverable microphone controls with press-and-hold and accessible tap-toggle
-  recording, local transcription, cancellation and text fallback. Voice remains
-  a separate slice on the composer microphone. Right drag is the Inspector rail
-  above, not a second voice gesture.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery and priority for investigations beyond the current
   Desk views described above.
@@ -431,7 +431,7 @@ send. Escape closes a new-question dialog; in an inline reply it returns focus
 to the conversation's collapse control and preserves the draft. Semantic Ask on
 Desk advice also replies in that conversation. Section switches preserve the
 mounted thread and draft; server history survives reload and another browser.
-Voice capture/transcription is a separate feature slice.
+Microphone input uses this same conversation path; see [local voice](voice.md).
 
 A follow-up persists its exact `follow_up_to`, the stable conversation ID and the
 original typed source context. Its literal question is sent with ordered prior
@@ -503,9 +503,3 @@ with an explanation that those recommendations are outdated.
 An unknown network acknowledgement offers a retry of the same selection/key;
 a definitive stale or conflicting selection reports the server's rejection.
 Existing delivery retry controls retain the selected request's note identity.
-
-
-The same composer is embedded in expanded card/worker/relationship Inspectors,
-PR details and Releases details. Its prominent microphone captures locally
-transcribed voice and sends through this same conversation protocol. See
-[local voice setup, limits and fallback](voice.md).

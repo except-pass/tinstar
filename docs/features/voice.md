@@ -9,9 +9,11 @@ Hold **Talk** to record and release to transcribe and send. A short tap starts
 recording; the next tap stops and sends. Keyboard/screen-reader activation uses
 the same toggle. The recording state shows elapsed time, a red microphone and
 **Cancel recording**. Cancel, recording loss, navigation away and a hidden page
-stop capture and never send a question. Recordings stop automatically at 60s.
+stop capture and never send a question. Browser capture stops automatically at 59s to leave encoder headroom within the
+60s server limit.
 Allow microphone access on an HTTPS Tin Star origin (localhost also works).
-Safari selects MP4; Chrome/Firefox select supported WebM/Opus or Ogg/Opus.
+The browser selects the first supported format from WebM/Opus, MP4 and
+Ogg/Opus, falling back to its default recording format.
 
 Transcribed speech is appended to the existing draft and automatically sent as
 an ordinary question through the existing idempotent Ask protocol. In a Desk
