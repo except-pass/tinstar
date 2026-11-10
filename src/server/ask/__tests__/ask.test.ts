@@ -983,17 +983,18 @@ it('retains authenticated worker terminal view identity and rejects a different 
   expect(wrongTask.status).toBe(409)
 })
 
-it.each([false, true])('restores a read completed answer as unread after archive=%s', async archived => {
+it.each([false, true])('preserves a completed answers read state on restore after archive=%s', async archived => {
   const { call, bridge, reload } = await setup()
   const id = (await call('requests', input())).data.data.request_id
   await bridge({ request_id: id, note: note(id) })
   await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Completed answer', cursor: '1' } })
   await call(`requests/${id}/read`, {})
-  expect(deskConversations((await call('requests')).data.data)[0]).toMatchObject({ view: 'history', unread: false })
+  expect(deskConversations((await call('requests')).data.data)[0]).toMatchObject({ view: 'needs-you', unread: false, attention: false })
+  const readAt = (await call('requests')).data.data[0].read_at
   if (archived) await call(`requests/${id}/dismiss`, {})
   await call(`requests/${id}/restore`, {})
   reload()
   const rows = (await call('requests')).data.data
-  expect(rows[0]).toMatchObject({ dismissed_at: null, read_at: null })
-  expect(deskConversations(rows)[0]).toMatchObject({ view: 'needs-you', unread: true })
+  expect(rows[0]).toMatchObject({ dismissed_at: null, read_at: readAt })
+  expect(deskConversations(rows)[0]).toMatchObject({ view: 'needs-you', unread: false, attention: false })
 })

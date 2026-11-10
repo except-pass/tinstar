@@ -106,20 +106,20 @@ function WorkspaceRail({ closeRequest, openRequest }: {
   const controls = useAskControls()
   const groups = deskConversations(controls?.items ?? [])
   const unread = groups.filter(group => group.unread).length
-  const counts = { 'needs-you': groups.filter(group => group.view === 'needs-you').length, waiting: groups.filter(group => group.view === 'waiting').length, history: groups.filter(group => group.view === 'history').length }
+  const counts = { 'needs-you': groups.filter(group => group.attention).length, waiting: groups.filter(group => group.view === 'waiting').length, history: groups.filter(group => group.view === 'history').length }
   const [selectedView, setSelectedView] = useState<DeskView | null>(null)
   const expandedGroup = groups.find(group => group.id === controls?.expanded)
   const previousExpanded = useRef<{ id: string; view: DeskView } | null>(null)
   // Follow an intentionally opened thread when a reply/read changes its view.
   // Resolve during render so its inline composer never unmounts between views.
   const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && !expandedGroup.turns.every(turn => !!turn.dismissed_at))
-  const view = followExpanded ? expandedGroup.view : selectedView ?? (counts['needs-you'] || !counts.waiting ? 'needs-you' : 'waiting')
+  const view = followExpanded ? expandedGroup.view : selectedView ?? (groups.some(group => group.view === 'needs-you') || !counts.waiting ? 'needs-you' : 'waiting')
   useEffect(() => {
     if (followExpanded) setSelectedView(expandedGroup.view)
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
   useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
-  const attention = groups.filter(group => group.failed && !group.unread && group.view !== 'history').length
+  const attention = groups.filter(group => group.attention && !group.unread).length
   return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
     <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
     <AskDesk now={now} view={view} />

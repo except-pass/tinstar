@@ -28,9 +28,10 @@ export function deskConversations(items: AskItem[]) {
     const failed = turns.some(turn => !turn.dismissed_at && deliveryFailed(turn))
     const answer = mostRecentAnswer(turns)
     const hasActions = !!latest.reply && !answer?.dismissed_at && answer?.reply?.suggested_actions.some(action => typeof action !== 'string')
-    const view: DeskView = archived ? 'history' : unread || failed || hasActions ? 'needs-you' : latest.reply ? 'history' : 'waiting'
+    const attention = !archived && (unread || failed || !!hasActions)
+    const view: DeskView = archived ? 'history' : unread || failed || latest.reply ? 'needs-you' : 'waiting'
     const updatedAt = turns.reduce((latest, turn) => turn.updated_at > latest ? turn.updated_at : latest, '')
-    return { id, turns, latest, unread, failed, view, updatedAt }
+    return { id, turns, latest, unread, failed, attention, view, updatedAt }
   }).sort((a, b) => Number(b.unread) - Number(a.unread) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
 }
 

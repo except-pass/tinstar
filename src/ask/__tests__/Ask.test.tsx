@@ -55,7 +55,7 @@ beforeEach(() => {
     if (match) {
       const row = records.find(record => record.request_id === match[1])!
       if (match[2] === 'read') row.read_at = new Date().toISOString()
-      if (match[2] === 'restore') { row.dismissed_at = null; row.read_at = null }
+      if (match[2] === 'restore') row.dismissed_at = null
       if (match[2] === 'dismiss') row.dismissed_at = new Date().toISOString()
       data = row
     }
@@ -1206,23 +1206,37 @@ it.each(['card', 'worker', 'relationship'] as const)('embeds the shared composer
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
-it('restores a read completed answer to Needs you as unread', async () => {
-  records = [{ ...seed(), read_at: new Date().toISOString() }]
+it('restores a read completed answer to the list without attention or an unread accent', async () => {
+  const at = new Date().toISOString()
+  records = [{ ...seed(), read_at: at, dismissed_at: at }]
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /^History/ }))
   fireEvent.click(await screen.findByRole('button', { name: 'Restore to inbox' }))
   fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
-  expect(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
-  await waitFor(() => expect(records[0]!.read_at).toBeNull())
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  await waitFor(() => expect(records[0]).toMatchObject({ read_at: at, dismissed_at: null }))
 })
-it('undoes archive of a read answer into Needs you as unread', async () => {
-  const answer = seed()
-  answer.reply!.suggested_actions = [{ id: 'review', label: 'Review', instruction: 'Review the result' }]
-  records = [{ ...answer, read_at: new Date().toISOString() }]
+it('undoes archive of a read answer without changing its read state or badge count', async () => {
+  const at = new Date().toISOString()
+  records = [{ ...seed(), read_at: at }]
   mount()
-  fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }))
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  fireEvent.click(screen.getByRole('button', { name: 'Archive conversation' }))
   fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
-  fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
-  expect(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
-  await waitFor(() => expect(records[0]).toMatchObject({ read_at: null, dismissed_at: null }))
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  await waitFor(() => expect(records[0]).toMatchObject({ read_at: at, dismissed_at: null }))
+})
+it('counts unread answers and current actions separately from quiet list membership', async () => {
+  const quiet = { ...seed(), read_at: new Date().toISOString(), question: 'Completed question' }
+  const actionable = { ...seed(), read_at: new Date().toISOString(), question: 'Action question' }
+  actionable.reply!.suggested_actions = [{ id: 'review', label: 'Review', instruction: 'Review the result' }]
+  records = [quiet, actionable, { ...seed(), question: 'Unread question' }]
+  mount()
+  expect(await screen.findByRole('button', { name: /Answered.*Completed question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /Answered.*Action question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /New answer.*Unread question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 2')
 })

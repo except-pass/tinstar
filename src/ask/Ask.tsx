@@ -91,7 +91,7 @@ export function AskProvider({ scene, state, onReturn, canBack, onBack, children 
   const action = (item: AskItem, value: 'retry' | 'dismiss' | 'restore') => {
     localRevision.current++
     if (value !== 'retry') {
-      setItems(rows => rows.map(row => row.conversation_id === item.conversation_id ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null, read_at: value === 'restore' ? null : row.read_at } : row))
+      setItems(rows => rows.map(row => row.conversation_id === item.conversation_id ? { ...row, dismissed_at: value === 'dismiss' ? new Date().toISOString() : null } : row))
       setExpanded(null)
     }
     pendingMutations.current++
