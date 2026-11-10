@@ -4,7 +4,7 @@ import { Decisions } from '../Decisions'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueSource } from '../../server/reconciliation/queue'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
-import { initialPresentation, type PresentationState } from '../presentation'
+import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
 import { loadPresentationPreferences, savePresentationPreferences } from '../presentationPreferences'
 import { renderHook } from '@testing-library/react'
 import { usePresentation } from '../usePresentation'
@@ -302,4 +302,38 @@ it('labels merged PR response controls with their own questions and routes each 
     await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Send to First Mate' })) })
     expect(submit).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({ anchorKey: sources[index]!.responseAnchor, kind: 'answer', text: `Response ${index}` }))
   }
+})
+
+it('prioritizes explicit card targets over retained items and reveals them through search', () => {
+  const scene = fixtureScene(), queue = fixtureQueue()
+  const first = { ...queue.items[0]!, id: 'request-a', cardIds: [fixtureId(1)] }
+  const second = { ...queue.items[0]!, id: 'request-b', cardIds: [fixtureId(5)] }
+  queue.items = [first, second]
+  workspace.value.queue = queue
+  state.queueItemId = first.id
+  const view = render(<Decisions />)
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'no matching question' } })
+  const open = (target: { cardId?: string; itemId?: string }) => {
+    const result = applyPresentationAction(state, { type: 'open-queue', ...target }, scene, Date.now(), queue)
+    expect(result.outcome).toBe('applied')
+    state = result.state
+    workspace.value.state = state
+    view.rerender(<Decisions />)
+  }
+  open({ cardId: fixtureId(5) })
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', second.id)
+  expect(view.container.querySelector('.decisions-row')).toHaveAttribute('data-decision-id', second.id)
+  open({ itemId: first.id })
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', first.id)
+  expect(view.container.querySelector('.decisions-row')).toHaveAttribute('data-decision-id', first.id)
+  const contextCard = scene.cards.find(card => ![fixtureId(1), fixtureId(5)].includes(card.id))!
+  open({ cardId: contextCard.id })
+  expect(screen.queryByLabelText('Selected decision')).toBeNull()
+  expect(within(screen.getByLabelText('Card context')).getByRole('link', { name: /Read Notion card/ })).toHaveAttribute('href', `https://www.notion.so/${contextCard.id}`)
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(0)
+  state = { ...state, queueCardId: null, queueItemId: 'removed-request', selection: { kind: 'card', id: fixtureId(1) } }
+  workspace.value.state = state
+  view.rerender(<Decisions />)
+  expect(screen.queryByLabelText('Selected decision')).toBeNull()
+  expect(screen.queryByLabelText('Card context')).toBeNull()
 })

@@ -52,16 +52,22 @@ export function Decisions() {
   useEffect(() => {
     setOpenedId(current => current && entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId ?? '') ? current : null)
   }, [selectedId])
-  const selected = entries.find(entry => entry.key === (state.queueOpen ? state.queueItemId : openedId)) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
+  const queueCardId = state.queueOpen ? state.queueCardId : null
+  const selected = state.queueOpen
+    ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
+    : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
+  const contextCardId = queueCardId && !selected ? queueCardId : null
+  const closeDetail = () => { setOpenedId(null); send({ type: 'close-queue' }); send({ type: 'clear-selection' })
   const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
-  const visible = entries.filter(entry => matches(entry) || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
+  const visible = entries.filter(entry => matches(entry) || state.queueOpen && entry.key === selected?.key || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
   const unavailable = !!queueError || !!error
   const incomplete = !!queue?.pullCoverage && (!queue.pullCoverage.associationsComplete || queue.pullCoverage.repositories.some(repo => repo.status !== 'fresh' || !repo.complete)) || queue && [queue.coverage.intentions, ...queue.coverage.fleet].some(source => !['fresh', 'partial'].includes(source.status) || source.coverage !== 'complete' || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
   const canFocus = (id: string) => !unavailable && !!scene?.cards.some(card => card.id === id)
   useLayoutEffect(() => {
-    if (!selectedId) return
-    list.current?.querySelector<HTMLElement>(`[data-card-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [state.selection, !!selected])
+    if (state.queueOpen && selected) {
+      Array.from(list.current?.querySelectorAll<HTMLElement>('[data-decision-id]') ?? []).find(row => row.dataset.decisionId === selected.key)?.scrollIntoView({ block: 'nearest' })
+    } else if (selectedId) list.current?.querySelector<HTMLElement>(`[data-card-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [state.selection, state.queueOpen, selected?.key])
   useLayoutEffect(() => {
     const current = state.flash, viewport = list.current
     if (!current || current.until <= Date.now() || !viewport) return
@@ -99,7 +105,7 @@ export function Decisions() {
   return <section className="decisions" aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
     <header><h1>Decisions</h1></header>
     <label className="decisions-search"><span className="ask-sr-only">Search decisions</span><input type="search" value={query} onChange={event => { interaction.current++; setQuery(event.target.value) }} placeholder="Need a decision? Search title, card or topic…" /></label>
-    <div className="decisions-layout" data-selected={!!selected}>
+    <div className="decisions-layout" data-selected={!!selected || !!contextCardId}>
       <div className="decisions-list" ref={list} aria-label="Decision requests">
         {!queue && !queueError && <p role="status">Reading decision sources…</p>}
         {queue && !visible.length && <p role="status">{unavailable || incomplete ? 'No matching requests in available records. Some evidence needs verification.' : query ? 'No matching requests.' : 'No decisions in the current queue.'}</p>}
@@ -116,7 +122,11 @@ export function Decisions() {
           return id ? <AskSurface as="div" subject={{ cardId: id }} key={entry.key}>{row}</AskSurface> : <div key={entry.key}>{row}</div>
         })}
       </div>
-      {selected && <DecisionDetail key={selected.key} entry={selected} items={queue?.needsWill ?? queue?.items ?? []} unavailable={unavailable} onClose={() => { setOpenedId(null); send({ type: 'close-queue' }); send({ type: 'clear-selection' }) }} />}
+      {selected && <DecisionDetail key={selected.key} entry={selected} items={queue?.needsWill ?? queue?.items ?? []} unavailable={unavailable} onClose={closeDetail} />}
+      {contextCardId && <aside className="decisions-summary" aria-label="Card context">
+        <header><h2>Card context</h2><button type="button" aria-label="Close card context" onClick={closeDetail}>×</button></header>
+        <DecisionCardContext key={contextCardId} id={contextCardId} />
+      </aside>}
     </div>
     {needsVerification && <details className="decisions-diagnostics"><summary>Some requests need verification · Details</summary>
       {bridgeError && <p>MCP connection delayed. Local browsing remains available.</p>}
