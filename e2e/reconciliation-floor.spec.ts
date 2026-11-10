@@ -618,7 +618,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await counts(2, 2)
   await expect(page.getByRole('button', { name: 'By Machine', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(slice('Cards: In Progress, 2')).toHaveAttribute('aria-pressed', 'true')
-  const clear = page.getByRole('button', { name: 'Clear all status selections' })
+  const clear = page.getByRole('complementary', { name: 'Applied filters' }).getByRole('button', { name: 'Clear all', exact: true })
   await clear.scrollIntoViewIfNeeded()
   const clearBox = (await clear.boundingBox())!
   expect(clearBox.x).toBeGreaterThanOrEqual(0)
