@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decisionProposalSchema } from '../decisionProposal'
+import { decisionProposalSchema, currentDecisionProposal } from '../decisionProposal'
 import { askReplySchema, askReturnSchema, askSelectionInputSchema } from '../ask'
 import { fixtureProposal } from '../../../test-fixtures/reconciliation/decisionProposal'
 
@@ -24,4 +24,17 @@ describe('published decision proposals', () => {
     expect(askReplySchema.parse(reply)).toEqual(reply)
     expect(askReplySchema.parse({ ...reply, decision_proposal: fixtureProposal('request-a') }).decision_proposal?.request_key).toBe('request-a')
   })
+})
+
+it('resolves one explicit typed revision chain and rejects unrelated, cyclic and cross-source publications', () => {
+  const p = fixtureProposal('request'), q = { ...p, proposal_id: 'q', supersedes: p.proposal_id }, r = { ...p, proposal_id: 'r', supersedes: 'q' }
+  const source = { home: '/fixture', taskId: null, kind: 'hold' as const, id: 'source' }
+  const candidate = (value: unknown) => ({ value, source_request: source })
+  expect(currentDecisionProposal([candidate(r), candidate(p), candidate(q)])?.value).toEqual(r)
+  expect(currentDecisionProposal([candidate(p), candidate('An explanatory answer')])?.value).toEqual(p)
+  expect(currentDecisionProposal([candidate(p), candidate({ ...q, supersedes: null })])).toBeUndefined()
+  expect(currentDecisionProposal([candidate({ ...p, supersedes: 'q' }), candidate(q)])).toBeUndefined()
+  expect(currentDecisionProposal([candidate(p), { value: q, source_request: { ...source, id: 'another' } }])).toBeUndefined()
+  expect(currentDecisionProposal([candidate(p), candidate({ ...q, request_key: 'another' })])).toBeUndefined()
+  expect(currentDecisionProposal([candidate(p), candidate({ ...p, rationale: 'Conflicting content' })])).toBeUndefined()
 })

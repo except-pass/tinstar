@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { releasedMergeSelection, askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
-import { currentDecisionProposal, type DecisionProposal } from '../../shared/decisionProposal'
+import type { DecisionProposal } from '../../shared/decisionProposal'
 import type { AskAction } from '../../shared/ask-actions'
 import type { ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { normalizeAskReply } from './reply'
@@ -106,7 +106,7 @@ export class AskStore {
   /** Chunk 2 supplies canonical membership lookup from its typed reply actions.
    * The callback runs inside the writer lock; no browser instruction is trusted.
    * A selection is a new bridge request, never an action executed by Tin Star. */
-  createActionSelection(owner: string, input: AskSelectionInput, lookupAction: (answer: AskRecord, actionId: string) => AskAction | undefined | Promise<AskAction | undefined>, published?: (answerId: string) => Promise<{ context: AskContext; proposal: DecisionProposal } | undefined>, captureMerge?: (action: AskAction, operationId: string) => Promise<ClawsonMergeInput>) {
+  createActionSelection(owner: string, input: AskSelectionInput, lookupAction: (answer: AskRecord, actionId: string, proposals: Array<{ answer_id: string; value: DecisionProposal }>) => AskAction | undefined | Promise<AskAction | undefined>, published?: (answerId: string) => Promise<{ context: AskContext; proposal: DecisionProposal } | undefined>, captureMerge?: (action: AskAction, operationId: string) => Promise<ClawsonMergeInput>) {
     const selectionInput = askSelectionInputSchema.parse(input)
     return this.change(async rows => {
       const { answer_id: answerId, action_id: actionId, client_key: clientKey } = selectionInput
@@ -141,14 +141,12 @@ export class AskStore {
         ;(consumed.client_key_aliases ??= []).push(clientKey)
         return consumed
       }
-      if (answer.context.target?.kind === 'decision') {
-        const current = currentDecisionProposal(rows.filter(row => row.owner === owner && row.synthetic_id === answer.synthetic_id && row.context.target?.kind === 'decision' && row.context.target.id === answer.context.target!.id && row.reply?.decision_proposal?.request_key === answer.context.target!.id).map(row => ({ answer_id: row.request_id, value: row.reply!.decision_proposal! })))
-        if (current?.answer_id !== answerId) throw new AskConflict('Proposal has been superseded')
-      } else {
+      const proposals = rows.filter(row => row.owner === owner && row.synthetic_id === answer.synthetic_id && row.context.target?.kind === 'decision' && row.context.target.id === answer.context.target?.id && row.reply?.decision_proposal?.request_key === answer.context.target?.id).map(row => ({ answer_id: row.request_id, value: row.reply!.decision_proposal! }))
+      if (answer.context.target?.kind !== 'decision') {
         const replies = conversationTurns(rows.filter(row => row.owner === owner && row.conversation_id === answer.conversation_id)).filter(turn => turn.role === 'assistant')
         if (replies.at(-1)?.request_id !== answerId) throw new AskConflict('Answer has been superseded')
       }
-      const action = await lookupAction(structuredClone(answer), actionId)
+      const action = await lookupAction(structuredClone(answer), actionId, proposals)
       if (!action || action.id !== actionId) throw new AskNotFound('Action unavailable in the saved answer')
       const selection = askActionSelectionSchema.parse({ selection_id: randomUUID(), answer_id: answerId, action_id: action.id,
         instruction: action.instruction, label: action.label, actor: owner, selected_at: this.now() })

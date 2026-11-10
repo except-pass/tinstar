@@ -402,7 +402,7 @@ export class WorkflowOperations {
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
       if (input.kind === 'request_decision') {
-        if (requests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
+        if (decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
         if (input.proposal && (input.proposal.card_id && input.proposal.card_id !== card.id || input.proposal.source.kind !== 'firstmate-request' || !input.source_request || input.proposal.source.id !== input.source_request.id)) throw new WorkflowError('decision-conflict', 'Published proposal must identify its bound First Mate source request and card')
         const related = requests.filter(row => row.action === input.action && !answered.has(row.id))
         const preserve = related.length ? related.some(row => row.preserve_action) : tags.includes(input.action)
@@ -411,7 +411,7 @@ export class WorkflowOperations {
         note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\n${workflowMarkers.request} ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...(input.proposal ? { proposal: input.proposal } : {}), ...binding })}`
       } else {
         let request = requests.find(row => row.id === input.request_id)
-        if (!request && (!answered.has(input.request_id) || input.source_request)) {
+        if (!request && !decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id) && (!answered.has(input.request_id) || input.source_request)) {
           // Older Notion asks retain their actual paragraph/comment identity.
           // The caller explicitly judges which aggregate action tag is resolved;
           // absent that judgment, leave every legacy action tag untouched.

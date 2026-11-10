@@ -132,14 +132,14 @@ export class AskApi {
           if (!item || !decisionFresh(item)) throw new AskConflict('Request freshness is unverified; refresh before choosing')
           return item
         }
-        const selected = await this.store.createActionSelection(login, input, async (answer, actionId) => {
+        const selected = await this.store.createActionSelection(login, input, async (answer, actionId, proposals) => {
           const proposal = answer.reply!.decision_proposal
           if (answer.context.target?.kind === 'decision') {
             const item = await current(answer.context.target.id)
             if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
             if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
             if (answer.published_proposal && (item.proposal?.answer_id !== answer.request_id || JSON.stringify(item.proposal.value) !== JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
-            if (!answer.published_proposal && item.proposal && currentDecisionProposal([{ answer_id: answer.request_id, value: proposal }, item.proposal])?.answer_id !== answer.request_id) throw new AskConflict('A newer work publication supersedes this answer')
+            if (currentDecisionProposal([...proposals, ...(item.proposal ? [item.proposal] : [])])?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded or has conflicting publications')
             if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
             return findSuggestedAction(proposal.actions, actionId)
           }

@@ -1,3 +1,4 @@
+import { currentDecisionProposal, decisionProposalSchema } from '../../shared/decisionProposal'
 import { decisionRecordRows, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
@@ -61,7 +62,7 @@ export function decisionProposals(notes: WorkflowNote[]) {
       return { row, added: !!data?.binding }
     })
   })
-  return [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
+  const history = [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
     const matching = entries.filter(entry => entry.row.id === id)
     if (matching.length === 1) return [matching[0]!.row]
     const published = matching.filter(entry => !entry.added), added = matching.filter(entry => entry.added)
@@ -70,6 +71,20 @@ export function decisionProposals(notes: WorkflowNote[]) {
     if (original.source_request || !binding.source_request || original.action !== binding.action || original.preserve_action !== binding.preserve_action) throw new DecisionSourceError('proposal identity has conflicting binding metadata')
     return [{ ...original, source_request: binding.source_request, source_question: binding.source_question, source_spawn_gen: binding.source_spawn_gen }]
   })
+  const bound = new Map<string, typeof history>()
+  for (const row of history.filter(row => row.source_request)) {
+    const request = firstMateRequestSchema.safeParse(row.source_request)
+    if (!request.success) throw new DecisionSourceError('published source binding is incomplete')
+    const key = requestKey(request.data)
+    bound.set(key, [...(bound.get(key) ?? []), row])
+  }
+  const current = [...bound.values()].map(group => {
+    if (group.length === 1 && !group[0]!.proposal) return group[0]
+    const resolved = currentDecisionProposal(group.map(row => ({ row, value: row.proposal, source_request: row.source_request })))
+    if (!resolved || group.some(row => !decisionProposalSchema.safeParse(row.proposal).success)) throw new DecisionSourceError('multiple proposals bind the same source request without one valid revision chain')
+    return resolved.row
+  })
+  return history.filter(row => !row.source_request || current.includes(row))
 }
 export function decisionAnswer(note: WorkflowNote) {
   const data = rows([note], 'Tin Star answer data: ')[0]
@@ -92,14 +107,10 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
     return linkedSource && rows(notes, 'Tin Star answer: ').length ? verify('answered proposal has no explicit First Mate request binding') : undefined
   }
-  const sources = new Set<string>()
   const results: DecisionResolution[] = []
   for (const row of bound) {
     const parsed = firstMateRequestSchema.safeParse(row.source_request)
     if (!parsed.success || typeof row.id !== 'string' || typeof row.source_question !== 'string' || !(row.source_spawn_gen === null || typeof row.source_spawn_gen === 'string')) return verify('published source binding is incomplete')
-    const request = parsed.data, key = requestKey(request)
-    if (sources.has(key)) return verify('multiple proposals bind the same source request')
-    sources.add(key)
   }
   // Validate every binding before sending any answer from this card.
   const reconcile = async (row: typeof bound[number]): Promise<DecisionResolution> => {
