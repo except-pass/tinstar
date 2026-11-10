@@ -77,7 +77,7 @@ tunnel-client run \
 
 The control-plane key is already placed at the path above; never read or print it. Keep credentials out of argv values, environment values, logs and source control; only file paths appear in commands.
 Do not enable embedded stub mode, payload capture, raw HTTP logging or public health listeners.
-The facade checks the injected bearer on every request, sends only the separate install token to the fixed localhost backend, and refuses redirects. It does not implement OAuth/DCR or advertise an OAuth issuer.
+The facade checks the injected bearer on every request, sends the separate install token and its configured caller credential to the fixed localhost backend, and refuses redirects. The backend verifies both credentials for configured PR-read grants; client-supplied identity and owner headers are never forwarded. It does not implement OAuth/DCR or advertise an OAuth issuer.
 
 Firstmate owns deployment and live ChatGPT acceptance after deploy; local SDK/browser proof does not establish live acceptance. Presentation tools still require `--allow-view`; shared workflow tools use the same authenticated caller boundary. Catalog changes require connector refresh after deploy. Do not modify or restart the existing live tunnel during validation.
 
@@ -125,14 +125,50 @@ The authoritative input schemas and defaults live in
 [`registerDomainReadTools` and its shared pagination schema](../../src/server/reconciliation/domainReads.ts)
 and are exposed through MCP `tools/list`.
 
-**PR authorization is pending an owner-binding decision.** Production currently
-returns `{outcome:"unauthorized", prerequisite:"...verified owner binding..."}`
-for `list_prs` and `get_pr`, before invoking any private PR reader. Install-token
-possession, a tunnel caller named `owner-chatgpt`, window IDs, localhost and
-forwarded Tailscale identity headers do not grant the PR Operations browser owner
-identity. No header is synthesized. The server-owned adapter authorization hook
-is denied by default; only synthetic tests supply a grant. Until that binding is
-approved and implemented, the positive “show my PRs” conversation is unavailable.
+**PR reads require an explicit, revocable caller grant (owner-approved Option A).**
+With no matching grant, `list_prs` and `get_pr` return
+`{outcome:"unauthorized", prerequisite:"...verified owner binding..."}` before
+invoking private PR readers. In the backend's private `config.json`, configure:
+
+```json
+{
+  "mcp": {
+    "prReadGrants": [{
+      "callerId": "owner-chatgpt",
+      "callerTokenFile": "/absolute/private/facade-caller-header",
+      "ownerLogin": "existing-owner@example.com"
+    }]
+  }
+}
+```
+
+Merge this key into the existing configuration. `ownerLogin` must already be in
+`ask.ownerLogins` under the same valid Ask configuration used by browser PR
+Operations. `callerTokenFile` is the same owner-only file supplied to the existing
+facade's `--caller-token-file` (one `Bearer <separate-token>` line); no secret
+values go in config or PR evidence. The facade must run the updated code to
+forward its authenticated proof. The backend requires its own `mcp-token` plus
+the matching caller ID **and** separate caller credential. Knowing an ID or
+installation token, sending an owner header, or reaching loopback/the tunnel
+alone grants no PR access. No browser session is needed and no owner header is
+synthesized.
+
+Configuration, owner membership and credential files are reread for every PR
+call. Delete the entry to revoke on the next call, without restarting backend or
+facade; already running reads may finish. Missing, malformed, mismatched or
+unreadable configuration/credentials fail closed. Rotating the caller file
+revokes the old proof immediately; restart the facade and tunnel-client to load
+the new caller credential as described above. Backend installation-token
+rotation still requires a backend restart under its existing token lifecycle.
+
+This grant is consulted **only** by `list_prs` and `get_pr`. They retain the shared
+PR Operations repository/owner scope and bounded outputs. It grants no browser
+API access, merge, approval, review submission, dispatch, Notion write, workflow
+mutation or release authority. Existing tool permissions remain independent;
+`get_release_status` needs no PR grant. Firstmate adds the live entry after merge
+and guarded deployment; this documentation does not establish live availability.
+Then request one ChatGPT connector refresh and verify both reads through ChatGPT
+against the same PRs in PR Operations before claiming live acceptance.
 
 Once authorized, inventory preserves the authenticated reader account/scope,
 canonical `repository#number` identity, captured head, multiple active/historical

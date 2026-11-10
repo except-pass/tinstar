@@ -89,7 +89,10 @@ export function createTunnelFacade(options: TunnelOptions) {
         }))
       }
       await upstream.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${upstreamPort}/api/reconciliation/mcp`), {
-        requestInit: { headers: { Authorization: `Bearer ${installToken}`, 'X-Tinstar-Caller': caller.id }, redirect: 'error' },
+        // Forward only the facade's configured, authenticated caller proof,
+        // never identity/owner headers supplied by the tunnel client.
+        requestInit: { headers: { Authorization: `Bearer ${installToken}`, 'X-Tinstar-Caller': caller.id,
+          'X-Tinstar-Caller-Authorization': `Bearer ${caller.token}` }, redirect: 'error' },
       }))
       server.setRequestHandler(ListToolsRequestSchema, async () => {
         const tools = await upstream.listTools()
