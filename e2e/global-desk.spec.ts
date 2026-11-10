@@ -568,13 +568,19 @@ else:
 `, { mode: 0o700 })
         await new Promise<void>((resolveRun, reject) => execFile('python3', ['-B', '-c', "import runpy,sys,pathlib; p=runpy.run_path('scripts/ask-puller.py'); print(p['pull_once'](sys.argv[1],sys.argv[2],pathlib.Path(sys.argv[3])))", base, token, home], { cwd: resolve('.') }, error => error ? reject(error) : resolveRun()))
         const warningNote = readFileSync(resolve(home, 'warning-note.txt'), 'utf8')
-        expect(JSON.parse(warningNote.split('\n')[1]).reply_warnings).toEqual(receipt.reply_warnings)
+        const warningPayload = warningNote.split('\n')[1]
+        if (warningPayload === undefined) throw new Error('Missing warning note payload')
+        expect(JSON.parse(warningPayload).reply_warnings).toEqual(receipt.reply_warnings)
         expect(existsSync(resolve(journal, 'reply.json'))).toBe(false)
         transcript.push({ firstmateInboxNote: warningNote })
         if (process.env.REJECTION_EVIDENCE_DIR) writeFileSync(resolve(process.env.REJECTION_EVIDENCE_DIR, 'firstmate-warning-note.txt'), warningNote)
         await thread.getByRole('button', { name: 'Keep open: Retain the card until the review lands' }).click()
         const pending = (await call('bridge', undefined, sender)).pending
-        const selected = pending.find((row: { body: string }) => JSON.parse(row.body.split('\n')[1]).action_selection?.action_id === valid.id)
+        const selected = pending.find((row: { body: string }) => {
+          const payload = row.body.split('\n')[1]
+          if (payload === undefined) throw new Error('Missing pending action payload')
+          return JSON.parse(payload).action_selection?.action_id === valid.id
+        })
         expect(selected).toBeTruthy()
         const envelope = JSON.parse(selected.body.split('\n')[1])
         expect(envelope.question).toBe(valid.instruction)
