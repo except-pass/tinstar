@@ -272,8 +272,10 @@ owner's merge, record the ask through `request_decision` with the Merge action o
 an existing owner-routed worker request and the canonical PR link. No merge,
 deploy or dispatch action is exposed by this read.
 
-Answered tracked requests are excluded from the Needs Will list when complete
-request history establishes the answer; unrelated action tags and waits survive.
+Answered tracked requests are omitted from request-history evidence. Historical
+answers never resolve a current action tag: a later explicit ask remains listed
+even when its relationship to an earlier request is unknown. Only the explicitly
+resolved ask is cleared; unrelated action tags and waits survive.
 An owner name alone is insufficient; a current action tag without a concrete next
 action remains a request needing readiness verification. Unavailable/partial history
 retains current explicit property asks for verification instead of inventing an
@@ -322,10 +324,13 @@ Confirmed/partial human saves promptly refresh the local shared request view;
 external writes appear through the existing polling/cache refresh. Failed reads
 retain last-known data and visible source warnings.
 
-Inspector checkpoints now include the original watchdog request ID (prefilled
-when available) and optional blocker/owner context, so human responses can close
-the same request without Notion. Answer selection omits known answered requests
-while retaining legacy source IDs and explicit ID entry. Create/edit/assign,
+Inspector checkpoints include the original watchdog request ID and optional
+blocker/owner context, so human responses can close the same request without
+Notion. Until the human edits the ID, its displayed default follows the current
+card watchdog indicator on refresh, including newly created or replacement
+requests. Explicit edits remain intact. Submission and retry intent use that
+same displayed ID; a changed intent receives a new operation ID. Answer selection
+omits known answered requests while retaining legacy source IDs and explicit ID entry. Create/edit/assign,
 start (native or external), checkpoint/wait, request/answer, complete and park
 continue to use the shared backend operations described above. State changes,
 errors, partial-save/readback and selective cleanup are shared with MCP.
