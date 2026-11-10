@@ -273,7 +273,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   renderedScene.current = scene.generatedAt
   const confirmedInScene = useRef<string | null>(null)
   const refreshWork = async (result?: StartWorkResult) => {
-    if (retainedCard.current && result?.card) {
+    if (retainedCard.current && result?.card && retainedCard.current.id === result.card.id) {
       retainedCard.current = { ...retainedCard.current, source: result.card as SceneCard['source'] }
       confirmedInScene.current = renderedScene.current
     }
@@ -293,7 +293,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const claim = [...scene.claims, ...scene.claimHistory].find(c => selection.kind === 'claim' && c.id === selection.id)
   const execution = scene.executions.find(e => e.id === (claim?.executionId ?? (selection.kind === 'execution' ? selection.id : '')))
   const currentCard = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
-  if (currentCard && confirmedInScene.current !== scene.generatedAt) { retainedCard.current = currentCard; confirmedInScene.current = null }
+  if (currentCard && (retainedCard.current?.id !== currentCard.id || confirmedInScene.current !== scene.generatedAt)) { retainedCard.current = currentCard; confirmedInScene.current = null }
   const card = (currentCard && confirmedInScene.current !== scene.generatedAt ? currentCard : undefined) ?? (selection.kind === 'card' && retainedCard.current?.id === selection.id ? retainedCard.current : undefined)
   const home = scene.coverage.homes.find(h => h.source.home === (selection.kind === 'manager' ? selection.id : execution?.home))
   const group = selection.kind === 'group' ? resolveFloorGroup(scene, state, selection.id, now) : undefined

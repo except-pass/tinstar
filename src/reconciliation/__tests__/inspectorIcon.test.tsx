@@ -234,3 +234,51 @@ it('retains the confirmed status and partial-save recovery when completion remov
   expect(within(inspector).getByText(/Partially saved. Status saved; note failed/)).toBeTruthy()
   expect(within(inspector).getByRole('button', { name: 'Save update' })).toBeEnabled()
 })
+
+it('keeps Inspector identity when another card save finishes and applies matching readback', async () => {
+  const first = scene.cards.find(card => card.id === fixtureId(1))!
+  const second = scene.cards.find(card => card.id === fixtureId(4))!
+  const requests: Array<{ input: { card_id: string }; resolve: (response: Response) => void }> = []
+  vi.mocked(apiFetch).mockImplementation((path, init) => {
+    if (String(path).endsWith('/workflow')) return new Promise<Response>(resolve => requests.push({ ...JSON.parse(String(init?.body)), resolve }))
+    return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { outcome: 'available', blocks: [] } })))
+  })
+  observed.refresh = vi.fn(async () => {})
+  const { container } = mount('detailed')
+  const open = (id: string) => {
+    const row = [...container.querySelectorAll<HTMLElement>('.ov-card')].find(element => element.dataset.entityId === id)!
+    fireEvent.click(inspectorButton(row))
+  }
+  const finish = async (index: number, card: typeof first.source) => {
+    await act(async () => requests[index]!.resolve(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', message: 'Confirmed', saved_fields: ['Name', 'Status'], card } }))))
+    await waitFor(() => expect(observed.refresh).toHaveBeenCalledTimes(index + 1))
+  }
+  open(first.id)
+  fireEvent.click(within(screen.getByLabelText('Inspector')).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]!.input.card_id).toBe(first.id)
+  open(second.id)
+  const savedFirst = structuredClone(first.source)
+  savedFirst.properties.Name!.value = 'Confirmed first card'
+  savedFirst.properties.Status!.value = 'Done'
+  savedFirst.url = 'https://www.notion.so/confirmed-first'
+  await finish(0, savedFirst)
+  const inspector = screen.getByLabelText('Inspector')
+  expect(heading()).toHaveTextContent(String(second.source.properties.Name!.value))
+  expect(within(inspector).getByText('Waiting For', { exact: true, selector: 'dd' })).toBeTruthy()
+  expect(within(inspector).getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', second.source.url)
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(requests).toHaveLength(2))
+  expect(requests[1]!.input.card_id).toBe(second.id)
+  const savedSecond = structuredClone(second.source)
+  savedSecond.properties.Name!.value = 'Confirmed second card'
+  savedSecond.properties.Status!.value = 'Queued'
+  savedSecond.url = 'https://www.notion.so/confirmed-second'
+  await finish(1, savedSecond)
+  expect(heading()).toHaveTextContent('Confirmed second card')
+  expect(within(inspector).getByText('Queued', { exact: true })).toBeTruthy()
+  expect(within(inspector).getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', savedSecond.url)
+  open(first.id)
+  expect(heading()).toHaveTextContent(String(first.source.properties.Name!.value))
+  expect(screen.getByRole('link', { name: 'Open Notion card ↗' })).toHaveAttribute('href', first.source.url)
+})
