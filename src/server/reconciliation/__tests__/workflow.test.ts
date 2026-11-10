@@ -1399,7 +1399,7 @@ it('projects the confirmed card after refresh reconciles a direct answer', async
   f.raw.properties.Status.status.name = 'Waiting For'
   f.comments.push({ id: 'direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request' }] })
   const result = await sources.getWork({ card_id: id, refresh: true, details: false })
-  expect(result).toMatchObject({ outcome: 'available', card: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } } } })
+  expect(result).toMatchObject({ outcome: 'available', card: { source: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } } } } })
 })
 
 it('preserves two bound proposals when the first answer quotes the second identity', async () => {

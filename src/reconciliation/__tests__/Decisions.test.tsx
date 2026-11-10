@@ -180,7 +180,7 @@ it('answers a typed published choice through the shared workflow without dismiss
 it('keeps sibling proposal choices enabled and replaces saved status with refreshed reconciliation', async () => {
   const queue = fixtureQueue(), item = { ...queue.items[0]!, cardIds: [fixtureId(5)] }
   const request = { cardId: fixtureId(5), id: 'proposal-a', action: 'Decision', preserveAction: false, requestedFrom: 'Will', question: 'First decision', since: null, sourceId: 'a', answered: false, options: [{ id: 'a', label: 'Answer A' }] }
-  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [request, { ...request, id: 'proposal-b', sourceId: 'b', question: 'Second decision', options: [{ id: 'b', label: 'Answer B' }] }] }]
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [request, { ...request, id: 'proposal-b', sourceId: 'b', question: 'Second decision', options: [{ id: 'b', label: 'Answer B' }] }] }, { ...item, id: 'source-b', requestSince: null, ageBasis: 'unknown', pulls: [], requests: [], decisionResolution: { state: 'pending', message: 'Sibling pending', request_id: 'proposal-b' } }]
   workspace.value.queue = queue
   state.selection = { kind: 'card', id: fixtureId(5) }
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', saved_fields: ['note'], decision_resolution: { state: 'pending', message: 'Decision recorded · First Mate not yet updated' } } }))))
@@ -188,12 +188,12 @@ it('keeps sibling proposal choices enabled and replaces saved status with refres
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Answer A' })) })
   expect(screen.getByRole('button', { name: 'Answer A' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Answer B' })).toBeEnabled()
-  workspace.value.queue = { ...queue, needsWill: [{ ...queue.needsWill[0]!, decisionResolution: { state: 'resolved', message: 'Resolved' } }] }
+  workspace.value.queue = { ...queue, needsWill: [...queue.needsWill, { ...queue.needsWill[0]!, id: 'source-a', decisionResolution: { state: 'verification-needed', message: 'Source A needs verification', request_id: 'proposal-a' } }] }
   view.rerender(<Decisions />)
-  expect(screen.getByRole('status')).toHaveTextContent('Resolved')
-  expect(screen.getByRole('status')).not.toHaveTextContent('not yet updated')
+  expect(screen.getByLabelText('Selected decision').querySelector('[role="status"]')).toHaveTextContent('Source A needs verification')
+  expect(screen.getByLabelText('Selected decision').querySelector('[role="status"]')).not.toHaveTextContent('not yet updated')
   expect(screen.getByRole('button', { name: 'Answer B' })).toBeEnabled()
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Answer B' })) })
   expect(screen.getByRole('button', { name: 'Answer B' })).toBeDisabled()
-  expect(screen.getAllByRole('status')).toHaveLength(1)
+  expect(screen.getByLabelText('Selected decision').querySelectorAll('[role="status"]')).toHaveLength(1)
 })
