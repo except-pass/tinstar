@@ -36,7 +36,7 @@ const base = { card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
 const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Progress', 'Waiting For', 'Done', 'Archived']),
   worker: workerSchema.optional(), disposition: prose.optional(), evidence: prose.optional(),
   wait: z.object({ dependency: prose, unblocks_when: prose, follow_up_by: label }).strict().optional() }
-const checkpointSchema = z.object({ assessment: prose.refine(value => value.length >= 12 && !/^(still (working|running)|none|pending|n\/a)[.! ]*$/i.test(value), 'Provide a substantive assessment'), evidence: prose.refine(value => value.length >= 8 && !/^(none|pending|n\/a|no evidence)[.! ]*$/i.test(value), 'Provide concrete evidence'), next_action: prose,
+const checkpointSchema = z.object({ assessment: prose, evidence: prose, next_action: prose,
   next_check_in: z.string().min(1).max(100), confirmation: z.enum(['provisional', 'owner-confirmed']),
   request_id: z.string().uuid().optional(), blocker: prose.optional() }).strict()
 export const updateWorkSchema = z.discriminatedUnion('kind', [

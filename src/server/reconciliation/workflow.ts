@@ -1,3 +1,4 @@
+import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
@@ -220,6 +221,8 @@ export class WorkflowOperations {
       set('Next check-in', new Date(next).toISOString())
       if (card.properties['Next action']) set('Next action', cp.next_action)
       note = `${cp.request_id ? `Check-in request: ${cp.request_id}\n` : ''}Date: ${at}\nBy: ${actor}\nProgress: ${proseLine(cp.assessment)}\nEvidence: ${proseLine(cp.evidence)}\nBlocker/owner: ${proseLine(cp.blocker ?? 'none')}\nNext action: ${proseLine(cp.next_action)}\nNext check-in: ${new Date(next).toISOString()}\nAppointment: ${cp.confirmation}`
+      const requestId = cp.request_id ?? 'unrequested-checkpoint'
+      if (!checkInReport(cp.request_id ? note : `Check-in request: ${requestId}\n${note}`, requestId)) throw new WorkflowError('invalid-checkpoint', 'Serialized checkpoint must satisfy the existing watchdog requirements for substantive progress/evidence and non-placeholder fields')
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const requests = notes.flatMap(note => note.text.split('\n').filter(line => line.startsWith('Tin Star request: ')).flatMap(line => {
         try { const row = JSON.parse(line.slice('Tin Star request: '.length)); return typeof row.id === 'string' && typeof row.action === 'string' ? [row as { id: string; action: string; preserve_action: boolean }] : [] } catch { return [] }

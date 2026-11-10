@@ -593,3 +593,40 @@ it.each(['\n', '\r\n', '\r'])('saves multiline checkpoint prose that round-trips
   expect((await f.reader.card(id, true)).properties['Next action']!.value).toBe(checkpoint.next_action)
   expect(checkInReport(savedNote, '22222222-2222-4222-8222-222222222222')).toBeNull()
 })
+
+it.each([
+  { field: 'assessment', value: 'Done\nBuild and tests passed', accepted: true },
+  { field: 'assessment', value: 'Tests passed', accepted: true },
+  { field: 'evidence', value: 'Receipt1', accepted: true },
+  { field: 'blocker', value: 'none', accepted: true },
+  { field: 'evidence', value: 'still working', accepted: false },
+  { field: 'evidence', value: 'still\nworking', accepted: false },
+  { field: 'assessment', value: 'Tests\n\n\npass', accepted: false },
+  { field: 'evidence', value: 'PR\n\n\n1234', accepted: false },
+  { field: 'assessment', value: '<complete update>', accepted: false },
+  { field: 'evidence', value: '<evidence>', accepted: false },
+  { field: 'blocker', value: '<owner\nname>', accepted: false },
+  { field: 'next_action', value: '<next\nstep>', accepted: false },
+])('uses verifier policy before writing serialized $field=$value', async ({ field, value, accepted }) => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  for (const correlated of [true, false]) {
+    const f = fixture()
+    const requestId = '11111111-1111-4111-8111-111111111111'
+    const checkpoint = { assessment: 'Build and tests passed', evidence: 'Successful fixture receipt', blocker: 'none', next_action: 'Review output',
+      next_check_in: '2026-11-10T17:00:00Z', confirmation: 'provisional', ...(correlated ? { request_id: requestId } : {}), [field]: value }
+    const normalized = (text: string) => text.trim().split(/\s+/).join(' ')
+    const candidate = `Check-in request: ${requestId}\nDate: 2026-11-10T15:00:00.000Z\nBy: Firstmate\nProgress: ${normalized(checkpoint.assessment)}\nEvidence: ${normalized(checkpoint.evidence)}\nBlocker/owner: ${normalized(checkpoint.blocker)}\nNext action: ${normalized(checkpoint.next_action)}\nNext check-in: 2026-11-10T17:00:00.000Z`
+    expect(checkInReport(candidate, requestId) !== null).toBe(accepted)
+    const result = await f.workflow.update({ card_id: id, operation_id: 'verifier-policy', kind: 'checkpoint', checkpoint } as UpdateWorkInput, 'Firstmate')
+    if (accepted) {
+      expect(result.outcome).toBe('saved')
+      const note = f.comments.at(-1).rich_text.map((part: any) => part.text.content).join('')
+      expect(checkInReport(correlated ? note : `Check-in request: ${requestId}\n${note}`, requestId)).not.toBeNull()
+      if (!correlated) expect(note).not.toContain('Check-in request:')
+    } else {
+      expect(result).toMatchObject({ outcome: 'not-saved', code: 'invalid-checkpoint', saved_fields: [] })
+      expect(f.requests.filter(r => ['PATCH', 'POST'].includes(r.method))).toHaveLength(0)
+      expect(f.comments).toHaveLength(1)
+    }
+  }
+})
