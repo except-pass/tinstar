@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type { AskAction, AskSuggestion } from '../shared/ask-actions'
 import type { AskSelectionInput } from '../shared/ask'
-import { sendSuggestedMerge, type SuggestedMergeCard } from './suggestedMerge'
+import { sendSuggestedMerge, type SuggestedMergeCard, type SuggestedMergeAttempt } from './suggestedMerge'
 import './ask-actions.css'
 
 /** Adapter for the selected conversation turn. No browser prose
@@ -36,7 +36,7 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
   const [merge, setMerge] = useState<MergeClick | null>(null)
   const locked = useRef(false)
   const attemptRef = useRef<Attempt | null>(null)
-  const mergeOps = useRef(new Map<string, string>())
+  const mergeOps = useRef(new Map<string, SuggestedMergeAttempt>())
   const actions = suggestions.filter((suggestion): suggestion is AskAction => typeof suggestion !== 'string')
   const legacy = suggestions.filter((suggestion): suggestion is string => typeof suggestion === 'string')
   const selectedId = selection?.action_id ?? attempt?.input.action_id
@@ -51,11 +51,11 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
     if (locked.current || superseded || selection || merge?.sent || merge?.sending) return
     if (action.merge) {
       locked.current = true
-      const operationId = mergeOps.current.get(action.id) ?? crypto.randomUUID()
-      mergeOps.current.set(action.id, operationId)
+      const mergeAttempt = mergeOps.current.get(action.id) ?? { operationId: crypto.randomUUID() }
+      mergeOps.current.set(action.id, mergeAttempt)
       setMerge({ actionId: action.id, sending: true })
       try {
-        setMerge({ actionId: action.id, sent: await sendSuggestedMerge(action.merge.pr_url, operationId) })
+        setMerge({ actionId: action.id, sent: await sendSuggestedMerge(action.merge.pr_url, mergeAttempt) })
       } catch (reason) {
         setMerge({ actionId: action.id, error: (reason as Error).message })
       } finally { locked.current = false }

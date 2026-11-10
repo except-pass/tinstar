@@ -162,7 +162,7 @@ describe('Ask recommendation buttons', () => {
   })
 
   it('shows a merge refusal with no card and retries the same operation', async () => {
-    const head = 'd'.repeat(40)
+    let head = 'd'.repeat(40)
     const pr = 'https://github.com/owner/repo/pull/8'
     const merge = { id: 'merge-pr-8', label: 'Merge PR 8', instruction: 'Merge this pull request', merge: { pr_url: pr } }
     const refusal = 'Nothing sent to Clawson. https://github.com/owner/repo/pull/8: CI is pending.'
@@ -175,11 +175,42 @@ describe('Ask recommendation buttons', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(refusal)
     expect(screen.queryByRole('link', { name: 'Open Clawson card ↗' })).toBeNull()
     expect(screen.getByRole('button', { name: `${keep.label}: ${keep.instruction}` })).toBeEnabled()
+    head = 'e'.repeat(40)
     fireEvent.click(screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` }))
     await waitFor(() => expect(read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge'))).toHaveLength(2))
     const bodies = read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge')).map(([, init]) => JSON.parse(String(init!.body)))
     expect(bodies[1].operation_id).toBe(bodies[0].operation_id)
-    expect(bodies[0].targets).toEqual([{ url: pr, head }])
+    expect(bodies[0].targets).toEqual([{ url: pr, head: 'd'.repeat(40) }])
+    expect(bodies[1].targets).toEqual([{ url: pr, head }])
+    expect(read.mock.calls.filter(([path]) => String(path).includes('/origin'))).toHaveLength(2)
+  })
+
+  it.each(['lost', 'unreadable', 'incomplete'])('replays the posted payload after a %s response without reading GitHub', async failure => {
+    const pr = 'https://github.com/owner/repo/pull/8'
+    const merge = { id: 'merge-pr-8', label: 'Merge PR 8', instruction: 'Merge this pull request', merge: { pr_url: pr } }
+    let posts = 0, origins = 0
+    const read = vi.fn(async (input: string, _init?: RequestInit) => {
+      if (String(input).includes('/origin')) {
+        if (++origins > 1) throw new Error('GitHub unavailable after head advanced')
+        return new Response(JSON.stringify({ ok: true, data: { head: 'a'.repeat(40) } }))
+      }
+      if (++posts === 1) {
+        if (failure === 'lost') throw new Error('Response lost')
+        return new Response(failure === 'unreadable' ? 'unreadable' : JSON.stringify({ ok: true, data: {} }))
+      }
+      return new Response(JSON.stringify({ ok: true, data: { url: 'https://www.notion.so/card', message: 'Sent to Clawson.' } }))
+    })
+    vi.stubGlobal('fetch', read)
+    render(<AskActions {...props({ suggestions: [merge] })} />)
+    const button = screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` })
+    fireEvent.click(button)
+    await screen.findByRole('alert')
+    fireEvent.click(button)
+    await screen.findByRole('link', { name: 'Open Clawson card ↗' })
+    const bodies = read.mock.calls.filter(([path]) => String(path).includes('/clawson-merge')).map(([, init]) => JSON.parse(String(init!.body)))
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]).toEqual(bodies[0])
+    expect(origins).toBe(1)
   })
 
   it('leaves a recommendation that only says merge on the ordinary selection path', async () => {
