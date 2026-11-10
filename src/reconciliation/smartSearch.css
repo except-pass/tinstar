@@ -73,7 +73,6 @@
 .ov-density-compact .ov-card.ov-collapsed:has(.ov-worker-fact) strong { min-width:70px; }
 
 .ov-pattern-neighbor .ov-pattern-coverage { font-size:8px; }
-.ov-toolbar { overflow-x:auto; }
 .ov-toolbar .ov-filter-chips:has(button) { flex:none; max-width:none; }
 .ov-toolbar .ov-filter-chips button { flex:none; max-width:none; }
 .ov-pattern-popover .ov-pattern-close { margin-left:8px; }
