@@ -79,7 +79,7 @@ export function releaseAssociations(scene: FloorScene, events: AssociationEvent[
     if (!link) { link = { cardId, active: false, sources: [], events: [] }; pull.links.push(link) }
     return link
   }
-  for (const card of scene.cards.filter(card => !card.source.in_trash && !card.source.archived && operationalStatuses.includes(String(card.source.properties.Status?.value)))) {
+  for (const card of scene.cards.filter(card => !card.source.in_trash && !card.source.archived && [...operationalStatuses, 'Done'].includes(String(card.source.properties.Status?.value)))) {
     for (const identity of declaredPulls(card)) {
       const link = edge(ensure(identity), card.id)
       link.active = true; link.sources.push('Notion Link/GitHub property')
@@ -92,7 +92,7 @@ export function releaseAssociations(scene: FloorScene, events: AssociationEvent[
     const worker = scene.executions.find(worker => worker.id === claim.executionId)
     const identity = worker && typeof worker.source.pr.url === 'string' ? releasePull(worker.source.pr.url) : null
     const card = scene.cards.find(card => card.id === claim.cardId)
-    if (!identity || !card || card.source.archived || card.source.in_trash || !operationalStatuses.includes(String(card.source.properties.Status?.value))) continue
+    if (!identity || !card || card.source.archived || card.source.in_trash || ![...operationalStatuses, 'Done'].includes(String(card.source.properties.Status?.value))) continue
     const link = edge(ensure(identity), claim.cardId)
     link.active = true
     if (!link.sources.includes('Verified Notion First Mate tasks → registered PR')) link.sources.push('Verified Notion First Mate tasks → registered PR')

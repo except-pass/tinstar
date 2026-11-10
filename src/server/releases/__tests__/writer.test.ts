@@ -75,6 +75,37 @@ describe('default-OFF production writer and shared Desk publication', () => {
     expect(f.scene.cards[0]!.source.properties.Status!.value).toBe('In Progress')
     f.scene.cards[0]!.source.properties.Status!.value = 'Done'
     expect(await writer.desk(f.scene.cards.map(card => card.source))).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
+    expect(await f.writer().desk(f.scene.cards.map(card => card.source))).toEqual([])
+  })
+  it('completes ownerless unchecked work and retains post-transition projections', async () => {
+    const f = await setup()
+    f.scene.cards[1]!.source.properties.Owner!.value = ''
+    await f.writer().run()
+    expect(f.scene.cards.map(card => card.source.properties.Status!.value)).toEqual(['In Progress', 'Done'])
+    const data = await f.read()
+    expect(data.pulls).toHaveLength(1)
+    expect(data.pulls[0]!.links.filter(link => link.active)).toHaveLength(2)
+    expect(data.pulls[0]!.deployment).toMatchObject({ state: 'shipped', verificationRequired: true })
+    expect(data.automation!.proposals).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'Done'
+    expect((await f.read()).pulls[0]!.deployment).toMatchObject({ state: 'shipped', verificationRequired: false })
+  })
+  it('retires resolved routes during reconciliation and publishes only a later release', async () => {
+    const f = await setup(), writer = f.writer()
+    await writer.run()
+    f.scene.cards[0]!.source.properties.Status!.value = 'Done'
+    await writer.run()
+    f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
+    expect(await f.writer().desk(f.scene.cards.map(card => card.source))).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
+    f.evidence.receipts[0]!.id = 'next-prod-run'
+    await writer.run()
+    const queue = await f.writer().desk(f.scene.cards.map(card => card.source))
+    expect(queue).toHaveLength(1)
+    const routes = (await writer.receipts()).filter(row => row.proposal.desk)
+    expect(routes).toHaveLength(2)
+    expect(queue[0]!.id).toBe(routes[1]!.proposal.desk!.item.id)
   })
   it('waits for both required PRs and evaluates one shared PR/card edge independently', async () => {
     const f = await setup()

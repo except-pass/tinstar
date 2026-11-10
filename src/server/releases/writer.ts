@@ -42,6 +42,7 @@ export interface ReleaseWriteRecord {
   phase: 'pending' | 'done' | 'skipped'
   createdAt: string
   updatedAt: string
+  verificationResolvedAt?: string
   lastError?: string
   disposition?: { actor: string; reason: string }
   history?: Array<{ action: 'skip' | 'resume'; actor: string; reason: string; at: string }>
@@ -62,6 +63,12 @@ const eligibleCard = (card: WorkCard, proposal: ReleaseTransitionProposal) => !c
 export class ReleaseAutomationWriter {
   private running: Promise<unknown> | null = null
   private file: string
+  private journalQueue: Promise<unknown> = Promise.resolve()
+  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.journalQueue.then(operation)
+    this.journalQueue = result.catch(() => undefined)
+    return result
+  }
   constructor(private root: string, private transport: ReleaseTransport, private read: () => Promise<ReleasesRead>, private now = () => new Date().toISOString()) {
     this.file = join(root, 'releases', 'writer-receipts.json')
   }
@@ -80,17 +87,19 @@ export class ReleaseAutomationWriter {
   }
   async receipts() { return (await this.journal()).records }
   async recoverReceipts(actor: string, reason: string) {
-    if (!actor.trim() || !reason.trim()) throw new Error('Actor and reason required')
-    if (this.running || await this.enabled()) throw new Error('Disable automation and wait for the active pass before recovering receipts')
-    const backup = `${this.file}.recovery-${randomUUID()}`
-    await rename(this.file, backup)
-    const recovery = { actor, reason, backup, at: this.now() }
-    await this.save({ version: 1, records: [], recovery })
-    return recovery
+    return this.exclusive(async () => {
+      if (!actor.trim() || !reason.trim()) throw new Error('Actor and reason required')
+      if (this.running || await this.enabled()) throw new Error('Disable automation and wait for the active pass before recovering receipts')
+      const backup = `${this.file}.recovery-${randomUUID()}`
+      await rename(this.file, backup)
+      const recovery = { actor, reason, backup, at: this.now() }
+      await this.save({ version: 1, records: [], recovery })
+      return recovery
+    })
   }
   run(): Promise<unknown> {
     if (this.running) return this.running
-    this.running = this.perform().finally(() => { this.running = null })
+    this.running = this.exclusive(() => this.perform()).finally(() => { this.running = null })
     return this.running
   }
   private async enabled() { return (await readAutomationSettings(this.root)).requestedEnabled }
@@ -99,6 +108,11 @@ export class ReleaseAutomationWriter {
     if (!await this.enabled()) return { enabled: false, completed: [] }
     const journal = await this.journal(), data = await this.read()
     if (data.reconciliation?.sourceStatus !== 'fresh') return { enabled: true, held: 'Current production evidence is required; historical snapshots never authorize writes', completed: [] }
+    for (const row of journal.records) {
+      if (row.phase !== 'done' || !row.proposal.desk || row.verificationResolvedAt) continue
+      const card = data.reconciliation.cards.find(card => card.cardId === row.proposal.cardId)
+      if (data.associationsComplete && (!card || card.status !== 'In Progress' || !card.requiresProductionVerification)) row.verificationResolvedAt = this.now()
+    }
     const proposals = data.automation?.proposals ?? [], completed: string[] = []
     for (const proposal of proposals) {
       if (!journal.records.some(row => row.proposal.id === proposal.id)) journal.records.push({ proposal, phase: 'pending', createdAt: this.now(), updatedAt: this.now() })
@@ -138,23 +152,35 @@ export class ReleaseAutomationWriter {
    * override of shipment evidence or direct edit of the journal. A manual card
    * disposition remains available through the existing audited work workflow. */
   async disposition(id: string, action: 'skip' | 'resume', actor: string, reason: string) {
-    if (!actor.trim() || !reason.trim()) throw new Error('Actor and reason required')
-    if (this.running) throw new Error('Writer pass is active; retry after it completes')
-    const journal = await this.journal(), row = journal.records.find(row => row.proposal.id === id)
-    if (!row) throw new Error('Release operation not found')
-    if (row.phase === 'done') throw new Error('Completed operations cannot be replayed; use the existing card workflow for correction')
-    row.phase = action === 'skip' ? 'skipped' : 'pending'; row.disposition = { actor, reason }; row.updatedAt = this.now()
-    row.history = [...(row.history ?? []), { action, actor, reason, at: row.updatedAt }]
-    await this.save(journal)
-    return row
+    return this.exclusive(async () => {
+      if (!actor.trim() || !reason.trim()) throw new Error('Actor and reason required')
+      if (this.running) throw new Error('Writer pass is active; retry after it completes')
+      const journal = await this.journal(), row = journal.records.find(row => row.proposal.id === id)
+      if (!row) throw new Error('Release operation not found')
+      if (row.phase === 'done') throw new Error('Completed operations cannot be replayed; use the existing card workflow for correction')
+      row.phase = action === 'skip' ? 'skipped' : 'pending'; row.disposition = { actor, reason }; row.updatedAt = this.now()
+      row.history = [...(row.history ?? []), { action, actor, reason, at: row.updatedAt }]
+      await this.save(journal)
+      return row
+    })
   }
   /** Publish through the shared Desk queue, using current card/owner/status.
    * Only a confirmed opt-in route appears; reads never acknowledge verification. */
-  async desk(cards: WorkCard[]): Promise<QueueItem[]> {
+  desk(cards: WorkCard[]): Promise<QueueItem[]> {
+    return this.exclusive(() => this.publishDesk(cards))
+  }
+  private async publishDesk(cards: WorkCard[]): Promise<QueueItem[]> {
     const result: QueueItem[] = []
-    for (const row of (await this.journal()).records) {
+    const journal = await this.journal()
+    let changed = false
+    const latest = new Map<string, ReleaseWriteRecord>()
+    for (const row of journal.records) if (row.phase === 'done' && row.proposal.desk) latest.set(row.proposal.cardId, row)
+    for (const row of journal.records) {
       const { proposal } = row, card = cards.find(card => card.id === proposal.cardId)
-      if (row.phase !== 'done' || !proposal.desk || !card || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) continue
+      if (row.phase !== 'done' || !proposal.desk || row.verificationResolvedAt) continue
+      if (latest.get(proposal.cardId) !== row || !card || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) {
+        row.verificationResolvedAt = this.now(); changed = true; continue
+      }
       const owner = String(property(card, 'Owner') ?? '').trim()
       if (!owner) continue
       const item = proposal.desk.item
@@ -162,6 +188,7 @@ export class ReleaseAutomationWriter {
         sources: item.sources.map(source => ({ ...source, request: { home: null, taskId: null, id: card.id, kind: 'notion-card' }, actions: ['Production verification'], action: item.action,
           readiness: 'ready-now', reasons: [], status: 'fresh', coverage: 'complete', observedAt: this.now(), expiresAt: new Date(Date.parse(this.now()) + 120_000).toISOString() })) })
     }
+    if (changed) await this.save(journal)
     return result
   }
 }

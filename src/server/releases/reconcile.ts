@@ -73,7 +73,7 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
         eligible: decision === 'would-complete', decision, reasons,
         receiptIds: [...new Set(linked.flatMap(pull => pull.deployment?.targets.flatMap(target => target.receipt ? [target.receipt.id] : []) ?? []))].sort() }
     }).sort((a, b) => a.cardId.localeCompare(b.cardId))
-  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.decision === 'would-verify'))
+  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.requiresProductionVerification && (card.decision === 'would-verify' || card.status === 'In Progress')))
   const report: ReleaseDryRun = {
     mode: 'dry-run', id: receiptHash({ pulls: pulls.map(pull => ({ id: pull.id, mergeSha: pull.mergeSha, exceptions: pull.exceptions, deployment: pull.deployment })), cards, sourceStatus: evidence.status }),
     sourceStatus: evidence.status, collectedAt: evidence.collectedAt,

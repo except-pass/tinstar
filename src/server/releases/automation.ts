@@ -59,7 +59,7 @@ export function planReleaseAutomation(data: ReleasesRead, scene: FloorScene, set
     evidence.sort((a, b) => a.pull.localeCompare(b.pull) || a.receipt.repository.localeCompare(b.receipt.repository) || a.receipt.component.localeCompare(b.receipt.component) || a.receipt.target.localeCompare(b.receipt.target) || a.receipt.id.localeCompare(b.receipt.id))
     const requiredPulls = unique(decision.requiredPulls), to = verify ? 'In Progress' : 'Done'
     const id = receiptHash({ cardId: card.id, to, owner, requiredPulls, evidence })
-    const proposal: ReleaseTransitionProposal = { id, cardId: card.id, owner: owner || 'Unassigned', from: 'Waiting for Prod Release', to, kind: verify ? 'verify-in-production' : 'complete', requiredPulls, evidence, auditText: audit(evidence, verify), desk: null }
+    const proposal: ReleaseTransitionProposal = { id, cardId: card.id, owner, from: 'Waiting for Prod Release', to, kind: verify ? 'verify-in-production' : 'complete', requiredPulls, evidence, auditText: audit(evidence, verify), desk: null }
     if (verify) {
       const title = String(card.source.properties.Name?.value ?? card.id)
       proposal.desk = { owner, item: {

@@ -23,10 +23,20 @@ async function setup() {
   cleanups.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) })
   const base = `http://127.0.0.1:${port}`
   const payload = { id: randomUUID(), pull: 'https://github.com/owner/repo/pull/12', cardId: scene.cards[0]!.id, action: 'link', reason: 'Reviewed explicit requirement' }
-  return { api, scene, read, payload, base }
+  return { api, scene, read, payload, base, root }
 }
 const headers = { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.com' }
 describe('Releases HTTP boundary', () => {
+  it('requests history so a PR linked only to Done work remains visible', async () => {
+    const { root, scene, read } = await setup()
+    const card = scene.cards[0]!
+    card.source.properties.Status!.value = 'Done'
+    card.source.properties.Link = { id: 'link', type: 'url', value: 'https://github.com/owner/repo/pull/999', hasMore: false }
+    const sources = { scene: async (_force = false, scope: { history?: boolean } = {}) => ({ ...scene, cards: scope.history ? [card] : [] }) }
+    const historyApi = new ReleasesApi(sources, root, new ReleasePullReader(read))
+    const data = await historyApi.read()
+    expect(data.pulls.map(pull => pull.number)).toContain(999)
+  })
   it('allows the UI handshake in desktop preflight without bypassing owner authorization', async () => {
     const { base, payload } = await setup()
     const Origin = 'https://tauri.localhost'

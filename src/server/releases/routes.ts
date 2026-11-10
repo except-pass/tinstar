@@ -28,7 +28,7 @@ export class ReleasesApi {
   }
   /** Shared authorized-source projection for Releases and contextual Ask. */
   async read(writable = false, force = false) {
-    const scene = await this.sources.scene(force)
+    const scene = await this.sources.scene(force, { history: true })
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
     try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
     const data = releaseAssociations(scene, events)
