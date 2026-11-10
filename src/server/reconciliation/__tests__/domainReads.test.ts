@@ -102,8 +102,7 @@ it('adapts real PR readers behind a server-owned test grant, preserving multiple
   })
   const reader = new PullReader(read, () => clock, new QueuePullReader(async () => { throw new Error('Checks source outage') }))
   const api = new PullsApi({ scene: async () => scene }, releases.store, root, reader, new PullFilesReader(read))
-  // A test-only grant exercises the facades. Production constructs DomainReadTools
-  // without this callback and denies, pending the owner's binding decision.
+  // Adapter projection coverage; configured transport grants are exercised separately.
   const domain = new DomainReadTools(api, releases, async () => true)
   const listed = await domain.listPulls(input)
   expect(listed).toMatchObject({ pagination: { total: 3, next_offset: 1 }, pulls: [{ id: 'owner/repo#1', head, links: expect.any(Array) }] })

@@ -74,7 +74,7 @@ export class ReconciliationMcp {
     // MCP config trouble degrades this interface only; source viewing still works.
     try { this.token = installToken(root) } catch { this.token = null }
   }
-  createServer(actor = 'Tin Star MCP') {
+  createServer(actor = 'Tin Star MCP', request?: IncomingMessage) {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     server.registerTool('search_work', { description: 'Find configured-board work by owner, status, initiative, epic or checkpoint. Independent of browser filters; default scope excludes Done/Archived. Paginated bounded property reads share UI links and Smart Search patterns (unknown is not none). No scene/window required.', inputSchema: searchWorkSchema, annotations: readAnnotations }, async input => result(await this.readers.searchWork?.(input) ?? { outcome: 'unavailable' }))
@@ -120,7 +120,7 @@ export class ReconciliationMcp {
     server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
     server.registerTool('next_queue_item', { description: 'Navigate to the next ordered verified ready desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
-    registerDomainReadTools(server, this.domainReads)
+    registerDomainReadTools(server, this.domainReads, request)
     return server
   }
   private sceneForWindow(sceneId: string) {
@@ -163,7 +163,7 @@ export class ReconciliationMcp {
       // install-token authority may assert this identity; browser input cannot.
       const forwarded = req.headers['x-tinstar-caller']
       const actor = typeof forwarded === 'string' && /^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,99}$/.test(forwarded) ? forwarded : 'Tin Star MCP'
-      const server = this.createServer(actor)
+      const server = this.createServer(actor, req)
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
       for (const [key, value] of Object.entries(headers)) res.setHeader(key, value)
       res.on('close', () => { void transport.close(); void server.close() })

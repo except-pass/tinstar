@@ -1,23 +1,14 @@
-import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { getConfigRoot } from '../configRoot'
 import { createTunnelFacade } from './tunnel'
+import { privateCredential } from './credentials'
 
 const { values } = parseArgs({ options: {
   port: { type: 'string', default: '5296' }, 'upstream-port': { type: 'string', default: '5281' },
   'caller-id': { type: 'string' }, 'caller-token-file': { type: 'string' },
   'allow-view': { type: 'boolean', default: false }, help: { type: 'boolean' },
 } })
-function privateCredential(path: string, authorization = false) {
-  const info = statSync(path)
-  if (!info.isFile() || (info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()) throw new Error('Credential must be owner-only')
-  const value = readFileSync(path, 'utf8')
-  if (!authorization) return value.trim()
-  const match = /^Bearer ([^\s]{32,})(?:\r?\n)?$/.exec(value)
-  if (!match || match[0] !== value) throw new Error('Caller file must contain one Bearer authorization value')
-  return match[1]!
-}
 async function main() {
   if (values.help) {
     console.log('Usage: tinstar-mcp-tunnel --caller-id NAME --caller-token-file FILE [--allow-view] [--port 5296] [--upstream-port 5281]\nBinds 127.0.0.1 only. TINSTAR_CONFIG_HOME selects the backend install token. Caller file must be owner-only and contain one line: Bearer <separate-token-of-at-least-32-characters> (optional trailing newline). The private org tunnel is the caller boundary; tunnel-client injects this file via --mcp.extra-headers Authorization: file:PATH. ChatGPT needs no extra credential. Read tools only unless --allow-view is explicit.')

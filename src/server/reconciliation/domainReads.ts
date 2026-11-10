@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { IncomingMessage } from 'node:http'
 import { z } from 'zod'
 import { releasePull } from '../../shared/releases'
 import type { PullsApi } from '../pulls/routes'
@@ -13,7 +14,7 @@ const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: J
 const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
 const unauthorized = {
   outcome: 'unauthorized',
-  prerequisite: 'A verified owner binding for MCP PR reads is required. The install token, tunnel caller ID, localhost and forwarded identity headers do not establish the authenticated PR Operations browser owner.',
+  prerequisite: 'A configured verified owner binding for MCP PR reads is required. Both the installation credential and the separate granted caller credential must match. Caller IDs, localhost and forwarded owner headers alone grant no PR access.',
 }
 function page<T>(rows: T[], offset: number, limit: number) {
   return { items: rows.slice(offset, offset + limit), total: rows.length,
@@ -22,22 +23,21 @@ function page<T>(rows: T[], offset: number, limit: number) {
 
 /** Thin facades over the instances serving the UI; no cache or association store.
  * The authorization hook is server-owned, never derived from tool arguments or
- * forwarded headers. Until an owner-binding design is approved, it denies PR
- * reads to prevent the tunnel credential bypassing PR Operations owner checks. */
+ * unverified identity headers. It defaults to denying PR reads. */
 export class DomainReadTools {
   constructor(private pulls: Pick<PullsApi, 'read' | 'inspect'>, private releases: Pick<ReleasesApi, 'read'>,
-    private authorizePulls: () => Promise<boolean> = async () => false) {}
+    private authorizePulls: (request?: IncomingMessage) => Promise<boolean> = async () => false) {}
 
-  async listPulls({ offset, limit }: { offset: number; limit: number }) {
-    if (!await this.authorizePulls()) return unauthorized
+  async listPulls({ offset, limit }: { offset: number; limit: number }, request?: IncomingMessage) {
+    if (!await this.authorizePulls(request)) return unauthorized
     try {
       const data = await this.pulls.read(), rows = page(data.pulls, offset, limit)
       return { outcome: 'available', ...data, pulls: rows.items, pagination: { total: rows.total, next_offset: rows.next_offset },
         omissions: ['CI, reviews and files require get_pr with the captured head. Inventory alone does not establish review need or merge readiness.'] }
     } catch { return { outcome: 'unavailable', message: 'PR Operations sources unavailable; inventory and linkage are unknown.' } }
   }
-  async getPull({ url, head, include_files, offset, limit }: { url: string; head: string; include_files: boolean; offset: number; limit: number }) {
-    if (!await this.authorizePulls()) return unauthorized
+  async getPull({ url, head, include_files, offset, limit }: { url: string; head: string; include_files: boolean; offset: number; limit: number }, request?: IncomingMessage) {
+    if (!await this.authorizePulls(request)) return unauthorized
     try {
       const data = await this.pulls.inspect(url, head, include_files)
       const files = data.footprint ? page(data.footprint.files, offset, limit) : null
@@ -70,8 +70,8 @@ export class DomainReadTools {
   }
 }
 
-export function registerDomainReadTools(server: McpServer, readers?: DomainReadTools) {
-  server.registerTool('list_prs', { description: 'Read the same scoped open PR inventory as PR Operations, with canonical repository#number IDs, captured heads, many-to-many card links and explicit repository/association coverage. CI/review need is unknown until get_pr. Requires a verified owner binding; tunnel credentials are insufficient.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.listPulls(input) : unauthorized))
-  server.registerTool('get_pr', { description: 'Inspect one PR URL at its captured head using shared PR Operations detail/check/review/file and attribution readers. Refresh list_prs after a head change. Partial/stale evidence is not merge readiness. No patches or terminal transcripts. Requires verified owner binding.', inputSchema: { url: pullUrl, head: z.string().regex(/^[a-f0-9]{40,64}$/), include_files: z.boolean().default(false), ...pagination }, annotations: readAnnotations }, async input => result(readers ? await readers.getPull(input) : unauthorized))
+export function registerDomainReadTools(server: McpServer, readers?: DomainReadTools, request?: IncomingMessage) {
+  server.registerTool('list_prs', { description: 'Read the same scoped open PR inventory as PR Operations, with canonical repository#number IDs, captured heads, many-to-many card links and explicit repository/association coverage. CI/review need is unknown until get_pr. Requires a configured grant verifying installation and caller credentials for an existing owner.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.listPulls(input, request) : unauthorized))
+  server.registerTool('get_pr', { description: 'Inspect one PR URL at its captured head using shared PR Operations detail/check/review/file and attribution readers. Refresh list_prs after a head change. Partial/stale evidence is not merge readiness. No patches or terminal transcripts. Requires a configured verified owner binding.', inputSchema: { url: pullUrl, head: z.string().regex(/^[a-f0-9]{40,64}$/), include_files: z.boolean().default(false), ...pagination }, annotations: readAnnotations }, async input => result(readers ? await readers.getPull(input, request) : unauthorized))
   server.registerTool('get_release_status', { description: 'Read the Releases PR-first queue, shared card links, production receipt/ancestry reconciliation and opt-in verification requirements. Missing/stale/partial evidence stays explicit and never proves shipment. offset/limit paginate pulls, card exceptions, eligibility cards and targets independently. Read-only.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.releaseStatus(input) : { outcome: 'unavailable', message: 'Release reader unavailable; queue and production status are unknown.' }))
 }
