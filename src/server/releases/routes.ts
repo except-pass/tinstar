@@ -20,15 +20,15 @@ async function ownerLogins(root: string): Promise<string[]> {
     return z.array(z.string().min(1)).parse(config.ask?.ownerLogins)
   } catch { return [] }
 }
-/** Local association overrides only. This API has no Notion writer or forge mutation. */
+/** GET produces observations/proposals only, never executes the scheduled writer. */
 export class ReleasesApi {
   readonly store: AssociationStore
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private evidence = new ReleaseEvidenceReader(root), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
   }
   /** Shared authorized-source projection for Releases and contextual Ask. */
-  async read(writable = false) {
-    const scene = await this.sources.scene()
+  async read(writable = false, force = false) {
+    const scene = await this.sources.scene(force)
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
     try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
     const data = releaseAssociations(scene, events)

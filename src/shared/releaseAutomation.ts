@@ -6,7 +6,7 @@ export interface ReleaseTransitionEvidence {
   mergeSha: string
   receipt: DeploymentReceipt
 }
-/** Reviewable intent, never a command. No writer or Desk publisher consumes this build. */
+/** Reviewable intent. Only the separately scheduled default-OFF writer executes it. */
 export interface ReleaseTransitionProposal {
   id: string
   cardId: string
@@ -20,8 +20,8 @@ export interface ReleaseTransitionProposal {
   desk: { owner: string; item: QueueItem } | null
 }
 export interface ReleaseAutomationPlan {
-  mode: 'review-only'
-  enabled: false
+  mode: 'review-only' | 'automatic'
+  enabled: boolean
   requestedEnabled: boolean
   configuration: 'default' | 'configured' | 'error'
   warnings: string[]

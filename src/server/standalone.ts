@@ -10,6 +10,7 @@ import { ReconciliationSources, handleReconciliationRequest } from './reconcilia
 import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
 import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
 import { ReleasesApi } from './releases/routes'
+import { ReleaseAutomationWriter } from './releases/writer'
 import { PullsApi } from './pulls/routes'
 import { ActionsApi } from './actions/routes'
 import { QuotaAxiPoller } from './quota/poller'
@@ -80,6 +81,13 @@ export function startServer(opts: ServerOptions) {
   reconciliation.checkInIndicators = () => checkIns.indicators()
   const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
+  const releaseWriter = new ReleaseAutomationWriter(getConfigRoot(), reconciliation.releaseTransport(), () => releases.read(false, true))
+  reconciliation.releaseDesk = cards => releaseWriter.desk(cards)
+  const reconcileProduction = () => { void releaseWriter.run().catch(() => log.warn('releases', 'Automatic reconciliation could not read its sources or durable receipts; inspect Releases configuration and writer-receipts.json.')) }
+  // This scheduled deterministic pass is independent of GET and custom actions.
+  // Missing/false automation.json returns before any board or evidence reads.
+  const productionTimer = setInterval(reconcileProduction, 60_000)
+  productionTimer.unref()
   const pulls = new PullsApi(reconciliation, releases.store)
   reconciliation.authorizePulls = req => pulls.authorized(req)
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
@@ -113,6 +121,7 @@ export function startServer(opts: ServerOptions) {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
   const shutdown = async () => {
+    clearInterval(productionTimer)
     quota.stop()
     telemetry.stopPolling()
     try { await observability.stop() } catch (err) { log.debug('shutdown', `observability: ${(err as Error).message}`) }

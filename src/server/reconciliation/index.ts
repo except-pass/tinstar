@@ -25,12 +25,14 @@ import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
+import { notionReleaseTransport } from '../releases/writer'
 
 export type SourceSnapshot = Omit<Awaited<ReturnType<ReconciliationSources['snapshot']>>, 'diagnostics'>
 export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['intentions'] }
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
+  releaseDesk?: (cards: WorkCard[]) => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
   readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
   readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
@@ -86,6 +88,7 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
+  releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
 
   async scene(force = false, scope: WorkScope = {}) {
@@ -183,6 +186,11 @@ export class ReconciliationSources {
       states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
+    if (this.releaseDesk && snapshot.intentions.status === 'fresh' && snapshot.intentions.coverage === 'complete' && snapshot.intentions.data) {
+      try { queue.items.push(...await this.releaseDesk(snapshot.intentions.data.cards)) }
+      catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
+      for (const readiness of Object.keys(queue.counts)) queue.counts[readiness] = queue.items.filter(item => item.readiness === readiness).length
+    }
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is
     // disclosed; it never becomes a fabricated request age or answer.

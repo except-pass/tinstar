@@ -14,11 +14,11 @@ describe('release automation review UI', () => {
     expect(screen.queryByRole('button')).toBeNull()
     expect(screen.getByText('0 proposed completions · 0 proposed owner checks · 0 held cards')).toBeTruthy()
   })
-  it('makes a requested but unavailable enablement visible and retains OFF', () => {
-    const data = { ...plan(), requestedEnabled: true }
+  it('shows the operator-enabled scheduler without exposing execution buttons', () => {
+    const data = { ...plan(), requestedEnabled: true, enabled: true }
     render(<ReleaseAutomationSummary plan={data} />)
-    expect(screen.getByRole('alert')).toHaveTextContent('Enablement requested but blocked')
-    expect(screen.getByText('Automatic transitions OFF · review only')).toBeTruthy()
+    expect(screen.getByText('Automatic transitions ON · scheduled reconciliation')).toBeTruthy()
+    expect(screen.queryByRole('button')).toBeNull()
   })
   it('discloses owner verification, release evidence and proposal identity without publishing the draft', () => {
     const data = plan()

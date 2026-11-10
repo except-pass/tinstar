@@ -45,3 +45,17 @@ it('detects reverts of commits introduced by a merge without rejecting unrelated
   await git('revert', '--no-edit', feature)
   expect(await checkReleaseAncestry('owner/repo', root, merged, await git('rev-parse', 'HEAD'))).toMatchObject({ state: 'unknown', reason: expect.stringContaining('reverts') })
 })
+
+it('uses the shared GitHub reader for exact ancestry and conservatively handles truncated/reverted history', async () => {
+  const { githubReleaseAncestry } = await import('../ancestry')
+  const merge = 'a'.repeat(40), deployed = 'b'.repeat(40), introduced = 'c'.repeat(40)
+  let history = { status: 'ahead', merge_base_sha: merge, total: 1, returned: 1, shas: deployed, reverts: '' }
+  const check = githubReleaseAncestry(async path => path.includes('/commits/') ? { parents: 2, first_parent: 'd'.repeat(40) } : path.includes(`${merge}...`) ? history : { status: 'ahead', total: 2, returned: 2, shas: `${introduced},${merge}` })
+  expect(await check('owner/repo', 'github', merge, deployed)).toEqual({ state: 'ancestor' })
+  history = { ...history, reverts: introduced }
+  expect(await check('owner/repo', 'github', merge, deployed)).toMatchObject({ state: 'unknown', reason: expect.stringContaining('reverts') })
+  history = { ...history, reverts: '', total: 101 }
+  expect(await check('owner/repo', 'github', merge, deployed)).toMatchObject({ state: 'unknown', reason: expect.stringContaining('incomplete') })
+  history = { ...history, status: 'diverged', merge_base_sha: 'e'.repeat(40) }
+  expect(await check('owner/repo', 'github', merge, deployed)).toEqual({ state: 'not-ancestor' })
+})

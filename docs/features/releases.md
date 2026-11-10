@@ -52,8 +52,9 @@ observations. Shipped and Verify in Prod require the read-only reconciliation
 proof below. Neither Notion Done nor a version tag implies shipment. The drawer
 shows merge provenance, required targets, receipts, card dry-run eligibility and
 link history. The sync disclosure reports failures and unknown deployed versions
-explicitly. Transition and owner-verification drafts can be inspected, but no
-Notion writer, active Desk routing, deployment action or mass backfill exists.
+explicitly. Transition and owner-verification proposals can be inspected. A separate scheduled
+writer is available behind the default-OFF operator switch; GET never writes.
+Deployment actions and mass backfill are outside this page.
 
 The table's canonical PR selection feeds the shared
 [installed PR actions framework](../pr-actions.md), which owns action execution modes,
@@ -71,8 +72,8 @@ board-guide and PM-bot sweep updates.
 Releases now computes per-PR/component shipment and per-card **dry-run** eligibility.
 `GET /api/releases/reconciliation` returns the same inspectable report used by the
 page; GET never writes cards, comments, Desk requests or GitHub. Replaying the
-same observations produces the same report ID and decisions. There is no
-active transition switch or Notion writer in this build.
+same observations produces the same report ID and decisions. The separately scheduled writer remains OFF unless the operator enables it;
+this endpoint never invokes that writer.
 
 A PR is shipped only when every explicit required target has a successful current
 production receipt and GitHub's effective merge commit is an ancestor of that
@@ -93,7 +94,8 @@ verification`, when true, instead produces **would-verify**, including the owner
 It appears in Verify in Prod and the drawer but performs no Desk or status action.
 Missing checkbox means no opt-in verification requirement; the reader does not
 create it. Other Notion statuses stay unrelated and cannot be completed by this
-report. Actual automation/routing and the board-guide/PM-bot rollout remain gated.
+report. The writer requires the checkbox schema and fresh current production evidence;
+rollout requires coordinated board-guide/PM Bot updates.
 
 ### Default-OFF transition and Desk review
 
@@ -117,30 +119,49 @@ The optional trusted operator file
 ```
 
 Omitting the file defaults to OFF. Invalid/unreadable settings remain OFF with a
-visible warning. **Even `enabled: true` is only a blocked enablement request in
-this build**: the response always has `enabled: false`, the UI shows OFF, and no
-Notion writer or Desk publisher exists. There is no HTTP method to activate or
-execute the plan. This boundary prevents premature live-board transitions before
-the parent approves activation together with the board-guide and PM-bot sweep
-updates in the same release. Do not change those operational instructions early.
-There is no mass-backfill path.
+visible warning. `enabled: true` enables a deterministic pass every 60 seconds in
+the existing backend. There is no browser activation/execute endpoint. GET still
+only reports proposals. Enable only with the owner-approved checkbox schema and
+coordinated policy updates. The [activation packet](../releases-activation.md)
+contains exact replacement text, operating commands and current evidence limits.
 
-Each proposal carries all required PRs, effective merge SHAs, per-component deploy
-identities/version/time and direct workflow/receipt links, plus short audit text.
-Its ID is stable for the same card, release evidence and routing owner; refreshing
-collection timestamps or unrelated work does not create a new proposal. Changed
-deployment evidence or verification owner changes the ID. No comments, audit
-events, status changes or active queue entries are emitted on replay. A future
-approved writer must re-read current status, opt-in flag, requirements and fresh
-evidence before execution, and durably deduplicate the proposal ID; this preview
-does not claim to implement exactly-once writes.
+The writer re-reads the authorized board, current associations/evidence and exact
+card immediately before each write. It requires an actual readable boolean
+`Requires production verification` checkbox even for an unflagged card. It
+comments the evidence, revalidates, then changes Status. It preserves owner,
+unrelated asks and other properties. Opted-in cards route to In Progress with an
+explicit production-check request; unflagged cards go to Done. A missing owner,
+unknown source, stale export, wrong target, disabled flag, rollback, revert,
+partial deployment or changed precondition holds the affected operation.
 
-Desk drafts reuse the existing `QueueItem` shape wrapped with their responsible
-owner. They retain card/PR/receipt links and use `future-or-conditional` readiness,
-`oneTouch: false`, no response anchor and no decision key. They stay outside
-`/api/reconciliation/queue` and default actionable Desk navigation while OFF. The
-shared global Desk/Ask implementation owns eventual publication and owner routing;
-Releases adds no parallel queue, Ask provider or response transport.
+`releases/writer-receipts.json` durably records intent before side effects and
+tracks pending/done/skipped operations. Stable IDs include card, owner, required
+PRs and deployment evidence. Comment markers deduplicate retries through the
+shared Notion content transport. A lost PATCH response is recovered by reading
+current Status and the exact comment marker; completed operations never replay
+or flap status. Notion offers no conditional PATCH, so a direct edit can still
+race the final read/write; evidence and receipts make that window auditable.
+
+Confirmed verification routes are published through the existing shared Desk
+queue with the current card owner and direct card/PR/deployment links. Only open
+In Progress cards with the explicit checkbox remain actionable. Reads do not
+record verification; the responsible owner records the result on the card and
+uses the existing workflow to finish it. No second queue service or Ask transport
+is introduced. Turning automation OFF stops new transitions; outstanding human
+verification requests remain visible until resolved.
+
+Inspect/dry-run with `npx tsx scripts/releases-automation.ts --config-root <root>
+--passes 32 --output /tmp/releases.json`. This command uses a read-only Notion
+transport even if the runtime switch is ON. Each pass retains the existing
+four-PR/eight-ancestry budget. Inspect local writer receipts or use its audited
+`--skip <proposal-id>` / `--resume <proposal-id>` options with `--actor` and
+`--reason`. To recover corrupt receipt storage, first disable automation and run
+`--recover-receipts --actor <owner> --reason <reason>`: the original file is
+preserved and the new journal records who recovered it and why. Inspect affected
+cards before resuming; recovery resets local deduplication, while existing
+comments and unrelated Status boundaries still apply. Existing audited card
+operations remain the manual path for an owner disposition; automation never
+invents deployment proof to override an exception.
 
 GitHub read failures are separate from pending reads. In default CLI mode, a missing `gh-axi` displays
 `Sync error: gh-axi unavailable on server PATH`; access/CLI/read failures display
@@ -177,7 +198,11 @@ deploy commands. An upstream/export owner must provide current evidence.
 Targets are exact deployed identities, not repository-wide version tags. For a
 monorepo, enumerate every affected required component explicitly. Missing mappings
 are Exceptions. `repositories[].checkout` is an existing checkout/bare mirror
-whose origin must match the configured GitHub repository (HTTPS or SSH). The
+whose origin must match the configured GitHub repository (HTTPS or SSH). Set
+`checkout: "github"` to use the same authenticated GitHub scalar reader as PR
+observations instead. GitHub comparisons check exact ancestry and standard
+reverts; truncated descendant/introduced history stays unknown. Configure a local
+mirror when the bounded GitHub response cannot establish complete history. The
 operator updates missing objects outside Tin Star. Reads use
 `git merge-base --is-ancestor`; failure or absent objects stays unknown. At most
 eight uncached commit pairs are inspected per refresh under a short read budget;
@@ -274,9 +299,40 @@ Authoritative upstream contracts:
 [immutable S3 journal](https://github.com/fortresspower/cmsandbox/blob/main/.github/scripts/releases/s3-coordination-store.mjs),
 [production runbook](https://github.com/fortresspower/cmsandbox/blob/main/docs/releases/production-runbook.md).
 
-At implementation inspection the production deploy workflow had zero runs and no
-final successful native PROD record was confirmed. The adapter is exercised with
-explicit synthetic fixtures; real records without available evidence remain
-unknown. Existing build/DEV receipts or a planner candidate alone cannot certify
-production. Firstmate/the upstream evidence owner must supply readable, current
-exports and repository/component mappings before positive real shipment proof.
+### Review an exported native coordinator directory
+
+For an already exported store, configure this alongside `receiptFiles`:
+
+```json
+{
+  "coordinatorSnapshots": [{
+    "directory": "/srv/release-evidence/v1.24.0",
+    "collectedAt": "2026-11-10T16:48:50Z"
+  }]
+}
+```
+
+The directory contains `control.json`, `journal/<digest>.json` and
+`objects/<digest>.json`. Preserve journal S3 LastModified as file mtime. The
+reader follows the committed chain and loads referenced objects only, verifying
+native content-addressed keys. Superseded bindings certify nothing. Reads are
+bounded to 8 MiB per object and 32 MiB total so an accidentally unbounded export
+cannot exhaust the HTTP process. An incomplete export is visibly an error;
+provide a bounded current chain to continue.
+
+These directories are explicitly historical snapshots: the UI labels the exact
+as-of time, `sourceStatus` is `snapshot`, and no writer can execute their
+proposals even if enabled. The snapshot has no freshness extension pretending it
+is current PROD. A later current-state export can use the existing normalized
+`receiptFiles` contract; this slice builds no AWS poller or release service.
+
+The first real proof consumed the completed v1.24.0 coordinator chain and frozen
+objects from the November 10 export, including the final
+[resume run](https://github.com/fortresspower/cmsandbox/actions/runs/42855184812).
+Six exact component identities were obtained: manager-analysis and its Alloy
+container, ra-workflow and its Alloy container, web-fmp portal, and runtime JSON.
+The runtime JSON key is part of its target identity. Other services remain
+unmapped; a monorepo source/tag cannot certify them. Explicit PR/target mappings
+are trusted operator configuration, with the actual GitHub changed paths and
+frozen component identities retained in the activation proof. No title-based or
+repository-wide association is created.

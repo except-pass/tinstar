@@ -54,6 +54,7 @@ export function productionSyncLabel(data: ReleasesRead, error: string | null) {
   if (!data.associationsComplete) return 'Sync incomplete: card associations unavailable or partial'
   if (data.reconciliation?.sourceStatus === 'error') return 'Sync error: production receipt source failed'
   if (data.reconciliation?.sourceStatus === 'stale') return 'Sync stale: refresh production receipt snapshot'
+  if (data.reconciliation?.sourceStatus === 'snapshot') return `PROD snapshot: ${data.reconciliation.collectedAt} · review only`
   if (data.reconciliation?.sourceStatus === 'unconfigured') return 'Production sync: evidence not configured'
   if (data.reconciliation?.lastSuccessfulAt) return `Production sync: reconciled ${data.reconciliation.lastSuccessfulAt}`
   if (data.reconciliation) return 'Production sync: dry run has unresolved evidence'

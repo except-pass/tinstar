@@ -128,10 +128,10 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
       <button type="button" onClick={() => setDrawer(null)}>Link PR</button>
     </header>
     {destination && <p role="status">{originMessage} <button type="button" onClick={clearOrigin}>Show all releases in this view</button></p>}
-    <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories{data.automation && ' · transitions OFF'}</summary>
+    <details className="rel-sync"><summary>{productionSyncLabel(data, warning)} · {new Set(data.pulls.map(pull => pull.repository)).size} repositories{data.automation && ` · transitions ${data.automation.enabled ? 'ON' : 'OFF'}`}</summary>
       {warning && <p role="alert">{warning}</p>}{data.githubSync?.errors.map(message => <p role="alert" key={message}>{message}</p>)}{[...data.warnings, ...(data.reconciliation?.warnings ?? [])].map(message => <p key={message}>{message}</p>)}
       {data.reconciliation?.targets.map(target => <p key={`${target.repository}:${target.target}:${target.component}`}>{target.repository} · {target.component} / {target.target} · {target.version ?? 'Version unknown'} · {target.deployedSha ?? target.artifactDigest ?? 'Identity unknown'} · observed {target.observedAt} · <a href={target.receiptUrl} target="_blank" rel="noreferrer">Receipt ↗</a></p>)}{!data.reconciliation?.targets.length && <p>Deployed component identities are unknown; no matching current receipt.</p>}
-      <p>Read-only reconciliation. No Notion or Desk transitions are performed.</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a><ReleaseAutomationSummary plan={data.automation} />
+      <p>Viewing Releases performs no Notion or Desk transitions. {data.reconciliation?.sourceStatus === 'snapshot' && 'Historical snapshot: automatic writes are blocked.'}</p><a href={apiUrl('/api/releases/reconciliation')} target="_blank" rel="noreferrer">Open dry-run JSON report ↗</a><ReleaseAutomationSummary plan={data.automation} />
     </details>
     {selection.length > 0 && <div className="rel-selection">{selection.length} unique PRs selected <button type="button" onClick={() => setSelection([])}>Clear selection</button></div>}
     <ActionControls targets={data.pulls.filter(pull => selection.includes(pull.id))} view={askView} />
