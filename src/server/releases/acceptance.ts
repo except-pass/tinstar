@@ -59,10 +59,15 @@ interface Selection { release: ReleaseObject; change: ReleaseChange; check: Acce
 export function acceptanceSelections(data: ReleasesRead, scene: FloorScene): Selection[] {
   return (data.releases ?? []).flatMap(release => releaseChanges(release, data, scene).flatMap(change => (change.checks ?? []).map(check => ({ release, change, check }))))
 }
-function deliveryGap({ release, change }: Selection, fresh: boolean) {
+function deliveryGap({ release, change }: Selection, data: ReleasesRead) {
   if (release.kind !== 'production') return 'Await exact production deployment; candidates cannot execute checks.'
-  if (!fresh || release.provenance.historical) return 'Fresh deployed-target receipts required; historical review cannot dispatch.'
+  if (data.reconciliation?.sourceStatus !== 'fresh' || release.provenance.historical) return 'Fresh deployed-target receipts required; historical review cannot dispatch.'
   if (release.membership.status !== 'complete' || change.delivery !== 'Deployed') return 'Every required PR and component must be proven in this release attempt.'
+  if (!change.targets.length || change.targets.some(target => {
+    const receipt = target.receipt
+    const current = data.reconciliation?.targets.filter(row => row.repository.toLowerCase() === release.repository.toLowerCase() && row.component === target.component && row.target === target.target) ?? []
+    return !receipt || current.length !== 1 || current[0]!.deployedSha !== receipt.deployedSha || current[0]!.artifactDigest !== receipt.artifactDigest
+  })) return 'Selected release no longer matches current production target source and artifact evidence.'
   return null
 }
 function request(selection: Selection, settings: AcceptanceSettings) {
@@ -82,7 +87,7 @@ export class ReleaseAcceptanceRunner {
     return { enabled: settings.enabled, zeroWrites: true, checks: acceptanceSelections(data, scene).map(selection => ({
       releaseId: selection.release.id, changeId: selection.change.id, checkId: selection.check.id, key: selection.check.key,
       title: selection.change.title, ref: selection.check.ref, outcome: selection.check.outcome, request: selection.check.method === 'workflow' && selection.change.delivery === 'Deployed' ? request(selection, settings) : null,
-      held: (!data.associationsComplete ? 'Complete explicit card/PR associations are required.' : deliveryGap(selection, data.reconciliation?.sourceStatus === 'fresh')) ?? (selection.check.method !== 'workflow' ? `Named ${selection.check.method} check: ${selection.check.owner}` : !request(selection, settings) ? 'No approved production-safe workflow configured for this check reference.' : !settings.enabled ? 'Dispatch is OFF in releases/acceptance.json.' : null),
+      held: (!data.associationsComplete ? 'Complete explicit card/PR associations are required.' : deliveryGap(selection, data)) ?? (selection.check.method !== 'workflow' ? `Named ${selection.check.method} check: ${selection.check.owner}` : !request(selection, settings) ? 'No approved production-safe workflow configured for this check reference.' : !settings.enabled ? 'Dispatch is OFF in releases/acceptance.json.' : null),
     })) }
   }
   private async save(selection: Selection, event: AcceptanceEvent) {
@@ -118,7 +123,7 @@ export class ReleaseAcceptanceRunner {
         const { check } = selection, previous = check.record?.events.at(-1)
         const event = (outcome: AcceptanceEvent['outcome'], reason: string, evidence: string | null = null, runId: number | null = null, runUrl: string | null = null): AcceptanceEvent => ({ at: this.now(), actor: input.actor, outcome, reason, evidence, runId, runUrl })
         if (input.action === 'skip') { records.push(await this.save(selection, event('skipped', input.reason!, input.evidence ?? null))); continue }
-        const gap = !data.associationsComplete ? 'Complete explicit card/PR associations are required.' : deliveryGap(selection, data.reconciliation?.sourceStatus === 'fresh')
+        const gap = !data.associationsComplete ? 'Complete explicit card/PR associations are required.' : deliveryGap(selection, data)
         if (gap) { if (input.key) throw new Error(gap); continue }
         if (input.action === 'manual') {
           // Explicit human exception keeps prior failed/running evidence in history.

@@ -19,6 +19,9 @@ export function acceptanceFixture(method: 'workflow' | 'human' | 'observation' =
   release.gaps = []; release.provenance.source = 'SYNTHETIC coordinator export; preview only'
   data.releases = releases
   data.reconciliation = { mode: 'dry-run', id: 'synthetic', sourceStatus: 'fresh', collectedAt: fixture.bundle.collectedAt, lastSuccessfulAt: null, warnings: [], cards: [], targets: [] }
+  data.reconciliation.targets = release.targets.flatMap(target => target.receipt ? [{ repository: target.receipt.repository,
+    component: target.component, target: target.target, deployedSha: target.receipt.deployedSha, artifactDigest: target.receipt.artifactDigest,
+    version: target.receipt.version, receiptUrl: target.receipt.receiptUrl, observedAt: target.receipt.deployedAt }] : [])
   const receipt = release.targets[0]!.receipt!
   const pull = data.pulls[0]!
   Object.assign(pull, { repository: release.repository, state: 'merged', mergeSha: fixture.source, freshness: 'fresh', title: 'Correct Avalon Modbus enum mappings', exceptions: [] })

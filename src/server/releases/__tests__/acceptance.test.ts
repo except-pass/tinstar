@@ -78,6 +78,60 @@ describe('release acceptance safe checks', () => {
     expect((await f.runner.plan()).checks[0]!.key).toBe(originalKey)
     expect((await f.runner.plan()).checks[0]!.outcome).toBe('running')
   })
+  it.each(['repository', 'component', 'target', 'deployedSha', 'artifactDigest', 'missing'] as const)('holds historical release execution when current %s differs', async field => {
+    const f = await setup(); await f.configure()
+    const current = f.data.reconciliation!.targets[0]!
+    if (field === 'missing') f.data.reconciliation!.targets = []
+    else current[field] = 'replacement-production-identity'
+    expect(releaseChanges(f.release, f.data, f.scene)[0]!.delivery).toBe('Deployed')
+    expect((await f.runner.plan()).checks[0]!.held).toContain('current production')
+    await f.runner.perform({ actor: 'owner' })
+    for (const action of ['retry', 'attach', 'manual'] as const) {
+      await expect(f.runner.perform({ actor: 'owner', key: f.key, action, reason: 'Audited recovery', runId: 42, outcome: 'passed', evidence: 'https://example.com/evidence' })).rejects.toThrow('current production')
+    }
+    expect(f.github).not.toHaveBeenCalled()
+    expect(await readAcceptanceRecords(f.root)).toEqual([])
+    await f.runner.perform({ actor: 'owner', key: f.key, action: 'skip', reason: 'Superseded deployment' })
+    expect((await readAcceptanceRecords(f.root))[0]!.events.at(-1)?.outcome).toBe('skipped')
+  })
+  it('requires every selected target while allowing unrelated production replacements', async () => {
+    const f = await setup(); await f.configure()
+    const sibling = structuredClone(f.release.targets[0]!)
+    sibling.target += '/second'; sibling.receipt!.target = sibling.target; sibling.receipt!.id += ':second'
+    f.release.targets.push(sibling)
+    f.pull.deployment!.targets.push({ ...structuredClone(f.pull.deployment!.targets[0]!), target: sibling.target, receipt: sibling.receipt })
+    f.data.reconciliation!.targets.push({ ...f.data.reconciliation!.targets[0]!, target: sibling.target })
+    f.data.reconciliation!.targets.push({ ...f.data.reconciliation!.targets[0]!, target: 'unrelated', deployedSha: 'c'.repeat(40) })
+    expect((await f.runner.plan()).checks[0]!.held).toBeNull()
+    f.data.reconciliation!.targets.find(target => target.target === sibling.target)!.artifactDigest = 'different-artifact'
+    expect((await f.runner.plan()).checks[0]!.held).toContain('current production')
+    await f.runner.perform({ actor: 'owner' })
+    expect(f.github).not.toHaveBeenCalled()
+  })
+  it('holds collection after replacement and preserves audit history and recovery', async () => {
+    const f = await setup(); await f.configure(); await f.runner.perform({ actor: 'owner' })
+    const history = await readAcceptanceRecords(f.root)
+    const current = f.data.reconciliation!.targets[0]!, source = current.deployedSha
+    current.deployedSha = source === 'c'.repeat(40) ? 'd'.repeat(40) : 'c'.repeat(40)
+    await f.runner.perform({ actor: 'owner' })
+    expect(f.github).toHaveBeenCalledTimes(1)
+    expect(await readAcceptanceRecords(f.root)).toEqual(history)
+    expect((await f.runner.plan()).checks[0]).toMatchObject({ outcome: 'running', held: expect.stringContaining('current production') })
+    current.deployedSha = source
+    f.github.mockResolvedValue({ id: 42, html_url: 'https://github.com/fortresspower/cmsandbox/actions/runs/42', event: 'workflow_dispatch', path: '.github/workflows/existing-smoke.yml', head_branch: 'main', created_at: now, status: 'completed', conclusion: 'success' })
+    await f.runner.perform({ actor: 'owner' })
+    expect((await readAcceptanceRecords(f.root))[0]!.events.at(-1)?.outcome).toBe('passed')
+  })
+  it('ignores current target presentation metadata and ordering', async () => {
+    const f = await setup(); await f.configure()
+    f.data.reconciliation!.targets.reverse()
+    for (const target of f.data.reconciliation!.targets) {
+      target.observedAt = '2026-11-10T00:00:00Z'; target.version = 'display-only'; target.receiptUrl = 'https://example.com/new-link'
+    }
+    expect((await f.runner.plan()).checks[0]!.held).toBeNull()
+    await f.runner.perform({ actor: 'owner' })
+    expect(f.github).toHaveBeenCalledTimes(1)
+  })
   it('defaults OFF, and dry-run creates no receipt and makes zero GitHub requests even when enabled', async () => {
     const f = await setup()
     expect(await f.runner.perform({ actor: 'owner' })).toEqual({ enabled: false, records: [] })
