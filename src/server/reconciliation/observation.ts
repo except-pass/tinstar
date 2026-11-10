@@ -22,6 +22,8 @@ export class CachedObservation<T> {
   private retryAt = 0
   private changes: Array<(data: T) => T> = []
 
+  peek(): Observation<T> | null { return this.cached ? this.current() : null }
+
   isCached() { return !!this.pending || !!this.cached && this.now() < this.retryAt }
 
   updateData(change: (data: T) => T) {

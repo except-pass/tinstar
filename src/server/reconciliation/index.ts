@@ -73,7 +73,7 @@ export class ReconciliationSources {
   async checkInSnapshot(force = false): Promise<CheckInSnapshot> {
     const [fleet, checkIns] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({ owner: 'Firstmate', statuses: ['In Progress', 'Waiting For'] }, force)])
     return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
-      fleet, intentions: ageObservation(checkIns), checkIns: ageObservation(checkIns) }
+      fleet, intentions: ageObservation(this.workReader.declarations()), checkIns: ageObservation(checkIns) }
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }

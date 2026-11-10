@@ -30,6 +30,13 @@ export class WorkReader {
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force)
   }
+  declarations() {
+    const key = JSON.stringify([undefined, undefined, undefined, undefined, undefined, false])
+    return this.queries.get(key)?.observation.peek() ?? {
+      status: 'unknown' as const, coverage: 'unknown' as const, data: null,
+      observedAt: null, attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Broader declaration coverage is unavailable',
+    }
+  }
   card(id: string, force = false) {
     const cached = this.cards.get(id)
     if (!force && cached && cached.until > Date.now()) { this.api.diagnostics.cacheHits++; return cached.value }

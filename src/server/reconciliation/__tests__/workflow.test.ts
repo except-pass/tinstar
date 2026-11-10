@@ -538,3 +538,30 @@ it('rejects partial wait cleanup and removes only the complete selected entry', 
   expect(await f.workflow.update({ ...answer, operation_id: 'wait-full', resolve_wait: 'Wait for security approval' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'saved' })
   expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Wait for legal approval')
 })
+
+it('keeps multiline wait inputs within one deduplicated, exactly removable entry', async () => {
+  const f = fixture()
+  const wait = { card_id: id, operation_id: 'multiline-wait', kind: 'wait', dependency: 'Security approval\nLegal approval', unblocks_when: 'Both approve\nRecord evidence', follow_up_by: 'Owner' } as UpdateWorkInput
+  expect(await f.workflow.update(wait, 'Owner')).toMatchObject({ outcome: 'saved' })
+  const first = String((await f.reader.card(id, true)).properties['Waiting For']!.value)
+  expect(await f.workflow.update({ ...wait, operation_id: 'dedupe-wait' }, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(first)
+  const entry = first.split('\n')[1]!
+  const answer = { card_id: id, operation_id: 'resolve-multiline', kind: 'answer_decision', request_id: 'body-1', answer: 'Both approvals received', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: entry } as UpdateWorkInput
+  expect(await f.workflow.update({ ...answer, operation_id: 'partial-multiline', resolve_wait: 'Legal approval' } as UpdateWorkInput, 'Owner')).toMatchObject({ code: 'wait-conflict' })
+  expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+})
+it('keeps cached broader declarations separate from watchdog eligibility without a new broad scan', async () => {
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  const other = structuredClone(f.raw); other.id = 'd'.repeat(32); other.properties.Owner.select.name = 'Other'; other.properties.Status.status.name = 'Queued'
+  f.pages.set(other.id, other)
+  const sources = f.sources()
+  expect((await sources.checkInSnapshot()).intentions.coverage).toBe('unknown')
+  await sources.snapshot()
+  const queries = f.requests.filter(r => r.url.endsWith('/query')).length
+  const snapshot = await sources.checkInSnapshot()
+  expect(snapshot.intentions.data!.cards.map(c => c.id)).toContain(other.id)
+  expect(snapshot.checkIns!.data!.cards.map(c => c.id)).toEqual([id])
+  expect(f.requests.filter(r => r.url.endsWith('/query'))).toHaveLength(queries)
+})

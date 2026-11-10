@@ -36,6 +36,7 @@ type Sources = Pick<ReconciliationSources, 'firstmateWork' | 'currentCard' | 'up
  * ledger/replay service. First Mate remains the only dispatcher/supervisor. */
 export class FirstmateUpdates {
   readonly path: string
+  private pickupCursor = 0
   private scanning = false
   private nextSweep = 0
   private version = 0
@@ -136,10 +137,23 @@ export class FirstmateUpdates {
   }
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
-    const snapshot = await this.load(), candidates = snapshot.batches.filter(batch => !batch.announced && batch.readyAt <= this.now()).slice(0, 3)
+    const snapshot = await this.load(), ready = snapshot.batches.filter(batch => !batch.announced && batch.readyAt <= this.now())
+    const pickups = ready.filter(batch => !batch.offered && batch.items.some(item => item.kind === 'pickup'))
+    const pickup = pickups.length ? pickups[this.pickupCursor++ % pickups.length] : undefined
+    const candidates = ready.filter(batch => batch === pickup || batch.offered || !batch.items.some(item => item.kind === 'pickup'))
     const current = new Map<string, WorkCard>()
-    for (const batch of candidates) if (!batch.offered) for (const item of batch.items.filter(item => item.kind === 'pickup')) {
-      try { current.set(item.card_id, await this.sources.currentCard(item.card_id)) } catch { /* no speculative pickup */ }
+    if (pickup) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let accepting = true
+      try {
+        await Promise.race([
+          Promise.allSettled(pickup.items.filter(item => item.kind === 'pickup').map(async item => {
+            const card = await this.sources.currentCard(item.card_id)
+            if (accepting) current.set(item.card_id, card)
+          })),
+          new Promise<void>(resolve => { timer = setTimeout(resolve, 5000) }),
+        ])
+      } finally { accepting = false; clearTimeout(timer) }
     }
     return this.change(state => {
       const pending: Array<{ request_id: string; inbox_request_id: string; body: string }> = []
@@ -157,6 +171,7 @@ export class FirstmateUpdates {
         const item = { request_id: batch.requestId, inbox_request_id: inboxRequestId(batch.requestId), body: batch.body! }
         if (jsonBytes(pending) + jsonBytes(item) > 240 * 1024) break
         batch.offered = true; pending.push(item)
+        if (pending.length === 3) break
       }
       return { pending, tracked: [] }
     })

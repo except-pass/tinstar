@@ -176,3 +176,27 @@ print(json.dumps(m.pull_once(sys.argv[2],sys.argv[3],pathlib.Path(sys.argv[4])))
   })
 
 })
+
+it('bounds slow pickup preflight and rotates to later ready batches without losing notices', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const f = await fixture()
+    await f.feed.sweep(true)
+    const other = structuredClone(f.card); other.id = 'e'.repeat(32)
+    await f.feed.confirmed({ card: other, actor: 'Other', operationId: 'other-pickup' })
+    f.sources.currentCard.mockImplementation(async id => {
+      if (id === f.card.id) return await new Promise<never>(() => {})
+      return structuredClone(other)
+    })
+    f.advance()
+    const first = f.feed.bridgeWork()
+    await vi.waitFor(() => expect(f.sources.currentCard).toHaveBeenCalled())
+    await vi.advanceTimersByTimeAsync(5000)
+    expect((await first).pending).toEqual([])
+    const second = (await f.feed.bridgeWork()).pending
+    expect(second).toHaveLength(1)
+    expect(payload(second[0]!.body).changes[0].card_id).toBe(other.id)
+    const state = JSON.parse(await readFile(f.feed.path, 'utf8'))
+    expect(state.batches.find((b: any) => b.items.some((item: any) => item.card_id === f.card.id)).announced).toBe(false)
+  } finally { vi.useRealTimers() }
+})
