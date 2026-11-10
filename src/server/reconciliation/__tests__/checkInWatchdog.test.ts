@@ -35,6 +35,7 @@ async function harness() {
   card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [{ fm_home: '/fixture/hulk', task_id: 'linked-worker', first_observed_spawn_gen: 'attempt-1' }] })
   let context: CardContextRead = { outcome: 'available', blocks: [{ id: 'previous', type: 'paragraph', text: 'Previous evidence-backed checkpoint' }] }
   const sources = {
+    checkInSnapshot: async () => sources.snapshot(),
     snapshot: vi.fn(async () => {
       const current = structuredClone(snapshot)
       current.intentions.expiresAt = new Date(now + 60_000).toISOString()

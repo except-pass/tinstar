@@ -66,7 +66,10 @@ export async function readNotionCard(config: ReconciliationConfig['notion'], id:
   return result
 }
 
-export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch) {
+// 2,000 cards leaves room beyond the current board size without unbounded
+// pagination. Schema, query pages and relation reads still share one 20s deadline.
+export const NOTION_QUERY_PAGE_LIMIT = 20
+export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' = 'board') {
   return new CachedObservation(async () => {
     if (!config) throw new Error('Notion is not configured')
     // One deadline across schema + pagination; no retries on the UI read path.
@@ -106,11 +109,17 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       return [name, { id: text(p.id), type: text(p.type), options, relation: p.type === 'relation'
         ? { data_source_id: notionPageId(record(p.relation).data_source_id), database_id: notionPageId(record(p.relation).database_id) } : null }]
     }))
+    const condition = (name: string, value: string) => {
+      const type = properties[name]?.type
+      if (type !== 'select' && type !== 'status') throw new Error('Unsupported check-in filter property')
+      return { property: name, [type]: { equals: value } }
+    }
+    const filter = scope === 'check-ins' ? { and: [condition('Owner', 'Firstmate'), { or: [condition('Status', 'In Progress'), condition('Status', 'Waiting For')] }] } : undefined
     const cards = new Map<string, ReturnType<typeof notionCard>>()
     let cursor: string | undefined
     let hasMore = false
-    for (let page = 0; page < 10; page++) {
-      const response = await request(`${path}/query`, { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) })
+    for (let page = 0; page < NOTION_QUERY_PAGE_LIMIT; page++) {
+      const response = await request(`${path}/query`, { page_size: 100, ...(filter ? { filter } : {}), ...(cursor ? { start_cursor: cursor } : {}) })
       if (!Array.isArray(response.results) || typeof response.has_more !== 'boolean') throw new Error('invalid Notion query')
       for (const value of response.results) {
         const item = notionCard(value)
@@ -158,7 +167,9 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       }
       return null
     }
-    for (const item of items) {
+    // Eligibility needs the filtered page census, not unrelated hierarchy
+    // expansion. Worker routing still uses the independent full-board graph.
+    for (const item of scope === 'board' ? items : []) {
       for (const prop of Object.values(item.properties)) {
         if (prop.type !== 'relation' || !prop.hasMore || !prop.id) continue
         const ids = await completeRelation(item.id, prop.id)
@@ -169,14 +180,15 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
     }
     const truncatedRelations = items.flatMap(item => Object.entries(item.properties)
       .filter(([, p]) => p.hasMore).map(([name]) => ({ pageId: item.id, property: name })))
-    const missingSchemaProperties = ['Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item', 'Link']
+    const required = scope === 'check-ins' ? ['Owner', 'Status', 'Next check-in'] : ['Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item', 'Link']
+    const missingSchemaProperties = required
       .filter(name => !(name in properties))
-    const partial = hasMore || truncatedRelations.length > 0 || missingSchemaProperties.length > 0
+    const partial = hasMore || scope === 'board' && truncatedRelations.length > 0 || missingSchemaProperties.length > 0
     return {
       observedAt: new Date().toISOString(), coverage: partial ? 'partial' as const : 'complete' as const,
       data: { dataSourceId: notionPageId(config.dataSourceId), schema: properties, cards: items,
         hasMore, truncatedRelations, missingSchemaProperties,
-        scope: 'configured-data-source-properties; card bodies and related external sources not collected' },
+        scope: scope === 'check-ins' ? 'configured-data-source; Owner Firstmate; Status In Progress or Waiting For; eligibility census only' : 'configured-data-source-properties; card bodies and related external sources not collected' },
     }
   }, 30_000, 120_000, config ? 'Notion read failed or returned an unsupported response; verify token access and data source' : 'Notion token and dataSourceId are not configured', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
 }

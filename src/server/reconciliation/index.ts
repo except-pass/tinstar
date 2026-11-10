@@ -15,12 +15,14 @@ import { buildWorkerLinkReport } from './workerLinkReport'
 import { SearchDocumentCollector } from './searchIndex'
 
 export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot']>>
+export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['intentions'] }
 
 /** Shared read-only collection and scene projection; no domain actions. */
 export class ReconciliationSources {
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private fleet
   private notion
+  private checkIns
   private context
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
@@ -30,6 +32,7 @@ export class ReconciliationSources {
     this.context = new CardContextReader(config.notion)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
     this.notion = notionObservation(config.notion)
+    this.checkIns = notionObservation(config.notion, fetch, 'check-ins')
   }
 
   async snapshot(force = false) {
@@ -51,6 +54,13 @@ export class ReconciliationSources {
   }
 
   async card(id: string) { return this.context.get(id) }
+
+  /** The full board can be incomplete without silencing the independent
+   * Firstmate-owned active-card census. No additional timer or writer. */
+  async checkInSnapshot(force = false): Promise<CheckInSnapshot> {
+    const [snapshot, checkIns] = await Promise.all([this.snapshot(force), this.checkIns.get(force)])
+    return { ...snapshot, checkIns: ageObservation(checkIns) }
+  }
 
   async currentCard(id: string) { return readNotionCard(this.config.notion, id) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }

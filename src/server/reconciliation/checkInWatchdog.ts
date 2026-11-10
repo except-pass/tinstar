@@ -6,7 +6,8 @@ import { bridgeUpdateSchema, inboxRequestId, jsonBytes, type BridgeUpdate } from
 import { checkInCeiling, checkInKey, checkInTime, type CheckInIndicator } from '../../shared/checkIn'
 import { getConfigRoot } from '../configRoot'
 import { AskConflict, AskNotFound } from '../ask/store'
-import type { SourceSnapshot, ReconciliationSources } from './index'
+import type { CheckInSnapshot, ReconciliationSources } from './index'
+import { ageObservation } from './observation'
 import { declaredLinks, reconcileScene, type SceneCard } from './scene'
 import { record, text } from './values'
 
@@ -26,10 +27,24 @@ export interface CheckInRoute {
 }
 /** Only a single current canonical claim with live execution can name a worker.
  * All ambiguity stays with First Mate; candidate titles are never consulted. */
-export function checkInDecisions(snapshot: SourceSnapshot, now = Date.now()) {
-  const scene = reconcileScene(snapshot, now)
-  const sourceFresh = ['fresh', 'partial'].includes(scene.coverage.intentions.status) && !snapshot.intentions.data?.hasMore
-  return scene.cards.map(card => {
+export function checkInDecisions(snapshot: CheckInSnapshot, now = Date.now()) {
+  const census = ageObservation(snapshot.checkIns ?? snapshot.intentions, now)
+  // Include active cards absent from a capped board read, while retaining its
+  // actual coverage. An incomplete identity graph routes to First Mate; it
+  // must not invalidate a separately complete eligibility census.
+  const all = new Map((snapshot.intentions.data?.cards ?? []).map(card => [card.id, card]))
+  for (const card of census.data?.cards ?? []) all.set(card.id, card)
+  const graph = { ...snapshot, intentions: { ...snapshot.intentions, data: (snapshot.intentions.data ?? census.data) ? {
+    ...(snapshot.intentions.data ?? census.data)!, cards: [...all.values()], hasMore: snapshot.intentions.data?.hasMore ?? true,
+  } : null } }
+  const scene = reconcileScene(graph, now)
+  const ids = new Set((census.data?.cards ?? []).map(card => card.id))
+  const sourceFresh = !!census.data && !census.data.hasMore && (snapshot.checkIns
+    ? census.status === 'fresh' && census.coverage === 'complete'
+    : ['fresh', 'partial'].includes(census.status))
+  return scene.cards.filter(card => ids.has(card.id)).map(graphCard => {
+    const source = census.data!.cards.find(card => card.id === graphCard.id)!
+    const card = { ...graphCard, source }
     const declarations = declaredLinks(card.source)
     const claims = scene.claims.filter(c => c.cardId === card.id && c.sources.includes('notion.First Mate tasks'))
     const claim = claims.length === 1 ? claims[0] : undefined
@@ -67,7 +82,7 @@ const rowSchema = z.object({
   verifiedAt: z.string().nullable(), verification: z.string().nullable(),
 })
 export type CheckInRow = z.infer<typeof rowSchema>
-type Sources = Pick<ReconciliationSources, 'snapshot' | 'currentCard' | 'currentCardContext'>
+type Sources = Pick<ReconciliationSources, 'checkInSnapshot' | 'currentCard' | 'currentCardContext'>
 type Settings = { deliveryEnabled: boolean; graceMs?: number }
 
 /** Preview/test bridge credentials must never cause real inbox delivery.
@@ -122,7 +137,7 @@ const writers = new Map<string, Promise<unknown>>()
 export class CheckInWatchdog {
   private scanning = false
   private nextSweep = 0
-  private latestSnapshot: SourceSnapshot | undefined
+  private latestSnapshot: CheckInSnapshot | undefined
   private deliveryCursor = 0
   readonly path: string
   constructor(private sources: Sources, private root = getConfigRoot(), private settings: () => Promise<Settings> = () => checkInSettings(root), private now = Date.now) {
@@ -166,7 +181,7 @@ export class CheckInWatchdog {
     this.scanning = true
     this.nextSweep = this.now() + CHECK_IN_INTERVAL_MS
     try {
-      const snapshot = await this.sources.snapshot()
+      const snapshot = await this.sources.checkInSnapshot()
       this.latestSnapshot = snapshot
       const decisions = checkInDecisions(snapshot, this.now())
       const settings = await this.settings()
@@ -174,7 +189,7 @@ export class CheckInWatchdog {
       for (const decision of decisions.filter(d => d.due)) {
         const key = checkInKey(decision.cardId, decision.dueAt!)
         if (known.has(key)) continue
-        const card = snapshot.intentions.data!.cards.find(card => card.id === decision.cardId)!
+        const card = (snapshot.checkIns ?? snapshot.intentions).data!.cards.find(card => card.id === decision.cardId)!
         // Source reads stay outside the writer: a slow Notion body must not
         // hold the delivery/receipt queue or the scene's card indicators.
         const context = await this.sources.currentCardContext(card.id).catch(() => null)
@@ -271,7 +286,9 @@ export class CheckInWatchdog {
           // or stale graph after restart routes reconciliation to First Mate.
           const snapshot = this.latestSnapshot
           const refreshed = snapshot && { ...snapshot, intentions: { ...snapshot.intentions, data: snapshot.intentions.data ? { ...snapshot.intentions.data,
-            cards: snapshot.intentions.data.cards.map(card => card.id === current.id ? current : card) } : null } }
+            cards: snapshot.intentions.data.cards.map(card => card.id === current.id ? current : card) } : null },
+            ...(snapshot.checkIns ? { checkIns: { ...snapshot.checkIns, data: snapshot.checkIns.data ? { ...snapshot.checkIns.data,
+              cards: snapshot.checkIns.data.cards.map(card => card.id === current.id ? current : card) } : null } } : {}) }
           const decision = refreshed && checkInDecisions(refreshed, this.now()).find(d => d.cardId === row.cardId)
           row.route = decision?.route ?? { via: 'firstmate', worker: null, reason: 'Worker source not yet refreshed after restart; First Mate must reconcile' }
           row.dependency = word(current, 'Waiting For')

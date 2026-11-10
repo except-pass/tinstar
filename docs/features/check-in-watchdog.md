@@ -12,6 +12,37 @@ Date-only appointments mean **9 AM America/New_York**, including DST changes.
 Timestamp offsets and Notion's explicit date timezone are respected. At the
 exact appointment instant a card is not yet overdue.
 
+Eligibility uses a separate Notion query filtered to `Owner: Firstmate` and
+`Status: In Progress` or `Waiting For`. Its cached census must be complete and
+fresh; it does not inherit the full board's pagination or unrelated relation
+coverage. The full-board reader permits up to 20 pages (2,000 cards) under its
+existing shared 20-second deadline and 30-second cache TTL. Hitting that bound
+still reports `hasMore` and partial coverage. The worker identity graph retains
+that truthful full-board coverage: if incomplete, requests go to First Mate for
+reconciliation rather than selecting an unverified worker. Before delivery,
+the existing uncached exact-page read rechecks scope, status and appointment.
+
+The report's `source` describes the scoped eligibility census; `boardSource`
+separately reports full-board coverage. Saved snapshots can include `checkIns`
+alongside `intentions` to reproduce this distinction offline. Legacy snapshots
+without the scoped observation remain conservative about board completeness.
+
+Pagination fixture timing (300 ms simulated latency per schema/page response,
+actual reader/parsing, no live credentials):
+
+| Board size | Returned | Requests | Elapsed | Coverage |
+| --- | --- | --- | --- | --- |
+| 1,008 | 1,008 | 12 | 3.65 s | complete |
+| 1,500 | 1,500 | 16 | 4.83 s | complete |
+| 2,501 | 2,000 | 21 | 6.34 s | partial, hasMore true |
+
+These fixture measurements demonstrate budget headroom at the specified
+latency; they do not establish production latency. The real deadline still
+applies when the API is slow, and failed/truncated reads retain truthful source
+state. The filtered 72-card regression completes in one query page even when
+the full-board fixture exceeds 2,000 cards. The exact-card GET before delivery
+continues to suppress a closed/changed card independently of either census.
+
 An exact canonical `First Mate tasks` declaration, confirmed/current claim and
 fresh running execution can name one worker **via First Mate**. Candidate title
 matches, missing workers, multiple canonical workers, conflicting generations,
