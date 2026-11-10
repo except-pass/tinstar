@@ -121,14 +121,9 @@ These tools use the same `PullsApi` / `ReleasesApi` instances as the UI, includi
 its bounded demand caches and shared `AssociationStore`. They require no open
 Overview window. They never write associations, change releases or approve PRs.
 
-Exact input schemas (all fields other than `url` and `head` are optional):
-
-```text
-list_prs: { offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
-get_pr: { url: GitHub PR URL (max 2048 characters), head: lowercase hex SHA (40..64 characters),
-          include_files: boolean = false, offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
-get_release_status: { offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
-```
+The authoritative input schemas and defaults live in
+[`registerDomainReadTools` and its shared pagination schema](../../src/server/reconciliation/domainReads.ts)
+and are exposed through MCP `tools/list`.
 
 **PR authorization is pending an owner-binding decision.** Production currently
 returns `{outcome:"unauthorized", prerequisite:"...verified owner binding..."}`
@@ -164,8 +159,8 @@ or a tag alone never proves production shipment.
 
 Pagination is a view of the current shared projection, not a frozen snapshot;
 source refreshes can change membership between pages. There is no new service,
-cache or persistent graph. Refresh the ChatGPT connector tool catalog after the
-owner deploys the updated facade.
+cache or persistent graph. After deployment, follow the
+[connector catalog refresh instructions](#scoped-outbound-tunnel-facade).
 
 Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `group`, `you` and `firstMate`. Use IDs returned by reads, never title matching. Executions retain First Mate home/task/attempt identity. Claims distinguish confirmed, textual, inferred and conflicting relationships.
 

@@ -83,7 +83,7 @@ Configure the home in `~/.config/tinstar/config.json`:
 
 The home must contain First Mate's `bin/fm-fleet-snapshot.sh` and `bin/fm-inbox.sh`. Direct dismiss also runs `bin/fm-captain-hold.sh` or `bin/fm-send.sh` from that same directory. Tinstar reads the fleet snapshot and opens private terminal views linked to worker windows. It does not create or stop workers. See [the integration reference](docs/features/firstmate-observer.md) for the current boundary.
 
-For conversational control of Overview and Decisions, use the [authenticated MCP connection instructions](docs/features/reconciliation-mcp.md#start-and-connect), including the [scoped outbound facade for ChatGPT](docs/features/reconciliation-mcp.md#scoped-outbound-tunnel-facade).
+For conversational control of Overview and Decisions and shared work, PR and release reads, use the [authenticated MCP connection instructions](docs/features/reconciliation-mcp.md#start-and-connect), including the [scoped outbound facade for ChatGPT](docs/features/reconciliation-mcp.md#scoped-outbound-tunnel-facade). The [PR and release read contract](docs/features/reconciliation-mcp.md#pr-and-release-reads-slice-b) describes availability and authorization requirements.
 
 ## Access and configuration
 
