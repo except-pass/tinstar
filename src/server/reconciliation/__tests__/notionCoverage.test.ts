@@ -64,7 +64,8 @@ it.each(['select', 'status'])('keeps operational and check-in reads scoped indep
   vi.stubGlobal('fetch', f.fetcher)
   const sources = new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token', dataSourceId }, warnings: [] })
   const snapshot = await sources.checkInSnapshot()
-  expect(snapshot.intentions).toMatchObject({ coverage: 'complete', data: { hasMore: false } })
+  // A cold watchdog read must not fetch the broader operational declarations.
+  expect(snapshot.intentions).toMatchObject({ status: 'unknown', coverage: 'unknown', data: null })
   expect(snapshot.checkIns).toMatchObject({ status: 'fresh', coverage: 'complete', data: { hasMore: false } })
   expect(f.calls.every(call => !!call.filter)).toBe(true)
   const filtered = f.calls.filter(call => JSON.stringify(call.filter).includes('Firstmate'))
@@ -77,6 +78,15 @@ it.each(['select', 'status'])('keeps operational and check-in reads scoped indep
   expect(decisions).toHaveLength(72)
   expect(decisions.every(d => d.due && d.route.worker === null && d.route.via === 'firstmate')).toBe(true)
   expect(decisions[0]!.cardId).toBe(id(2001)) // absent from the capped full-board graph
+
+  const operational = await sources.snapshot()
+  expect(operational.intentions).toMatchObject({ coverage: 'complete', data: { hasMore: false } })
+  const cached = await sources.checkInSnapshot()
+  expect(cached.intentions).toEqual(operational.intentions)
+  expect(cached.checkIns).toEqual(snapshot.checkIns)
+  expect(checkInDecisions(cached)).toEqual(decisions)
+  expect(f.calls).toHaveLength(2) // one scoped census and one explicit operational read
+  expect(f.calls.every(call => !!call.filter)).toBe(true)
 })
 
 it('does not use a truncated scoped census to authorize eligibility', async () => {
