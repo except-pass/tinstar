@@ -11,7 +11,7 @@ import { AskActions, AskSelectionRejected } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
-import { answerStatus, deliveryFailed, deskConversations, type DeskView } from './deskInbox'
+import { answerStatus, deliveryFailed, deskConversations, mostRecentAnswer, type DeskView } from './deskInbox'
 import { VoiceInput } from './VoiceInput'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -277,7 +277,7 @@ function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskCont
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
   const latest = turns.at(-1)!
-  const latestAnswer = turns.filter(turn => turn.reply).sort((a, b) => Date.parse(a.answered_at ?? a.created_at) - Date.parse(b.answered_at ?? b.created_at)).at(-1)
+  const latestAnswer = mostRecentAnswer(turns)
   const seed = controls.replySeed?.conversationId === latest.conversation_id ? controls.replySeed : null
   const viewport = useRef<HTMLDivElement>(null), nearBottom = useRef(true)
   // Reply timestamps can interleave with later questions. Sort message events,
@@ -356,7 +356,7 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
     {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers appear here.'}</p>}
     {groups.map(group => {
       const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
-      const answer = [...turns].filter(turn => turn.reply).sort((a, b) => (a.answered_at ?? a.created_at).localeCompare(b.answered_at ?? b.created_at)).at(-1)
+      const answer = mostRecentAnswer(turns)
       const preview = answer?.reply?.summary && displayRequestText(answer.reply.summary) !== conversationTitle(turns) ? displayRequestText(answer.reply.summary) : null
       return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-conversation-id={item.conversation_id} data-unread={unread} data-expanded={expanded}>
         <button type="button" hidden={expanded} data-has-preview={!!preview} className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
