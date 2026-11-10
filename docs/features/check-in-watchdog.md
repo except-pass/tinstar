@@ -117,7 +117,8 @@ configuration edit is needed to enable the ordinary installed service.
 
 ## Notion closure and repair
 
-First Mate owns the investigation and uses its existing authorized writer to
+First Mate owns the investigation and uses Tin Star’s shared authenticated
+`update_work` checkpoint operation (including the original `request_id`) to
 post a concise dated update to the **original card** and set `Last touched by`.
 The inbox request supplies this human-readable checkpoint shape, together in
 one paragraph or unresolved page comment:
@@ -221,7 +222,7 @@ or obtain an explicit safe test plan through Firstmate.
    exclusion and absence of any store/bridge request.
 4. First Mate routes A if appropriate, investigates B itself, then writes the
    dated evidence/blocker/owner/next-action checkpoint on the same card through
-   its existing authorized writer. Capture the immutable reply receipt and
+   the shared `update_work` checkpoint operation. Capture the immutable reply receipt and
    cursor, raw Notion paragraph/comment, exact next property, `Last touched by`
    and page edit time. Capture the **Answered; Notion update pending** line
    before readback completes, then the cleared line afterward.

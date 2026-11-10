@@ -4,7 +4,7 @@ import type { FloorScene } from '../shared/reconciliationPresentation'
 import type { StartWorkInput, StartWorkResult } from '../shared/workflow'
 
 /** Compact Inspector action. Server policy is authoritative for every choice. */
-export function StartWork({ cardId, scene, onSaved }: { cardId: string; scene: FloorScene; onSaved: () => Promise<void> }) {
+export function StartWork({ cardId, scene, onSaved }: { cardId: string; scene: FloorScene; onSaved: (result?: StartWorkResult) => Promise<void> }) {
   const [mode, setMode] = useState('firstmate'), [selected, setSelected] = useState('')
   const [system, setSystem] = useState(''), [run, setRun] = useState(''), [reference, setReference] = useState(''), [evidence, setEvidence] = useState('')
   const [observed, setObserved] = useState(''), [running, setRunning] = useState(false)
@@ -27,7 +27,7 @@ export function StartWork({ cardId, scene, onSaved }: { cardId: string; scene: F
       if (!response.ok || !body.ok || !body.data) throw new Error(body.error?.message ?? 'Start work unavailable')
       const saved = body.data as StartWorkResult
       setResult(saved)
-      if (saved.outcome !== 'not-saved') await onSaved().catch(() => {})
+      if (saved.outcome !== 'not-saved') await onSaved(saved).catch(() => {})
     } catch { setResult({ outcome: 'partially-saved', code: 'response-unavailable', operation_id: attempt.current.input.operation_id, saved_fields: [], message: 'Not confirmed saved. Refresh the card, then retry; the same attempt will be reused.' }) }
     finally { setBusy(false) }
   }

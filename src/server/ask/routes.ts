@@ -13,6 +13,7 @@ import type { ReconciliationSources } from '../reconciliation'
 import { artifactContext, type AskArtifactSources } from './artifacts'
 import { AskConflict, AskNotFound, AskStore } from './store'
 import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
+import type { FirstmateUpdates } from '../reconciliation/firstmateUpdates'
 import type { CheckInWatchdog } from '../reconciliation/checkInWatchdog'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
@@ -44,7 +45,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -75,12 +76,17 @@ export class AskApi {
           if (conversation) return ok(res, await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId), { headers })
           const data = await this.store.bridgeWork(syntheticId)
           const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
-          return ok(res, { pending: [...data.pending, ...system.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
+          const work = !syntheticId && this.workUpdates ? await this.workUpdates.bridgeWork() : { pending: [], tracked: [] }
+          return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
         }
         if (req.method === 'POST') {
           const update = bridgeUpdateSchema.parse(await readBody(req))
           if (!syntheticId && await this.checkIns?.owns(update.request_id)) {
             await this.checkIns!.ingest(update)
+            return ok(res, { accepted: true }, { headers })
+          }
+          if (!syntheticId && await this.workUpdates?.owns(update.request_id)) {
+            await this.workUpdates!.ingest(update)
             return ok(res, { accepted: true }, { headers })
           }
           const row = await this.store.ingest(update, syntheticId)

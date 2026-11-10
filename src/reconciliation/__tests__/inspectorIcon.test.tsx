@@ -160,7 +160,7 @@ describe('Copy Notion link', () => {
     installClipboard(writeText)
     let copied = ''
     Object.defineProperty(document, 'execCommand', { configurable: true, value: (command: string) => {
-      if (command === 'copy') copied = document.querySelector('textarea')?.value ?? ''
+      if (command === 'copy') copied = document.querySelector<HTMLTextAreaElement>('textarea[readonly]')?.value ?? ''
       return true
     } })
     await openTask()
@@ -173,7 +173,7 @@ describe('Copy Notion link', () => {
   it.each(['success', 'refused', 'throws'] as const)('restores focus and removes the fallback textarea when copy %s', async outcome => {
     installClipboard(vi.fn().mockRejectedValue(new Error('denied')))
     Object.defineProperty(document, 'execCommand', { configurable: true, value: () => {
-      document.querySelector('textarea')!.focus()
+      document.querySelector<HTMLTextAreaElement>('textarea[readonly]')!.focus()
       if (outcome === 'throws') throw new Error('copy failed')
       return outcome === 'success'
     } })
@@ -183,7 +183,7 @@ describe('Copy Notion link', () => {
     fireEvent.keyDown(button, { key: 'Enter' })
     await waitFor(() => expect(button).toHaveFocus())
     await act(async () => { await Promise.resolve() })
-    expect(document.querySelector('textarea')).toBeNull()
+    expect(document.querySelector<HTMLTextAreaElement>('textarea[readonly]')).toBeNull()
     expect(button).toHaveFocus()
     expect(screen.queryByText('Copied') !== null).toBe(outcome === 'success')
   })

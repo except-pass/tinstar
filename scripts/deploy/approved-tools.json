@@ -11,5 +11,7 @@
   "present_view",
   "read_record",
   "search_work",
-  "start_work"
+  "start_work",
+  "create_work",
+  "update_work"
 ]
