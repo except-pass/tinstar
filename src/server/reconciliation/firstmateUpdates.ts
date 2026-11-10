@@ -142,6 +142,7 @@ export class FirstmateUpdates {
           (baseline?.details ? !baseline.details.some(previous => previous.id === block.id) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old?.observed ?? '')))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const sections = (contentSeen ? [] : own?.sections) ?? (context?.blocks ?? []).filter(block => block.type !== 'comment' && baseline?.details && baseline.details.find(previous => previous.id === block.id)?.text !== block.text).map(block => block.id)
+        if (!own && context?.outcome === 'available') sections.push(...(baseline?.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
         const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections,
           ...(!own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
         // Redaction is an output boundary; raw current-state comparisons stay exact.
@@ -150,7 +151,7 @@ export class FirstmateUpdates {
       }
       const operations = [...(old?.operations ?? []), ...(!operationSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
-      this.baselines.set(card.id, { properties: after, ...(context ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}) })
+      this.baselines.set(card.id, { properties: after, ...(context?.outcome === 'available' ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}) })
     })
   }
   /** Called from the existing refresh callback, never a second scheduler. */

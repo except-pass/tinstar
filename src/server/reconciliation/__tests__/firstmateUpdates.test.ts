@@ -375,3 +375,26 @@ it('includes successive section confirmations and the final note in one consumer
   expect(notices).toHaveLength(1)
   expect(payload(notices[0]!.body)).toMatchObject({ actor: 'Consumer', changes: [{ body_sections: ['brief', 'acceptance_criteria'], comments: [{ text: note, author: 'Consumer' }] }] })
 })
+
+it('retains a direct human body deletion in its update across failed delivery', async () => {
+  const f = await fixture()
+  f.card.properties.Status!.value = 'In Progress'
+  f.context.blocks.push({ id: 'deleted-paragraph', type: 'paragraph', text: 'Original human brief' })
+  await f.feed.sweep(true)
+  f.advance(); f.card.last_edited_time = new Date(f.now()).toISOString()
+  await f.feed.sweep(true)
+  f.advance()
+  for (const notice of (await f.feed.bridgeWork()).pending) await f.feed.ingest({ request_id: notice.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'baseline-note', request_id: inboxRequestId(notice.request_id) } })
+  f.context.blocks.splice(0)
+  f.advance(); f.card.last_edited_time = new Date(f.now()).toISOString()
+  await f.feed.sweep(true); f.advance()
+  const notices = (await f.feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  expect(payload(notices[0]!.body).changes[0]).toMatchObject({ kind: 'update', body_sections: ['deleted-paragraph'] })
+  await f.feed.ingest({ request_id: notices[0]!.request_id, error: 'wake-failed' })
+  await f.feed.sweep(true)
+  expect((await f.restarted().bridgeWork()).pending).toEqual(notices)
+  await delivered(f.feed, notices[0]!)
+  await f.feed.sweep(true)
+  expect((await f.feed.bridgeWork()).pending).toEqual([])
+})

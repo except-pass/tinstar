@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { WorkflowContent } from '../workflowContent'
+import { NotionWriteError, WorkflowContent } from '../workflowContent'
 import { FirstmateUpdates } from '../firstmateUpdates'
 import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
@@ -507,6 +507,30 @@ describe('remaining shared workflow operations', () => {
     expect((await f.reader.card(id)).properties['Will action']!.value).toEqual(['Merge', 'Decision'])
     expect(await f.workflow.update(input('park', { disposition: 'Owner deferred further work', status: 'Archived' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Archived')
+  })
+  it('preserves confirmed creation and its receipt after body verification rejection', async () => {
+    for (const status of [403, 429]) {
+      const f = fixture()
+      const root = await mkdtemp(join(tmpdir(), 'workflow-create-readback-')); roots.push(root)
+      const workflow = new WorkflowOperations(f.reader, async () => [], root)
+      const create = { operation_id: `create-readback-${status}`, name: 'Created before read failure', owner: 'Firstmate', area: 'Engineering', content: { brief: 'Preserve this card' } }
+      const request = WorkflowContent.prototype.request
+      const spy = vi.spyOn(WorkflowContent.prototype, 'request').mockImplementation(function (this: WorkflowContent, path, method, body) {
+        if (path.startsWith(`blocks/${'c'.repeat(32)}/children?`)) return Promise.reject(new NotionWriteError(status))
+        return request.call(this, path, method, body)
+      })
+      try {
+        expect(await workflow.create(create, 'Owner')).toMatchObject({
+          outcome: 'partially-saved', code: 'create-unconfirmed', card: { id: 'c'.repeat(32) },
+          saved_fields: expect.arrayContaining(['card', 'Name', 'Owner', 'Status', 'Area', 'Last touched by']),
+        })
+      } finally { spy.mockRestore() }
+      f.pages.get('c'.repeat(32)).properties.Name.title = [{ plain_text: 'Human renamed the saved card' }]
+      const restarted = new WorkflowOperations(f.reader, async () => [], root)
+      expect(await restarted.create(create, 'Owner')).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32) } })
+      expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+      expect(f.pages.size).toBe(2)
+    }
   })
   it('creates a real card with required classification/content and recovers a lost create response across restart', async () => {
     const f = fixture(); f.controls.lostCreate()

@@ -371,14 +371,15 @@ export class WorkflowOperations {
   }
   private async performCreate(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
+    const saved: string[] = []
     const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = JSON.stringify(input)
-    const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = []): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
+    const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = saved): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
     try {
       const config = this.reader.config
       if (!config) throw new Error('Not configured')
       const previous = await this.creations.get(key)
       if (previous && previous.input !== signature) throw new WorkflowError('operation-conflict', 'operation_id was used with different creation input')
-      if (previous?.cardId) { card = await this.reader.card(previous.cardId, true); this.reader.confirm(card); return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card']) }
+      if (previous?.cardId) { saved.push('card'); card = await this.reader.card(previous.cardId, true); this.reader.confirm(card); return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card']) }
       // A creation receipt is in the initial page children, so lost responses and
       // restarts can recover it without an authoritative offline queue or schema.
       const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, filter: { property: 'Name', title: { equals: input.name } } })
@@ -386,8 +387,9 @@ export class WorkflowOperations {
       for (const raw of candidates.results) {
         const candidate = notionCard(raw)
         if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) {
-          card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
+          card = candidate; saved.push('card')
           await this.creations.put(key, signature, card.id)
+          card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
           await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
           return result('saved', 'already-saved', 'Card creation already saved', ['card'])
         }
@@ -401,19 +403,29 @@ export class WorkflowOperations {
       const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))]
       await this.creations.put(key, signature)
       attempted = true
-      const created = await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config.dataSourceId }, properties, children })
-      const parsed = notionCard(created)
-      card = await this.reader.card(parsed.id, true); this.reader.confirm(card)
+      let created: Awaited<ReturnType<WorkflowContent['request']>>
+      try {
+        created = await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config.dataSourceId }, properties, children })
+      } catch (error) {
+        if (error instanceof NotionWriteError && error.status < 500) {
+          await this.creations.remove(key)
+          return result('not-saved', 'notion-rejected', `Notion rejected creation (HTTP ${error.status})`)
+        }
+        throw error
+      }
+      card = notionCard(created)
+      saved.push('card')
+      await this.creations.put(key, signature, card.id)
+      card = await this.reader.card(card.id, true); this.reader.confirm(card)
       const fields = Object.keys(values).filter(name => this.matches(card!, name, this.normalized(card!, name, values[name as keyof typeof values])))
+      saved.push(...fields)
       const sections = await this.content.sections(card.id)
       const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === child.paragraph.rich_text.map(r => r.text.content).join('')))
-      if (complete) await this.creations.put(key, signature, card.id)
       await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(child => child.paragraph.rich_text.map(r => r.text.content).join('')) })
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
-      if (error instanceof WorkflowError) return result('not-saved', error.code, error.message)
-      if (error instanceof NotionWriteError && error.status < 500 && attempted) { await this.creations.remove(key); return result('not-saved', 'notion-rejected', `Notion rejected creation (HTTP ${error.status})`) }
-      return result(attempted ? 'partially-saved' : 'not-saved', attempted ? 'create-unconfirmed' : 'source-unavailable', attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
+      if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
+      return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'create-unconfirmed' : 'source-unavailable', saved.length ? 'Card created; only listed steps confirmed saved. Current verification failed; retry identical input to retrieve the existing card.' : attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
     }
   }
 
