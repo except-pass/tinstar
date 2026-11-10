@@ -41,7 +41,7 @@ describe('Overview toolbar and filter shelf', () => {
     scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Filters', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }))
     for (const checkbox of screen.getAllByRole('checkbox')) {
       if ((checkbox as HTMLInputElement).checked) fireEvent.click(checkbox)
     }
@@ -54,7 +54,7 @@ describe('Overview toolbar and filter shelf', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close Customize' }))
     const scope = screen.getByRole('button', { name: 'Edit Status scope: Custom - Done' })
     fireEvent.click(scope)
-    expect(screen.getByRole('region', { name: 'Filters', exact: true })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Filters' })).toBeTruthy()
     expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked()
     expect(screen.getByLabelText('Status preset')).toHaveValue('custom')
     fireEvent.keyDown(screen.getByRole('checkbox', { name: 'Done' }), { key: 'Escape' })
