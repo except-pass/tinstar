@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { updateWorkSchema } from '../../shared/workflow'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { WorkActions, CreateWork } from '../WorkActions'
+import { WorkActions } from '../WorkActions'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { apiFetch } from '../../apiClient'
 vi.mock('../../apiClient', () => ({ apiFetch: vi.fn() }))
@@ -33,17 +33,6 @@ it('collects complete checkpoint intent with explicit confirmation and shows the
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not saved. Next check-in exceeds'))
   expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body)).input).toMatchObject({ kind: 'checkpoint', checkpoint: { next_check_in: '2026-11-12', confirmation: 'owner-confirmed', assessment: 'Build complete; acceptance remains', next_action: 'Review required output' } })
 })
-it('creates a queued card from declared owner/area and brief without an open Notion UI', async () => {
-  const saved = vi.fn(async () => {})
-  vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', message: 'Card created', saved_fields: ['card'] } })))
-  render(<CreateWork onSaved={saved} />)
-  fill('Card name', 'New work'); fill('Owner', 'Firstmate'); fill('Area', 'Engineering'); fill('Brief', 'Implement the supported behavior'); fill('Acceptance criteria', 'Readback matches both interfaces')
-  fireEvent.click(screen.getByRole('button', { name: 'Create queued card' }))
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved. Card created'))
-  expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body))).toMatchObject({ operation: 'create', input: { name: 'New work', owner: 'Firstmate', area: 'Engineering', status: 'Queued', content: { brief: 'Implement the supported behavior', acceptance_criteria: 'Readback matches both interfaces' } } })
-  expect(saved).toHaveBeenCalledTimes(1)
-})
-
 it('retains edit preconditions and identity across refreshed props until intent changes', async () => {
   const card = structuredClone(fixtureScene().cards[0]!)
   card.source.properties.Priority = { type: 'select', value: 'Low' } as any

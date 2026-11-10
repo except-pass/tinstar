@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
-import type { CreateWorkInput, StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
+import type { StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
 import { decisionRequests } from '../shared/workflowRequests'
 import { workflowSaved } from './workflowSaved'
@@ -13,13 +13,13 @@ const saveMessage = (result: StartWorkResult) => `${result.outcome === 'saved' ?
 function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<StartWorkResult | null>(null)
   const attempt = useRef<{ signature: string; input: unknown; id: string }>()
-  async function save(operation: 'create' | 'update', values: Omit<CreateWorkInput, 'operation_id'> | WithoutOperation<UpdateWorkInput>) {
-    const { expected: _expected, ...intent } = values as WithoutOperation<UpdateWorkInput>
-    const signature = JSON.stringify([operation, intent])
+  async function save(values: WithoutOperation<UpdateWorkInput>) {
+    const { expected: _expected, ...intent } = values
+    const signature = JSON.stringify(['update', intent])
     if (signature !== attempt.current?.signature) { const id = crypto.randomUUID(); attempt.current = { signature, id, input: { ...values, operation_id: id } } }
     setBusy(true); setResult(null)
     try {
-      const response = await apiFetch('/api/reconciliation/workflow', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation, input: attempt.current.input }) })
+      const response = await apiFetch('/api/reconciliation/workflow', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: attempt.current.input }) })
       const body = await response.json()
       if (!response.ok || !body.ok || !body.data) throw new Error('Workflow unavailable')
       setResult(body.data)
@@ -74,7 +74,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     }
     else if (kind === 'complete') input = { ...base, kind, disposition: note, evidence }
     else input = { ...base, kind, disposition: note, status: status === 'Archived' ? 'Archived' : 'Backlog' }
-    await save('update', input)
+    await save(input)
   }
   return <details className="ov-start-work ov-work-actions"><summary>Update work</summary><form onSubmit={event => void submit(event)}>
     <label>Operation<select value={kind} onChange={e => { setKind(e.target.value as typeof kind); setStatus('Queued') }}>{actions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -103,14 +103,5 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     <button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save update'}</button>
     {canReissue && <><button type="button" disabled={busy} onClick={() => void onSaved().catch(() => {})}>Refresh card</button><button type="submit" disabled={busy} onClick={newAttempt}>Re-issue with refreshed card</button></>}
     {result && <p role="status" data-save-outcome={result.outcome}>{saveMessage(result)}</p>}
-  </form></details>
-}
-
-export function CreateWork({ onSaved }: { onSaved: (result?: StartWorkResult) => Promise<void> }) {
-  const [name, setName] = useState(''), [owner, setOwner] = useState(''), [area, setArea] = useState(''), [brief, setBrief] = useState(''), [acceptance, setAcceptance] = useState('')
-  const { save, busy, result } = useWorkSave(onSaved)
-  return <details className="ov-start-work ov-create-work"><summary>Create work</summary><form onSubmit={event => { event.preventDefault(); void save('create', { name, owner, area, status: 'Queued', content: { ...(brief ? { brief } : {}), ...(acceptance ? { acceptance_criteria: acceptance } : {}) } }) }}>
-    {field('Card name', name, setName)}{field('Owner', owner, setOwner)}{field('Area', area, setArea)}{field('Brief', brief, setBrief, false, true)}{field('Acceptance criteria', acceptance, setAcceptance, false, true)}
-    <button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create queued card'}</button>{result && <p role="status" data-save-outcome={result.outcome}>{saveMessage(result)}</p>}
   </form></details>
 }

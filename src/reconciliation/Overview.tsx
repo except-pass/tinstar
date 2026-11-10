@@ -1,5 +1,5 @@
 import { externalWorkers, type StartWorkResult } from '../shared/workflow'
-import { WorkActions, CreateWork } from './WorkActions'
+import { WorkActions } from './WorkActions'
 import { StartWork } from './StartWork'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
@@ -35,11 +35,6 @@ import { combinedPatternResult, sceneWorkHealth, patternEmptyText, type PatternR
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { OpenInChatGPT } from '../ask/OpenInChatGPT'
 import { checkInIndicatorText } from '../shared/checkIn'
-
-function CreateWorkAction() {
-  const { refreshAfterMutation } = useDeskWorkspace()
-  return <CreateWork onSaved={refreshAfterMutation} />
-}
 
 type Dispatch = (action: PresentationAction) => void
 interface View { restoringSearch?: boolean; scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; patternResults?: ReadonlyMap<string, PatternResult>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
@@ -441,7 +436,6 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
           send({ type: 'clear-selection' })
         }
       }} />
-      {!waiting && <CreateWorkAction />}
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
       <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${waiting ? ' ov-waiting-canvas' : ''}`}>{waiting ? <div className="ov-waiting-columns">
           <section className="ov-waiting-workers" aria-label="Workers"><header className="ov-waiting-worker-head">WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</header>{[...new Set(waitingWorkers.map(group => group.outerId))].map(outerId => {
