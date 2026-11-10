@@ -8,7 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { ReconciliationSources } from '..'
+import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { externalWorkers, type StartWorkInput } from '../../../shared/workflow'
@@ -183,7 +183,9 @@ describe('shared status-aware work reads', () => {
     const retained = (await f.reader.query(scope)).data!.cards
     expect(retained).toMatchObject([{ id, properties: { Status: { value: 'In Progress' } } }])
     expect((await f.reader.query({ ...scope, statuses: ['Queued'] })).data!.cards).toHaveLength(0)
-    expect((await f.reader.query({ ...scope, statuses: ['In Progress'] })).data!.cards).toHaveLength(0)
+    const queryCount = f.requests.filter(request => request.method === 'POST').length
+    expect((await f.reader.query({ ...scope, statuses: ['In Progress'] })).data!.cards).toMatchObject([{ id, properties: { Status: { value: 'In Progress' } } }])
+    expect(f.requests.filter(request => request.method === 'POST')).toHaveLength(queryCount + 1)
     f.raw.properties[classification].has_more = false
     f.reader.confirm(await f.reader.card(id, true))
     expect((await f.reader.query(scope)).data!.cards).toHaveLength(0)
@@ -288,6 +290,26 @@ it('keeps UI history explicit while ordinary work queries retain their own opera
   expect((await sources.searchWork({})).records).toHaveLength(0)
   expect((await sources.searchWork({ history: true })).records[0]!.card!.id).toBe(id)
   expect(f.requests.filter(request => request.method === 'POST').map(request => !!request.body.filter)).toEqual([true, false])
+})
+
+it.each(['Queued', 'Done', 'Archived'])('authorizes Inspector body reads by configured board for %s cards', async status => {
+  const f = fixture(), sources = f.sources()
+  f.raw.properties.Status.status.name = status
+  const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  seedOriginAllowlist(port)
+  const url = `http://127.0.0.1:${port}/api/reconciliation/card-context?id=${id}`
+  const allowed = await fetch(url)
+  expect(allowed.status).toBe(200)
+  expect((await allowed.json()).data.blocks).toContainEqual(expect.objectContaining({ id: 'body-1', text: 'Acceptance: retain provenance' }))
+  expect(f.requests.some(request => request.method === 'POST')).toBe(false)
+  expect((await fetch(url, { headers: { Origin: 'https://evil.example' } })).status).toBe(403)
+  f.raw.parent.data_source_id = 'c'.repeat(32)
+  const bodiesBefore = f.requests.filter(request => request.url.includes('/blocks/')).length
+  expect((await fetch(url)).status).toBe(404)
+  expect(f.requests.filter(request => request.url.includes('/blocks/'))).toHaveLength(bodiesBefore)
+  expect((await fetch(`${url.slice(0, url.indexOf('?'))}?id=invalid`)).status).toBe(404)
 })
 
 it('uses the existing 9 AM Eastern date-only checkpoint semantics after Notion filtering', async () => {

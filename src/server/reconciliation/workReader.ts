@@ -44,9 +44,11 @@ export class WorkReader {
   confirm(card: WorkCard) {
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })
     this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card) })
-    for (const { scope, observation } of this.queries.values()) observation.updateData(data => {
+    for (const [key, { scope, observation }] of this.queries) observation.updateData(data => {
       const matches = scopeMatches(card, scope)
-      const retain = matches === true || matches === undefined && data.cards.some(item => item.id === card.id)
+      const present = data.cards.some(item => item.id === card.id)
+      if (matches === undefined && !present && this.queries.get(key)?.observation === observation) this.queries.delete(key)
+      const retain = matches === true || matches === undefined && present
       return { ...data, cards: [...data.cards.filter(item => item.id !== card.id), ...(retain ? [card] : [])] }
     })
   }

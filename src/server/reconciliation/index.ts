@@ -163,8 +163,9 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
   if (path === '/api/reconciliation/card-context') {
     const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
-    const scene = await sources.scene()
-    if (!id || !scene.cards.some(c => c.id === id)) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
+    if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
+    try { await sources.currentCard(id) }
+    catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
   return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
