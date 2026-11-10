@@ -122,7 +122,7 @@ test('shared task/worker grouping, nested order, filters, references and persist
   const scene = new SceneReconciler().reconcile(sources, proofNow), mutations: string[] = []
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
   await page.goto(base)
@@ -206,7 +206,7 @@ test('date grouping uses all six New York buckets in calendar order', async ({ p
   ] as const
   for (const [id, start] of schedule) scene.cards.find(c => c.id === fixtureId(id))!.source.properties['Next check-in'] = { id: 'check', type: 'date', hasMore: false, value: { start } }
   scene.cards.find(c => c.id === fixtureId(100))!.source.properties.Status!.value = 'Queued'
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await selectAdvanced(page, 'Outer grouping', 'checkIn')
   await selectAdvanced(page, 'Inner grouping', 'none')
@@ -219,7 +219,7 @@ test('realistic volume, last-known data and failed refresh suspend absence findi
   await page.clock.install()
   const scene = fixtureScene({ size: 850, unavailable: true })
   let failed = false
-  await page.route('**/api/reconciliation/scene', route => failed ? route.fulfill({ status: 503, body: 'unavailable' }) : route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => failed ? route.fulfill({ status: 503, body: 'unavailable' }) : route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await selectAdvanced(page, 'Status preset', 'all')
   await expect(page.locator('.ov-card')).toHaveCount(857)
@@ -227,7 +227,7 @@ test('realistic volume, last-known data and failed refresh suspend absence findi
   await expect(page.locator('.ov-item.ov-gap,.ov-item.ov-orphan')).toHaveCount(0)
   await inspectEntity(page, page.locator(`.ov-card[data-entity-id="${fixtureId(1)}"]`))
   failed = true
-  await page.clock.fastForward(20_001)
+  await page.getByRole('button', { name: /^Refresh work\./ }).click()
   await expect(page.getByRole('button', { name: 'Notion unavailable · Details' })).toBeVisible()
   await expect(page.locator('.ov-card')).toHaveCount(857)
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Build live reconciliation')
@@ -239,7 +239,7 @@ for (const state of ['queued', 'held']) {
     const sources = fixtureSources()
     Object.assign(sources.fleet[1]!.observation.data!.backlog![0]!, { state, hold_reason: 'Awaiting review capacity', blocked_by: 'review-task', hold_until: '2026-11-05T12:00:00Z' })
     const scene = new SceneReconciler().reconcile(sources)
-    await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+    await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
     await page.goto(base)
     const card = page.locator(`.ov-card[data-entity-id="${fixtureId(2)}"]`)
     await expect(card).toHaveAttribute('data-tone', 'quiet')
@@ -255,48 +255,54 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await page.clock.install({ time: now })
   const scene = fixtureScene({ now })
   const workers = scene.executions.filter(e => e.kind !== 'secondmate')
-  workers[0]!.liveness = 'running'
-  workers[1]!.liveness = 'waiting'; workers[1]!.source.current_state.state = 'waiting'
-  workers[2]!.liveness = 'liveness-not-observed'; workers[2]!.source.current_state.state = 'unknown'; workers[2]!.source.last_event.state = 'unknown'
+  // Use source identities: reconcile order is independent of status order.
+  const runningWorker = workers.find(worker => worker.identity.task_id === 'linked-worker')!
+  const waitingWorker = workers.find(worker => worker.identity.task_id === 'untracked-worker')!
+  const unknownWorker = workers.find(worker => worker.identity.task_id === 'candidate-worker')!
+  runningWorker.source.current_state.state = 'working'
+  waitingWorker.source.current_state.state = 'paused'
+  unknownWorker.source.current_state.state = 'unknown'; unknownWorker.source.last_event.state = 'unknown'
   const card = scene.cards.find(c => c.id === fixtureId(1))!
   for (const [name, value] of Object.entries({ Priority: '🔴 High', 'Last touched by': 'Will', 'Due Date': { start: '2026-11-07' }, 'Next check-in': { start: '2026-11-04T10:00:00-05:00' } })) card.source.properties[name] = { id: name, type: 'rich_text', hasMore: false, value }
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.route('**/api/reconciliation/card-context?*', route => route.fulfill({ json: { ok: true, data: { outcome: 'partial', blocks: [{ id: 'full', text: 'Full source card body' }] } } }))
   await page.goto(base)
   await expect(page.locator('.ov-worker-status').filter({ hasText: /^Running$/ })).not.toHaveCount(0)
-  for (const status of ['Waiting', 'Blocked', 'Unknown']) await expect(page.locator('.ov-worker-status').filter({ hasText: new RegExp('^' + status + '$') })).toHaveCount(1)
+  await expect(page.locator('.ov-worker-status').filter({ hasText: /^Waiting(?: · reported .+)?$/ })).toHaveCount(2)
+  await expect(page.locator('.ov-worker-status').filter({ hasText: /^No update since / })).toHaveCount(1)
+  await expect(page.locator('.ov-worker-status.status-blocked')).toContainText('Waiting')
   const task = page.locator(`.ov-card[data-entity-id="${card.id}"]`).first()
   const fields = await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()
   await expect(task.locator('.ov-priority')).toHaveText('High')
   await expect(task.locator('.ov-task-status')).toHaveText('In Progress')
   await expect(task).toContainText('Overdue')
-  await expect(task.locator('.ov-age')).toHaveAttribute('title', 'Last touched by Will')
+  await expect(task.locator('.ov-age')).toHaveAttribute('title', /^Last touched by Will\./)
   await expect(task).not.toContainText(/No worker|Unverified|Machine|Manager|Link|execution/i)
   await expect(task.locator('.ov-breadcrumb')).toHaveText('Unassigned')
-  const desk = page.getByRole('complementary', { name: 'Your desk' })
-  const queueId = await desk.locator('.ov-queue').getAttribute('data-queue-item-id')
+  const desk = page.getByRole('complementary', { name: 'Discuss' })
+  await expect(desk.locator('.ov-queue')).toHaveCount(0)
   await inspectEntity(page, task)
   await expect(page.getByLabel('Inspector', { exact: true })).toBeVisible()
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Full source card body')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Last touched byWill')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Some content omitted')
-  await expect(desk.getByLabel('Desk queue')).toBeVisible()
-  await expect(desk.locator('.ov-queue')).toHaveAttribute('data-queue-item-id', queueId!)
-  const running = page.locator('.ov-execution').filter({ has: page.locator('.status-running') }).first()
+  await expect(desk.locator('.ov-queue')).toHaveCount(0)
+  const runningId = await page.locator('.ov-execution').filter({ has: page.locator('.status-running') }).first().getAttribute('data-entity-id')
+  const running = page.locator(`.ov-execution[data-entity-id=${JSON.stringify(runningId)}]`).first()
   await expect(running).toHaveCSS('opacity', '1')
   await page.getByRole('button', { name: 'Close Inspector' }).click()
   await expect(task).toBeFocused()
   await selectAdvanced(page, 'Outer grouping', 'machine')
   expect(await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()).toEqual(fields)
-  // Expire the observations, preserving recorded execution status and legibility.
+  // Expired observations retain legibility without claiming current activity.
   await page.clock.fastForward(61_001)
-  await expect(running.locator('.status-running')).toBeVisible()
+  await expect(running.locator('.ov-worker-status')).toHaveText('Home unreachable')
   await expect(running.locator('.ov-freshness')).toHaveAttribute('aria-label', 'Last known observation')
   await inspectEntity(page, running)
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Latest activity')
-  await expect(desk.getByLabel('Desk queue')).toBeVisible()
+  await expect(desk.locator('.ov-queue')).toHaveCount(0)
   await expect(running).toHaveCSS('opacity', '1')
   await page.keyboard.press('Escape')
   await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
@@ -309,7 +315,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   if (mobile) await page.emulateMedia({ reducedMotion: 'reduce' })
   const scene = fixtureScene({ now, size: 120 }), mutations: string[] = []
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
   await page.goto(base)
@@ -326,10 +332,10 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   await expect(task).toHaveCount(0)
   const saved = await page.evaluate(() => localStorage.getItem('tinstar.floor.preferences'))
   await page.locator('.ov-workspace').evaluate(el => { el.scrollTop = el.scrollHeight })
-  if (mobile) await page.locator('.ov-mobile-desk').click()
-  const desk = page.getByRole('complementary', { name: 'Your desk', includeHidden: true })
-  const queueId = await desk.locator('.ov-queue').getAttribute('data-queue-item-id')
-  const deskCard = desk.locator(`[data-desk-card-id="${fixtureId(1)}"]`).first()
+  await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  const decision = page.locator(`.decisions-row[data-card-id="${fixtureId(1)}"]`).first()
+  await decision.click()
+  const deskCard = page.getByRole('button', { name: 'Open related work' })
   await deskCard.focus()
   await page.keyboard.press('Enter')
   await expect(task).toHaveCount(2)
@@ -337,7 +343,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   await expect(task.first()).toHaveClass(/desk-target/)
   await expect(task.first()).toHaveClass(/flashed/)
   await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
-  await expect(desk.locator('.ov-queue')).toHaveAttribute('data-queue-item-id', queueId!)
+  await expect(page.getByLabel('Selected decision')).toHaveCount(0)
   await expect(page.locator('.ov-line.desk-target')).toHaveCount(2)
   await expect(page.locator('.ov-execution.desk-target')).toHaveCount(2)
   await expectAdvanced(page, 'Status preset', 'custom')
@@ -353,31 +359,28 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
 })
 
 
-test('Coming up card removed by scene refresh links its own source without writes', async ({ page }) => {
+test('a decision whose card leaves the scene retains its source link without writes', async ({ page }) => {
   const now = Date.parse('2026-11-04T17:00:00Z')
   await page.clock.install({ time: now })
   const scene = fixtureScene({ now })
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   const mutations: string[] = []
+  let sceneReads = 0
   page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => { sceneReads++; return route.fulfill({ json: { ok: true, data: scene } }) })
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
-  await page.goto(base)
-  const desk = page.getByLabel('Desk queue')
-  await expect(desk.getByRole('heading', { name: 'Coming up' })).toBeVisible()
-  const next = desk.locator('h4').filter({ hasText: 'Coming up' }).locator('xpath=following-sibling::div').first().locator('[data-desk-card-id]')
-  const id = await next.getAttribute('data-desk-card-id')
+  await page.goto(`${base}/?view=decisions`)
+  const row = page.locator('.decisions-row[data-card-id]').first()
+  const id = await row.getAttribute('data-card-id')
   expect(id).toBeTruthy()
-  const queueId = await desk.getAttribute('data-queue-item-id')
   scene.cards = scene.cards.filter(card => card.id !== id)
-  await page.clock.fastForward(20_001)
-  await expect(page.locator(`.ov-card[data-entity-id="${id}"]`)).toHaveCount(0)
-  await next.click()
-  const notice = desk.getByRole('status')
-  await expect(notice).toContainText('not on the floor right now')
-  await expect(notice.getByRole('link', { name: 'Read source card' })).toHaveAttribute('href', `https://www.notion.so/${id}`)
-  await expect(desk).toHaveAttribute('data-queue-item-id', queueId!)
-  await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
+  const beforeRefresh = sceneReads
+  // useFloorScene polls the active Decisions surface every thirty seconds.
+  await page.clock.fastForward(30_001)
+  await expect.poll(() => sceneReads).toBeGreaterThan(beforeRefresh)
+  await row.click()
+  await expect(page.getByLabel('Selected decision').getByRole('link', { name: 'Read Notion card' })).toHaveAttribute('href', `https://www.notion.so/${id}`)
+  await expect(page.getByRole('button', { name: 'Open related work' })).toHaveCount(0)
   expect(mutations).toEqual([])
 })
 
@@ -395,7 +398,7 @@ test('approved floor structure: select breadcrumbs, band counts, card positions 
     card.source.properties.Epic = { id: 'epic', type: 'select', hasMore: false, value: 'Readability' }
     card.source.properties.Priority = { id: 'priority', type: 'select', hasMore: false, value: 'High' }
   }
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await selectAdvanced(page, 'Outer grouping', 'initiative')
   await selectAdvanced(page, 'Inner grouping', 'status')
@@ -456,7 +459,7 @@ test('worker Order drives task barycenters with many-to-many relationships in bo
   scene.claims.push({ ...first, id: 'additional-task', cardId: fixtureId(6) })
   for (const [id, hour] of [[1, 12], [4, 13], [6, 14]]) scene.cards.find(c => c.id === fixtureId(id!))!.source.properties['Next check-in'] = { id: 'check', type: 'date', hasMore: false, value: { start: `2026-11-04T${hour}:00:00Z` } }
   scene.executions.find(w => w.identity.task_id === 'untracked-worker')!.source.last_event.age_seconds = 0
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await selectAdvanced(page, 'Outer grouping', 'none')
   await selectAdvanced(page, 'Inner grouping', 'none')
@@ -486,7 +489,7 @@ test('Notion declarations draw confirmed edges without worker-side assignment me
   expect(linked).toHaveLength(2)
   expect(linked.every(c => c.sources.length === 1 && c.sources[0] === 'notion.First Mate tasks')).toBe(true)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { items: [], sources: [] } } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
@@ -505,7 +508,7 @@ test('Ultra Compact density, canonical fan-out, keyboard, geometry and reload pe
   const now = Date.now(), scene = fixtureScene({ now })
   const first = scene.claims.find(c => c.cardId === fixtureId(1))!
   scene.claims.push({ ...first, id: 'ui-second-direct-task', cardId: fixtureId(6) })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.goto(base)
   await clickAdvanced(page, 'Ultra Compact')
   const workerId = scene.executions.find(w => w.identity.task_id === 'linked-worker')!.id
@@ -561,14 +564,18 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   const first = scene.claims.find(c => c.cardId === fixtureId(1))!
   scene.claims.push({ ...first, id: 'toolbar-fanout', cardId: fixtureId(6) }, { ...first, id: 'repeated-evidence' })
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   const toolbar = page.getByRole('toolbar', { name: 'Arrange work' })
   await expect(toolbar).toBeVisible()
   expect((await toolbar.boundingBox())!.height).toBe(48)
-  expect((await page.locator('.ov-headings').boundingBox())!.y).toBe((await toolbar.boundingBox())!.y + 48)
+  const createWork = page.locator('.ov-create-work')
+  await expect(createWork).toBeVisible()
+  const toolbarBox = (await toolbar.boundingBox())!, createBox = (await createWork.boundingBox())!
+  expect(createBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
+  expect((await page.locator('.ov-headings').boundingBox())!.y).toBeGreaterThanOrEqual(createBox.y + createBox.height)
   await expect(page.locator('.ov-top,.ov-intro')).toHaveCount(0)
   await expect(page.getByLabel('Outer grouping')).toHaveCount(0)
   const cardIds = () => page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')).sort())
@@ -635,7 +642,7 @@ test('single-row toolbar Smart Search ranks, filters one-hop clusters and restor
   await page.clock.install({ time: proofNow })
   const scene = fixtureScene({ now: proofNow, size: 143 })
   scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Name!.value = 'Release Coordinator'
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.addInitScript(() => localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'machine', inner: 'none', order: 'operational', direction: 'asc' } })))
   await page.goto(base)
@@ -695,7 +702,7 @@ test('single-row toolbar Smart Search exact identifiers, named entities and expl
   const card = scene.cards.find(card => card.id === fixtureId(2))!
   card.source.properties.Initiative = { id: 'initiative', type: 'relation', value: ['explicit'], hasMore: false }
   card.source.properties['Will action'] = { id: 'will', type: 'multi_select', value: ['Decision', 'Merge'], hasMore: false }
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   await expect(page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true })).toBeVisible()
@@ -735,7 +742,7 @@ for (const width of [1440, 390]) test(`single-row toolbar Pattern Dial readiness
   const proofNow = Date.parse('2026-11-09T16:00:00Z')
   await page.clock.install({ time: proofNow })
   let scene = fixtureReadinessScene({ now: proofNow })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   const center = page.locator('.ov-pattern-selected')
@@ -771,7 +778,7 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   const proofNow = Date.parse('2026-11-06T00:00:00Z')
   await page.clock.install({ time: proofNow })
   const scene = fixtureScene({ now: proofNow })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   await page.getByRole('button', { name: 'Smart Search (Ctrl or Command K)', exact: true }).click()
@@ -804,17 +811,18 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   await center.press('Escape')
   await expect(page.getByRole('tooltip')).toHaveCount(0); await expect(center).toContainText('Blocked')
   await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
-  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
   await expect(center).toContainText('Needs me')
+  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
+  await expect(center).toContainText('Unstaffed')
   const box = (await center.boundingBox())!, client = await page.context().newCDPSession(page)
   const touch = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] })
   await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...touch, x: touch.x + 55 }] })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   await client.detach()
-  await expect(center).toContainText('Blocked')
+  await expect(center).toContainText('Needs me')
   await dial.dispatchEvent('wheel', { deltaX: 0, deltaY: 100 })
-  await expect(center).toContainText('Blocked')
+  await expect(center).toContainText('Unstaffed')
   await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
   await expect(page.locator('.ov-donut')).toHaveCount(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
@@ -828,7 +836,7 @@ for (const width of [1440, 390]) {
     source.source.properties['Next check-in'] = { id: 'check', type: 'date', value: { start: '2026-11-01T12:00:00Z' }, hasMore: false }
     source.source.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: 'Reviewer capacity', hasMore: false }
     await page.addInitScript(() => localStorage.setItem('tinstar.overview.density', 'compact'))
-    await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+    await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
     await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { items: [], generatedAt: scene.generatedAt } } }))
     await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
     const submitted: Array<Record<string, unknown>> = []
@@ -899,22 +907,22 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('dialog')).toHaveCount(0)
     expect(submitted).toMatchObject([{ card_id: fixtureId(1), question: 'Why is this waiting?' }])
     await page.reload()
-    if (width === 390) await page.getByRole('button', { name: 'Your desk', exact: true }).click()
-    const desk = page.getByLabel('Your desk', { exact: true })
+    if (width === 390) await page.getByRole('button', { name: /^Open Discuss,/ }).click()
+    const desk = page.getByLabel('Discuss', { exact: true })
     await expect(desk.getByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
     await expect(desk.getByText('The reviewer is preparing the next pass.')).toBeVisible()
     for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) await expect(desk.getByText(text, { exact: true })).toHaveCount(0)
-    await expect(desk.getByRole('button', { name: 'Dismiss to history' })).toBeHidden()
+    await expect(desk.getByRole('button', { name: 'Archive conversation' })).toBeVisible()
     await desk.getByRole('button', { name: /New answer.*Why is this waiting/ }).click()
     await expect(card).toHaveClass(/flashed/)
-    await expect(page.getByRole('dialog')).toContainText('The reviewer is preparing the next pass.')
+    await expect(desk.locator('.ask-thread')).toContainText('The reviewer is preparing the next pass.')
   })
 }
 
 test('mobile successive search results release history ownership without leaving Overview', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const scene = fixtureScene({ now: Date.now() })
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   await expect(page.locator('.ov')).toBeVisible()
@@ -933,13 +941,14 @@ test('mobile successive search results release history ownership without leaving
   await choose('Roadmap: planned integration')
   await page.goBack()
   await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => history.state)).toEqual({ sentinel: 'overview-baseline' })
+  const restoredHistory = () => page.evaluate(() => ({ sentinel: history.state?.sentinel, search: history.state?.tinstarSearch ?? null }))
+  await expect.poll(restoredHistory).toEqual({ sentinel: 'overview-baseline', search: null })
   await choose('Waiting for input')
   const clear = page.getByRole('button', { name: 'Clear search focus', exact: true })
   await clear.scrollIntoViewIfNeeded()
   await clear.click()
   await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => history.state)).toEqual({ sentinel: 'overview-baseline' })
+  await expect.poll(restoredHistory).toEqual({ sentinel: 'overview-baseline', search: null })
   await expect(page.locator('.ov')).toBeVisible()
   expect(page.url()).toBe(originalUrl)
   expect(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-entity-id')))).toEqual(beforeCards)
@@ -954,7 +963,7 @@ for (const density of ['compact', 'detailed']) test(`card worker facts and one u
   await page.clock.install({ time: now })
   const sources = fixtureSources({ now })
   let scene = new SceneReconciler().reconcile(sources, now)
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   const card = (n: number) => page.locator(`.ov-card[data-entity-id="${fixtureId(n)}"]`)

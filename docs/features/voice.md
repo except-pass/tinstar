@@ -1,6 +1,6 @@
 # Local voice questions
 
-The same First Mate composer appears in Desk threads, the Overview Inspector
+The same First Mate composer appears in Discuss threads, the Overview Inspector
 (cards, workers and connections), worker terminal details, PR details and Releases details. Compact rows
 keep their existing Ask icons, semantic right-click and swipe gestures. Typed
 questions use Enter to send and Shift+Enter for a newline.
@@ -16,7 +16,7 @@ The browser selects the first supported format from WebM/Opus, MP4 and
 Ogg/Opus, falling back to its default recording format.
 
 Transcribed speech is appended to the existing draft and automatically sent as
-an ordinary question through the existing idempotent Ask protocol. In a Desk
+an ordinary question through the existing idempotent Ask protocol. In a Discuss
 thread it retains that conversation and previous-turn context. The transcript
 appears in history; if sending fails it stays editable in the composer and Send
 retries the exact same request. If transcription fails or times out, the draft
@@ -99,7 +99,7 @@ Existing conversation/action/reply tests continue to cover bridge correlation,
 idempotency, immutable replies, old records and bounded history.
 
 Firstmate owns post-deploy real iPhone Safari/Android Chrome and First Mate
-reply proof: record a pronoun-dependent follow-up in an existing Desk thread;
+reply proof: record a pronoun-dependent follow-up in an existing Discuss thread;
 check the actual delivered envelope and reply, stable conversation ID/history
 across reload/device/section changes; test hold/tap/cancel/denial/airplane mode,
 keyboard visible at 390px, reduced motion and return-to-source. Screenshots and

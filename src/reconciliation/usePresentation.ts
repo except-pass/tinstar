@@ -7,8 +7,10 @@ import type { CommandResult, ViewCommand } from '../shared/reconciliationCommand
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true, decisionsActive = false, queueReadFailed = false) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true, decisionsActive = false, queueReadFailed = false, onNavigation?: (action: PresentationAction) => void) {
   const [state, setState] = useState(loadPresentationPreferences)
+  const navigate = useRef(onNavigation)
+  navigate.current = onNavigation
   const [connection, setConnection] = useState<{ scene_id: string } | null>(null)
   const [bridgeError, setBridgeError] = useState(false)
   const readFailure = useRef(readFailed)
@@ -33,6 +35,9 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     const applied = applyPresentationAction(current.current, action, latestScene.current, Date.now(), latestQueue.current)
     current.current = applied.state
     setState(applied.state)
+    // Manual and MCP navigation must reveal the same surface before the ack.
+    // Repeated commands also reopen a previously browsed canonical item.
+    if (applied.outcome === 'applied' && ['open-queue', 'navigate-queue', 'navigate-card', 'reveal-search'].includes(action.type)) navigate.current?.(action)
     return applied
   }, [])
   useEffect(() => {

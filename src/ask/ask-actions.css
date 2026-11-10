@@ -2,7 +2,7 @@
 .ask-recommendations a{color:#8ce5eb}
 .ask-recommendations [role="alert"]{color:#ffb4a8;margin:6px 0}
 .ask-action-choices{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
-.ask-recommendations .ask-action-choice{box-sizing:border-box;min-height:44px;max-width:100%;padding:8px 12px;border:1px solid #638995;border-radius:6px;background:#16323d;color:#d5f4f0;font:600 13px/1.4 system-ui;white-space:normal;text-align:left;overflow-wrap:anywhere;cursor:pointer}
+.ask-recommendations .ask-action-choice{box-sizing:border-box;min-height:44px;max-width:100%;padding:8px 12px;border:1px solid #638995;border-radius:6px;background:transparent;color:#d5f4f0;font:600 13px/1.4 system-ui;white-space:normal;text-align:left;overflow-wrap:anywhere;cursor:pointer}
 .ask-recommendations .ask-action-choice:hover:enabled{background:#204650;border-color:#8ce5eb}
 .ask-recommendations .ask-action-choice:disabled{opacity:.6;cursor:default}
 .ask-recommendations :focus-visible{outline:2px solid #00f0ff;outline-offset:2px}
@@ -12,3 +12,6 @@
 .ask-recommendations .ask-action-explanation{color:#a2bdc8;font-size:12px;margin:6px 0}
 .ask-action-selection p{margin:6px 0}
 .ask-action-legacy{margin:6px 0;padding-left:20px}
+
+
+.ask-recommendations>.ask-action-choices>.ask-action-choice:first-child{background:#16434b;border-color:#6dabb3}

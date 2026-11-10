@@ -22,7 +22,7 @@ describe('Decisions', () => {
     const { container } = render(<Decisions />)
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Roadmap' } })
     const row = container.querySelector<HTMLButtonElement>(`[data-card-id="${fixtureId(5)}"]`)!
-    expect(row).toHaveTextContent('Future or conditional')
+    expect(row).toHaveTextContent('Waiting on a prerequisite')
     fireEvent.click(row)
     expect(workspace.value.send).toHaveBeenCalledWith({ type: 'focus', target: { kind: 'card', id: fixtureId(5) }, origin: 'manual' })
     expect(container.querySelector('[data-presentation-scene]')).toHaveAttribute('data-scene-id', 'same-window')
@@ -61,7 +61,8 @@ describe('Decisions', () => {
     workspace.value.scene = scene
     state.selection = { kind: 'card', id: fixtureId(5) }
     const view = render(<Decisions />)
-    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Next action not published')
+    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Roadmap: planned integration')
+    expect(within(screen.getByLabelText('Selected decision')).queryByText('Will', { exact: true })).toBeNull()
     expect(view.container.querySelector('[data-card-id]')).not.toHaveTextContent('Will')
     state.selection = null
     view.rerender(<Decisions />)
@@ -110,8 +111,8 @@ describe('Decisions', () => {
     queue.items = []
     workspace.value.queue = queue
     render(<Decisions />)
-    expect(screen.getByText(/Shared card focus is unavailable/)).toBeVisible()
-    expect(screen.getByText(/Source coverage is incomplete/)).toBeVisible()
+    expect(screen.getByText(/Shared card focus is unavailable/).closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByText(/Some evidence needs verification/)).toBeVisible()
   })
   it('shows unlinked request details without card focus or flash claims', () => {
     const queue = fixtureQueue()
@@ -119,19 +120,22 @@ describe('Decisions', () => {
     workspace.value.queue = queue
     const view = render(<Decisions />)
     fireEvent.click(screen.getByText('Choose a recovery path'))
-    expect(screen.getByText('No linked card; card focus and flash are unavailable.')).toBeVisible()
+    expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'hold:unlinked')
+    expect(workspace.value.send).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-card-id]')).toBeNull()
-    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Select a card')
+    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Choose a recovery path')
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'no match' } })
-    expect(screen.queryByText('Choose a recovery path')).toBeNull()
+    expect(within(screen.getByLabelText('Decision requests')).queryByText('Choose a recovery path')).toBeNull()
+    expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Choose a recovery path')
   })
   it('disables focus for a queued card absent from the source scene', () => {
     const scene = fixtureScene()
     scene.cards = scene.cards.filter(card => card.id !== fixtureId(5))
     workspace.value.scene = scene
     const view = render(<Decisions />)
-    expect(view.container.querySelector(`[data-card-id="${fixtureId(5)}"]`)).toBeDisabled()
-    expect(screen.getByRole('link', { name: /Read source card/ })).toBeVisible()
+    fireEvent.click(view.container.querySelector(`[data-card-id="${fixtureId(5)}"]`)!)
+    expect(workspace.value.send).not.toHaveBeenCalled()
+    expect(screen.getByRole('link', { name: /Read Notion card/ })).toBeVisible()
   })
 })
 describe('Decisions presentation acknowledgment', () => {
@@ -154,7 +158,8 @@ it('uses the shared Needs Will projection and shows advisory unknowns and honest
   queue.operationalExceptions = [{ cardId: fixtureId(1), title: 'Slow source card', state: 'unknown', reasons: ['Linked home snapshot expired'], sources: [] }]
   workspace.value.queue = queue
   render(<Decisions />)
-  expect(screen.getByText('Request age unknown')).toBeInTheDocument()
+  fireEvent.click(document.querySelector('.decisions-row')!)
+  expect(screen.getByText('Request age unknown').closest('details')).not.toHaveAttribute('open')
   expect(screen.getByText(/PR opened 2026-11-01.*not request age/)).toBeInTheDocument()
   expect(screen.getByText('Execution unknown')).toBeInTheDocument()
   expect(screen.getByText('Linked home snapshot expired')).toBeInTheDocument()
@@ -196,4 +201,28 @@ it('keeps sibling proposal choices enabled and replaces saved status with refres
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Answer B' })) })
   expect(screen.getByRole('button', { name: 'Answer B' })).toBeDisabled()
   expect(screen.getByLabelText('Selected decision').querySelectorAll('[role="status"]')).toHaveLength(1)
+})
+
+it('keeps multi-card requests canonical and removes the same resolved decision after the shared queue refresh', () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, cardIds: [fixtureId(1), fixtureId(5)] }
+  queue.items = [item]
+  workspace.value.queue = queue
+  const view = render(<Decisions />)
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(1)
+  fireEvent.click(view.container.querySelector('.decisions-row')!)
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', item.id)
+  workspace.value.queue = { ...queue, items: [] }
+  view.rerender(<Decisions />)
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(0)
+  expect(screen.queryByLabelText('Selected decision')).toBeNull()
+})
+it('keeps coordination bundles in diagnostics rather than presenting one omnibus decision', () => {
+  const queue = fixtureQueue()
+  queue.items = [{ ...queue.items[0]!, title: 'Owner calls via main: bus restore, tariff route, designer restart timing' }]
+  workspace.value.queue = queue
+  const view = render(<Decisions />)
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(0)
+  const note = screen.getByText(/Owner calls via main/)
+  expect(note.closest('details')).not.toHaveAttribute('open')
+  expect(screen.getByText(/Some requests need verification/)).toBeVisible()
 })

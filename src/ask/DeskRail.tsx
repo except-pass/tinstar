@@ -3,7 +3,7 @@ import { clampDeskWidth, defaultDeskWidth, deskWidthLimit, loadDeskPreferences, 
 import './desk.css'
 
 export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, children }: {
-  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose: () => void; children: ReactNode
+  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose?: () => void; children: ReactNode
 }) {
   const [preferences, setPreferences] = useState(loadDeskPreferences)
   const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width:850px)').matches ?? false)
@@ -37,14 +37,14 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
   const close = () => {
     if (narrow) setMobileOpen(false)
     else setPreferences(value => ({ ...value, collapsed: true }))
-    trigger.current?.focus({ preventScroll: true }); onClose()
+    trigger.current?.focus({ preventScroll: true }); onClose?.()
   }
   const changeWidth = (next: number) => setPreferences(value => ({ ...value, width: clampDeskWidth(next, available) }))
   const countLabel = `${unread} unread answers, ${attention} need attention`
   return <div ref={host} className={`desk-host${narrow ? ' is-narrow' : ''}${visible ? ' is-open' : ' is-closed'}`} style={{ '--desk-width': `${width}px` } as React.CSSProperties}>
-    <button ref={trigger} type="button" className="desk-trigger" aria-controls="global-desk" aria-expanded={visible} aria-label={`Open Your desk, ${countLabel}`} onClick={() => { if (narrow) setMobileOpen(true); else open() }}>Your desk{unread + attention > 0 && <span aria-hidden="true">{unread + attention}</span>}</button>
-    {narrow && visible && <button className="desk-backdrop" type="button" aria-label="Close Your desk" onClick={close} />}
-    <div className="desk-divider" hidden={narrow || !visible} role="separator" tabIndex={0} aria-label="Resize Your desk" aria-orientation="vertical" aria-controls="global-desk" aria-valuemin={minimumDeskWidth} aria-valuemax={Math.floor(deskWidthLimit(available))} aria-valuenow={Math.round(width)} aria-valuetext={`${Math.round(width)} pixels`} onDoubleClick={() => changeWidth(defaultDeskWidth)} onKeyDown={event => {
+    <button ref={trigger} type="button" className="desk-trigger" aria-controls="global-desk" aria-expanded={visible} aria-label={`Open Discuss, ${countLabel}`} onClick={() => { if (narrow) setMobileOpen(true); else open() }}>Discuss{unread + attention > 0 && <span aria-hidden="true">{unread + attention}</span>}</button>
+    {narrow && visible && <button className="desk-backdrop" type="button" aria-label="Close Discuss" onClick={close} />}
+    <div className="desk-divider" hidden={narrow || !visible} role="separator" tabIndex={0} aria-label="Resize Discuss" aria-orientation="vertical" aria-controls="global-desk" aria-valuemin={minimumDeskWidth} aria-valuemax={Math.floor(deskWidthLimit(available))} aria-valuenow={Math.round(width)} aria-valuetext={`${Math.round(width)} pixels`} onDoubleClick={() => changeWidth(defaultDeskWidth)} onKeyDown={event => {
       const next = event.key === 'ArrowLeft' ? width + 16 : event.key === 'ArrowRight' ? width - 16 : event.key === 'Home' ? minimumDeskWidth : event.key === 'End' ? deskWidthLimit(available) : null
       if (next !== null) { event.preventDefault(); changeWidth(next) }
     }} onPointerDown={event => {
@@ -56,7 +56,7 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
       drag.current = null
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
     }} onPointerCancel={() => { drag.current = null }} onLostPointerCapture={() => { drag.current = null }} />
-    <aside id="global-desk" ref={panel} className="global-desk ov-desk" hidden={!visible} role={narrow ? 'dialog' : undefined} aria-modal={narrow && visible ? true : undefined} aria-label="Your desk" onKeyDown={event => {
+    <aside id="global-desk" ref={panel} className="global-desk" hidden={!visible} role={narrow ? 'dialog' : undefined} aria-modal={narrow && visible ? true : undefined} aria-label="Discuss" onKeyDown={event => {
       if (!narrow) return
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
       if (event.key === 'Tab') {
@@ -66,7 +66,7 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
       }
     }}>
-      <header><h2>Desk</h2><button ref={closeButton} type="button" className="desk-collapse" aria-label={narrow ? 'Close Your desk' : 'Collapse Your desk'} onClick={close}>{narrow ? 'Close' : '−'}</button></header>{children}
+      <header><h2>Discuss</h2><button ref={closeButton} type="button" className="desk-collapse" aria-label={narrow ? 'Close Discuss' : 'Collapse Discuss'} onClick={close}>{narrow ? 'Close' : '−'}</button></header>{children}
     </aside>
   </div>
 }

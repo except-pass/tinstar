@@ -288,7 +288,7 @@ export function buildJanitorReport(input: AuditInput, options: AuditOptions = {}
       }), proposedAction: 'Retain these related cards separately; verify their cited scope boundaries before any future cleanup' })),
     baseline: { openDecisionCandidates: queue.items.length, decisionReadiness: Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional']
       .map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length])),
-      note: 'Existing Desk queue projection only; no GitHub readiness refresh, new Desk items, reminders or authoritative PM verdicts' },
+      note: 'Existing decision queue projection only; no GitHub readiness refresh, new decisions, reminders or authoritative PM verdicts' },
     counts: { total: unique.length, bySeverity: { info: unique.filter(p => p.severity === 'info').length, warning: unique.filter(p => p.severity === 'warning').length } }, metrics,
   }
 }

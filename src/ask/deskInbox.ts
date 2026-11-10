@@ -1,3 +1,4 @@
+import { displayRequestText } from '../shared/requestText'
 import type { AskItem } from '../shared/ask'
 
 // A saved note can be delivered while waking First Mate explicitly failed.
@@ -29,4 +30,13 @@ export function deskConversations(items: AskItem[]) {
 
 export function answerStatus(item: AskItem) {
   return item.reply ? item.read_at ? 'Answered' : 'New answer' : deliveryFailed(item) ? 'Delivery failed' : 'Waiting for answer'
+}
+
+/** Prefer the newest human question over a selection instruction. Action-only
+ * legacy conversations use First Mate's retained summary or action label. */
+export function conversationTitle(turns: AskItem[]) {
+  const latest = turns.at(-1)!
+  const question = [...turns].reverse().find(turn => !turn.action_selection)
+  const title = question?.question ?? latest.reply?.summary ?? latest.action_selection?.label ?? latest.question
+  return displayRequestText(title, 'Conversation with First Mate')
 }

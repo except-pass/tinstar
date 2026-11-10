@@ -22,7 +22,7 @@ export interface AskActionsProps {
   selection?: AskActionSelectionState | null
   onSelect: (input: AskSelectionInput) => Promise<AskActionDelivery>
 }
-const statusLabel = { sent: 'Requested', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' } as const
+const statusLabel = { sent: 'Requested', delivered: 'Delivered', answered: 'Result received', failed: 'Failed' } as const
 interface Attempt { input: AskSelectionInput; delivery?: AskActionDelivery; uncertain?: boolean; rejection?: string }
 interface MergeClick { actionId: string; sending?: boolean; error?: string; sent?: SuggestedMergeCard }
 
@@ -94,11 +94,11 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect 
     {!!legacy.length && <ul className="ask-action-legacy">{legacy.map((text, index) => <li key={index}>{text}</li>)}</ul>}
     {superseded && !!actions.length && <p className="ask-action-explanation">These recommendations are outdated. Use the latest answer’s choices.</p>}
     {merge?.sending && <p role="status">Checking the PR and sending…</p>}
-    {merge?.error && <p role="alert">{merge.error}</p>}
+    {merge?.error && <><p role="alert">Merge request unconfirmed. Retry this choice.</p><details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{merge.error}</p></details></>}
     {merge?.sent && <p role="status">{merge.sent.message} <a href={merge.sent.url} target="_blank" rel="noreferrer">Open Clawson card ↗</a></p>}
     {selected && <div className="ask-action-selection">
-      <p>Selected: {selected.instruction}</p>
-      <p role="status">{delivery ? statusLabel[delivery.status] : attempt?.rejection ? `Selection not requested: ${attempt.rejection}` : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}{delivery?.error ? ` — ${delivery.error}` : ''}</p>
+      <p role="status">{delivery ? statusLabel[delivery.status] : attempt?.rejection ? 'Blocked · Request unavailable' : uncertain ? 'Delivery unconfirmed. Retry this selection to check the same request.' : 'Sending selection…'}</p>
+      {(attempt?.rejection || delivery?.error) && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{attempt?.rejection ?? delivery?.error}</p></details>}
       {delivery?.status === 'answered' && <p className="ask-action-explanation">First Mate replied in this conversation. Read the reply for the outcome.</p>}
       {uncertain && !superseded && <button type="button" className="ask-action-choice" onClick={() => { void select(selected) }}>Retry same selection</button>}
     </div>}

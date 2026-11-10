@@ -142,9 +142,10 @@ for (const kind of ['keyed', 'held-work'] as const) test(`Desk is read-only for 
   try {
     await installDeskAttention(page, base)
     await page.goto(base)
-    const desk = page.getByLabel('Desk queue')
-    await expect(desk.getByRole('heading', { level: 3 })).toBeVisible()
-    await desk.getByText('First Mate request · 1', { exact: true }).click()
+    await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+    await page.locator('.decisions-row').first().click()
+    const desk = page.getByLabel('Selected decision')
+    await expect(desk.getByRole('heading', { level: 2 })).toBeVisible()
     await expect(desk.getByRole('link', { name: 'Open source terminal' })).toHaveAttribute('href', /worker=alpha/)
     await expect(desk.getByRole('textbox')).toHaveCount(0)
     await expect(desk.getByRole('slider')).toHaveCount(0)

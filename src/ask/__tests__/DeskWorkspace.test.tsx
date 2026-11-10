@@ -3,13 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
 import { Overview } from '../../reconciliation/Overview'
-import { DeskWorkspace } from '../DeskWorkspace'
+import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
 import { AskCardAction } from '../Ask'
 import { DeskRail } from '../DeskRail'
 import { clampDeskWidth, deskPreferencesKey, loadDeskPreferences } from '../deskPreferences'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
 import { askItemSchema } from '../../shared/ask'
-import { decisionItems } from '../../shared/reconciliationQueue'
 const source = vi.hoisted(() => ({ scene: null as unknown, queue: null as ReturnType<typeof fixtureQueue> | null, queueError: null as string | null }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: source.scene, error: null, now: Date.now() }) }))
 vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: source.queueError }) }))
@@ -45,51 +44,48 @@ const rail = (request = 0) => <DeskRail openRequest={request} unread={2} attenti
 describe('desk workspace', () => {
 it('has one compact header and one History control while retaining resize and collapse', async () => {
   render(<App />)
-  const desk = screen.getByLabelText('Your desk')
-  expect(within(desk).getByRole('heading', { name: 'Desk' })).toBeVisible()
-  expect(within(desk).getByRole('button', { name: 'Collapse Your desk' })).toBeVisible()
+  const desk = screen.getByLabelText('Discuss')
+  expect(within(desk).getByRole('heading', { name: 'Discuss' })).toBeVisible()
+  expect(within(desk).getByRole('button', { name: 'Collapse Discuss' })).toBeVisible()
   expect(within(desk).getAllByRole('button', { name: /^History/ })).toHaveLength(1)
   for (const label of ['Find worker', 'Message receipts', 'Ask First Mate', 'Reset Desk size']) expect(within(desk).queryByRole('button', { name: label })).toBeNull()
   expect(within(desk).queryByText('YOU / ONE INBOX')).toBeNull()
   expect(within(desk).queryByText('Desk size')).toBeNull()
-  expect(screen.getByRole('separator', { name: 'Resize Your desk' })).toBeVisible()
+  expect(screen.getByRole('separator', { name: 'Resize Discuss' })).toBeVisible()
   await act(async () => {})
 })
 
-it('counts threads once, keeps verified decisions ahead of a long Waiting inbox and never reads listed answers', async () => {
+it('counts only conversations, keeps decisions out of Discuss and never reads listed answers', async () => {
   const answer = { ...record(), status: 'answered' as const, reply: { summary: 'Ready to review', detail: 'Evidence', references: [], suggested_actions: [] } }
   const followUp = { ...record(), conversation_id: answer.conversation_id, question: 'A follow-up', created_at: '2099-01-01T00:00:00Z' }
   const archived = { ...record(), dismissed_at: new Date().toISOString() }
   items = [answer, followUp, archived, ...Array.from({ length: 45 }, (_, i) => ({ ...record(), question: `Pending question ${i}` }))]
   source.queue = fixtureQueue()
-  const decisions = decisionItems(source.queue).length
   render(<Shell />)
-  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
-  await waitFor(() => expect(within(tabs).getByRole('button', { name: `Needs you ${decisions + 1}` })).toHaveAttribute('aria-pressed', 'true'))
-  const queue = screen.getByRole('region', { name: 'Desk queue' })
-  expect(queue.compareDocumentPosition(screen.getByLabelText('Questions for First Mate')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const tabs = screen.getByRole('navigation', { name: 'Discuss views' })
+  await waitFor(() => expect(within(tabs).getByRole('button', { name: 'Needs you 1' })).toHaveAttribute('aria-pressed', 'true'))
+  expect(screen.queryByRole('region', { name: 'Decision queue' })).toBeNull()
   expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(1)
   expect(within(tabs).getByRole('button', { name: 'History 1' })).toBeVisible()
   fireEvent.click(within(tabs).getByRole('button', { name: 'Waiting 45' }))
-  expect(queue).not.toBeVisible()
   expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(45)
-  fireEvent.click(within(tabs).getByRole('button', { name: `Needs you ${decisions + 1}` }))
-  expect(screen.getByRole('region', { name: 'Desk queue' })).toBe(queue)
+  fireEvent.click(within(tabs).getByRole('button', { name: 'Needs you 1' }))
+  expect(screen.queryByRole('region', { name: 'Decision queue' })).toBeNull()
   expect(document.querySelectorAll('[data-ask-id]')).toHaveLength(1)
   expect(read.mock.calls.some(([url]) => /\/read$/.test(String(url)))).toBe(false)
   expect(items.map(item => item.read_at)).toEqual(items.map(() => null))
 })
 
-it('retains queue diagnostics without counting failed reads or expired evidence as ready decisions', async () => {
+it('keeps queue failures and expired evidence out of conversation counts', async () => {
   source.queue = fixtureQueue()
   const view = render(<Shell />)
-  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
+  const tabs = screen.getByRole('navigation', { name: 'Discuss views' })
   await act(async () => {})
   source.queueError = 'Queue source unavailable'
   view.rerender(<Shell />)
   expect(within(tabs).getByRole('button', { name: 'Needs you 0' })).toBeVisible()
   fireEvent.click(within(tabs).getByRole('button', { name: 'Needs you 0' }))
-  expect(screen.getByText('Requests could not refresh.')).toBeVisible()
+  expect(screen.queryByText('Requests could not refresh.')).toBeNull()
   expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
   source.queueError = null
   source.queue = { ...source.queue, items: source.queue.items.map(item => ({ ...item, sources: item.sources.map(s => ({ ...s, expiresAt: '2020-01-01T00:00:00Z' })) })) }
@@ -101,19 +97,19 @@ it('retains queue diagnostics without counting failed reads or expired evidence 
 it('keeps one inbox and a draft through all section switches and collapse/reopen', async () => {
   const view = render(<Shell />)
   await screen.findAllByText('Where is the evidence?')
-  const desk = screen.getByLabelText('Your desk')
+  const desk = screen.getByLabelText('Discuss')
   fireEvent.click(screen.getByRole('button', { name: 'Ask First Mate about this task' }))
   fireEvent.change(screen.getByRole('textbox', { name: 'Question' }), { target: { value: 'Draft kept while browsing' } })
   for (const page of ['decisions', 'releases', 'pulls', 'worker', 'overview']) {
     view.rerender(<Shell page={page} />)
-    expect(screen.getByLabelText('Your desk')).toBe(desk)
+    expect(screen.getByLabelText('Discuss')).toBe(desk)
     expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('Draft kept while browsing')
   }
   fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Collapse Your desk' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
   expect(desk).not.toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
-  expect(screen.getByLabelText('Your desk')).toBe(desk)
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
+  expect(screen.getByLabelText('Discuss')).toBe(desk)
   expect(within(desk).getAllByText('Where is the evidence?')).toHaveLength(2)
 })
 it('polls once per interval while independent answers arrive in another section', async () => {
@@ -150,12 +146,13 @@ it('shows retained questions before contextual sources become available', async 
   render(<Shell page="releases" />)
   expect(await screen.findAllByText('Where is the evidence?')).toHaveLength(2)
   fireEvent.click(screen.getByRole('button', { name: 'Ask First Mate about this task' }))
-  expect(screen.getByText(/Source context is unavailable/)).toHaveAttribute('role', 'status')
+  expect(screen.getByRole('status')).toHaveTextContent('Discuss is temporarily unavailable')
+  expect(screen.getByText(/Source context is unavailable/).closest('details')).not.toHaveAttribute('open')
 })
 it('restores desktop width/collapse across reload and allows accessible reset', () => {
   localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))
   const view = render(rail())
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '456')
   fireEvent.keyDown(screen.getByRole('separator'), { key: 'ArrowLeft' })
   expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '472')
@@ -183,15 +180,15 @@ it('uses the same mobile sheet subtree and preserves desktop collapse when openi
   Object.defineProperty(window, 'innerWidth', { value: 390 })
   localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))
   render(rail())
-  const trigger = screen.getByRole('button', { name: /Open Your desk, 2 unread answers, 1 need attention/ })
+  const trigger = screen.getByRole('button', { name: /Open Discuss, 2 unread answers, 1 need attention/ })
   fireEvent.click(trigger)
-  const sheet = screen.getByRole('dialog', { name: 'Your desk' })
-  expect(within(sheet).getByRole('button', { name: 'Close Your desk' })).toHaveFocus()
+  const sheet = screen.getByRole('dialog', { name: 'Discuss' })
+  expect(within(sheet).getByRole('button', { name: 'Close Discuss' })).toHaveFocus()
   fireEvent.keyDown(sheet, { key: 'Escape' })
   expect(sheet).not.toBeVisible(); expect(trigger).toHaveFocus()
   expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
   fireEvent.click(trigger)
-  expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(sheet)
+  expect(screen.getByRole('dialog', { name: 'Discuss' })).toBe(sheet)
 })
 it('handles invalid or unavailable browser preferences without preventing use', () => {
   localStorage.setItem(deskPreferencesKey, '{bad')
@@ -201,8 +198,8 @@ it('handles invalid or unavailable browser preferences without preventing use', 
   vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('restricted') })
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('restricted') })
   render(rail())
-  fireEvent.click(screen.getByRole('button', { name: 'Collapse Your desk' }))
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   expect(screen.getByRole('button', { name: 'Inbox item' })).toBeVisible()
 })
 
@@ -234,7 +231,7 @@ it.each(['Clear', 'Escape'])('restores search focus after section remount using 
   expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
   expect([...view.container.querySelectorAll('.ov-card')].map(element => element.getAttribute('data-entity-id'))).toEqual(before)
 })
-it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask and dismisses operational queue navigation on %s', async origin => {
+it.each(['ask', 'execution', 'claim'])('preserves mobile Desk for Ask and dismisses operational queue navigation on %s', async origin => {
   Object.defineProperty(window, 'innerWidth', { value: 390 })
   localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 456, collapsed: true }))
   source.queue = fixtureQueue()
@@ -245,18 +242,15 @@ it.each(['queue', 'ask', 'execution', 'claim'])('preserves mobile Desk for Ask a
   render(<NavigationShell />)
   await waitFor(() => expect(read.mock.calls.some(([url]) => url === '/api/ask/requests')).toBe(true))
   fireEvent.click(screen.getByRole('button', { name: 'Visit Releases' }))
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
-  const desk = screen.getByRole('dialog', { name: 'Your desk' })
-  if (origin !== 'queue') fireEvent.click(within(desk).getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
-  if (origin === 'queue') fireEvent.click(desk.querySelector<HTMLButtonElement>(`[data-desk-card-id="${fixtureId(1)}"]`)!)
-  else fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0]!)
-  if (origin === 'queue') expect(desk).not.toBeVisible()
-  else expect(desk).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
+  const desk = screen.getByRole('dialog', { name: 'Discuss' })
+  fireEvent.click(within(desk).getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
+  expect(desk.querySelector('[data-desk-card-id]')).toBeNull()
+  fireEvent.click(within(desk).getAllByText('Where is the evidence?')[0]!)
+  expect(desk).toBeVisible()
   expect(screen.getByRole('region', { name: 'Overview' })).toBeVisible()
   expect(loadDeskPreferences()).toEqual({ width: 456, collapsed: true })
-  if (origin === 'queue') fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
-  expect(screen.getByRole('dialog', { name: 'Your desk' })).toBe(desk)
-  if (origin === 'queue') fireEvent.click(within(desk).getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
+  expect(screen.getByRole('dialog', { name: 'Discuss' })).toBe(desk)
   expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2)
 })
 
@@ -328,11 +322,11 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
   const first = items[0]!
   items = [first, ...['Can it proceed?', 'Who reviews it?'].map((question, index) => ({ ...record(), conversation_id: first.conversation_id, question, created_at: `2099-01-0${index + 1}T00:00:00Z` }))]
   const view = render(<Shell />)
-  fireEvent.click(await screen.findByRole('button', { name: /^Waiting for answer.*Where is the evidence/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Waiting for answer.*Who reviews it/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
   fireEvent.change(field, { target: { value: 'What about that review?' } })
-  const tabs = screen.getByRole('navigation', { name: 'Desk views' })
+  const tabs = screen.getByRole('navigation', { name: 'Discuss views' })
   for (const tab of ['History', 'Needs you', 'Waiting']) {
     fireEvent.click(within(tabs).getByRole('button', { name: new RegExp(`^${tab} `) }))
     expect(screen.getByLabelText('Reply to First Mate', { selector: 'textarea' })).toBe(field)
@@ -351,3 +345,27 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
   expect(field).toHaveValue('What about that review?')
 })
 }, 30_000)
+
+
+it('routes each intentional decision navigation and keeps Discuss collapse independent of the decision pane', async () => {
+  source.queue = fixtureQueue()
+  function QueueProbe() {
+    const { send, state } = useDeskWorkspace()
+    return <><button onClick={() => send({ type: 'open-queue', itemId: source.queue!.items[0]!.id })}>Open decision</button><output aria-label="Decision pane open">{String(state.queueOpen)}</output></>
+  }
+  function Navigation() {
+    const [page, setPage] = useState('overview')
+    return <DeskWorkspace overviewActive={page === 'overview'} decisionsActive={page === 'decisions'} onOverview={() => setPage('overview')} onDecisions={() => setPage('decisions')} workers={[]} messages={[]} submit={vi.fn()}><main><span data-testid="page">{page}</span><button onClick={() => setPage('overview')}>Visit Overview</button><QueueProbe /></main></DeskWorkspace>
+  }
+  render(<Navigation />)
+  await act(async () => {})
+  fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
+  expect(screen.getByTestId('page')).toHaveTextContent('decisions')
+  expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
+  expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
+  fireEvent.click(screen.getByRole('button', { name: 'Visit Overview' }))
+  expect(screen.getByTestId('page')).toHaveTextContent('overview')
+  fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
+  expect(screen.getByTestId('page')).toHaveTextContent('decisions')
+})

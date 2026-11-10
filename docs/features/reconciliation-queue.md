@@ -4,7 +4,7 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-The default Desk and Next navigation show verified ready requests. Verification and conditional requests remain in the queue data and can be explicitly selected; the Desk does not render a secondary list or queue summary. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor: an owner-actionable hold whose ID exactly equals the decision key is required. If multiple tasks share that key, the hold must explicitly name the matching origin task. Task IDs, legacy aliases, matching text and card ownership never supply this routing.
+Decisions shows the existing canonical requests, with verification and conditional states kept visible. Default Next navigation includes only verified ready requests. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor: an owner-actionable hold whose ID exactly equals the decision key is required. If multiple tasks share that key, the hold must explicitly name the matching origin task. Task IDs, legacy aliases, matching text and card ownership never supply this routing.
 
 Each First Mate source has its own inspector, Answer/Dismiss controls (only while both the item and that source are ready and current), and existing worker terminal link. The link is emitted only when the existing resolver returns that exact full home/task identity. Unavailable or ambiguous targets show terminal unavailable. Notion sources open their own card and never acquire First Mate response controls.
 
@@ -26,7 +26,7 @@ Deduplication uses connected explicit identities only: exact scoped request iden
 
 ## Source limits and prerequisites
 
-The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls and receipt delivery remain unchanged; the Desk binds to them per source.
+The queue retains only the snapshot's published open-decision keys/summaries, hold kind/completion and task-origin ID. It does not return raw backlog bodies, briefs, pane transcripts or operator command suggestions. Existing worker/message/terminal controls and receipt delivery remain unchanged; Decisions binds to them per source.
 
 Notion's existing property reader additionally retains optional `Next action` / `Next Action` and `Evidence` properties **if already present**. It creates no properties or planning hierarchy. In the observed board these properties are absent: actions/evidence written only in page bodies remain uncollected by S4. Owner/Will-action/Waiting-For candidates therefore need verification unless corroborated by a current explicit First Mate request. That is an observed interface gap, not permission to infer readiness from a Merge tag. The response always discloses `cardBodies: not-collected`; on-demand card prose is available separately through [S5 card context](reconciliation-mcp.md#tools-and-authority) and does not feed queue readiness. PM Bot/human-owned card context cannot establish a ready First Mate request automatically.
 
@@ -52,7 +52,7 @@ The live discovery proof is saved outside the repository at `/home/farm/fm-home/
 ## Decisions tab
 
 `?view=decisions` lists the shared `needsWill` projection across all three
-readiness categories, including future/conditional requests. The Desk uses this
+readiness categories, including future/conditional requests. Decisions uses this
 same projection for request selection and ready navigation. See the
 [workflow view contract](workflow.md#slice-3-shared-operational-views-and-normal-use)
 for ask inclusion, PR evidence, request age and advisory execution warnings.

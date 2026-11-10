@@ -40,12 +40,12 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
     return <AskSurface as="div" subject={{ cardId: id }} key={id}><button type="button" className={`ov-desk-card${focused ? ' focused' : ''}`} key={id} data-desk-card-id={id} aria-current={state.navigation?.cardId === id ? 'true' : undefined} onClick={() => {
       if (scene && !card) { setUnavailable(id); return }
       setUnavailable(null); send({ type: 'navigate-card', cardId: id })
-    }}><small {...askElement('status', 'Desk readiness')}>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong {...askElement('title', 'Task')}>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small {...askElement('status')}>{cardStatus(card)}</small>}</button></AskSurface>
+    }}><small {...askElement('status', 'Decision readiness')}>{ready(item) ? item.kind === 'merge' ? 'Review' : 'Decision' : item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite' : 'Needs verification'}</small><strong {...askElement('title', 'Task')}>{card ? cardTitle(card) : requestText(item.title)}</strong>{card && <small {...askElement('status')}>{cardStatus(card)}</small>}</button></AskSurface>
   }) : <h3>{requestText(item.title)}</h3>
   const next = actionable.filter(item => item.id !== selected?.id)
-  return <section className="ov-queue" aria-label="Desk queue" data-queue-item-id={selected?.id ?? ''}>
+  return <section className="ov-queue" aria-label="Decision queue" data-queue-item-id={selected?.id ?? ''}>
     {unavailable && <p role="status">Card not on the floor right now. <a href={`https://www.notion.so/${encodeURIComponent(unavailable)}`} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
-    {cardId ? <AskSurface as="section" subject={{ cardId }}><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Your desk</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}</AskSurface> : <>
+    {cardId ? <AskSurface as="section" subject={{ cardId }}><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Decisions</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}</AskSurface> : <>
       {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{requestText(selected.title)}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
         {selected.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Read pull request' : e.kind === 'card' ? 'Read card' : 'Read evidence'} ↗</a>)}
@@ -77,7 +77,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
 
 /** The source anchor is resolved against the current explicit request inventory
  * by the existing fleet endpoints. A queue item id is never a response target. */
-function SourceActions({ source, submit }: { source: QueueSource; submit: (draft: Draft) => Promise<SubmitResult> }) {
+export function SourceActions({ source, submit }: { source: QueueSource; submit: (draft: Draft) => Promise<SubmitResult> }) {
   const anchor = source.responseAnchor!
   const [state, setState] = useState<'idle' | 'busy' | 'answered' | 'dismissed'>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -101,7 +101,7 @@ function SourceActions({ source, submit }: { source: QueueSource; submit: (draft
       inFlight.current = true; setState('busy'); setError(null)
       void apiFetch('/api/fleet/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: anchor }) })
         .then(res => res.json()).then(body => {
-          if (!body.ok || !body.data?.dismissed) throw new Error(body.error?.message ?? body.data?.error ?? 'Source request is no longer available. Refresh the Desk.')
+          if (!body.ok || !body.data?.dismissed) throw new Error(body.error?.message ?? body.data?.error ?? 'Source request is no longer available. Refresh Decisions.')
           setState('dismissed')
         }).catch(reason => { setError((reason as Error).message); setState('idle') }).finally(() => { inFlight.current = false })
     }} />

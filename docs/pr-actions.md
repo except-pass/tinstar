@@ -43,7 +43,7 @@ still enforces its incomplete-workload holds; completing it does not activate Me
 
 Select PRs with current captured head/base, inspect a candidate's source, manifest and
 tests, then explicitly install its immutable version. Custom creation uses the existing
-Desk Ask composer. Model replies cannot install, grant or invoke a privileged operation.
+Discuss Ask composer. Model replies cannot install, grant or invoke a privileged operation.
 Live installation happens in the broker's store, separately from simulation grants.
 Rollback selects a retained version with its own grants and keeps all receipts.
 

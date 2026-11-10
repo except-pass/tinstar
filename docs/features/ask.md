@@ -1,6 +1,6 @@
 # Ask First Mate
 
-Ask/Inspect and the persistent Desk share the existing owner-scoped request
+Ask/Inspect and the persistent Discuss share the existing owner-scoped request
 store and First Mate bridge.
 
 A left drag on a task, worker, or relationship opens a text composer for that
@@ -55,28 +55,27 @@ text selection native; an active selection prevents an
 item swipe from opening Ask or Inspector. Nested surfaces give the nearest
 item ownership of its swipe.
 
-Desk has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
+Discuss has one application-level owner in `src/ask/DeskWorkspace.tsx`, above
 Overview, Decisions, PRs, Releases and worker navigation. Section changes, rail collapse and
 mobile close keep the inbox, history, composer draft and answer selection mounted.
 The existing owner-scoped store, 5-second Ask refresh and First Mate bridge are
 unchanged. UI-command bridge availability follows the
 [MCP session contract](reconciliation-mcp.md#start-and-connect).
 
-Desktop Desk opens by default. Drag the visible divider to resize, or focus it
+Desktop Discuss opens by default. Drag the visible divider to resize, or focus it
 and use Left/Right (16px) and Home/End (bounds). Double-click the divider to
 restore the default width. Width and collapsed state persist per browser/device in
 `tinstar.desk.preferences`; unavailable storage uses usable defaults. Effective
 width clamps to the available workspace without erasing the preferred width.
-At 850px and below, a single global Desk button opens the same inbox in a sheet;
+At 850px and below, a single global Discuss button opens the same inbox in a sheet;
 mobile open/close does not change the remembered desktop preference. Unread
 answers and actionable/failed items remain counted on the collapsed entry.
-The header contains only **Desk** and collapse/close. PRs' Desk button opens this
+The compact header contains only **Discuss** and collapse/close. PRs' Discuss button opens this
 workspace directly. Source health remains an on-demand Overview view; worker
 switching stays available in worker detail.
 
 **Needs you**, **Waiting** and **History** provide one compact text control with
-conversation counts. Needs you shows verified actionable queue requests first,
-then unread answers, failed deliveries and retained answered conversations.
+conversation counts. Needs you shows unread answers, failed deliveries and retained answered conversations. Formal requests remain in Decisions and do not contribute to Discuss counts.
 Waiting contains questions whose latest turn has no answer, unless an unread
 answer or known failure still needs attention. History contains dismissed
 conversations and supports search across their questions, source names and answers.
@@ -87,7 +86,7 @@ Ordinary Ask copy is **Waiting for answer**, **New answer**, **Answered** or
 **Delivery failed**. Listing or counting an answer does not read it; intentionally
 opening its conversation uses the existing persisted read path. Opening an
 unanswered question shows the thread and delivery diagnostics. **Sent** and
-**Delivered** remain available in expanded **Delivery details**; only a true
+**Delivered** remain available in expanded **Technical details**; only a true
 failed delivery offers **Retry delivery**, using the same request ID.
 A delivered question waiting for an answer has no retry button. An open thread
 follows a reply/read transition between views without replacing its composer.
@@ -115,8 +114,8 @@ available on touch and becomes more prominent on hover or keyboard focus;
 left/right swipes retain their Ask/Inspector meanings.
 
 Opening an item reveals its originating context, switching sections when
-necessary, while retaining the conversation in Desk. Work items use existing
-[Desk navigation](overview.md); inline answers and return controls are described
+necessary, while retaining the conversation in Discuss. Work items use existing
+[Discuss navigation](overview.md); inline answers and return controls are described
 [below](#typed-artifact-origins-and-returns).
 Link items retain the exact claim ID, reveal its endpoints and scroll to its card;
 the flash targets that relationship, including unverified Detailed lines, rather
@@ -180,7 +179,7 @@ in PRs or Releases. Source removal, receipt replacement and changed PR heads hav
 visible fallback messages; source links remain available in the answer. Manual
 section navigation or clearing the origin ends pending focus.
 
-Desk returns to a PR with its captured query/sort intact, temporarily reveals,
+Discuss returns to a PR with its captured query/sort intact, temporarily reveals,
 expands and focuses the canonical row, and keeps the answer open. A closed PR
 is read individually through owner-only `GET /api/pulls/origin?url=…`; this does
 not add closed PRs to the open inventory. The same configured repository and
@@ -188,16 +187,16 @@ owned/authored/explicitly-associated relevance scope applies. Changed heads are
 labelled; failed or inaccessible reads retain the answer and original GitHub
 link. “Show all PRs in this view” removes only the temporary reveal.
 
-Answers expand inline in the persistent Desk, with neighboring conversation
+Answers expand inline in the persistent Discuss, with neighboring conversation
 previews still available in one click. Correlated follow-ups share one thread;
 collapse, history, unread status, dismiss, references and suggested actions retain
 the existing request/permission boundaries. See [continuous text conversations](#continuous-text-conversations)
 for the shared composer and inline reply behavior.
-On mobile, opening a conversation keeps the Desk sheet open; close it to see
+On mobile, opening a conversation keeps the Discuss sheet open; close it to see
 the revealed origin in the main workspace.
 
 Normal browser history entries store the previous section's query, sort, filters
-and grouping before a Desk jump. Back (or the thread's Back to previous view
+and grouping before a Discuss jump. Back (or the thread's Back to previous view
 control) restores those fields once source data is ready. Pending restoration
 cannot be overwritten by a departing loading view. Selection, collapsed groups,
 expanded rows, detail data and scroll positions are not restored across history.
@@ -231,7 +230,7 @@ unlisted logins fail closed. Ask rejects non-loopback browser API peers to preve
 remote direct clients from spoofing the header. Local OS users are inside the
 host trust boundary; do not expose the backend through an unauthenticated proxy
 that preserves a client-supplied header. CORS is not authentication. Tauri/direct
-local access without the trusted owner header cannot use this owner Desk.
+local access without the trusted owner header cannot use this owner Discuss.
 
 Browser requests require `X-Tinstar-UI: 1` in addition to owner identity. Any
 supplied Origin must be allowlisted; an absent Origin is accepted. No
@@ -346,9 +345,10 @@ the collection is dropped as a whole, creating no buttons and preventing an
 ambiguous recommendation from being promoted. Either omission
 cannot delay other answers in the installed puller. `reply.rejected_actions`
 records a reason for each omitted entry, with its index and string ID when
-available, or a collection-level reason when the field is not an array. Desk
-shows the answer and the valid buttons without rejection notices or validation
-errors. The stored reply and later conversation
+available, or a collection-level reason when the field is not an array. Discuss
+shows the answer and valid buttons without raw validation errors in the message.
+Technical details retains diagnostics; when no valid action survives, Request new choices
+prepares an editable follow-up. The stored reply and later conversation
 history keep the rejection details. Bridge POST receipts return the same
 details in `data.reply_warnings` (including on delivery retries), so pullers
 can surface them to First Mate. The published 6.0.0 puller ignores this extra field;
@@ -376,7 +376,7 @@ Automated proof runs the HTTP API and the executable puller with isolated homes,
 inbox/clavis stand-ins; it is adapter behavior proof, not a real primary answer.
 The full real proof requires the operator to install/configure the puller, an
 owner-authenticated question created through Tin Star, a primary-published reply,
-a second pass, and Desk return-to-context screenshots at one frozen commit.
+a second pass, and Discuss return-to-context screenshots at one frozen commit.
 Physical iPhone Safari/Android Chrome behavior must be documented separately
 when devices are available; simulated touch does not prove physical mic paths.
 
@@ -402,7 +402,7 @@ The remaining parent-card items are follow-up slices:
   Work, Worker or Link context.
 - Queued, Investigating and Needs input/decision lifecycle updates, progress and
   revision-aware delivery and priority for investigations beyond the current
-  Desk views described above.
+  Discuss views described above.
 - Richer reassignment, stale and inaccessible context handling beyond the
   current scene availability check and captured source-link fallback.
 - Full parent-card failure, permissions, accessibility and reduced-motion proof;
@@ -413,7 +413,7 @@ The remaining parent-card items are follow-up slices:
 
 `useElementAsk` and `askElement` in `src/ask/` provide one field contract for
 Overview cards (including expanded relationship hints and card/execution
-Inspector fields), PR rows/details, Releases rows/evidence, and Desk items
+Inspector fields), PR rows/details, Releases rows/evidence, and Discuss items
 including Card context text. Manager, group and First Mate Inspector selections
 do not expose element Ask. Existing `data-ask-field`
 markup works with the same hook. Right-click, Shift+F10, the Context Menu key,
@@ -430,18 +430,18 @@ The optional `element` metadata in the create/context schemas captures the
 displayed label (e.g. `Overdue 3d` plus the formatted check-in), value and
 deterministic question type. The authoritative shape and limits live in
 `askElementSchema` in `src/shared/ask.ts`. Existing `field_key` / `field_value`,
-server-owned item origins, bridge delivery, inline threads and Desk returns
+server-owned item origins, bridge delivery, inline threads and Discuss returns
 remain the same path. The sheet shows the captured element and an editable
 suggestion, using the composer keyboard controls described above.
 
 ## Continuous text conversations
 
-Expanded Desk conversations include a persistent **Reply to First Mate** field.
+Expanded Discuss conversations include a persistent **Reply to First Mate** field.
 It uses the same text composer as card, worker, relationship, PR and Release Ask
 entry: Enter sends, Shift+Enter adds a line, and composing with an IME does not
 send. Escape closes a new-question dialog; in an inline reply it returns focus
 to the conversation's collapse control and preserves the draft. Semantic Ask on
-Desk advice also replies in that conversation. Section switches preserve the
+Discuss advice also replies in that conversation. Section switches preserve the
 mounted thread and draft; server history survives reload and another browser.
 Microphone input uses this same conversation path; see [local voice](voice.md).
 
@@ -518,3 +518,31 @@ with an explanation that those recommendations are outdated.
 An unknown network acknowledgement offers a retry of the same selection/key;
 a definitive stale or conflicting selection reports the server's rejection.
 Existing delivery retry controls retain the selected request's note identity.
+
+
+## Discuss and Decisions presentation
+
+Discuss is the existing persistent conversation rail, renamed without changing Ask
+routes, storage keys, bridge correlation or permissions. Rows show status/time,
+the newest meaningful user question, source and one short answer preview. A thread
+orders individual user and First Mate messages by their timestamps; summaries
+that prefix the full answer are shown once. Markdown links remain links. Validated
+structured actions stay with the proposing answer and remain disabled after a
+superseding answer. Selection receipts report Requested, Delivered or Result
+received; First Mate's ordinary reply supplies the actual outcome.
+
+A latest reply whose actions failed validation shows **One-click action unavailable**
+and **Request new choices**, which prepares an editable follow-up in the same
+conversation. Validation reasons and raw request evidence live in **Technical
+details**. Existing legacy text suggestions remain inert. Old user messages quoting
+the former validator wall retain the full original under Technical details.
+
+Decisions retains the existing queue and canonical identities. It has one compact
+row per request, even when several cards support it. Evidence and existing response
+controls open in its detail pane; conditional and unverified requests display their
+limits before any action. Legacy encoded text is decoded before readiness checks,
+so a request beginning “After the next prod release” remains conditional. Aggregate
+“Owner calls via main” records remain operational coordination in diagnostics,
+with no omnibus acceptance. Source warnings and retained worker notes are
+available on demand near the footer. No new queue, approval engine, poller or
+model call is introduced.
