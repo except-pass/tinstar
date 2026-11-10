@@ -72,6 +72,7 @@ it('places finished and absent records in history rather than the current worker
   const tasks = sources.fleet[1]!.observation.data!.tasks
   tasks[0]!.lastEventText = 'paused [at=1]: waiting on CI'
   tasks[1]!.lastEventText = 'done [at=1]: finished but window open'
+  tasks[1]!.current_state.state = 'done'
   tasks[2]!.endpoint.exists = false
   observed.scene = new SceneReconciler().reconcile(sources)
   const { container } = mount()
@@ -291,5 +292,5 @@ it.each(['done', 'landed'])('shows a worker resumed after a recorded %s outcome'
   const worker = scene.executions.find(value => value.identity.task_id === task.id)!
   const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)
   expect(element).toBeDefined()
-  expect(element).toHaveTextContent('running')
+  expect(element).toHaveTextContent(/running/i)
 })

@@ -49,8 +49,8 @@ Escape closes the popover and restores its trigger's focus.
 
 The authoritative worker and card attention orders, exact source labels and
 unknown-state handling live in [`floorStatus.ts`](../../src/shared/floorStatus.ts).
-The worker projection preserves observation/event precedence and exposes additional
-publisher states only when otherwise unknown; history remains separate.
+The worker projection uses the [recorded worker evidence contract](codex-activity.md);
+history remains separate.
 Within the same status, Next check-in ascending, display
 name and canonical ID settle ties. Worker check-in ties use the earliest linked
 card checkpoint in that subdivision. In both densities and under every preset,
@@ -358,12 +358,9 @@ First Mate liveness reconciler. It returns canonical verified worker IDs/count,
 running/waiting/terminal/unknown counts, blockers, observation/coverage, explicit
 `null` for unavailable runnable/resolver evidence and unpublished progress time, and per-pattern
 `match`, `no-match` or `unavailable` plus concrete evidence and a reason. Null never means zero.
-Health uses the shared current-activity classification: fresh crew-state
-(`run-step`) and the [Codex turn fallback](codex-activity.md) from session logs.
-Pane-derived states are ignored, including apparently working or finished states.
-Status events date the last update and retain terminal outcomes; historical working
-verbs and endpoint existence do not prove current activity. The same evidence
-supplies floor chips and status categories; source details remain in diagnostics.
+Health, floor chips and status categories use the same
+[recorded worker evidence contract](codex-activity.md); source details remain in
+diagnostics.
 This feature implements no recovery, watchdog or scheduling behavior.
 
 The inspectable builtin definitions live in `patternDefinitions`:
