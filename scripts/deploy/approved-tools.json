@@ -1,18 +1,21 @@
 [
+  "create_work",
   "get_card_context",
   "get_command",
+  "get_pr",
   "get_queue",
+  "get_release_status",
   "get_scene",
   "get_work",
   "get_work_views",
   "get_worker_link_report",
   "get_workflow_rules",
+  "list_prs",
   "list_ui_sessions",
   "next_queue_item",
   "present_view",
   "read_record",
   "search_work",
   "start_work",
-  "create_work",
   "update_work"
 ]

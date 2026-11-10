@@ -16,6 +16,7 @@ import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
 import { searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, workflowRules, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
 import type { WorkerLinkReport } from './workerLinkReport'
+import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -69,7 +70,7 @@ const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string
 export class ReconciliationMcp {
   readonly sessions = new SceneSessions()
   private token: string | null
-  constructor(private readers: PresentationReaders, root = getConfigRoot()) {
+  constructor(private readers: PresentationReaders, root = getConfigRoot(), private domainReads?: DomainReadTools) {
     // MCP config trouble degrades this interface only; source viewing still works.
     try { this.token = installToken(root) } catch { this.token = null }
   }
@@ -119,6 +120,7 @@ export class ReconciliationMcp {
     server.registerTool('present_view', { description: 'Steer one explicit window using semantic actions only. Include its current revision and a unique command_id. Retry identical input for idempotency. Applied means the browser committed and acknowledged; queued is not applied. User clicks win revision conflicts. View only, no work/approval/Notion changes.', inputSchema: commandInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait(input))
     server.registerTool('next_queue_item', { description: 'Navigate to the next ordered verified ready desk item; future actions stay in their work context. Uses the same browser acknowledgment, revision, expiry and idempotency protocol as present_view. Navigation never approves or dismisses.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().min(1).max(128), expected_revision: z.number().int().nonnegative(), ttl_ms: z.number().int().min(500).max(15_000).default(8000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => this.submitAndWait({ ...input, action: { type: 'navigate-queue', direction: 'next' } }))
     server.registerTool('get_command', { description: 'Read an earlier command outcome without resubmitting or changing the view. Idempotency retained for ten minutes, then unknown-id.', inputSchema: { scene_id: z.string().uuid(), command_id: z.string().max(128) }, annotations: readAnnotations }, async ({ scene_id, command_id }) => result(this.sessions.result(scene_id, command_id)))
+    registerDomainReadTools(server, this.domainReads)
     return server
   }
   private sceneForWindow(sceneId: string) {

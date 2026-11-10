@@ -14,8 +14,7 @@ current, last-known, historical, conflicting and unverified distinctions. Unknow
 coverage never means no worker. Stalled/Blocked use the UI’s `workHealth` rules,
 including unavailable evidence. Body/comments are on-demand; comments include
 published author ID and creation time. Existing associated PR URLs are evidence;
-PR checks and releases get their own later read tools (`list_prs`, `get_pr`,
-`get_release_status`). No duplicate GitHub reader is introduced here.
+PR and release reads follow the [MCP domain-read contract](reconciliation-mcp.md#pr-and-release-reads-slice-b), including its PR authorization prerequisite.
 
 ## Read contracts
 
