@@ -47,11 +47,13 @@ export function checkInCeiling(at: number): number {
 export interface CheckInIndicator {
   requestId: string
   originalCheckpoint: string
-  state: 'due' | 'requested' | 'acknowledged' | 'responded' | 'needs-attention'
+  state: 'due' | 'requested' | 'acknowledged' | 'responded' | 'answered-needs-correction' | 'needs-attention'
   requestedAt: string | null
+  correction?: string
   answered: boolean
 }
 export function checkInIndicatorText(value: CheckInIndicator): string {
+  if (value.state === 'answered-needs-correction') return `Answered; correction needed · ${value.correction ?? 'Verify checkpoint fields'}`
   if (value.answered) return 'Answered; Notion update pending'
   if (value.state === 'needs-attention') return 'Check-in unresolved · Awaiting First Mate follow-up'
   if (!value.requestedAt) return 'Check-in due · Awaiting First Mate delivery'

@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { fixtureId, fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
-import { checkInCeiling, checkInKey, checkInTime } from '../../../shared/checkIn'
+import { checkInCeiling, checkInKey, checkInTime, checkInIndicatorText } from '../../../shared/checkIn'
 import { inboxRequestId } from '../../../shared/ask'
 import { AskApi } from '../../ask/routes'
 import { checkInDecisions, checkInReport, checkInSettings, CheckInWatchdog, CHECK_IN_GRACE_MS } from '../checkInWatchdog'
@@ -49,7 +49,7 @@ async function harness() {
   const watchdog = make()
   const report = (requestId: string, next = '2026-11-10T17:00:00Z') => `Check-in request: ${requestId}\nDate: ${new Date(now).toISOString()}\nBy: Firstmate\nProgress: Implemented the checkpoint reader; delayed by a failing fixture.\nEvidence: https://example.test/pull/42 green test receipt\nBlocker/owner: none; Firstmate\nNext action: Validate the remaining delivery path\nNext check-in: ${next}`
   const publish = (requestId: string, next = '2026-11-10T17:00:00Z') => {
-    context = { outcome: 'available', blocks: [{ id: 'actual-checkpoint', type: 'paragraph', text: report(requestId, next) }] }
+    context = { outcome: 'available', blocks: [{ id: 'actual-checkpoint', type: 'paragraph', created_time: new Date(now).toISOString(), text: report(requestId, next) }] }
     card.last_edited_time = new Date(now).toISOString()
     card.properties['Last touched by'] = { id: 'by', type: 'select', value: 'Firstmate', hasMore: false }
     card.properties['Next check-in']!.value = { start: next }
@@ -146,7 +146,8 @@ describe('durable lifecycle on the existing bridge', () => {
     await Promise.all([h.watchdog.sweep(), h.watchdog.sweep(), h.watchdog.sweep()])
     expect(h.sources.snapshot).toHaveBeenCalledTimes(1)
     await h.watchdog.sweep(true)
-    const [a, b] = await Promise.all([h.watchdog.bridgeWork(), h.make().bridgeWork()])
+    const restarted = h.make(); await restarted.sweep(true)
+    const [a, b] = await Promise.all([h.watchdog.bridgeWork(), restarted.bridgeWork()])
     expect(a.pending).toHaveLength(1); expect(b.pending).toEqual(a.pending)
     const id = a.pending[0]!.request_id
     expect(a.pending[0]!.body).toContain('SYSTEM CHECK-IN REQUEST')
@@ -229,7 +230,7 @@ describe('durable lifecycle on the existing bridge', () => {
     await h.reply(id, 'Updating Notion now') // duplicate transport cursor
     await expect(h.reply(id, 'Different immutable reply', '2')).rejects.toThrow('already recorded')
   })
-  it.each(['empty', 'synthetic', 'newer-edit', 'ceiling', 'unrelated', 'old-date'])('does not clear for %s evidence', async kind => {
+  it.each(['empty', 'synthetic', 'newer-edit', 'ceiling', 'unrelated', 'old-checkpoint'])('does not clear for %s evidence', async kind => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
     h.publish(id)
@@ -238,7 +239,7 @@ describe('durable lifecycle on the existing bridge', () => {
     if (kind === 'newer-edit') h.card.properties['Next check-in']!.value = { start: '2026-11-10T18:00:00Z' }
     if (kind === 'ceiling') h.publish(id, '2026-11-11T22:00:00Z')
     if (kind === 'unrelated') h.publish(randomUUID())
-    if (kind === 'old-date') h.setContext({ outcome: 'available', blocks: [{ id: 'old', type: 'paragraph', text: h.report(id).replace(new Date(h.time()).toISOString(), '2026-11-01T15:00:00Z') }] })
+    if (kind === 'old-checkpoint') h.setContext({ outcome: 'available', blocks: [{ id: 'old', type: 'paragraph', created_time: '2026-11-01T15:00:00Z', text: h.report(id).replace(new Date(h.time()).toISOString(), '2026-11-01T15:00:00Z') }] })
     await h.watchdog.sweep(true)
     expect((await h.watchdog.rows())[0]!.verifiedAt).toBeNull()
   })
@@ -248,7 +249,7 @@ describe('durable lifecycle on the existing bridge', () => {
     await h.note(id); await h.reply(id, 'Updating Notion now')
     expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'responded', verifiedAt: null })
     h.advance(42_000)
-    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', text: h.report(id) }] })
+    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', created_time: '2026-11-10T15:00:00Z', text: h.report(id) }] })
     h.card.last_edited_time = '2026-11-10T15:00:00.000Z'
     h.card.properties['Last touched by'] = { id: 'by', type: 'select', value: 'Firstmate', hasMore: false }
     h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00Z' }
@@ -259,18 +260,199 @@ describe('durable lifecycle on the existing bridge', () => {
       verification: expect.stringContaining('checkpoint live-comment; attributed to Firstmate; dated 2026-11-10T15:00:42.000Z'),
     })
   })
-  it('rejects a comment dated in a later minute than last_edited_time', async () => {
+  it.each(['paragraph', 'comment'])('accepts a sub-minute request and four-hour %s checkpoint', async type => {
+    const h = await harness(); h.advance(20_000)
+    await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.advance(25_000)
+    const next = '2026-11-10T19:00:45Z'
+    h.publish(id, next)
+    h.setContext({ outcome: 'available', blocks: [{ id: 'minute-checkpoint', type,
+      created_time: '2026-11-10T14:00:00Z', last_edited_time: '2026-11-10T15:00:00Z', text: h.report(id, next) }] })
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', followUp: null })
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
+  })
+  it('rejects an appointment beyond the four-hour checkpoint minute', async () => {
+    const h = await harness(); h.advance(20_000)
+    await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.advance(25_000)
+    h.publish(id, '2026-11-10T19:01:00Z')
+    h.setContext({ outcome: 'available', blocks: [{ id: 'over-ceiling', type: 'paragraph',
+      last_edited_time: '2026-11-10T15:00:00Z', text: h.report(id, '2026-11-10T19:01:00Z') }] })
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'answered-needs-correction',
+      verification: 'Next check-in: exceeds the In Progress ceiling', verifiedAt: null })
+  })
+  it('accepts a self-reported Date in a later minute than the checkpoint metadata', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
     await h.note(id); await h.reply(id, 'Updating Notion now')
     h.advance(65_000)
-    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', text: h.report(id) }] })
+    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment', created_time: '2026-11-10T15:00:00Z', text: h.report(id) }] })
     h.card.last_edited_time = '2026-11-10T15:00:00.000Z'
     h.card.properties['Last touched by'] = { id: 'by', type: 'select', value: 'Firstmate', hasMore: false }
     h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00Z' }
     expect(h.report(id)).toContain('Date: 2026-11-10T15:01:05.000Z')
     await h.watchdog.sweep(true)
-    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'responded', verifiedAt: null })
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', verifiedAt: new Date(h.time()).toISOString() })
+  })
+  it.each([
+    ['clock guess ahead', '2026-11-10T02:25:00Z', '2026-11-10T15:00Z'],
+    ['trailing timezone note', '2026-11-10T02:24Z', '2026-11-10T15:00Z (10 AM ET)'],
+    ['UTC date text', '2026-11-10 02:45 UTC', '2026-11-10T15:00Z'],
+  ])('resolves the live %s shape using Notion time without a follow-up', async (_, reportedDate, next) => {
+    const h = await harness()
+    h.advance(Date.parse('2026-11-10T02:24:00Z') - baseline)
+    h.card.properties['Next check-in']!.value = { start: '2026-11-10T02:20:00Z' }
+    await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.publish(id, '2026-11-10T15:00:00Z')
+    h.card.last_edited_time = '2026-11-10T02:20:00Z'
+    h.setContext({ outcome: 'available', blocks: [{ id: 'live-comment', type: 'comment',
+      created_time: '2026-11-10T02:24:00Z', text: h.report(id, next).replace(/^Date:.*$/m, `Date: ${reportedDate}`) }] })
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', followUp: null })
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
+  })
+  it.each(['closed', 'none (Done).', 'N/A.', 'DONE (archived)', 'Closed!'])('accepts a closed checkpoint %s', async next => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.publish(id)
+    h.card.properties.Status!.value = next.includes('archived') ? 'Archived' : 'Done'
+    h.card.properties['Next check-in']!.value = null
+    h.setContext({ outcome: 'available', blocks: [{ id: 'closed', type: 'comment',
+      created_time: new Date(h.time()).toISOString(), text: h.report(id, next) }] })
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', followUp: null })
+  })
+  it('compares date-only appointments at 9 AM New York and trims attribution', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.publish(id, '2026-11-11T14:00:00Z')
+    h.card.properties.Status!.value = 'Waiting For'
+    h.card.properties['Last touched by']!.value = ' FIRSTMATE '
+    h.setContext({ outcome: 'available', blocks: [{ id: 'date-only', type: 'paragraph',
+      last_edited_time: new Date(h.time()).toISOString(), text: h.report(id, '2026-11-11 (tomorrow)') }] })
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]!.state).toBe('resolved')
+  })
+  it.each([
+    ['Date', 'not a date', 'Date: unparseable timestamp'],
+    ['Progress', 'still working', 'Progress: substantive update required'],
+    ['Evidence', 'no evidence', 'Evidence: substantive evidence required'],
+    ['Next action', '<next action>', 'Next action: missing value or placeholder'],
+    ['By', 'Another coordinator', 'By: must match Last touched by'],
+    ['Next check-in', '2026-11-10T18:00Z (newer edit)', 'Next check-in: does not match the current property'],
+    ['Next check-in', 'none (Done).', 'Next check-in: unparseable appointment'],
+  ])('shows a quiet %s correction and never sends a no-answer follow-up', async (field, value, issue) => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.card.properties.Status!.value = 'Waiting For'
+    h.publish(id, '2026-11-11T17:00:00Z')
+    const body = h.report(id, '2026-11-11T17:00:00Z')
+    h.setContext({ outcome: 'available', blocks: [{ id: 'incorrect', type: 'comment',
+      created_time: new Date(h.time()).toISOString(), text: body.replace(`${field}: ${body.split(`${field}: `)[1]!.split('\n')[0]}`, `${field}: ${value}`) }] })
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'answered-needs-correction', verification: issue, verifiedAt: null, followUp: null })
+    const indicator = (await h.watchdog.indicators()).get(h.card.id)!
+    expect(indicator.answered).toBe(true)
+    expect(checkInIndicatorText(indicator)).toBe(`Answered; correction needed · ${issue}`)
+    await h.reply(id, 'Updating Notion now')
+    h.advance(CHECK_IN_GRACE_MS * 3)
+    await h.make().sweep(true)
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
+    expect((await h.watchdog.rows())[0]!.followUp).toBeNull()
+    h.publish(id, new Date(h.time() + 3600_000).toISOString())
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]!.state).toBe('resolved')
+  })
+  it.each(['queued', 'offered', 'receipted'])('preserves a %s follow-up when a field needs correction', async stage => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    if (stage !== 'queued') {
+      const followUp = (await h.watchdog.bridgeWork()).pending[0]!
+      if (stage === 'receipted') await h.note(followUp.request_id)
+    }
+    const saved = (await h.watchdog.rows())[0]!.followUp
+    const next = new Date(h.time() + 3600_000).toISOString()
+    h.publish(id, next)
+    h.setContext({ outcome: 'available', blocks: [{ id: 'bad-evidence', type: 'paragraph',
+      last_edited_time: new Date(h.time()).toISOString(), text: h.report(id, next).replace(/^Evidence:.*$/m, 'Evidence: no evidence') }] })
+    const restarted = h.make()
+    await restarted.sweep(true)
+    expect((await restarted.rows())[0]).toMatchObject({
+      state: stage === 'queued' ? 'answered-needs-correction' : 'needs-attention',
+      verification: 'Evidence: substantive evidence required', followUp: saved, verifiedAt: null,
+    })
+    if (stage === 'queued') {
+      expect(checkInIndicatorText((await restarted.indicators()).get(h.card.id)!)).toBe('Answered; correction needed · Evidence: substantive evidence required')
+      expect((await restarted.bridgeWork()).pending).toEqual([])
+    }
+    h.publish(id, next)
+    await restarted.sweep(true)
+    expect((await restarted.rows())[0]).toMatchObject({ state: 'resolved', followUp: saved })
+    expect((await restarted.bridgeWork()).pending).toEqual([])
+  })
+  it.each(['before-request', 'future', 'missing'])('retains the %s checkpoint-time guard', async kind => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    h.publish(id)
+    h.setContext({ outcome: 'available', blocks: [{ id: 'bad-time', type: 'comment', text: h.report(id),
+      created_time: kind === 'missing' ? undefined : new Date(h.time() + (kind === 'future' ? 60_000 : -60_000)).toISOString() }] })
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'answered-needs-correction',
+      verification: 'Checkpoint time: must be at or after the request and at or before now', verifiedAt: null })
+  })
+  it('follows up exactly once when the original card genuinely has no answer', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    const followUp = (await h.watchdog.bridgeWork()).pending[0]!
+    expect(followUp.body).toContain('SYSTEM CHECK-IN FOLLOW-UP')
+    await h.note(followUp.request_id)
+    h.advance(CHECK_IN_GRACE_MS * 4)
+    await h.make().sweep(true)
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'needs-attention', verifiedAt: null,
+      followUp: { requestId: followUp.request_id } })
+  })
+  it('does not mistake another request ID for an answer to the original request', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.publish(`${id}-different`)
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'needs-attention', verifiedAt: null })
+    expect((await h.watchdog.bridgeWork()).pending[0]!.body).toContain('SYSTEM CHECK-IN FOLLOW-UP')
+  })
+  it('resolves a previously followed-up row when its skewed checkpoint now verifies', async () => {
+    const h = await harness(); await h.watchdog.sweep()
+    const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
+    h.advance(CHECK_IN_GRACE_MS)
+    await h.watchdog.sweep(true)
+    const followUp = (await h.watchdog.bridgeWork()).pending[0]!
+    await h.note(followUp.request_id)
+    h.publish(id, '2026-11-10T19:00:00Z')
+    h.setContext({ outcome: 'available', blocks: [{ id: 'skewed', type: 'comment',
+      created_time: new Date(h.time()).toISOString(),
+      text: h.report(id, '2026-11-10T19:00:00Z').replace(/^Date:.*$/m, `Date: ${new Date(h.time() + 120_000).toISOString()}`) }] })
+    await h.make().sweep(true)
+    expect((await h.watchdog.rows())[0]).toMatchObject({ state: 'resolved', followUp: { requestId: followUp.request_id } })
+    expect((await h.watchdog.bridgeWork()).pending).toEqual([])
   })
   it('creates a new epoch only after its new appointment passes', async () => {
     const h = await harness(); await h.watchdog.sweep()

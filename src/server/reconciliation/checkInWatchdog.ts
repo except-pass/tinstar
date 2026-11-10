@@ -77,7 +77,7 @@ type Delivery = z.infer<typeof deliverySchema>
 const rowSchema = z.object({
   key: z.string(), cardId: z.string(), url: z.string(), originalCheckpoint: z.string(), dueAt: z.string(),
   status: z.string(), owner: z.string(), dependency: z.string(), route: z.object({ via: z.literal('firstmate'), worker: z.object({ home: z.string(), task: z.string(), attempt: z.string() }).nullable(), reason: z.string() }),
-  createdAt: z.string(), state: z.enum(['due', 'requested', 'acknowledged', 'responded', 'needs-attention', 'resolved', 'superseded']),
+  createdAt: z.string(), state: z.enum(['due', 'requested', 'acknowledged', 'responded', 'answered-needs-correction', 'needs-attention', 'resolved', 'superseded']),
   lastRelevantCheckpoint: z.string(), request: deliverySchema, followUp: deliverySchema.nullable(),
   verifiedAt: z.string().nullable(), verification: z.string().nullable(),
 })
@@ -99,21 +99,39 @@ const labels = ['Check-in request', 'Date', 'By', 'Progress', 'Evidence', 'Block
 type Report = Record<typeof labels[number], string>
 /** A small labeled checkpoint is both readable on Notion and verifiable without
  * a model. The request correlation prevents unrelated edits from closing it. */
-export function checkInReport(body: string, requestId: string): Report | null {
+function readReport(body: string, requestId: string): { report?: Report; issue?: string } {
   const fields: Partial<Report> = {}
+  let issue: string | undefined
+  let correlated = false
   for (const line of body.split(/\r?\n/)) {
     const colon = line.indexOf(':')
     const label = line.slice(0, colon).trim() as typeof labels[number]
     if (colon < 0 || !labels.includes(label)) continue
-    if (fields[label] !== undefined) return null
-    fields[label] = line.slice(colon + 1).trim()
+    const value = line.slice(colon + 1).trim()
+    if (label === 'Check-in request' && value === requestId) correlated = true
+    if (fields[label] !== undefined) issue ??= `${label}: duplicate field`
+    fields[label] = value
   }
-  if (labels.some(label => !fields[label]) || fields['Check-in request'] !== requestId) return null
-  if (!Number.isFinite(Date.parse(fields.Date!)) || labels.some(label => /^<.*>$/.test(fields[label]!))) return null
-  if (fields.Progress!.length < 12 || fields.Evidence!.length < 8 ||
-    /^(?:still (?:working|running)|none|pending|n\/a|no evidence)[.! ]*$/i.test(fields.Progress!) ||
-    /^(?:none|pending|n\/a|still working|no evidence)[.! ]*$/i.test(fields.Evidence!)) return null
-  return fields as Report
+  if (!correlated) return {}
+  for (const label of labels) {
+    if (!fields[label] || /^<.*>$/.test(fields[label]!)) issue ??= `${label}: missing value or placeholder`
+  }
+  if (fields['Check-in request'] !== requestId) issue ??= 'Check-in request: does not match original request ID'
+  if (!Number.isFinite(Date.parse(fields.Date ?? ''))) issue ??= 'Date: unparseable timestamp'
+  if ((fields.Progress?.length ?? 0) < 12 ||
+    /^(?:still (?:working|running)|none|pending|n\/a|no evidence)[.! ]*$/i.test(fields.Progress ?? '')) issue ??= 'Progress: substantive update required'
+  if ((fields.Evidence?.length ?? 0) < 8 ||
+    /^(?:none|pending|n\/a|still working|no evidence)[.! ]*$/i.test(fields.Evidence ?? '')) issue ??= 'Evidence: substantive evidence required'
+  return issue ? { issue } : { report: fields as Report }
+}
+export function checkInReport(body: string, requestId: string): Report | null {
+  return readReport(body, requestId).report ?? null
+}
+
+/** Compare the appointment token, leaving human notes out of the clock. */
+function reportedNext(value: string): string | null {
+  return value.match(/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}| UTC)?)?(?=$|\s|[().,;!])/i)?.[0]
+    .replace(/ UTC$/i, 'Z').replace(' ', 'T') ?? null
 }
 
 function delivery(requestId = randomUUID()): Delivery {
@@ -171,7 +189,8 @@ export class CheckInWatchdog {
       // The oldest unresolved appointment stays visible, even if someone moved
       // the property without a substantive checkpoint.
       if (!result.has(row.cardId)) result.set(row.cardId, { requestId: row.request.requestId, originalCheckpoint: row.originalCheckpoint,
-        state: row.state, requestedAt: row.request.offeredAt, answered: !!row.request.reply || !!row.followUp?.reply })
+        state: row.state, requestedAt: row.request.offeredAt, answered: row.state === 'answered-needs-correction' || !!row.request.reply || !!row.followUp?.reply,
+        ...(row.state === 'answered-needs-correction' ? { correction: row.verification ?? undefined } : {}) })
     }
     return result
   }
@@ -202,7 +221,7 @@ export class CheckInWatchdog {
       }
       for (const observed of await this.rows()) {
         if (observed.state === 'resolved' || observed.state === 'superseded' || !observed.request.offeredAt) continue
-        await this.verify(observed)
+        const correction = await this.verify(observed)
         await this.change(rows => {
           const row = rows.find(row => row.key === observed.key)!
           if (row.state === 'resolved' || row.state === 'superseded' || !row.request.offeredAt) return
@@ -210,6 +229,12 @@ export class CheckInWatchdog {
             row.state = 'resolved'; row.verifiedAt = observed.verifiedAt; row.verification = observed.verification
             return
           }
+          if (correction) {
+            row.verification = correction
+            if (!row.followUp?.offeredAt) row.state = 'answered-needs-correction'
+            return
+          }
+          if (row.state === 'answered-needs-correction') return
           // Re-evaluate against replies ingested while the readback was in
           // flight; never overwrite a newer receipt with the observed copy.
           const acknowledged = [row.request, row.followUp].some(d => d?.reply && checkInReport(d.reply.body, row.request.requestId))
@@ -222,28 +247,38 @@ export class CheckInWatchdog {
       }
     } finally { this.scanning = false }
   }
-  private async verify(row: CheckInRow) {
+  private async verify(row: CheckInRow): Promise<string | undefined> {
     try {
       const context = await this.sources.currentCardContext(row.cardId)
       const card = await this.sources.currentCard(row.cardId)
+      let correction: string | undefined
       // A bounded partial read may still contain the exact complete paragraph.
       for (const block of context.blocks) {
-        const report = checkInReport(block.text, row.request.requestId)
+        const { report, issue } = readReport(block.text, row.request.requestId)
+        if (issue) { correction = issue; continue }
         if (!report) continue
-        const at = Date.parse(report.Date), next = checkInTime(report['Next check-in'], text(date(card).time_zone))
+        // Notion's checkpoint metadata is authoritative; the author's Date can
+        // have clock skew. Edited paragraphs may contain a fresh checkpoint.
+        const at = Date.parse(block.last_edited_time ?? block.created_time ?? '')
+        const next = checkInTime(reportedNext(report['Next check-in']), text(date(card).time_zone))
         const closed = ['done', 'archived'].includes(word(card, 'Status').toLowerCase())
-        // Notion returns last_edited_time truncated to the minute, so a report
-        // later in that same minute is this edit. A later minute is still newer.
-        const reportedMinute = Math.floor(at / 60_000) * 60_000
-        if (!Number.isFinite(at) || at < Date.parse(row.createdAt) || at > this.now() || Date.parse(card.last_edited_time) < reportedMinute ||
-          word(card, 'Last touched by').toLowerCase() !== report.By.toLowerCase()) continue
-        if (!(closed && report['Next check-in'].toLowerCase() === 'closed') &&
-          (!Number.isFinite(next) || next <= at || next !== appointment(card) ||
-          word(card, 'Status').toLowerCase() === 'in progress' && next > checkInCeiling(at))) continue
+        let failure: string | undefined
+        if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
+          failure = 'Checkpoint time: must be at or after the request and at or before now'
+        } else if (word(card, 'Last touched by').toLowerCase() !== report.By.trim().toLowerCase()) {
+          failure = 'By: must match Last touched by'
+        } else if (!(closed && /^(?:closed|none|n\/a|done)(?=$|\s|[().,;!])/i.test(report['Next check-in']))) {
+          if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
+          else if (next !== appointment(card)) failure = 'Next check-in: does not match the current property'
+          else if (next <= at) failure = 'Next check-in: must be after the checkpoint'
+          else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
+        }
+        if (failure) { correction = failure; continue }
         row.state = 'resolved'; row.verifiedAt = new Date(this.now()).toISOString()
-        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}`
+        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}`
         return
       }
+      return correction
     } catch { /* Failed read never closes an appointment; retry on next sweep. */ }
   }
   /** Existing bearer bridge is the only delivery surface. Before first exposure,
@@ -254,7 +289,7 @@ export class CheckInWatchdog {
     const observed = await this.rows()
     const start = this.deliveryCursor % Math.max(observed.length, 1)
     const ordered = [...observed.slice(start), ...observed.slice(0, start)]
-    const candidates = ordered.filter(row => !['resolved', 'superseded'].includes(row.state) &&
+    const candidates = ordered.filter(row => !['resolved', 'superseded', 'answered-needs-correction'].includes(row.state) &&
       [row.request, row.followUp].some(item => item && !item.reply && (!item.noteId || item.announced === false || !!item.error))).slice(0, 3)
     const currentCards = new Map<string, Card>()
     for (const row of candidates) {
@@ -266,7 +301,7 @@ export class CheckInWatchdog {
       for (const candidate of candidates) {
         const row = rows.find(row => row.key === candidate.key)
         if (!row) continue
-        if (['resolved', 'superseded'].includes(row.state)) continue
+        if (['resolved', 'superseded', 'answered-needs-correction'].includes(row.state)) continue
         const retryOriginal = !row.request.reply && (!row.request.noteId || row.request.announced === false || !!row.request.error)
         let item = retryOriginal ? row.request : row.followUp && !row.followUp.reply ? row.followUp : row.request
         if (item.reply || item.noteId && item.announced !== false && !item.error) continue
@@ -328,7 +363,7 @@ export class CheckInWatchdog {
         if (item.reply) throw new AskConflict('System answer already recorded')
         item.reply = { body: update.reply.body, at: update.reply.at, cursor: update.reply.cursor }
         item.error = null
-        if (!['resolved', 'needs-attention', 'superseded'].includes(row.state)) row.state = checkInReport(update.reply.body, row.request.requestId) ? 'acknowledged' : 'responded'
+        if (!['resolved', 'needs-attention', 'answered-needs-correction', 'superseded'].includes(row.state)) row.state = checkInReport(update.reply.body, row.request.requestId) ? 'acknowledged' : 'responded'
       }
       if (update.error && !item.reply && !(item.noteId && update.error === 'capture-failed')) item.error = update.error
     })

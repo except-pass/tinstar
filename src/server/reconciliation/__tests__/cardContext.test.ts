@@ -20,15 +20,18 @@ it('reads checkpoint comments without a writer and retains body evidence if comm
     if (url.pathname === '/v1/comments') {
       expect(url.searchParams.get('block_id')).toBe('b'.repeat(32))
       return denied ? new Response('', { status: 403 }) : new Response(JSON.stringify({ has_more: false, results: [
-        { id: 'comment', rich_text: [{ plain_text: 'Actual dated checkpoint comment' }] },
+        { id: 'comment', created_time: '2026-11-10T02:24:00Z', rich_text: [{ plain_text: 'Actual dated checkpoint comment' }] },
       ] }))
     }
     return new Response(JSON.stringify({ has_more: false, results: [
-      { id: 'paragraph', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Card checkpoint paragraph' }] } },
+      { id: 'paragraph', last_edited_time: '2026-11-10T02:25:00Z', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Card checkpoint paragraph' }] } },
     ] }))
   }) as unknown as typeof fetch
   const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
-  expect((await reader.checkpoints('b'.repeat(32))).blocks).toHaveLength(2)
+  expect((await reader.checkpoints('b'.repeat(32))).blocks).toMatchObject([
+    { id: 'paragraph', last_edited_time: '2026-11-10T02:25:00Z' },
+    { id: 'comment', created_time: '2026-11-10T02:24:00Z' },
+  ])
   denied = true
   expect(await reader.checkpoints('b'.repeat(32))).toMatchObject({ outcome: 'partial', blocks: [{ id: 'paragraph', text: 'Card checkpoint paragraph' }] })
   expect(vi.mocked(fetcher).mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)

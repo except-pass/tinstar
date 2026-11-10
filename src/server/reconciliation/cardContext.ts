@@ -4,7 +4,7 @@ import { record } from './values'
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   observedAt?: string
-  blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null }>
+  blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
   omissions?: string
 }
@@ -56,7 +56,12 @@ export class CardContextReader {
         for (const item of body.results) {
           const comment = record(item)
           if (!Array.isArray(comment.rich_text)) continue
-          context.blocks.push({ id: String(comment.id), type: 'comment', author: typeof record(comment.created_by).id === 'string' ? String(record(comment.created_by).id) : null, createdAt: typeof comment.created_time === 'string' ? comment.created_time : null, text: comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('').replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+          context.blocks.push({ id: String(comment.id), type: 'comment',
+            author: typeof record(comment.created_by).id === 'string' ? String(record(comment.created_by).id) : null,
+            createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,
+            created_time: typeof comment.created_time === 'string' ? comment.created_time : undefined,
+            last_edited_time: typeof comment.last_edited_time === 'string' ? comment.last_edited_time : undefined,
+            text: comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('').replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
         }
         if (body.has_more !== true) return context
         const next = typeof body.next_cursor === 'string' ? body.next_cursor : undefined
@@ -77,7 +82,7 @@ export class CardContextReader {
   async read(id: string): Promise<CardContextRead> {
     if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
-    const blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null }> = []
+    const blocks: CardContextRead['blocks'] = []
     let requests = 0, bytes = 0, partial = false
     const safeTypes = new Set(['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'to_do', 'toggle', 'quote', 'callout', 'table_row'])
     const visit = async (blockId: string, depth: number) => {
@@ -107,7 +112,10 @@ export class CardContextReader {
             const rich = type === 'table_row' && Array.isArray(data.cells) ? data.cells.flat() : data.rich_text
             const text = Array.isArray(rich) ? rich.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('') : ''
             // Avoid forwarding common credential literals embedded in prose.
-            blocks.push({ id: String(b.id), type, text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+            blocks.push({ id: String(b.id), type,
+              created_time: typeof b.created_time === 'string' ? b.created_time : undefined,
+              last_edited_time: typeof b.last_edited_time === 'string' ? b.last_edited_time : undefined,
+              text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
           } else partial = true
           if (b.has_children === true) {
             if (safeTypes.has(type) || type === 'table' || type === 'column_list' || type === 'column') await visit(String(b.id), depth + 1)
