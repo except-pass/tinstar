@@ -571,19 +571,19 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   const toolbar = page.getByRole('toolbar', { name: 'Arrange work' })
   await expect(toolbar).toBeVisible()
   expect((await toolbar.boundingBox())!.height).toBe(48)
-  const createWork = page.locator('.ov-create-work')
-  await expect(createWork).toBeVisible()
-  const toolbarBox = (await toolbar.boundingBox())!, createBox = (await createWork.boundingBox())!
-  expect(createBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
-  expect((await page.locator('.ov-headings').boundingBox())!.y).toBeGreaterThanOrEqual(createBox.y + createBox.height)
+  const shelf = page.locator('.ov-filter-shelf')
+  await expect(shelf).toBeVisible()
+  const toolbarBox = (await toolbar.boundingBox())!, shelfBox = (await shelf.boundingBox())!
+  expect(shelfBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height)
+  expect((await page.locator('.ov-headings').boundingBox())!.y).toBeGreaterThanOrEqual(shelfBox.y + shelfBox.height)
   await expect(page.locator('.ov-top,.ov-intro')).toHaveCount(0)
   await expect(page.getByLabel('Outer grouping')).toHaveCount(0)
   const cardIds = () => page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id')).sort())
-  const counts = async (cards: number, workers: number) => {
+  const counts = async (cards: number, workers: number, waiting = false) => {
     await expect(page.locator('.ov-card')).toHaveCount(cards)
     await expect(page.locator('.ov-execution')).toHaveCount(workers)
-    await expect(page.locator('.ov-headings')).toContainText(`WORKERS · ${workers}`)
-    await expect(page.locator('.ov-headings')).toContainText(`NOTION TASKS · ${cards}`)
+    await expect(page.locator(waiting ? '.ov-waiting-worker-head' : '.ov-headings')).toContainText(`WORKERS · ${workers}`)
+    await expect(page.locator(waiting ? '.ov-waiting-head' : '.ov-headings')).toContainText(waiting ? `Waiting For · ${cards}` : `NOTION TASKS · ${cards}`)
   }
   await counts(5, 5)
   for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'manager']]) {
@@ -594,11 +594,11 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   }
   const slice = (name: string) => page.getByRole('button', { name, exact: true })
   await clickStatusSlice(page, 'Cards: Waiting For, 1')
-  await counts(1, 1)
+  await counts(1, 5, true) // Dependency groups change Work only; Workers remain visible.
   await (await tabToStatusSlice(page, 'Cards: Waiting For, 1')).press('Space')
   await counts(5, 5)
   await slice('Cards: Waiting For, 1').press('Enter')
-  await counts(1, 1)
+  await counts(1, 5, true)
   expect(await cardIds()).toEqual([fixtureId(4)])
   await expect(page.getByRole('region', { name: 'Workers statuses' })).toBeVisible()
   await clickStatusSlice(page, 'Cards: In Progress, 4')
