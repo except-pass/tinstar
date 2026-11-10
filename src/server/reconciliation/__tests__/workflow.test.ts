@@ -1345,3 +1345,13 @@ it('rejects duplicate or excessive option ids while preserving free-text answers
   expect(await f.workflow.update({ ...f.request, options: [{ id: 'r3', label: 'R3' }] } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
   expect(await f.workflow.update(f.answer, 'Legacy MCP')).toMatchObject({ decision_resolution: { state: 'pending' } })
 })
+
+it('rejects a different source answer after restart even when the operation id already has a receipt', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update(f.answer, 'Owner')
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...f.answer, answer: 'R1' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(f.messages).toHaveLength(1)
+})

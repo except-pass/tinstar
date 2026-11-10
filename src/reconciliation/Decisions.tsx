@@ -122,7 +122,7 @@ function DecisionChoices({ entry }: { entry: DecisionEntry }) {
   const requests = (entry.item as Partial<NeedsWillItem>).requests ?? []
   const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length)
   const status = result?.decision_resolution?.message ?? (result ? result.message : entry.item.decisionResolution?.message)
-  return <>{proposals.map(proposal => <div key={proposal.id} role="group" aria-label={proposal.question ?? 'Decision choices'}>
+  return <>{proposals.map(proposal => <div className="ask-recommendations ask-action-choices" key={proposal.id} role="group" aria-label={proposal.question ?? 'Decision choices'}>
     {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={busy || !!result?.decision_resolution} onClick={() => void save('update', {
       kind: 'answer_decision', card_id: entry.id!, request_id: proposal.id, option_id: option.id, answer: option.label,
       next: { owner: 'Firstmate', status: 'Queued' },

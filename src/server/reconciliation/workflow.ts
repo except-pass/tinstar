@@ -431,12 +431,6 @@ export class WorkflowOperations {
       const pendingMarker = `Tin Star decision pending: ${JSON.stringify([actor, input.operation_id])}`
       const pending = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.actor === actor && row.input?.operation_id === input.operation_id)
       const receipt = notes.find(note => note.text.split('\n').includes(marker))
-      if (receipt) {
-        this.noteRepairs.delete(key)
-        this.reader.confirm(card)
-        await this.changed({ card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
-        return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
-      }
       if (input.kind === 'answer_decision' && notes.some(note => note.text.split('\n').some(line => {
         if (!line.startsWith('Tin Star request: ')) return false
         try { const row = JSON.parse(line.slice('Tin Star request: '.length)); return row.id === input.request_id && !!row.source_request } catch { return false }
@@ -448,6 +442,12 @@ export class WorkflowOperations {
           if (decisionAnswerText(existing) !== input.answer || !existing.text.split('\n').includes(`Next owner: ${input.next.owner}`) || !existing.text.split('\n').includes(`Next status: ${input.next.status}`)) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
           return { ...result('saved', 'already-saved', 'This exact proposal answer is already recorded; no comment or property changes replayed'), saved_fields: ['note'] }
         }
+      }
+      if (receipt) {
+        this.noteRepairs.delete(key)
+        this.reader.confirm(card)
+        await this.changed({ card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
+        return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
       }
       if (repair) {
         if (repair.signature !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
