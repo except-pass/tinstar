@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 
 const commands = new Set([
-  'doctor', 'status', 'reach', 'ask-puller',
+  'doctor', 'status', 'reach', 'ask-puller', 'voice',
   'install-service', 'uninstall-service', 'start', 'stop', 'restart', 'logs', 'help',
 ])
 
@@ -18,12 +18,14 @@ async function main() {
       console.log('Usage: tinstar [--port PORT] [--host ADDRESS] [--no-open] [--no-setup] [--no-reach]')
       console.log('Commands: doctor, status, reach, ask-puller, install-service, uninstall-service, start, stop, restart, logs')
       console.log('Ask: tinstar ask-puller install|uninstall|enable|disable|status|restart')
+      console.log('Voice: tinstar voice install|status')
       console.log('Ask journal: tinstar ask-puller journal retire|resume --origin URL --reason TEXT')
       return
     }
     if (command === 'doctor') return (await import('./doctor.js')).doctor()
     if (command === 'status') return (await import('./tinstar/status.js')).run(process.argv)
     if (command === 'reach') return (await import('./tinstar/commands/reach.js')).run(process.argv.slice(3))
+    if (command === 'voice') return (await import('./tinstar/voice.js')).run()
     if (command === 'ask-puller') return (await import('./tinstar/ask-puller.js')).run()
     return (await import('./tinstar/commands/service.js')).run(process.argv)
   }

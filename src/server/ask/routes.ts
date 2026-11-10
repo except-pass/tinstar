@@ -11,6 +11,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { secretEquals } from '../reconciliation/sessions'
 import type { ReconciliationSources } from '../reconciliation'
 import { artifactContext, type AskArtifactSources } from './artifacts'
+import { LocalTranscriber, VoiceError } from './transcribe'
 import { AskConflict, AskNotFound, AskStore } from './store'
 import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
 import type { FirstmateUpdates } from '../reconciliation/firstmateUpdates'
@@ -45,7 +46,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -102,6 +103,14 @@ export class AskApi {
     if (!(peer === '::1' || peer.startsWith('127.')) || typeof login !== 'string' || !settings.ownerLogins.includes(login)) return fail(res, 'FORBIDDEN', 'Authorized tailnet owner required', { headers })
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     try {
+      if (path === '/api/ask/transcribe' && req.method === 'POST') {
+        const controller = new AbortController()
+        const abort = () => controller.abort()
+        req.once('aborted', abort)
+        res.once('close', abort)
+        try { return ok(res, await this.voice.transcribe(req, controller.signal), { headers }) }
+        finally { req.off('aborted', abort); res.off('close', abort) }
+      }
       if (path === '/api/ask/requests' && req.method === 'GET') return ok(res, (await this.store.list(login)).map(publicAsk), { headers })
       if (path === '/api/ask/selections' && req.method === 'POST') {
         const input = askSelectionInputSchema.parse(await readBody(req))
@@ -126,12 +135,14 @@ export class AskApi {
           context = { anchor: { kind: 'work', page_id: input.card_id, label: 'Deploy smoke', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: input.view }
         }
         else if (isArtifactTarget(input.target)) {
+          if (input.view.worker) throw new AskConflict('Worker view requires a canonical execution')
           if (!this.artifacts) throw new AskNotFound('Artifact sources unavailable')
           context = await artifactContext(input.target, input.view, { ...(input.element ? { element: input.element } : {}), ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}) }, this.artifacts)
         } else {
           const scene = await this.sources.scene()
           const claim = input.target?.kind === 'claim' ? scene.claims.find(claim => claim.id === input.target!.id) : undefined
           const worker = input.target?.kind === 'execution' ? scene.executions.find(worker => worker.id === input.target!.id) : undefined
+          if (input.view.worker && (input.view.scene !== 'overview' || !worker || worker.home !== input.view.worker.home || worker.identity.task_id !== input.view.worker.task_id)) throw new AskConflict('Worker view does not match the canonical execution')
           if (input.target && !(claim || worker)) throw new AskNotFound('Entity unavailable in the authorized source')
           const card = scene.cards.find(card => card.id === (claim?.cardId ?? input.card_id))
           if (!card && !worker) throw new AskNotFound('Card unavailable in the authorized source')
@@ -161,6 +172,7 @@ export class AskApi {
     } catch (error) { return this.error(res, error, headers) }
   }
   private error(res: ServerResponse, error: unknown, headers: Record<string, string>) {
+    if (error instanceof VoiceError) return fail(res, error.code, error.message, { headers })
     if (error instanceof AskConflict) return fail(res, 'CONFLICT', error.message, { headers })
     if (error instanceof AskNotFound) return fail(res, 'NOT_FOUND', error.message, { headers })
     if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof Error && ['Expected JSON', 'Request too large'].includes(error.message)) return fail(res, 'BAD_REQUEST', 'Invalid Ask payload', { headers })

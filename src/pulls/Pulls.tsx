@@ -1,6 +1,6 @@
 import { askElement } from '../ask/element'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { AskCardAction } from '../ask/Ask'
+import { AskContextComposer, AskCardAction } from '../ask/Ask'
 import { OpenInChatGPT } from '../ask/OpenInChatGPT'
 import { AskSurface } from '../ask/AskSurface'
 import { useOriginFocus } from '../ask/useOriginFocus'
@@ -144,6 +144,7 @@ export function Pulls() {
           </article>)}{!context.contributors.length && <p>Worker / manager unknown. No explicit PR registration observed in current or retained backlog sources.</p>}
           <p>Retained backlog registrations can identify retired tasks, but omit attempt, historical manager and machine. Coverage is not a permanent complete contributor index. {scene?.historyScope ?? 'Relationship history unavailable.'}</p>
           <ActionControls targets={[pull]} view={view} compact focusReceipt={destination?.target.kind === 'pull' ? destination.target.action_receipt_id : undefined} />
+          <AskContextComposer subject={subject} />
         </AskSurface></td></tr>}</Fragment>
       })}
     </tbody></table></div>{data && !rows.length && <p className="pr-notice">{data.pulls.length ? 'No matching PRs.' : data.repositories.every(repo => repo.complete) && data.repositories.length ? 'No open PRs in this repository scope.' : 'No PRs observed. Check repository coverage above.'}</p>}

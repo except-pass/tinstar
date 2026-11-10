@@ -4,6 +4,9 @@ import { askSuggestionsSchema } from './ask-actions'
 
 export const pageIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const askViewSchema = z.object({
+  // Worker terminals are a mode of the existing Overview shell. Retain their
+  // exact home/task identity so Return to source can reopen the same worker.
+  worker: z.object({ home: z.string().min(1).max(2048), task_id: z.string().min(1).max(2048) }).strict().optional(),
   scene: z.enum(['overview', 'pulls', 'releases']), organizer: organizerSchema.optional(), statusFilter: statusFilterSchema.optional(),
   query: z.string().max(512).optional(), sort: z.string().max(64).optional(), descending: z.boolean().optional(),
   filter: z.string().max(64).optional(), preset: z.enum(['initiative', 'repository']).optional(), collapsed: z.array(z.string().max(2048)).max(500).optional(),

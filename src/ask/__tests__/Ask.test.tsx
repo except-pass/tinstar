@@ -1108,3 +1108,62 @@ it('preserves optimistic archive and Undo across polls until both writes settle'
     expect(container.querySelector('[data-ask-id]')).toBeTruthy()
   } finally { vi.useRealTimers() }
 })
+
+it('auto-sends local voice in the current Desk conversation and preserves its draft after failure', async () => {
+  const first = seed(); records = [first]
+  vi.stubGlobal('isSecureContext', true)
+  const stop = vi.fn()
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop }], getAudioTracks: () => [] })) } })
+  class Recorder {
+    static isTypeSupported = () => true
+    mimeType = 'audio/webm'
+    state = 'inactive'
+    onstop?: () => void
+    ondataavailable?: (event: { data: Blob }) => void
+    start() { this.state = 'recording' }
+    stop() { this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['recording']) }); queueMicrotask(() => this.onstop?.()) }
+  }
+  vi.stubGlobal('MediaRecorder', Recorder)
+  let transcriptions = 0
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url) !== '/api/ask/transcribe') return original(url, init)
+    transcriptions++
+    return new Response(JSON.stringify(transcriptions === 1 ? { ok: false, error: { message: 'Local transcription timed out' } } : { ok: true, data: { text: 'Can it proceed now?' } }), { status: transcriptions === 1 ? 503 : 200 })
+  })
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
+  const thread = screen.getByRole('region', { name: /Answer thread/ })
+  const question = within(thread).getByRole('textbox', { name: 'Reply to First Mate' })
+  fireEvent.change(question, { target: { value: 'Keep this context.' } })
+  const record = async () => {
+    fireEvent.click(within(thread).getByRole('button', { name: 'Record voice question' }), { detail: 0 })
+    const stopButton = await within(thread).findByRole('button', { name: 'Stop recording and send' })
+    fireEvent.click(stopButton, { detail: 0 })
+  }
+  await record()
+  expect(await within(thread).findByRole('alert')).toHaveTextContent('timed out')
+  expect(question).toHaveValue('Keep this context.')
+  expect(requests).toHaveLength(0)
+  await record()
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ question: 'Keep this context.\nCan it proceed now?', follow_up_to: first.request_id, card_id: first.context.anchor.page_id })
+  expect(records.at(-1)!.conversation_id).toBe(first.conversation_id)
+  expect(question).toHaveValue('')
+  expect(stop).toHaveBeenCalledTimes(2)
+})
+
+it.each(['card', 'worker', 'relationship'] as const)('embeds the shared composer for a selected %s without adding compact card chrome', async kind => {
+  const { container } = mount(), task = card(container)
+  expect(within(task).queryByRole('textbox')).toBeNull()
+  const target = kind === 'card' ? task : kind === 'worker' ? worker(container) : container.querySelector<SVGPathElement>('.ov-relationship-hit')!
+  drag(target, [180, 100])
+  const inspector = screen.getByLabelText('Inspector')
+  const text = within(inspector).getByRole('textbox', { name: /^Question about/ })
+  fireEvent.change(text, { target: { value: 'Explain this item.' } })
+  fireEvent.keyDown(text, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  const anchor = kind === 'card' ? { card_id: fixtureId(1) } : { target: { kind: kind === 'worker' ? 'execution' : 'claim', id: target.getAttribute(kind === 'worker' ? 'data-entity-id' : 'data-claim-id') } }
+  expect(requests[0]).toMatchObject({ ...anchor, question: 'Explain this item.', view: { scene: 'overview' } })
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
