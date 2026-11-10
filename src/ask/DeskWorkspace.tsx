@@ -74,6 +74,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     filter: { search: presentation.state.search ?? emptySearch(), searchFocus: presentation.state.searchFocus, searchReveal: presentation.state.searchReveal, status: presentation.state.statusFilter, donut: presentation.state.donutFilter, exceptions: presentation.state.exceptionsOnly },
     group: presentation.state.organizer,
   }), saved => {
+    if (search.isHistoryNavigation()) { views?.navigated(); return }
     handledOrigin.current = null
     // Workspace Back may only be dismissing a reopened search palette. Restore
     // its saved focus as well as the query; set-search intentionally clears it.

@@ -522,11 +522,11 @@ describe('initiative selection applies the canonical filter', () => {
     expect(preferences().search.facets).toEqual([])
   })
 
-  it.each(['Escape', 'Restore previous view'])('restores the previous filter state with %s and preserves card-result reveal', exit => {
+  it.each(['Escape', 'Restore previous view'])('restores the temporary view with %s while retaining the selected initiative', exit => {
     const { container } = mount()
     fireEvent.click(screen.getByRole('button', { name: /^Filter Cards: Waiting For,/ }))
-    const saved = { search: { query: '', patterns: [], facets: [] }, ...preferences() }, before = cardIds(container)
     chooseInitiative()
+    const saved = preferences(), before = cardIds(container)
     fireEvent.keyDown(window, { key: 'k', metaKey: true })
     search('Release Coordinator')
     expect(screen.getByRole('option', { name: /Release Coordinator.*Outside current view/ })).toBeTruthy()
@@ -537,6 +537,7 @@ describe('initiative selection applies the canonical filter', () => {
     else fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
     expect(preferences()).toEqual(saved)
     expect(cardIds(container)).toEqual(before)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' }))
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('Tin unrelated task')
     fireEvent.click(screen.getByRole('option', { name: /Tin unrelated task/ }))
     expect(preferences().search?.facets ?? []).toEqual([])

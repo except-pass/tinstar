@@ -70,8 +70,11 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     if (!state.searchFocus && state.search !== appliedSearch.current) snapshot.current = null
   }
   const restoreView = (saved: ViewSnapshot, clear = false) => {
-    const { searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
-    send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : saved.state.search ?? emptySearch(), searchReveal: searchReveal ?? null, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
+    const { searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, linksVisible, arrangement, sort } = saved.state
+    // Search only owns its temporary lens. Explicit filter edits (including
+    // initiative selection) remain applied when the previous view is restored.
+    const { statusFilter, donutFilter } = state
+    send({ type: 'restore-search-view', view: { search: clear ? emptySearch() : state.search ?? emptySearch(), searchReveal: searchReveal ?? null, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
     setRoots(saved.roots); setDetails(saved.details); setDensity(saved.density); saveOverviewDensity(saved.density)
     restorePending.current = saved
   }
@@ -129,6 +132,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
       ignorePop.current = false; return
     }
     if (!active || !snapshot.current || previousDepth <= historyEntries.current) return
+    views?.navigated()
     if (open) dismiss(false); else restore(false, false)
   }
   useEffect(() => {
@@ -138,7 +142,11 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
   }, [])
-  return { remember, dismiss, isRestoring: () => !!restorePending.current, open, focused: !!state.searchFocus || !!appliedSearch.current && state.search === appliedSearch.current, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target], initiative?: string) => {
+  // Workspace history runs in capture phase and may render before our pop
+  // listener. Let it identify search-owned navigation before replaying a stale
+  // workspace snapshot over the latest explicit filters.
+  const isHistoryNavigation = () => !!ignorePop.current || !!snapshot.current && historyEntries.current > ownedHistoryDepth()
+  return { remember, dismiss, isHistoryNavigation, isRestoring: () => !!restorePending.current, open, focused: !!state.searchFocus || !!appliedSearch.current && state.search === appliedSearch.current, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target], initiative?: string) => {
     if (!scene || [target, ...targets].some(item => !targetExists(scene, item, state))) return false
     remember()
     leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
