@@ -187,8 +187,7 @@ and activity history, evidence and safe source links. Next to Open Notion card, 
 copies that card's URL. Task prose loads on demand;
 partial content labels omissions and unavailable content offers the source link.
 Worker terminal links use the exact-home resolver and open the safe viewer
-separately. The Inspector exposes [Update work and Start work](workflow.md), and
-Overview offers Create work outside Waiting For grouping through the same shared workflow policy and readback.
+separately. The Inspector exposes [Update work and Start work](workflow.md).
 Closing the Inspector restores focus to the floor card.
 
 The [Ask reference](ask.md) owns the Desk inbox layout, question submission,

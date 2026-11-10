@@ -1,10 +1,11 @@
 # Shared workflow operations
 
-Tin Star owns workflow recording; Notion remains authoritative. Overview’s
-**Create work** and the Inspector’s **Update work** and **Start work** forms call
-the same backend operations as the authenticated MCP. Work tools require no open
-browser or `scene_id`. Explicit window selection and acknowledgment still govern
-presentation focus/flash.
+Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
+**Update work** and **Start work** forms call the same backend operations as the
+authenticated MCP. `create_work` remains available through authenticated MCP;
+the UI workflow endpoint does not accept creation, and Overview has no creation
+control. Work tools require no open browser or `scene_id`. Explicit
+window selection and acknowledgment still govern presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
 the existing Notion reader, scene/link projection and Smart Search predicates.
@@ -115,12 +116,11 @@ and screenshots use fixtures and do not establish live acceptance.
 ## Slice 2: remaining operations and First Mate integration
 
 `create_work` and `update_work` extend `WorkflowOperations`, the existing
-`start_work` policy, the authenticated MCP/tunnel, and compact Overview/Inspector
-surfaces. The **Create work** action requires a name, owner and area; the
-Inspector's **Update work** form collects each operation's coupled inputs. Neither
-surface needs Notion open. Inspector details include bounded comments as well as
-body prose. A card leaving the current filter remains in the Inspector with its
-last confirmed readback so a partial save can still be seen and retried.
+`start_work` policy, and the authenticated MCP/tunnel. `create_work` requires a
+name, owner and area. The Inspector's **Update work** form collects each update
+operation's coupled inputs and needs no Notion window. Inspector details include
+bounded comments as well as body prose. A card leaving the current filter remains in the
+Inspector with its last confirmed readback so a partial save can still be seen and retried.
 
 `create_work({operation_id,name,owner,area,status?,properties?,content?})` creates
 one page in the configured data source. Initial status is Queued by default;

@@ -333,10 +333,10 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
     expect(parse(await client.callTool({ name: 'update_work', arguments: input }))).toEqual(ui)
   }
   const create = { operation_id: 'parity-create', name: 'Created across UI/MCP', owner: 'Firstmate', area: 'Engineering', content: { brief: 'Created with a fixture source' } }
-  const createdUi = await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'create', input: create }) })
-  const created = (await createdUi.json()).data
+  const created = parse(await client.callTool({ name: 'create_work', arguments: create }))
   expect(created).toMatchObject({ outcome: 'saved' })
   expect(parse(await client.callTool({ name: 'create_work', arguments: create }))).toEqual(created)
+  expect((await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'create', input: create }) })).status).toBe(400)
   expect((await remote.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work']))
   const noAuth = await fetch(`${base}/api/reconciliation/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'tools/call', params: { name: 'update_work', arguments: { card_id: id, operation_id: 'unauthorized', kind: 'complete', disposition: 'x', evidence: 'x' } } }) })
   expect(noAuth.status).toBe(401)

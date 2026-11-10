@@ -176,12 +176,11 @@ export class ReconciliationMcp {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     if (path === '/api/reconciliation/workflow') {
       try {
-        const request = z.object({ operation: z.enum(['search', 'get', 'start', 'update', 'create', 'rules']), input: z.unknown().optional() }).strict().parse(await body(req))
+        const request = z.object({ operation: z.enum(['search', 'get', 'start', 'update', 'rules']), input: z.unknown().optional() }).strict().parse(await body(req))
         if (request.operation === 'rules') return ok(res, workflowRules, { headers })
         if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
         if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
         if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(updateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
-        if (request.operation === 'create') return ok(res, await this.readers.createWork?.(createWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
         return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
       } catch { return fail(res, 'BAD_REQUEST', 'Invalid workflow request; use the shared workflow operation schema', { headers }) }
     }
