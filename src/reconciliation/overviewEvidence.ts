@@ -45,6 +45,7 @@ export interface PatternCoverage {
   unavailableCardIds: string[]
   total: number
   evaluated: number
+  confirmed: number
   label: string
   reasons: string[]
 }
@@ -55,21 +56,15 @@ export function patternCheckSummary(cardIds: Iterable<string>, results: Readonly
   const unavailableCardIds = visible.filter(id => results.get(id)!.outcome === 'unavailable')
   const unknown = unavailableCardIds.map(id => results.get(id)!)
   if (!unknown.length) return null
-  const reasons = new Set(unknown.flatMap(result => result.reason.split('; ').map(reason => {
-    if (/source read failed/i.test(reason)) return 'source read failed'
-    if (/Notion source/i.test(reason)) return 'Notion source unavailable or stale'
-    if (/Work status is not published/i.test(reason)) return 'work status unknown'
-    if (/last reported|observation |liveness not observed/i.test(reason)) return 'worker observations incomplete or stale'
-    if (/Home snapshot/i.test(reason)) return 'worker snapshots unavailable or stale'
-    if (/(?:Running|Runnable) state unknown/i.test(reason)) return 'worker state unknown'
-    if (/Worker decision requests/i.test(reason)) return 'worker decision evidence unavailable'
-    if (/accountability|source, link|assignment coverage/i.test(reason)) return 'assignment evidence incomplete'
-    if (/Runnable.*(?:coverage|unknown|availability)/i.test(reason)) return 'runnable work unknown'
-    if (/resolver.*(?:coverage|unknown)/i.test(reason)) return 'resolver coverage incomplete'
-    if (/Tracked continuation/i.test(reason)) return 'continuations not checked'
-    if (/Meaningful progress|heartbeat\/check-in age|no threshold can/i.test(reason)) return 'progress time unknown'
-    return reason
-  }).filter(Boolean)))
-  return { unavailableCardIds, total: visible.length, evaluated: visible.length - unknown.length,
-    label: `Pattern unknown: ${unknown.length}`, reasons: [...reasons] }
+  // Keep machine provenance in each card's inspector; the dial needs one useful reason.
+  const reasons = [...new Set(unknown.map(result => {
+    if (/source read failed|Notion source/i.test(result.reason)) return 'Card updates are missing or out of date'
+    if (/Work status is not published/i.test(result.reason)) return 'Work status is missing'
+    if (/Meaningful progress|heartbeat\/check-in age|no threshold can/i.test(result.reason)) return 'Progress timing is missing'
+    if (/Tracked continuation/i.test(result.reason)) return 'Follow-on work has not been checked'
+    return 'Worker or assignment evidence is missing'
+  }))]
+
+  return { unavailableCardIds, total: visible.length, evaluated: visible.length - unknown.length, confirmed: visible.filter(id => results.get(id)!.outcome === 'match').length,
+    label: `${unknown.length} not evaluated`, reasons }
 }

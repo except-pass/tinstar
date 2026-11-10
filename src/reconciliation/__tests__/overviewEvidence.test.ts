@@ -323,8 +323,8 @@ describe('selected pattern coverage', () => {
       ['outside', result('Notion source unavailable')],
     ])
     expect(patternCheckSummary(['a', 'a', 'b', 'c', 'd', 'e', 'not-evaluated'], results)).toEqual({
-      unavailableCardIds: ['a', 'b', 'c'], total: 5, evaluated: 2, label: 'Pattern unknown: 3',
-      reasons: ['worker state unknown', 'progress time unknown'],
+      unavailableCardIds: ['a', 'b', 'c'], total: 5, evaluated: 2, confirmed: 1, label: '3 not evaluated',
+      reasons: ['Worker or assignment evidence is missing', 'Progress timing is missing'],
     })
     expect(results.get('d')!.outcome).toBe('match')
     expect(results.get('e')!.outcome).toBe('no-match')
@@ -338,7 +338,7 @@ describe('selected pattern coverage', () => {
   it('describes 127 unavailable cards without implying broken links or requests', () => {
     const results = new Map(Array.from({ length: 127 }, (_, id) => [String(id), result('Worker decision requests or assignment coverage are incomplete')]))
     expect(patternCheckSummary(results.keys(), results)).toMatchObject({
-      total: 127, evaluated: 0, label: 'Pattern unknown: 127', reasons: ['worker decision evidence unavailable'],
+      total: 127, evaluated: 0, confirmed: 0, label: '127 not evaluated', reasons: ['Worker or assignment evidence is missing'],
     })
   })
   it.each(['blank', 'empty', 'verified', 'conflict', 'missing-home', 'stale-home', 'partial-home'] as const)(
