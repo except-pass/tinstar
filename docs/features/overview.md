@@ -219,16 +219,23 @@ as an empty board. See the [source configuration reference](reconciliation-floor
 
 ## Waiting For dependency groups
 
-Selecting only **Waiting For** in the card status donut/menu, or as the sole
-Custom status, replaces the Work organizer with dependency groups in either
-density. The Workers pane retains its organizer, worker status choices and
+Click the labelled **Waiting For** chip in the top bar, or open **Choose pattern**
+and select **Waiting For**, to show dependency groups in either density. Both
+controls are reachable with Tab and activate with Enter or Space; in the pattern
+list, use arrow keys and Enter to select the entry. These entries select only
+Waiting For in the card status filter while preserving worker status choices.
+The chip shows its pressed state and clears the card status selection when clicked
+again. Selecting only **Waiting For** in the card status donut/menu, or as the sole
+Custom status, also replaces the Work organizer with dependency groups.
+The Workers pane retains its organizer, worker status choices and
 relationship context instead of narrowing to workers linked to Waiting For cards.
 The existing toolbar and Search remain shared. Leaving this status selection
 returns to the saved Work organizer without resetting selection or relationships.
 Waiting for Prod Release is excluded.
 
 The Work header shows the current matching Waiting For scope count and inline
-All / Actor / Event / Work choices. All is selected on entry; these choices filter
+All / Actor / Event / Work choices. On narrow screens, entry scrolls the Work
+header into view. All is selected on entry; these choices filter
 dependency groups only. Categories appear in Actor, Event, Work order. Each card
 contributes once by canonical Notion ID to its primary dependency. The deterministic
 projection and normalization rules live in
@@ -295,8 +302,11 @@ the dial. One notch or scroll step moves one pattern; small trackpad movements
 accumulate before the first step. Within a pixel-scroll burst, decreasing deltas
 are suppressed after that step, while equal or increasing deltas keep turning
 the dial. A direction change or about 200 ms of silence starts a new burst.
-Hold the dial for about half a second, or press Enter or Alt+Down, to open every
-pattern in that order with the same counts and reminders. Arrows move in the list,
+Click **Choose pattern**, hold the dial for about half a second, or press Enter
+or Alt+Down on the dial to open every pattern in that order with the same counts
+and reminders. The list also ends with a
+[Waiting For entry](#waiting-for-dependency-groups), outside the circular detents.
+Arrows move in the list,
 Enter selects one, and Escape closes it and returns focus to the dial. Moving more
 than a few pixels cancels the hold, so a swipe still turns one detent and a short
 click still selects a neighbor or opens the center details.
