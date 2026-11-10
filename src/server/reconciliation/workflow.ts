@@ -147,14 +147,14 @@ export class WorkflowOperations {
   createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<ClawsonMergePlan>): Promise<StartWorkResult> {
     const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
     return this.serialize('create', input, actor, async () => {
-      const previous = await this.creations.get(JSON.stringify([actor, input.operation_id]))
-      if (previous && previous.input !== signature) return { outcome: 'not-saved', code: 'operation-conflict', message: 'This click was already used with a different selection.', operation_id: input.operation_id, saved_fields: [] }
-      if (previous?.cardId) {
-        const card = await this.reader.card(previous.cardId, true)
-        return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card }
-      }
-      if (previous) {
-        try {
+      try {
+        const previous = await this.creations.get(JSON.stringify([actor, input.operation_id]))
+        if (previous && previous.input !== signature) return { outcome: 'not-saved', code: 'operation-conflict', message: 'This click was already used with a different selection.', operation_id: input.operation_id, saved_fields: [] }
+        if (previous?.cardId) {
+          const card = await this.reader.card(previous.cardId, true)
+          return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card }
+        }
+        if (previous) {
           const card = await this.findCreation(actor, input.operation_id, clawsonMergeTitle(input))
           if (!card) return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation remains unconfirmed; this retry will not create a duplicate.', operation_id: input.operation_id, saved_fields: [] }
           await this.creations.put(JSON.stringify([actor, input.operation_id]), signature, card.id)
@@ -162,9 +162,9 @@ export class WorkflowOperations {
           this.reader.confirm(current)
           await this.changed({ card: current, actor, operationId: input.operation_id, properties: {} })
           return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card: current }
-        } catch {
-          return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation could not be reconciled; retry to retrieve its receipt.', operation_id: input.operation_id, saved_fields: [] }
         }
+      } catch {
+        return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation could not be reconciled; retry to retrieve its receipt.', operation_id: input.operation_id, saved_fields: [] }
       }
       const prepared = await prepare()
       const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })

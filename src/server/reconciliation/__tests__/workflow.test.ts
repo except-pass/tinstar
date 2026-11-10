@@ -2,7 +2,7 @@ import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
 import { readerRepositories } from '../../../shared/actions'
 import { checkInReport } from '../checkInWatchdog'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server } from 'node:http'
@@ -1129,5 +1129,25 @@ it.each(['already merged', 'head changed', 'GitHub unavailable'].flatMap(reason 
   expect(searches).toHaveLength(page + 1)
   for (const search of searches) expect(search.body.filter).toEqual({ property: 'Name', title: { equals: 'Admin merge 1 PR: owner/repo' } })
   if (page === 1) expect(searches[1]!.body.start_cursor).toBe('1')
+  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+})
+
+
+it.each(['receipt store', 'confirmed card'])('preserves Clawson creation uncertainty when reading the %s fails after restart', async failure => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-receipt-read-')); roots.push(root)
+  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
+  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection', script: 'set -euo pipefail' }))
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved' })
+  const receiptPath = join(root, 'workflow-create-receipts.json')
+  const receipt = await readFile(receiptPath, 'utf8')
+  const restarted = new WorkflowOperations(f.reader, async () => [], root)
+  prepare.mockRejectedValue(new Error('Head advanced; preflight must not run'))
+  if (failure === 'receipt store') await writeFile(receiptPath, 'unreadable receipt')
+  else vi.spyOn(f.reader, 'card').mockRejectedValueOnce(new Error('Notion unavailable'))
+  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed', saved_fields: [] })
+  if (failure === 'receipt store') await writeFile(receiptPath, receipt)
+  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32) } })
+  expect(prepare).toHaveBeenCalledTimes(1)
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
 })
