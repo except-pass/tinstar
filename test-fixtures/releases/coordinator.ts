@@ -21,4 +21,3 @@ export function coordinatorExport(options: { partial?: boolean; rollback?: boole
   const bundle: any = { schema: 'tinstar.cmsandbox-production-export.v1', repository: 'fortresspower/cmsandbox', bucket: 'fortresspower-cmsandbox-release-prod-298117917676', collectedAt: '2026-11-06T18:15:00Z', control: { head }, journal: { [head]: event }, journalMetadata: { [head]: { lastModified: '2026-11-06T18:10:00Z' } }, objects: { [manifest]: candidate, [planRef]: plan, [inputRef]: inputs, [buildRef]: build } }
   return { bundle, event, release, candidate, plan, step, source, head }
 }
-
