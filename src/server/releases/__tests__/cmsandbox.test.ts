@@ -78,3 +78,20 @@ it('invalidates an old completed binding when the committed head supersedes it w
   bundle.journal[digest] = superseded; bundle.journalMetadata[digest] = { lastModified: '2026-11-06T18:12:00Z' }; bundle.control.head = digest
   expect(cmsandboxReceipts(bundle)[0]).toMatchObject({ outcome: 'partial' })
 })
+
+it('loads frozen candidate objects without any production control or journal', async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { readCoordinatorBundle } = await import('../coordinatorStore')
+  const { coordinatorReleaseObjects } = await import('../objects')
+  const { bundle } = coordinatorExport()
+  const root = await mkdtemp(join(process.cwd(), '.candidate-export-'))
+  try {
+    await mkdir(join(root, 'objects'))
+    for (const [id, value] of Object.entries(bundle.objects)) await writeFile(join(root, 'objects', `${id.slice(7)}.json`), JSON.stringify(value))
+    const loaded = await readCoordinatorBundle(root)
+    expect(cmsandboxReceipts(loaded)).toEqual([])
+    const releases = coordinatorReleaseObjects({ status: 'snapshot', collectedAt: null, warnings: [], receipts: [], repositories: new Map(), requirements: new Map(), coordinatorSources: [{ bundle: loaded, asOf: bundle.collectedAt, historical: true }] })
+    expect(releases).toEqual([expect.objectContaining({ kind: 'candidate', version: 'v1.24.0', targets: [expect.objectContaining({ component: 'manager-analysis', receipt: null })] })])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

@@ -23,7 +23,14 @@ export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject
       const observed = previous?.observed || Object.values(record?.steps ?? {}).some((step: any) => !!step.verified)
       bindings.set(key, { digest, event, observed: !!observed })
     }
-    for (const { digest, event, observed } of [...bindings.values()].reverse()) {
+    const entries = [...bindings.values()].reverse()
+    const boundPlans = new Set(entries.map(({ event }) => event.binding.plan))
+    for (const [planId, plan] of Object.entries(bundle.objects) as Array<[string, any]>) {
+      const candidate = bundle.objects[plan?.candidate]
+      if (boundPlans.has(planId) || receiptHash(plan) !== planId || !candidate || receiptHash(candidate) !== plan.candidate) continue
+      entries.push({ digest: '', observed: false, event: { binding: { plan: planId, manifest: plan.candidate, release_id: candidate.tag?.name ?? planId } } })
+    }
+    for (const { digest, event, observed } of entries) {
       const binding = event.binding, plan = bundle.objects[binding.plan], candidate = bundle.objects[binding.manifest]
       if (!plan || !candidate || plan.candidate !== binding.manifest) continue
       const targetMap = new Map<string, ReleaseTarget>()
@@ -42,7 +49,7 @@ export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject
       const common = { repository: bundle.repository, version: String(candidate.tag?.name ?? binding.release_id), sourceSha: candidate.tag?.sha ?? null,
         candidateId: binding.manifest, planId: binding.plan, scope: Object.keys(candidate.desired ?? {}),
         observedAt: bundle.journalMetadata[digest]?.lastModified ?? null,
-        provenance: { source: 'Coordinator frozen manifest, plan and committed PROD journal', asOf: source.asOf, historical: source.historical || evidence.status !== 'fresh' },
+        provenance: { source: digest ? 'Coordinator frozen manifest, plan and committed PROD journal' : 'Coordinator frozen manifest and plan', asOf: source.asOf, historical: source.historical || evidence.status !== 'fresh' },
         membership: { status: 'pending' as const, baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: [],
         gaps: [...evidence.warnings, ...(plan.coverage_gaps ?? []), ...(plan.compatibility_gaps ?? [])].map(String) }
       const candidateId = `${bundle.repository}:candidate:${binding.manifest}:${binding.plan}`
@@ -50,10 +57,10 @@ export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject
         state: plan.readiness === 'ready' ? 'Ready' : plan.readiness === 'blocked' ? 'Blocked' : 'Needs review',
         evidenceUrl: `https://github.com/${bundle.repository}/tree/${common.sourceSha}` })
       if (!observed) continue
-      const receipts = cmsandboxReceipts({ ...bundle, control: { head: digest } }).filter(receipt => receipt.id.startsWith(`${digest}:`))
+      const receipts = cmsandboxReceipts({ ...bundle, control: { head: digest } }, false).filter(receipt => receipt.id.startsWith(`${digest}:`))
       const targets = [...targetMap.values()].map(target => ({ ...target, receipt: receipts.find(receipt => receipt.component === target.component && receipt.target === target.target) ?? null }))
       const productionId = `${bundle.repository}:production:${binding.release_id}:${digest}`
-      const state = event.result?.status === 'superseded' ? 'Superseded' : targets.length && targets.every(target => target.receipt?.outcome === 'succeeded') ? 'Needs review' : 'Partial rollout'
+      const state = event.result?.status === 'superseded' ? 'Superseded' : event.command?.type === 'close' && event.state?.releases?.[binding.release_id]?.status === 'completed' && targets.length && targets.every(target => target.receipt?.outcome === 'succeeded') ? 'Needs review' : 'Partial rollout'
       releases.set(productionId, { ...common, id: productionId, kind: 'production', executionId: digest, targets, state,
         evidenceUrl: receipts[0]?.receiptUrl ?? null,
         gaps: [...common.gaps, ...(state === 'Superseded' ? ['This historical attempt was superseded; it does not certify current production'] : [])] })

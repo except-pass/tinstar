@@ -28,6 +28,23 @@ describe('authoritative coordinator release objects', () => {
     const objects = coordinatorReleaseObjects(source(options).evidence)
     expect(objects.find(row => row.kind === 'production')?.state).toBe('Partial rollout')
   })
+  it('discovers frozen plans before a production binding exists', () => {
+    const { evidence, bundle } = source()
+    bundle.control.head = null; bundle.journal = {}; bundle.journalMetadata = {}
+    expect(coordinatorReleaseObjects(evidence)).toEqual([expect.objectContaining({ kind: 'candidate', version: 'v1.24.0', executionId: null, observedAt: null })])
+    const planId = Object.keys(bundle.objects).find(id => bundle.objects[id].candidate)!
+    bundle.objects[planId].readiness = 'blocked'
+    expect(coordinatorReleaseObjects(evidence)).toEqual([])
+  })
+  it('retains verified target delivery on a stopped execution without certifying writer receipts', () => {
+    const { evidence, bundle, event, release } = source()
+    release.status = 'stopped'; event.command.type = 'finish'
+    const digest = receiptHash(event)
+    bundle.control.head = digest; bundle.journal = { [digest]: event }
+    bundle.journalMetadata[digest] = { lastModified: '2026-11-06T18:10:00Z' }
+    expect(coordinatorReleaseObjects(evidence).find(row => row.kind === 'production')).toMatchObject({ state: 'Partial rollout', targets: [{ receipt: { outcome: 'succeeded', exceptions: [] } }] })
+    expect(cmsandboxReceipts(bundle)[0]!.outcome).toBe('partial')
+  })
   it('retains separate same-tag attempts and marks superseded evidence explicitly', () => {
     const { bundle, event, head, evidence } = source()
     const terminal = { ...event, previous: head, state: { releases: {} }, result: { status: 'superseded' } }
