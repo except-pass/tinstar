@@ -869,3 +869,39 @@ it('does not wake for successful Firstmate notes when unsupported body blocks le
   expect(notices).toHaveLength(1)
   expect(JSON.parse(notices[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'human-after-self', text: 'Human comment remains actionable', author: 'human-author' }] })
 })
+
+it.each(['brief', 'acceptance_criteria', 'both-sections', 'note', 'comment', 'property'] as const)('retains confirmed %s effects across successful callbacks with partial body context', async effect => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  for (const name of ['brief', 'acceptance_criteria']) f.blocks.push({ id: name, type: 'paragraph', paragraph: { rich_text: [{ plain_text: `Tin Star section: ${name}\nOriginal ${name}` }] } })
+  const root = await mkdtemp(join(tmpdir(), 'workflow-confirmed-effects-')); roots.push(root)
+  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  sources.workflow.onChange = change => feed.confirmed(change)
+  await feed.sweep(true)
+  const initial = await sources.currentCard(id)
+  await feed.confirmed({ before: initial, card: initial, actor: 'Firstmate', operationId: 'baseline', properties: {} })
+  f.blocks.push({ id: 'unsupported-image', type: 'image', image: {} })
+  vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
+  await feed.sweep(true)
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  for (const notice of (await feed.bridgeWork()).pending) await feed.ingest({ request_id: notice.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: notice.request_id, request_id: inboxRequestId(notice.request_id) } })
+  const content = effect === 'both-sections' ? { brief: 'Confirmed brief', acceptance_criteria: 'Confirmed acceptance' }
+    : effect === 'brief' || effect === 'acceptance_criteria' ? { [effect]: `Confirmed ${effect}` } : undefined
+  for (let round = 0; round < 2; round++) {
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    expect(await sources.updateWork({ card_id: id, operation_id: `confirmed-${effect}-${round}`, kind: 'edit',
+      ...(round === 0 && content ? { content } : {}), ...(round === 0 && effect === 'property' ? { properties: { Name: 'Confirmed name' } } : {}),
+      note: `Confirmed history ${round}` }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    await feed.sweep()
+    vi.setSystemTime(new Date(Date.now() + 10_001))
+    expect((await feed.bridgeWork()).pending).toEqual([])
+  }
+  f.blocks[0].paragraph.rich_text = [{ plain_text: 'Human changed an unrelated paragraph' }]
+  vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
+  await feed.sweep(true)
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const human = (await feed.bridgeWork()).pending
+  expect(human).toHaveLength(1)
+  expect(JSON.parse(human[0]!.body.split('\n').slice(1).join('')).changes[0].body_sections).toEqual(['body-1'])
+})

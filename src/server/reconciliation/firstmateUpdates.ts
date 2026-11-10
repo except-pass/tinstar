@@ -158,11 +158,17 @@ export class FirstmateUpdates {
         const bounded = boundedItem(item)
         this.add(state, actor, bounded)
       }
+      const confirmedBaseline = (previous: CardContextRead['blocks'] | undefined, comments: boolean) => {
+        const confirmed = (context?.blocks ?? []).filter(block => own && (comments
+          ? block.type === 'comment' && own.notes?.some(note => noteMatches(block.text, note))
+          : block.type !== 'comment' && own.sectionTexts?.some(text => block.text === contextText(text))))
+        return confirmed.length ? [...new Map([...(previous ?? []), ...confirmed].map(block => [block.id, block])).values()] : previous
+      }
+      const details = context?.outcome === 'available' && !commentsOnly ? context.blocks : confirmedBaseline(baseline?.details, false)
+      const comments = context && (context.commentsOutcome ?? context.outcome) === 'available' ? context.blocks.filter(block => block.type === 'comment') : confirmedBaseline(baseline?.comments, true)
       const operations = [...(old?.operations ?? []), ...(!operationSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
-      this.baselines.set(card.id, { properties: after,
-        ...(context?.outcome === 'available' && !commentsOnly ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}),
-        ...(context && (context.commentsOutcome ?? context.outcome) === 'available' ? { comments: context.blocks.filter(block => block.type === 'comment') } : baseline?.comments ? { comments: baseline.comments } : {}) })
+      this.baselines.set(card.id, { properties: after, ...(details ? { details } : {}), ...(comments ? { comments } : {}) })
     })
   }
   /** Called from the existing refresh callback, never a second scheduler. */
