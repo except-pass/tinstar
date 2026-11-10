@@ -337,3 +337,39 @@ it('prioritizes explicit card targets over retained items and reveals them throu
   expect(screen.queryByLabelText('Selected decision')).toBeNull()
   expect(screen.queryByLabelText('Card context')).toBeNull()
 })
+
+it.each(['item', 'card'] as const)('focus supersedes a prior %s queue target in rendered Decisions', openKind => {
+  const scene = fixtureScene(), queue = fixtureQueue()
+  const source = (id: string, question: string): QueueSource => {
+    const request = { home: 'test-home', taskId: id, kind: 'decision' as const, id }
+    return { kind: 'firstmate', id, field: 'decision', request, action: question, responseAnchor: requestAnchor(request), readiness: 'ready-now', status: 'fresh', coverage: 'complete', observedAt: null, expiresAt: null }
+  }
+  queue.items = [
+    { ...queue.items[0]!, id: 'request-a', cardIds: [fixtureId(1)], readiness: 'ready-now', sources: [source('a', 'Approve the first request?')] },
+    { ...queue.items[0]!, id: 'request-b', cardIds: [fixtureId(5)], readiness: 'ready-now', sources: [source('b', 'Approve the second request?')] },
+  ]
+  workspace.value.queue = queue
+  workspace.value.submit = vi.fn()
+  const opened = applyPresentationAction(state, { type: 'open-queue', ...(openKind === 'item' ? { itemId: 'request-a' } : { cardId: fixtureId(1) }) }, scene, Date.now(), queue)
+  expect(opened.outcome).toBe('applied')
+  state = opened.state
+  workspace.value.state = state
+  const view = render(<Decisions />)
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'request-a')
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'no matching question' } })
+  const scrolled: Element[] = []
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this) })
+  const focused = applyPresentationAction(state, { type: 'focus', target: { kind: 'card', id: fixtureId(5) }, origin: 'manual' }, scene, Date.now(), queue)
+  expect(focused.outcome).toBe('applied')
+  expect(focused.state).toMatchObject({ selection: { kind: 'card', id: fixtureId(5) }, queueOpen: false, queueCardId: null })
+  state = focused.state
+  workspace.value.state = state
+  view.rerender(<Decisions />)
+  const detail = screen.getByLabelText('Selected decision')
+  expect(detail).toHaveAttribute('data-decision-id', 'request-b')
+  expect(within(detail).getByText('Approve the second request?')).toBeVisible()
+  expect(within(detail).queryByText('Approve the first request?')).toBeNull()
+  expect(within(detail).getByRole('slider', { name: 'Slide to dismiss' })).toBeVisible()
+  expect(view.container.querySelector('.decisions-row')).toHaveAttribute('data-decision-id', 'request-b')
+  expect(scrolled.at(-1)).toHaveAttribute('data-decision-id', 'request-b')
+})
