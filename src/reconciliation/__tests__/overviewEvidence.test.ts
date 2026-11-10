@@ -144,7 +144,7 @@ describe('card worker facts', () => {
     expect(gapTargets(scene, now).some(target => target.kind === 'card' && target.id === card.id)).toBe(gap)
     const health = sceneWorkHealth(scene, now).find(health => health.cardId === card.id)!
     for (const pattern of ['unstaffed', 'stalled'] as const) {
-      expect(health.patterns[pattern].outcome).toBe(report === 'current' ? 'no-match' : report === 'stale' ? 'unavailable' : 'match')
+      expect(health.patterns[pattern].outcome).toBe(report === 'current' ? 'no-match' : report === 'stale' || pattern === 'stalled' ? 'unavailable' : 'match')
     }
   })
   it('uses fresh current state for running and counts multiple workers', () => {

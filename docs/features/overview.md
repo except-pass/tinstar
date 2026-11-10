@@ -300,9 +300,6 @@ the previous view. Each card's Inspector → Evidence & diagnostics retains the
 selected verdict and source evidence. Unknown pattern coverage is separate from
 confirmed findings and does not establish a broken worker link or a request for you.
 No pattern, or no unavailable results, adds no coverage indicator or floor row.
-A current tracked external-worker report rules out Unstaffed/Stalled; a stale report
-keeps execution unknown. External reports retain their consumer-reported provenance
-and do not establish independently verified runtime evidence for Active.
 
 Search and patterns are read-only and never send Ask requests or change Notion,
 assignment or execution state.
@@ -387,6 +384,12 @@ The inspectable builtin definitions live in `patternDefinitions`:
 | Idle workers | Requires no runnable assignment and distinction from intentional waits/terminal history. Unavailable because assignment availability is unpublished. |
 | State mismatch | Requires lifecycle disagreement after excluding tracked continuations. Unavailable because continuation coverage is unpublished. |
 | Stale | Requires a meaningful-progress timestamp and an inspected threshold. Unavailable because progress time is unpublished; heartbeat/check-in/edit age is not substituted. |
+
+A current tracked external-worker report rules out Unstaffed/Stalled; a stale report
+keeps execution unknown. The [scene finding rules](reconciliation-floor.md#reconciled-scene-s2)
+govern execution-gap conclusions used by No worker and gap styling. External reports retain their
+[consumer-reported provenance](workflow.md#start-contract-and-enforced-rules)
+and do not establish independently verified runtime evidence for Active.
 
 The dial exposes missing evidence through unknown counts and the reminder,
 without disabled buttons or an additional patterns menu. Multiple blocked workers

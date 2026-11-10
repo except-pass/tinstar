@@ -2,7 +2,6 @@ import { expect, test, type Page, type Locator } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fixtureId, fixtureReadinessScene, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
@@ -82,13 +81,14 @@ test.beforeEach(async ({ page }, info) => {
 })
 
 test.beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), 'tinstar-floor-'))
+  await mkdir(join(process.cwd(), '.test-runtime'), { recursive: true })
+  root = await mkdtemp(join(process.cwd(), '.test-runtime', 'tinstar-floor-'))
   await mkdir(join(root, 'config'))
   await writeFile(join(root, 'config', 'config.json'), JSON.stringify({ firstmate: { homes: [] }, reconciliation: { fleet: [] } }))
   const port = await freePort()
   base = `http://127.0.0.1:${port}`
   server = spawn(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })
@@ -711,7 +711,7 @@ test('single-row toolbar Smart Search exact identifiers, named entities and expl
   await center.focus(); await center.press('ArrowRight'); await center.press('ArrowRight'); await center.press('ArrowRight')
   await expect(center).toContainText('Needs me')
   await expect(page.locator('.ov-card')).toHaveCount(2)
-  await expect(page.locator('.ov-pattern-summary')).toHaveCount(1)
+  await expect(page.locator('.ov-pattern-summary')).toHaveCount(0)
   await expect(page.locator('.ov-card')).not.toContainText(["Can't tell", "Can't tell"])
   await screenshot(page, 'smart-search-explicit-decision')
   // Deliver disposable source snapshots through the running browser's normal refresh.
@@ -739,27 +739,27 @@ for (const width of [1440, 390]) test(`single-row toolbar Pattern Dial readiness
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
   const center = page.locator('.ov-pattern-selected')
-  await expect(center).toHaveAccessibleName('All, 2 matching tasks. Show explanation')
+  await expect(center).toHaveAccessibleName(/All, 2 matching tasks\.\s+Show explanation/)
   await center.press('ArrowLeft')
-  await expect(center).toHaveAccessibleName('Active, 1 matching tasks. Show explanation')
+  await expect(center).toHaveAccessibleName(/Active, 1 matching tasks\.\s+Show explanation/)
   await screenshot(page, `readiness-active-${width}`)
   await center.press('ArrowRight'); await center.press('ArrowRight')
-  await expect(center).toHaveAccessibleName('Stalled, 1 matching tasks. Show explanation')
+  await expect(center).toHaveAccessibleName(/Stalled, 1 matching tasks\.\s+Show explanation/)
   await center.click()
   await expect(page.getByRole('tooltip')).toContainText('Stalled · 1 matching tasks')
   await screenshot(page, `readiness-stalled-${width}`)
   scene = fixtureReadinessScene({ now: proofNow, stale: true })
   await page.reload()
-  await expect(center).toHaveAccessibleName('Stalled, ? matching tasks, incomplete evidence. Show explanation')
+  await expect(center).toHaveAccessibleName(/Stalled, \? matching tasks, incomplete evidence\. Selected pattern could not evaluate/)
   await center.click()
-  const tooltip = page.getByRole('tooltip')
-  await expect(tooltip).toContainText('Home snapshot stale or unreadable: /fixture/hulk')
-  await expect(tooltip).toContainText('Runnable coverage incomplete for /fixture/hulk')
+  const tooltip = page.getByRole('dialog', { name: 'Stalled pattern coverage' })
+  await expect(tooltip).toContainText('worker snapshots unavailable or stale')
+  await expect(tooltip).toContainText('runnable work unknown')
   const bounds = await tooltip.boundingBox()
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
   await screenshot(page, `readiness-unknown-${width}`)
   await center.press('Escape'); await center.press('ArrowLeft'); await center.press('ArrowLeft')
-  await expect(center).toHaveAccessibleName('Active, 1+ matching tasks, incomplete evidence. Show explanation')
+  await expect(center).toHaveAccessibleName(/Active, 1\+ matching tasks, incomplete evidence\. Selected pattern could not evaluate/)
   await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
   await expect(page.locator('.ov-donut')).toHaveCount(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
@@ -962,7 +962,7 @@ for (const density of ['compact', 'detailed']) test(`card worker facts and one u
   await expect(card(2)).toContainText('No worker')
   const center = page.locator('.ov-pattern-selected')
   await center.press('ArrowRight')
-  await expect(page.locator('.ov-pattern-summary')).toHaveCount(1)
+  await expect(page.locator('.ov-pattern-summary')).toHaveCount(0)
   await expect(page.locator('.ov')).not.toContainText("Can't tell")
   await expect(card(2)).toBeVisible()
   await screenshot(page, `in-progress-after-${density}`)
@@ -986,4 +986,101 @@ for (const density of ['compact', 'detailed']) test(`card worker facts and one u
   await card(1).click()
   await expect(card(1)).toContainText('1 worker waiting · reported 3h ago')
   await screenshot(page, `worker-facts-expanded-after-${density}`)
+})
+
+for (const width of [1440, 390]) test(`single-row toolbar scoped pattern coverage and exact drilldown at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  await page.clock.install({ time: now })
+  const sources = fixtureSources({ now })
+  const template = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+  sources.intentions.data!.cards = Array.from({ length: 127 }, (_, i) => ({ ...structuredClone(template), id: fixtureId(100 + i) }))
+  sources.fleet = []
+  const scene = new SceneReconciler().reconcile(sources, now)
+  const writes: string[] = []
+  page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) writes.push(req.url()) })
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  await page.goto(base)
+  const center = page.locator('.ov-pattern-selected')
+  await expect(page.locator('.ov-card')).toHaveCount(127)
+  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await screenshot(page, `pattern-all-${width}`)
+  await center.press('ArrowRight')
+  await expect(center).toContainText('Pattern unknown: 127')
+  await expect(page.locator('.ov-pattern-summary')).toHaveCount(0)
+  await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
+  await center.click()
+  const detail = page.getByRole('dialog', { name: 'Stalled pattern coverage' })
+  await expect(detail).toContainText('127 of 127 visible cards; 0 evaluated')
+  await expect(detail).toContainText('not a confirmed problem or request for you')
+  await screenshot(page, `pattern-unknown-${width}`)
+  await detail.getByRole('button', { name: 'Inspect 127 cards with unknown pattern' }).click()
+  await expect(page.locator('.ov-card.ov-search-match')).toHaveCount(127)
+  expect(new Set(await page.locator('.ov-card').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id'))))).toEqual(new Set(scene.cards.map(card => card.id)))
+  await screenshot(page, `pattern-drilldown-${width}`)
+  await page.getByRole('button', { name: 'Clear search focus', exact: true }).click()
+  await center.press('ArrowRight')
+  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await center.press('ArrowLeft'); await center.press('ArrowLeft')
+  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  expect(writes).toEqual([])
+})
+
+test('single-row toolbar external reports and status boundaries preserve truthful worker facts', async ({ page }) => {
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  await page.clock.install({ time: now })
+  let scene = fixtureScene({ now })
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  for (const condition of ['current', 'stale', 'different-card', 'Queued', 'Waiting For', 'Waiting for Prod Release', 'Done', 'Archived']) {
+    const sources = fixtureSources({ now })
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+    if (['current', 'stale', 'different-card'].includes(condition)) card.properties['Delegated To'] = { id: 'external', type: 'rich_text', hasMore: false, value: JSON.stringify({ schema: 'tinstar.external-worker.v1', kind: 'external', system: 'Build runner', run_id: 'one', reference: 'https://runner.example/one', card_id: condition === 'different-card' ? fixtureId(1) : card.id, observed_at: new Date(now - (condition === 'stale' ? 600000 : 0)).toISOString(), state: 'running', evidence: 'Actively compiling assigned work', reported_by: 'Clawson' }) }
+    else card.properties.Status!.value = condition
+    scene = new SceneReconciler().reconcile(sources, now)
+    await page.goto(base)
+    const customize = page.getByRole('button', { name: 'Customize', exact: true })
+    await customize.click(); await page.getByLabel('Status preset', { exact: true }).selectOption('all'); await customize.click()
+    const rendered = page.locator(`.ov-card[data-entity-id="${card.id}"]`).first()
+    await expect(rendered).toBeVisible()
+    if (condition === 'different-card') await expect(rendered).toContainText('No worker')
+    else { await expect(rendered).not.toContainText('No worker'); await expect(rendered).not.toHaveAttribute('data-tone', 'gap') }
+    await screenshot(page, `worker-boundary-${condition.replaceAll(' ', '-')}`)
+  }
+})
+
+test('single-row toolbar link evidence boundaries keep pattern unknown separate from conflicts', async ({ page }) => {
+  const { readWorkerLinks } = await import('../src/server/reconciliation/workerLinks')
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  await page.clock.install({ time: now })
+  let scene = fixtureScene({ now })
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
+  for (const condition of ['blank', 'empty', 'verified', 'conflict', 'missing-home', 'stale-home', 'partial-home']) {
+    const sources = fixtureSources({ now })
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(1))!
+    if (condition === 'blank') { card.properties['First Mate tasks']!.value = ''; card.properties['First Mate tasks']!.workerLinks = readWorkerLinks({ type: 'rich_text', rich_text: [] }) }
+    if (condition === 'empty') card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [] })
+    if (condition === 'conflict') card.properties['First Mate tasks']!.value = '{'
+    if (condition === 'missing-home') sources.fleet = []
+    if (condition === 'stale-home') sources.fleet[1]!.observation.status = 'stale'
+    if (condition === 'partial-home') sources.fleet[0]!.observation.coverage = 'partial'
+    scene = new SceneReconciler().reconcile(sources, now)
+    await page.goto(base)
+    const center = page.locator('.ov-pattern-selected')
+    await center.focus(); await center.press('Enter')
+    await page.getByRole('option', { name: /^Stale,/ }).click()
+    await expect(center).toContainText('Pattern unknown:')
+    await expect(page.locator(`.ov-card[data-entity-id="${card.id}"]`).first()).not.toContainText('No worker')
+    await center.click()
+    await expect(page.getByRole('dialog', { name: 'Stale pattern coverage' })).toContainText('progress time unknown')
+    await screenshot(page, `link-evidence-${condition}`)
+    if (condition === 'conflict') {
+      await page.keyboard.press('Escape')
+      await page.getByRole('button', { name: /· Details$/ }).click()
+      await expect(page.getByRole('region', { name: 'Source health' })).toContainText('1 card has conflicting worker evidence')
+      await screenshot(page, 'link-evidence-conflict-details')
+    }
+  }
 })

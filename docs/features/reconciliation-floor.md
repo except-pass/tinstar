@@ -178,6 +178,11 @@ The scene contains:
 
 Finding rules:
 
+An [external-worker report](workflow.md#start-contract-and-enforced-rules) for
+the same card suppresses a task execution gap: a current report accounts for
+execution, while a stale report leaves execution unknown. Absence of a First Mate
+worker alone cannot establish a gap in either case.
+
 | Finding | S2 evidence and limits |
 | --- | --- |
 | Confirmed link | See the authoritative [worker-link classifications](../notion-worker-links.md#classification). |
