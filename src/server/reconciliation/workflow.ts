@@ -3,7 +3,7 @@ import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInp
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import type { SourceSnapshot } from './index'
@@ -356,6 +356,7 @@ export class WorkflowOperations {
       await this.changed({ before: card, card, actor, operationId: input.operation_id, notes: [notePending], sections })
       return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
+      if (error instanceof ManagedSectionConflict) return { ...result(saved.length ? 'partially-saved' : 'not-saved', 'conflict', `${error.message}. Review current state and re-issue with a new operation_id.`), requires_new_operation_id: true }
       if (error instanceof NotionWriteError && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
       const partial = error instanceof WorkflowError ? { ...result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message), ...(error.requiresNewOperationId ? { requires_new_operation_id: true } : {}) }
         : result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'save-unconfirmed' : 'source-unavailable',

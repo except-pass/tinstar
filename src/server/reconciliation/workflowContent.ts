@@ -21,6 +21,7 @@ export const sectionMarker = (name: string) => `Tin Star section: ${name}`
 /** Raw internal content is used for exact write preconditions/receipts only.
  * Conversational readbacks still pass through the application's redactor. */
 export class NotionWriteError extends Error { constructor(readonly status: number) { super(`Notion HTTP ${status}`) } }
+export class ManagedSectionConflict extends Error {}
 export class WorkflowContent {
   constructor(private reader: WorkReader) {}
   async request(path: string, method = 'GET', body?: unknown) {
@@ -74,10 +75,10 @@ export class WorkflowContent {
   async section(id: string, name: string, text: string, expected?: string) {
     const marker = sectionMarker(name), desired = `${marker}\n${name === 'brief' ? 'Brief' : 'Acceptance criteria'}\n${text}`
     const sections = await this.sections(id), matches = sections.filter(block => block.text.split('\n')[0] === marker)
-    if (matches.length > 1) throw new Error('Duplicate managed sections; correct the specific section before replacing it')
+    if (matches.length > 1) throw new ManagedSectionConflict('Duplicate managed sections; correct the specific section before replacing it')
     const found = matches[0]
     if (found?.text === desired) return
-    if (expected !== undefined && (found?.text ?? '') !== expected) throw new Error('Section changed; refresh before replacing it')
+    if (expected !== undefined && (found?.text ?? '') !== expected) throw new ManagedSectionConflict('Section changed; refresh before replacing it')
     if (found) await this.request(`blocks/${found.id}`, 'PATCH', { paragraph: richText(desired) })
     else await this.request(`blocks/${id}/children`, 'PATCH', { children: [paragraph(desired)] })
     const readback = await this.sections(id)

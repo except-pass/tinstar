@@ -9,6 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
+import { WorkflowContent } from '../workflowContent'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
@@ -628,5 +629,40 @@ it.each([
       expect(f.requests.filter(r => ['PATCH', 'POST'].includes(r.method))).toHaveLength(0)
       expect(f.comments).toHaveLength(1)
     }
+  }
+})
+
+
+it.each(['brief', 'acceptance_criteria'] as const)('distinguishes definite %s conflicts from uncertain section writes', async name => {
+  for (const failure of ['changed', 'duplicate', 'uncertain'] as const) {
+    const f = fixture()
+    const original = `Tin Star section: ${name}\nOriginal content`
+    f.blocks.push({ id: 'managed', type: 'paragraph', paragraph: { rich_text: [{ plain_text: original }] } })
+    let reads = 0
+    f.controls.onRead(() => {
+      if (++reads !== 2) return
+      if (failure === 'changed') f.blocks[1].paragraph.rich_text = [{ plain_text: `Tin Star section: ${name}\nHuman edit` }]
+      if (failure === 'duplicate') f.blocks.push({ ...structuredClone(f.blocks[1]), id: 'duplicate' })
+    })
+    const request = WorkflowContent.prototype.request
+    const spy = vi.spyOn(WorkflowContent.prototype, 'request').mockImplementation(function (this: WorkflowContent, path, method, body) {
+      if (failure === 'uncertain' && path === 'blocks/managed' && method === 'PATCH') return Promise.reject(new Error('Lost API response'))
+      return request.call(this, path, method, body)
+    })
+    try {
+      const input = { card_id: id, operation_id: `section-${name}-${failure}`, kind: 'edit', content: { [name]: 'Replacement content' } } as UpdateWorkInput
+      const result = await f.workflow.update(input, 'Consumer')
+      expect(result).toMatchObject({ outcome: 'partially-saved', code: failure === 'uncertain' ? 'save-unconfirmed' : 'conflict', saved_fields: ['Last touched by'] })
+      expect(result.requires_new_operation_id).toBe(failure === 'uncertain' ? undefined : true)
+      expect(f.comments).toHaveLength(1)
+      expect(f.blocks[1].paragraph.rich_text[0].plain_text).toBe(failure === 'changed' ? `Tin Star section: ${name}\nHuman edit` : original)
+      const calls = f.requests.length
+      expect(await f.workflow.update(input, 'Consumer')).toEqual(result)
+      expect(f.requests).toHaveLength(calls)
+      if (failure !== 'uncertain') {
+        f.blocks.splice(2)
+        expect(await f.workflow.update({ ...input, operation_id: `${input.operation_id}-fresh` }, 'Consumer')).toMatchObject({ outcome: 'saved', saved_fields: ['Last touched by', name, 'note'] })
+      }
+    } finally { spy.mockRestore() }
   }
 })
