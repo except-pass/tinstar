@@ -19,7 +19,7 @@
 .ov-search-panel :focus-visible { outline:2px solid #8edbc8; outline-offset:-2px; }
 .ov .ov-item.ov-search-context { opacity:.65; border-style:dashed; }
 .ov .ov-item.ov-search-match { border-color:#69a88f; box-shadow:inset 2px 0 #69a88f; }
-.ov-pattern-dial { display:grid; grid-template-columns:minmax(0,1fr) minmax(132px,1.3fr) minmax(0,1fr); align-items:center; flex:0 0 360px; min-width:340px; height:38px; border:1px solid #304851; border-radius:7px; background:linear-gradient(90deg,#101d25,#1c3338 50%,#101d25); touch-action:pan-y; }
+.ov-pattern-dial { display:grid; grid-template-columns:minmax(max-content,1fr) max-content minmax(max-content,1fr); align-items:center; flex:0 0 auto; width:max-content; min-width:340px; height:38px; border:1px solid #304851; border-radius:7px; background:linear-gradient(90deg,#101d25,#1c3338 50%,#101d25); touch-action:pan-y; }
 .ov-toolbar .ov-pattern-dial button { border:0; background:transparent; display:flex; align-items:center; justify-content:center; gap:4px; height:36px; min-width:0; padding:0 4px; white-space:nowrap; }
 .ov-pattern-neighbor { color:#82969f!important; font-size:9px!important; }
 .ov-pattern-neighbor .ov-pattern-value { font-size:9px; }
@@ -40,7 +40,6 @@
 .ov-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 @media(max-width:1200px) {
   .ov-toolbar .ov-customize-trigger>span { display:none; }
-  .ov-pattern-dial { min-width:340px; }
   .ov-preset-scroll { flex-shrink:1; }
 }
 @media(max-width:850px) {
@@ -48,7 +47,6 @@
   .ov-search-panel { position:fixed; top:60px; left:78px; width:calc(100vw - 88px); max-height:calc(100dvh - 76px); overflow:auto; }
 }
 @media(max-width:600px) {
-  .ov-pattern-dial { flex:0 0 340px; width:340px; min-width:340px; }
   .ov-pattern-neighbor { font-size:8px!important; flex-direction:column; gap:1px!important; }
   .ov-pattern-selected { font-size:10px!important; gap:3px!important; }
 
@@ -60,7 +58,6 @@
 }
 
 
-.ov-toolbar .ov-pattern-selected { overflow:hidden; }
 .ov-pattern-value { display:flex; flex-direction:column; min-width:0; font-size:11px; line-height:14px; }
 .ov-pattern-value>span { white-space:nowrap; }
 .ov-pattern-dial .ov-pattern-coverage { font-size:9px; color:#a2b5bd; text-decoration:underline; text-decoration-color:#678780; text-underline-offset:2px; }

@@ -1129,7 +1129,8 @@ for (const expanded of [false, true]) test(`single-row toolbar live roadmap cove
   expect([...new Set(await cards.evaluateAll(nodes => nodes.map(n => n.getAttribute('data-entity-id'))))].sort()).toEqual(ids)
 })
 
-test('single-row toolbar live combined pattern coverage names all predicates', async ({ page }) => {
+for (const width of [1440, 390]) test(`single-row toolbar live combined pattern coverage at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
   const now = Date.parse('2026-11-10T12:00:00Z')
   await page.clock.install({ time: now })
   const scene = fixtureScene({ now })
@@ -1138,10 +1139,25 @@ test('single-row toolbar live combined pattern coverage names all predicates', a
   await page.goto(base)
   const center = page.locator('.ov-pattern-selected')
   await expect(center).toHaveAccessibleName(/Blocked \+ Stale, 0 confirmed, 1 not evaluated/)
+  await expect(center).toHaveText('Blocked + Stale 0 confirmed1 not evaluated')
+  await center.scrollIntoViewIfNeeded()
+  await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
+  const geometry = await page.locator('.ov-pattern-dial button').evaluateAll(buttons => buttons.map(button => {
+    const bounds = button.getBoundingClientRect()
+    const lines = [...button.querySelectorAll('.ov-pattern-value > *')].map(line => {
+      const range = document.createRange()
+      range.selectNodeContents(line)
+      const text = range.getBoundingClientRect()
+      return text.left >= bounds.left && text.right <= bounds.right && text.top >= bounds.top && text.bottom <= bounds.bottom
+    })
+    return { fits: lines.every(Boolean), selectedVisible: !button.classList.contains('ov-pattern-selected') || bounds.left >= 0 && bounds.right <= innerWidth }
+  }))
+  expect(geometry).toHaveLength(3)
+  expect(geometry.every(button => button.fits && button.selectedVisible)).toBe(true)
   await expect(page.locator('.ov-card')).toHaveCount(1)
   await center.click()
   await expect(page.getByRole('dialog', { name: 'Blocked + Stale pattern coverage' })).toContainText('0 confirmed blocked + stale · 1 not evaluated')
-  await screenshot(page, 'combined-pattern-coverage')
+  await screenshot(page, `combined-pattern-coverage-${width}`)
 })
 
 
