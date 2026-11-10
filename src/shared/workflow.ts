@@ -67,7 +67,7 @@ export const workflowRules = {
     'A decision answer names the next Owner/Status and clears only that request. Other asks, waits and worker history survive.',
     'Completion/parking requires a caller-supported disposition; a merge or worker exit never implies business completion.',
     'Next check-in uses America/New_York, date-only means 9 AM. Checkpoints require assessment, evidence, next action and provisional/owner-confirmed attribution. In Progress appointments obey the board ceiling. Ordinary activity never advances them.',
-    'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved; retry the same operation_id with identical input. Updates save a history note with operation provenance before properties; note-saved / properties-pending retries repair only missing steps, including after restart.',
+    'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved; Only a missing note may be repaired in the same process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id; no automatic replay or restart recovery.',
     'UI and MCP use the same serialized operations and authenticated actor. Firstmate pickup is Queued only; active edits are contextual updates, never worker dispatch.',
   ],
   later_slices: ['Computed decision view and redundant writer/poller retirement'],
