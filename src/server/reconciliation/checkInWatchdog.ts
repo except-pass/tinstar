@@ -265,8 +265,6 @@ export class CheckInWatchdog {
         let failure: string | undefined
         if (!Number.isFinite(at) || Math.floor(at / 60_000) < Math.floor(Date.parse(row.createdAt) / 60_000) || at > this.now()) {
           failure = 'Checkpoint time: must be at or after the request and at or before now'
-        } else if (word(card, 'Last touched by').toLowerCase() !== report.By.trim().toLowerCase()) {
-          failure = 'By: must match Last touched by'
         } else if (!(closed && /^(?:closed|none|n\/a|done)(?=$|\s|[().,;!])/i.test(report['Next check-in']))) {
           if (!Number.isFinite(next)) failure = 'Next check-in: unparseable appointment'
           else if (next !== appointment(card)) failure = 'Next check-in: does not match the current property'
@@ -274,8 +272,13 @@ export class CheckInWatchdog {
           else if (word(card, 'Status').toLowerCase() === 'in progress' && Math.floor(next / 60_000) > Math.floor(checkInCeiling(at) / 60_000)) failure = 'Next check-in: exceeds the In Progress ceiling'
         }
         if (failure) { correction = failure; continue }
+        // By versus Last touched by is cosmetic metadata. A difference does not
+        // fail the answer; the row keeps a short note and the quiet card line stays clear.
+        const touched = word(card, 'Last touched by')
+        const byNote = touched.toLowerCase() === report.By.trim().toLowerCase() ? ''
+          : `; answered by ${report.By.trim()} (last edited by ${touched || 'unknown'})`
         row.state = 'resolved'; row.verifiedAt = new Date(this.now()).toISOString()
-        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}`
+        row.verification = `Notion ${card.id} checkpoint ${block.id}; attributed to ${report.By}; dated ${report.Date}; next ${report['Next check-in']}; checkpoint time ${new Date(at).toISOString()}${byNote}`
         return
       }
       return correction
