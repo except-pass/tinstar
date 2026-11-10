@@ -84,6 +84,7 @@ export class AskStore {
         for (const turn of rows) {
           if (turn.owner !== owner || turn.synthetic_id || turn.conversation_id !== row.conversation_id) continue
           turn.dismissed_at = action === 'restore' ? null : turn.dismissed_at ?? at
+          if (action === 'restore') turn.read_at = null
           turn.updated_at = at
         }
       }

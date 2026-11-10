@@ -55,7 +55,7 @@ beforeEach(() => {
     if (match) {
       const row = records.find(record => record.request_id === match[1])!
       if (match[2] === 'read') row.read_at = new Date().toISOString()
-      if (match[2] === 'restore') row.dismissed_at = null
+      if (match[2] === 'restore') { row.dismissed_at = null; row.read_at = null }
       if (match[2] === 'dismiss') row.dismissed_at = new Date().toISOString()
       data = row
     }
@@ -1204,4 +1204,25 @@ it.each(['card', 'worker', 'relationship'] as const)('embeds the shared composer
   const anchor = kind === 'card' ? { card_id: fixtureId(1) } : { target: { kind: kind === 'worker' ? 'execution' : 'claim', id: target.getAttribute(kind === 'worker' ? 'data-entity-id' : 'data-claim-id') } }
   expect(requests[0]).toMatchObject({ ...anchor, question: 'Explain this item.', view: { scene: 'overview' } })
   expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('restores a read completed answer to Needs you as unread', async () => {
+  records = [{ ...seed(), read_at: new Date().toISOString() }]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /^History/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore to inbox' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
+  expect(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
+  await waitFor(() => expect(records[0]!.read_at).toBeNull())
+})
+it('undoes archive of a read answer into Needs you as unread', async () => {
+  const answer = seed()
+  answer.reply!.suggested_actions = [{ id: 'review', label: 'Review', instruction: 'Review the result' }]
+  records = [{ ...answer, read_at: new Date().toISOString() }]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Archive conversation' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
+  expect(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ })).toBeVisible()
+  await waitFor(() => expect(records[0]).toMatchObject({ read_at: null, dismissed_at: null }))
 })

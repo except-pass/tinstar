@@ -49,7 +49,9 @@ export function Decisions() {
     const id = item.cardIds[0] ?? null, card = scene?.cards.find(card => card.id === id)
     return { key: item.id, item, id, ...decisionCopy(item, card ? cardTitle(card) : item.title) }
   })
-  useEffect(() => { setOpenedId(null) }, [selectedId])
+  useEffect(() => {
+    setOpenedId(current => current && entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId ?? '') ? current : null)
+  }, [selectedId])
   const selected = entries.find(entry => entry.key === (state.queueOpen ? state.queueItemId : openedId)) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
   const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
   const visible = entries.filter(entry => matches(entry) || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
@@ -129,18 +131,8 @@ export function Decisions() {
 }
 
 function DecisionDetail({ entry, items, unavailable, onClose }: { entry: DecisionEntry; items: QueueItem[]; unavailable: boolean; onClose: () => void }) {
-  const { scene, now, submit, messages = [], workers = [], refreshAfterMutation, send } = useDeskWorkspace()
-  const { item, id } = entry
-  const card = scene?.cards.find(card => card.id === id)
-  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
-  useEffect(() => {
-    if (!id) return
-    const controller = new AbortController()
-    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
-      if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' })
-    }).catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
-    return () => controller.abort()
-  }, [id])
+  const { now, submit, messages = [], workers = [] } = useDeskWorkspace()
+  const { item } = entry
   const ready = !unavailable && item.readiness === 'ready-now' && !sourceStale(item, now)
   const request = item as Partial<NeedsWillItem>
   return <aside className="decisions-summary" aria-label="Selected decision" data-decision-id={item.id}>
@@ -148,10 +140,7 @@ function DecisionDetail({ entry, items, unavailable, onClose }: { entry: Decisio
     {entry.question && <p>{entry.question}</p>}
     <DecisionChoices key={entry.key} entry={entry} items={items} />
     {!ready && <p role="status">{item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite. Verify it has cleared before answering.' : 'This request needs verification before you act.'}</p>}
-    {id && <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>}
     {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Open PR' : 'Read evidence'} ↗</a>)}
-    {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
-    {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
     {item.sources.filter(source => source.request && source.request.kind !== 'notion-card').map((source, index) => {
       const pending = messages.find(message => message.kind === 'answer' && message.sourceAnchor === source.responseAnchor)
       const request = source.request!
@@ -165,13 +154,32 @@ function DecisionDetail({ entry, items, unavailable, onClose }: { entry: Decisio
         {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details className="decisions-evidence"><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready && request.kind !== 'notion-card' && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
       </section>
     })}
-    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    {item.cardIds.map(id => <DecisionCardContext key={id} id={id} />)}
     <details className="decisions-evidence"><summary>Technical details</summary>
       <p>{request.requestSince ? `Oldest recorded open ask: ${request.requestSince}` : 'Request age unknown'}</p>
       {request.pulls?.map(pull => <p key={pull.id}>{pull.repository} #{pull.number} · PR opened {pull.createdAt} (not request age) · {pull.readiness?.checks ?? 'Checks unverified'}</p>)}
-      <pre>{JSON.stringify({ request: item, source: context }, null, 2)}</pre>
+      <pre>{JSON.stringify({ request: item }, null, 2)}</pre>
     </details>
   </aside>
+}
+function DecisionCardContext({ id }: { id: string }) {
+  const { scene, refreshAfterMutation, send } = useDeskWorkspace()
+  const card = scene?.cards.find(card => card.id === id)
+  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
+      if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' })
+    }).catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
+    return () => controller.abort()
+  }, [id])
+  return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
+    <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>
+    {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
+    {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
+    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>
+  </section>
 }
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
   if (!warnings?.length) return null

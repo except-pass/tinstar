@@ -13,6 +13,7 @@ import type { PullsRead } from '../../../shared/pulls'
 import { AskApi } from '../routes'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
+import { deskConversations } from '../../../ask/deskInbox'
 import type { AskAction } from '../../../shared/ask-actions'
 import { fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
@@ -980,4 +981,19 @@ it('retains authenticated worker terminal view identity and rejects a different 
   expect(wrongHome.status).toBe(409)
   const wrongTask = await call('requests', { ...body, client_key: randomUUID(), view: { ...body.view, worker: { ...body.view.worker, task_id: 'different-worker' } } })
   expect(wrongTask.status).toBe(409)
+})
+
+it.each([false, true])('restores a read completed answer as unread after archive=%s', async archived => {
+  const { call, bridge, reload } = await setup()
+  const id = (await call('requests', input())).data.data.request_id
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Completed answer', cursor: '1' } })
+  await call(`requests/${id}/read`, {})
+  expect(deskConversations((await call('requests')).data.data)[0]).toMatchObject({ view: 'history', unread: false })
+  if (archived) await call(`requests/${id}/dismiss`, {})
+  await call(`requests/${id}/restore`, {})
+  reload()
+  const rows = (await call('requests')).data.data
+  expect(rows[0]).toMatchObject({ dismissed_at: null, read_at: null })
+  expect(deskConversations(rows)[0]).toMatchObject({ view: 'needs-you', unread: true })
 })

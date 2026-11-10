@@ -231,20 +231,46 @@ it('preserves recommendation verbs as questions and hides workflow protocol meta
   const queue = fixtureQueue()
   queue.items = [{ ...queue.items[0]!, cardIds: [fixtureId(5)], action: 'Should we recommend 3 replicas or keep 1?' }]
   workspace.value.queue = queue
-  const original = 'Question: Keep 1 replica or move to 3?\nTin Star request: {"id":"private-request","action":"Decision","preserve_action":true}'
+  const original = 'Question: Keep 1 replica or move to 3?\nTin Star request: {"id":"private-request","action":"Decision","preserve_action":true}\nTin Star decision: "private-decision"\nTin Star operation: ["actor","private-operation"]'
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'note', text: original }] } }))))
   render(<Decisions />)
   fireEvent.click(document.querySelector('.decisions-row')!)
   const evidence = await screen.findByText('Question: Keep 1 replica or move to 3?')
   expect(evidence).toBeVisible()
-  expect(evidence).not.toHaveTextContent('private-request')
+  for (const marker of ['private-request', 'private-decision', 'private-operation']) expect(evidence).not.toHaveTextContent(marker)
   const detail = screen.getByLabelText('Selected decision')
   expect(detail).toHaveTextContent('Should we recommend 3 replicas or keep 1?')
   expect(detail).not.toHaveTextContent('First Mate recommends')
   expect(within(detail).queryByLabelText('Operation')).toBeNull()
   expect(within(detail).queryByText('Edit / note')).toBeNull()
   expect(within(detail).getByLabelText('Answer')).toBeInTheDocument()
-  const technical = within(detail).getByText('Technical details').closest('details')!
+  const technical = within(detail).getAllByText('Technical details')[0]!.closest('details')!
   expect(technical).not.toHaveAttribute('open')
   expect(technical).toHaveTextContent('private-request')
+})
+
+it('retains the explicitly opened request when its click focuses a shared card', () => {
+  const queue = fixtureQueue(), base = queue.items[0]!
+  queue.items = [{ ...base, id: 'first', cardIds: [fixtureId(5)] }, { ...base, id: 'second', cardIds: [fixtureId(5)] }]
+  workspace.value.queue = queue
+  const view = render(<Decisions />)
+  fireEvent.click(view.container.querySelector('[data-decision-id="second"]')!)
+  state.selection = { kind: 'card', id: fixtureId(5) }
+  view.rerender(<Decisions />)
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'second')
+})
+it('exposes every supporting card context in one canonical request', async () => {
+  const queue = fixtureQueue()
+  queue.items = [{ ...queue.items[0]!, cardIds: [fixtureId(1), fixtureId(5)] }]
+  workspace.value.queue = queue
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'source', text: url.includes(fixtureId(1)) ? 'First supporting question' : 'Second supporting question' }] } }))))
+  const view = render(<Decisions />)
+  fireEvent.click(view.container.querySelector('.decisions-row')!)
+  expect(await screen.findByText('First supporting question')).toBeVisible()
+  expect(await screen.findByText('Second supporting question')).toBeVisible()
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(1)
+  for (const id of [fixtureId(1), fixtureId(5)]) expect(view.container.querySelector(`a[href="https://www.notion.so/${id}"]`)).toBeVisible()
+  const related = screen.getAllByRole('button', { name: 'Open related work' })
+  fireEvent.click(related[1]!)
+  expect(workspace.value.send).toHaveBeenCalledWith({ type: 'navigate-card', cardId: fixtureId(5) })
 })
