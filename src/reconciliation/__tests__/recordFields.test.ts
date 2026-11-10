@@ -5,9 +5,9 @@ import { checkIn, taskFields } from '../recordFields'
 const now = Date.parse('2026-11-05T02:00:00Z')
 
 it.each([
-  ['2026-11-04', 'upcoming', 'Nov 4'],
-  ['2026-11-03', 'overdue', 'Overdue · Nov 3'],
-  ['2026-11-05', 'upcoming', 'Nov 5'],
+  ['2026-11-04', 'overdue', 'Overdue · Nov 4 9 AM ET'],
+  ['2026-11-03', 'overdue', 'Overdue · Nov 3 9 AM ET'],
+  ['2026-11-05', 'upcoming', 'Nov 5 9 AM ET'],
   ['2026-11-04T20:59:00-05:00', 'overdue', 'Overdue · Nov 4, 8:59 PM'],
   ['2026-11-04T21:01:00-05:00', 'upcoming', 'Nov 4, 9:01 PM'],
   ['2026-11-04T21:00:00-05:00', 'upcoming', 'Nov 4, 9:00 PM'],

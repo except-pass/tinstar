@@ -14,3 +14,6 @@
 .ov-copy-link{display:inline-flex;align-items:center;gap:4px}
 .ov-copy-link .material-symbols-outlined{font-family:'Material Symbols Outlined';font-weight:400;font-style:normal;font-size:14px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;width:14px;height:14px;font-feature-settings:'liga'}
 .ov-density-detailed .ov-item.ov-collapsed{min-height:29px}
+.ov-check-in-request{white-space:normal;overflow-wrap:anywhere;line-height:1.4}
+.ov-item.ov-collapsed:has(.ov-check-in-request){height:auto;max-height:none;min-height:48px;flex-wrap:wrap}
+.ov-item.ov-collapsed .ov-check-in-request{flex-basis:100%;margin:0 0 4px;white-space:normal;text-align:left;font-size:9px;line-height:1.4}

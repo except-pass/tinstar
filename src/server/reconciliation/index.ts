@@ -4,7 +4,8 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource } from './config'
 import { fleetObservation } from './fleet'
-import { notionObservation } from './notion'
+import { notionObservation, readNotionCard } from './notion'
+import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
 import { SceneReconciler } from './scene'
@@ -17,6 +18,7 @@ export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot'
 
 /** Shared read-only collection and scene projection; no domain actions. */
 export class ReconciliationSources {
+  checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private fleet
   private notion
   private context
@@ -50,8 +52,15 @@ export class ReconciliationSources {
 
   async card(id: string) { return this.context.get(id) }
 
+  async currentCard(id: string) { return readNotionCard(this.config.notion, id) }
+  async currentCardContext(id: string) { return this.context.checkpoints(id) }
+
   async scene(force = false) {
     const scene = this.reconciler.reconcile(await this.snapshot(force))
+    if (this.checkInIndicators) {
+      const indicators = await this.checkInIndicators()
+      for (const card of scene.cards) card.checkInRequest = indicators.get(card.id)
+    }
     return { ...scene, searchIndex: this.search.get(scene) }
   }
 

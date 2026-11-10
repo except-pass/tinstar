@@ -2,6 +2,7 @@ import type { Execution, SceneCard } from '../server/reconciliation/scene'
 import type { FloorScene } from './presentation'
 import { cardStatus, cardTitle } from './overviewModel'
 import { dateBucket, dateTimestamp } from '../shared/floorOrganization'
+import { checkInTime } from '../shared/checkIn'
 
 export function propertyText(card: SceneCard, name: string): string {
   const value = card.source.properties[name]?.value
@@ -39,9 +40,9 @@ export function checkIn(card: SceneCard, now: number): { state: string; label: s
   if (['done', 'archived', 'backlog', 'todo', 'not started', 'planned', 'spare tokens'].includes(status)) return { state: 'not-applicable', label: 'Not applicable' }
   const at = propertyDate(card, 'Next check-in')
   if (!at) return { state: 'missing', label: 'Not scheduled' }
-  const bucket = dateBucket(at, now, true)
-  const overdue = bucket === 'Overdue'
-  return { state: bucket === 'Unknown' ? 'unknown' : overdue ? 'overdue' : 'upcoming', label: `${overdue ? 'Overdue · ' : ''}${dateLabel(at)}` }
+  const time = checkInTime(at)
+  const overdue = time < now
+  return { state: !Number.isFinite(time) ? 'unknown' : overdue ? 'overdue' : 'upcoming', label: `${overdue ? 'Overdue · ' : ''}${dateLabel(at)}${at.length === 10 ? ' 9 AM ET' : ''}` }
 }
 /** Stable order for compact cards and complete Inspector metadata. */
 export function taskFields(card: SceneCard, now: number, actionable = true) {
@@ -68,7 +69,7 @@ export function workerBreadcrumb(scene: FloorScene, worker: Execution): string {
 export function compactCheckIn(card: SceneCard, now: number): string {
   const check = checkIn(card, now)
   if (check.state === 'overdue') {
-    const elapsed = now - dateTimestamp(propertyDate(card, 'Next check-in')!)
+    const elapsed = now - checkInTime(propertyDate(card, 'Next check-in')!)
     return `Overdue ${elapsed < 3600000 ? `${Math.max(1, Math.floor(elapsed / 60000))}m` : elapsed < 86400000 ? `${Math.floor(elapsed / 3600000)}h` : `${Math.floor(elapsed / 86400000)}d`}`
   }
   if (check.state === 'upcoming') {

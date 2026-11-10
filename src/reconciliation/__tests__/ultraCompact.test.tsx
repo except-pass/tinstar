@@ -41,6 +41,21 @@ function arrange(outer: string, inner = 'none') {
 }
 
 describe('Ultra Compact Overview', () => {
+  it('shows a quiet deduplicated check-in line on its own card and removes it after verified closure', () => {
+    const card = scene.cards.find(card => card.id === fixtureId(1))!
+    card.checkInRequest = { requestId: 'checkpoint-request', originalCheckpoint: '2026-11-10T14:00:00Z', state: 'requested', requestedAt: '2026-11-10T15:05:00Z', answered: false }
+    const { container, rerender } = mount()
+    const line = task(container, 1).querySelector('.ov-check-in-request')!
+    expect(line).toHaveTextContent('Check-in requested 10:05 AM ET · Awaiting First Mate')
+    expect(line).toHaveTextContent('Original check-in 2026-11-10T14:00:00Z')
+    expect(task(container, 2).querySelector('.ov-check-in-request')).toBeNull()
+    card.checkInRequest.answered = true
+    rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+    expect(task(container, 1).querySelector('.ov-check-in-request')).toHaveTextContent('Answered; Notion update pending')
+    delete card.checkInRequest
+    rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+    expect(container.querySelector('.ov-check-in-request')).toBeNull()
+  })
   it('defaults to collapsed endpoints with honest unmatched labels and full accessible titles', () => {
     const { container } = mount()
     expect(container.querySelector('.ov')).toHaveAttribute('data-density', 'compact')

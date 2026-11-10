@@ -13,6 +13,7 @@ import type { ReconciliationSources } from '../reconciliation'
 import { artifactContext, type AskArtifactSources } from './artifacts'
 import { AskConflict, AskNotFound, AskStore } from './store'
 import { bridgeContract, bridgeHeaders, pullerRelease, supportedPuller } from './bridgeContract'
+import type { CheckInWatchdog } from '../reconciliation/checkInWatchdog'
 
 export const askConfigSchema = z.object({ ownerLogins: z.array(z.string().min(1)).min(1), bridgeToken: z.string().min(32) })
 export type AskConfig = z.infer<typeof askConfigSchema>
@@ -43,7 +44,7 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog) {
     this.store = new AskStore(root)
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -71,11 +72,18 @@ export class AskApi {
         if (req.method === 'DELETE' && syntheticId) { await this.store.removeSynthetic(syntheticId); return ok(res, { removed: true }, { headers }) }
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
-          const data = conversation ? await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId) : await this.store.bridgeWork(syntheticId)
-          return ok(res, conversation ? data : { ...data, ...bridgeContract }, { headers })
+          if (conversation) return ok(res, await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId), { headers })
+          const data = await this.store.bridgeWork(syntheticId)
+          const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
+          return ok(res, { pending: [...data.pending, ...system.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
         }
         if (req.method === 'POST') {
-          const row = await this.store.ingest(bridgeUpdateSchema.parse(await readBody(req)), syntheticId)
+          const update = bridgeUpdateSchema.parse(await readBody(req))
+          if (!syntheticId && await this.checkIns?.owns(update.request_id)) {
+            await this.checkIns!.ingest(update)
+            return ok(res, { accepted: true }, { headers })
+          }
+          const row = await this.store.ingest(update, syntheticId)
           return ok(res, { accepted: true, ...(row.reply?.rejected_actions?.length ? { reply_warnings: row.reply.rejected_actions } : {}) }, { headers })
         }
         return fail(res, 'BAD_REQUEST', 'Use GET or POST', { headers, status: 405 })

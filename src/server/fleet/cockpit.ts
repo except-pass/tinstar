@@ -82,7 +82,7 @@ export class CockpitFleet {
   private outbox = new FleetOutbox()
   private marks = new WorkerMarks()
 
-  constructor() {
+  constructor(private onSourceRefreshTick?: () => void) {
     const config = loadFleetConfig(getConfigRoot())
     this.homes = config.firstmate.homes
     this.views = new FirstmateViews({ window: firstmatePortWindow(config) })
@@ -95,9 +95,10 @@ export class CockpitFleet {
       watcher.start()
       this.watchers.push(watcher)
     }
-    this.timer = setInterval(() => void this.refresh(), 20_000)
+    this.timer = setInterval(() => { this.onSourceRefreshTick?.(); void this.refresh() }, 20_000)
     this.timer.unref?.()
     void this.refresh()
+    this.onSourceRefreshTick?.()
   }
 
   stop(): void {

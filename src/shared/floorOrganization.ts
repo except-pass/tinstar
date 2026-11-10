@@ -1,4 +1,5 @@
 import { activityTimestamp } from './workerTimestamps'
+import { checkInTime } from './checkIn'
 import { codexTurn } from './codexActivity'
 import { compareStatus, floorWorkerStatus, hasDonutFilter, statusRank, unknownStatus } from './floorStatus'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
@@ -62,10 +63,10 @@ export function dateTimestamp(value: string): number {
 export const dateBuckets = ['Overdue', 'Today', 'Tomorrow', 'This week', 'Later', 'Not scheduled', 'Unknown']
 export function dateBucket(value: string | null, now: number, checkIn = false) {
   if (!value) return 'Not scheduled'
-  const time = dateTimestamp(value)
+  const time = checkIn ? checkInTime(value) : dateTimestamp(value)
   if (!Number.isFinite(time)) return 'Unknown'
   const today = calendarDay(now), day = calendarDay(time), diff = day - today
-  if (diff < 0 || checkIn && value.length > 10 && time < now) return 'Overdue'
+  if (diff < 0 || checkIn && time < now) return 'Overdue'
   if (!diff) return 'Today'
   if (diff === 1) return 'Tomorrow'
   const weekday = new Date(today * 86400000).getUTCDay()

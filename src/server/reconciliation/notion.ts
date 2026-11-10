@@ -29,7 +29,7 @@ function property(value: unknown, name: string): { id: string | null; type: stri
     ...(name === FIRST_MATE_TASKS ? { workerLinks: readWorkerLinks(value) } : {}) }
 }
 
-function card(value: unknown) {
+export function notionCard(value: unknown) {
   const p = record(value)
   const id = notionPageId(p.id)
   if (!id || typeof p.last_edited_time !== 'string' || !p.properties || p.object !== 'page') throw new Error('invalid Notion page')
@@ -39,6 +39,31 @@ function card(value: unknown) {
     archived: p.archived === true, in_trash: p.in_trash === true,
     properties: Object.fromEntries(PROPERTY_NAMES.filter(name => name in properties).map(name => [name, property(properties[name], name)])),
   }
+}
+
+/** Exact uncached page read, sharing the source parser. Used immediately before
+ * inbox delivery and for closure; cached scene data cannot authorize either. */
+export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: typeof fetch = fetch) {
+  if (!config || notionPageId(id) !== id) throw new Error('Notion card unavailable')
+  const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error', signal: AbortSignal.timeout(5_000),
+    headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } })
+  if (!response.ok || !response.body) throw new Error('Notion card read failed')
+  const reader = response.body.getReader(), chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      bytes += value.length
+      if (bytes > 4 * 1024 * 1024) throw new Error('Notion card response too large')
+      chunks.push(value)
+    }
+  } finally { await reader.cancel().catch(() => {}) }
+  const raw = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+  const result = notionCard(raw)
+  const parent = record(raw.parent)
+  if (result.id !== id || notionPageId(parent.data_source_id) !== notionPageId(config.dataSourceId)) throw new Error('Notion card identity or source changed')
+  return result
 }
 
 export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch) {
@@ -81,14 +106,14 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       return [name, { id: text(p.id), type: text(p.type), options, relation: p.type === 'relation'
         ? { data_source_id: notionPageId(record(p.relation).data_source_id), database_id: notionPageId(record(p.relation).database_id) } : null }]
     }))
-    const cards = new Map<string, ReturnType<typeof card>>()
+    const cards = new Map<string, ReturnType<typeof notionCard>>()
     let cursor: string | undefined
     let hasMore = false
     for (let page = 0; page < 10; page++) {
       const response = await request(`${path}/query`, { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) })
       if (!Array.isArray(response.results) || typeof response.has_more !== 'boolean') throw new Error('invalid Notion query')
       for (const value of response.results) {
-        const item = card(value)
+        const item = notionCard(value)
         cards.set(item.id, item)
       }
       hasMore = response.has_more

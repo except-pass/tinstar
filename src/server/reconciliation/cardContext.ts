@@ -14,6 +14,45 @@ export interface CardContextRead {
 export class CardContextReader {
   private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
+  /** Comments are an existing authorized coordinator update surface as well as
+   * card paragraphs. Missing comment permission leaves paragraphs readable. */
+  async checkpoints(id: string): Promise<CardContextRead> {
+    const context = await this.read(id)
+    if (!this.config) return context
+    const signal = AbortSignal.timeout(20_000)
+    let cursor: string | undefined, bytes = 0
+    try {
+      for (let page = 0; page < 5; page++) {
+        const url = new URL('https://api.notion.com/v1/comments')
+        url.searchParams.set('block_id', id); url.searchParams.set('page_size', '100')
+        if (cursor) url.searchParams.set('start_cursor', cursor)
+        const res = await this.fetcher(url, { signal, redirect: 'error', headers: { Authorization: `Bearer ${this.config.token}`, 'Notion-Version': '2025-09-03' } })
+        if (!res.ok || !res.body) throw new Error('Comments unavailable')
+        const reader = res.body.getReader(), chunks: Uint8Array[] = []
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            bytes += value.length
+            if (bytes > 2 * 1024 * 1024) throw new Error('Comments too large')
+            chunks.push(value)
+          }
+        } finally { await reader.cancel().catch(() => {}) }
+        const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        if (!Array.isArray(body.results)) throw new Error('Invalid comments')
+        for (const item of body.results) {
+          const comment = record(item)
+          if (!Array.isArray(comment.rich_text)) continue
+          context.blocks.push({ id: String(comment.id), type: 'comment', text: comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('') })
+        }
+        if (body.has_more !== true) return context
+        const next = typeof body.next_cursor === 'string' ? body.next_cursor : undefined
+        if (!next || next === cursor) throw new Error('Invalid comments cursor')
+        cursor = next
+      }
+    } catch { /* No comment access is not evidence of closure or missing data. */ }
+    return { ...context, outcome: context.outcome === 'unavailable' ? 'unavailable' : 'partial', omissions: `${context.omissions ?? ''} Comments unavailable or truncated.` }
+  }
   get(id: string, revision?: string) {
     const cached = this.cache.get(id)
     if (cached && cached.until > Date.now() && (revision === undefined || revision === cached.revision)) return cached.value
@@ -22,7 +61,7 @@ export class CardContextReader {
     this.cache.set(id, { until: Date.now() + 60_000, revision, value })
     return value
   }
-  private async read(id: string): Promise<CardContextRead> {
+  async read(id: string): Promise<CardContextRead> {
     if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
     const blocks: Array<{ id: string; type: string; text: string }> = []

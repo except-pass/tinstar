@@ -36,6 +36,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "check-in:report": "tsx scripts/check-in-report.ts",
     "janitor:pilot": "tsx scripts/card-janitor-pilot.ts",
     "postinstall": "node bin/ask-puller-postinstall.js",
     "janitor:report": "tsx scripts/card-janitor-report.ts",
