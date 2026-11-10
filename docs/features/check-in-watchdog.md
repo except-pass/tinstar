@@ -84,11 +84,13 @@ never silently acquires another request ID.
 
 After two hours without a substantive acknowledgement or a correlated card
 checkpoint, a single persisted follow-up flags the unresolved request to First Mate.
-A checkpoint with the exact request ID that fails verification instead records
+A checkpoint with the exact request ID that fails verification before a follow-up
+has been offered instead records
 `answered-needs-correction` and shows the failing field on the quiet card line.
 It stays unresolved without sending a no-answer follow-up; a corrected checkpoint
-resolves it on the next sweep. Previously sent follow-ups also resolve when their
-checkpoint verifies. An unsupported "still
+resolves it on the next sweep. A queued follow-up retains its ID and receipts but
+is suppressed. Already-offered follow-ups retain their state and history, and
+resolve when their checkpoint verifies. An unsupported "still
 working" reply does not stop it. Moving the date without verified evidence
 also does not evade this one follow-up on a still-active integrated card: its
 body includes both original and current checkpoints. Closed/out-of-scope cards
@@ -139,14 +141,17 @@ blocker/owner, next action, attribution matching `Last touched by`, and next
 checkpoint matching the current property. An offset-free next timestamp in the
 report uses that property's explicit timezone when comparing the instants.
 Timing uses the checkpoint's Notion `last_edited_time` (or `created_time`),
-which must be at or after the request and at or before the current time. The
+which must be in the request's minute or later and at or before the current time.
+The request comparison uses minute precision to accommodate truncated Notion
+metadata; the current-time bound remains exact. The
 author's Date only has to parse, including ISO timestamps with or without seconds
 and `YYYY-MM-DD HH:MM UTC`; clock guesses do not invalidate a real checkpoint.
 Next check-in reads the leading date/time and ignores trailing notes such as
 `(10 AM ET)`. Date-only values still mean 9 AM America/New_York.
 An active In Progress checkpoint
 must fit the board ceiling (four hours during business-day 8 AM–8 PM ET working
-hours, otherwise 10 AM the next business morning). A real dependency date on
+hours, otherwise 10 AM the next business morning), comparing appointment and
+ceiling at minute precision. A real dependency date on
 Waiting For may be later. Done/Archived can use `closed`, `none`, `n/a`, or
 `done` (case-insensitive, with trailing notes/punctuation) with a dated
 evidence-backed closing checkpoint.
