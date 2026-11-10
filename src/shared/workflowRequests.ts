@@ -12,7 +12,8 @@ export const decisionRecordRows = (notes: { text: string }[], prefix: string): R
   }
   const kind = prefix === 'Tin Star request: ' ? 'request_decision' : prefix === 'Tin Star answer: ' || prefix === 'Tin Star answer data: ' ? 'answer_decision' : null
   // Quoted protocol examples in an edit/comment are not a new owner decision.
-  if (kind && (operation ? operation !== `Operation: ${kind}` : !lines[0]?.startsWith(prefix === 'Tin Star answer data: ' ? 'Tin Star answer: ' : prefix))) return []
+  const legacyRequest = prefix === 'Tin Star request: ' && (lines[0]?.startsWith('Requested from: ') || lines[0]?.startsWith('Question: '))
+  if (kind && (operation ? operation !== `Operation: ${kind}` : !legacyRequest && !lines[0]?.startsWith(prefix === 'Tin Star answer data: ' ? 'Tin Star answer: ' : prefix))) return []
   if (!kind && !lines[0]?.startsWith(prefix)) return []
   if (prefix === 'Tin Star answer: ') {
     const data = decisionRecordRows([note], 'Tin Star answer data: ')[0]
