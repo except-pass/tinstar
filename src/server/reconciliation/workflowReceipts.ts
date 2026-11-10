@@ -15,9 +15,9 @@ export interface HandoffReceiptState {
 interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState }
 const writers = new Map<string, Promise<unknown>>()
 
-/** Only uncertain page creations need a local durable latch: unlike property
- * patches/comments they have no caller-supplied Notion identity to retry. This
- * file is a receipt, never an offline work queue or an authoritative card. */
+/** Creation latches and handoff reconciliation state share this receipt store.
+ * See docs/features/workflow.md for persistence and retry guarantees; this is
+ * never an offline work queue or an authoritative card. */
 export class CreationReceipts {
   constructor(private root?: string) {}
   private tail: Promise<unknown> = Promise.resolve()

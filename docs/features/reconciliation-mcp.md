@@ -102,7 +102,7 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `get_workflow_rules()` | Current code-enforced [workflow rules and operation contracts](workflow.md) |
 | `get_work_views()` | Shared [Needs Will and advisory execution warnings](workflow.md#slice-3-shared-operational-views-and-normal-use), without a browser; PR details retain the existing owner authorization boundary |
 | `start_work(...)`, `create_work(...)`, `update_work(...)` | [Shared workflow operations](workflow.md): contracts, enforced rules and partial-save handling |
-| `submit_handoff(...)` | One-call lossless approved specification recording, explicit target/revision, confirmed assignment and separate inbox/execution evidence. Retrieve exact paginated chunks through `get_work` with `implementation_contract`. Catalog refresh required once after deploy. |
+| `submit_handoff(...)` | [Approved implementation handoffs](workflow.md#one-call-approved-implementation-handoffs): recording, assignment outcomes, full-contract retrieval and rollout requirements. |
 | `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
 | `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
