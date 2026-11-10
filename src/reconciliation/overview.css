@@ -122,23 +122,10 @@
 .ov-toolbar>button{white-space:nowrap;flex:none;padding:5px}
 .ov-preset-scroll{display:flex;gap:3px;flex:none;overflow-x:auto;scrollbar-width:none;min-width:0}
 .ov-preset-scroll>button{white-space:nowrap}
-.ov-toolbar .ov-filter-chips{display:flex;gap:3px;min-width:0;flex:1;overflow:auto;scrollbar-width:thin;align-items:center}
-.ov-filter-chips button{white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis;font-size:9px;border-color:#41606d}
-.ov-donuts{display:flex;align-items:center;gap:12px;margin-left:auto;flex:none}
-.ov-donut-control{display:flex;align-items:center;gap:3px}
 .ov-donut{width:36px;height:36px;overflow:visible;flex:none}
 .ov-donut path{cursor:pointer;transition:stroke-width .1s}
 .ov-donut path:hover,.ov-donut path:focus-visible{stroke-width:11;outline:none;filter:drop-shadow(0 0 2px white)}
 .ov-donut .ov-slice-unselected{opacity:.45}
-.ov-toolbar .ov-donut-trigger{display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:2px;border:0;font-size:9px;line-height:12px}
-.ov-donut-trigger b{color:#d5e6eb;font-size:10px;font-weight:500}
-.ov-donut-key{display:flex;flex-direction:column;gap:3px;margin-left:4px;font:8px var(--ov-mono);color:#9db6bf;max-width:120px}
-.ov-donut-key>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ov-donut-key i,.ov-donut-options i{display:inline-block;width:6px;height:6px;margin-right:4px;border-radius:50%;flex:none}
-.ov-donut-options>button{display:flex;width:100%;align-items:center;text-align:left;gap:5px;margin-top:3px}
-.ov-donut-options>button>b{margin-left:auto}
-.ov-donut-options>button[aria-pressed=true]{border-color:#6ebcae;background:#193b3b}
-.ov-donut-options{width:310px;max-height:min(70vh,550px);overflow:auto}
 .ov-customize{left:8px;right:auto;width:min(650px,calc(100% - 16px));max-height:calc(100vh - 80px);overflow:auto}
 .ov-advanced-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .ov-advanced-controls .ov-slot{display:flex;flex:1 1 140px;flex-direction:column;align-items:stretch;gap:5px}
@@ -148,11 +135,9 @@
 .ov-advanced-controls button[aria-pressed=true]{border-color:#6ebcae;background:#193b3b}
 .ov-customize .ov-field-palette{padding:12px 0 0;margin-top:12px;border-top:1px solid #35505b;border-bottom:0}
 .ov-toolbar .ov-warning{color:var(--ov-amber)}
-@media(max-width:1600px){.ov-donut-key{display:none}}
 @media(max-width:1100px){.ov-toolbar{padding:0 5px;gap:3px}.ov-toolbar button{font-size:9px}.ov-preset-scroll{flex:0 1 auto}.ov-donuts{gap:6px}}
 @media(max-width:600px){.ov-toolbar{padding:0 4px}.ov-preset-scroll{flex:1}.ov-toolbar .ov-filter-chips{flex:0 1 50px}.ov-filter-chips button{font-size:8px}.ov-donuts{gap:3px}.ov-donut{width:25px;height:25px}.ov-donut-trigger b{font-size:9px}.ov-toolbar .ov-donut-trigger{font-size:8px}.ov-customize-trigger>span,.ov-clear-filters>span{display:none}.ov-toolbar .ov-customize-trigger,.ov-toolbar .ov-clear-filters{padding:4px;font-size:14px}}
 
-.ov-toolbar .ov-filter-chips:empty{display:none}
 @media(max-width:600px){.ov-count-note{display:none}}
 
 .ov-desk-title{display:flex;align-items:center;gap:8px}.ov-desk-tools{display:flex;gap:4px;margin-left:auto}.ov-desk-tools button{padding:4px;border:0;background:none}.ov-desk-tools .material-symbols-outlined{font-size:20px}
@@ -166,3 +151,40 @@
 .ov-start-work label { display: grid; gap: 4px; }
 .ov-start-work input, .ov-start-work select, .ov-start-work textarea { max-width: 100%; min-width: 0; color: inherit; background: var(--bg-surface, #181818); border: 1px solid #666; border-radius: 4px; padding: 6px; }
 .ov-start-work [data-save-outcome="not-saved"], .ov-start-work [data-save-outcome="partially-saved"] { color: #f0bd70; }
+
+/* One filter shelf below the existing primary toolbar. */
+.ov-filter-shelf{display:grid;grid-template-columns:240px minmax(0,1fr);border-bottom:1px solid #23404a;background:var(--ov-panel)}
+.ov-active-panel{background:color-mix(in srgb,var(--ov-panel) 75%,#20414b);border-right:1px solid #23404a;padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:9px}
+.ov-active-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ov-active-heading{display:flex;align-items:center;gap:6px;color:var(--ov-low);text-transform:uppercase;font-size:10px;font-weight:700;letter-spacing:.09em;white-space:nowrap}
+.ov-active-heading b{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 4px;border:1px solid #40616d;border-radius:4px;background:#173741;color:#85dce0;letter-spacing:0;font-variant-numeric:tabular-nums}
+.ov-active-panel .ov-clear-filters{padding:0;border:0;background:none;color:#8ac1ca;font-size:10px;white-space:nowrap;cursor:pointer}
+.ov-active-panel .ov-clear-filters:hover:not(:disabled){color:var(--ov-ink);text-decoration:underline}
+.ov-active-panel .ov-clear-filters:disabled{opacity:.45;cursor:default}
+.ov-active-panel .ov-filter-chips{display:flex;flex-wrap:wrap;gap:5px;align-content:start;min-height:28px;overflow:visible}
+.ov-active-panel .ov-filter-chips button{display:flex;align-items:center;gap:5px;min-height:27px;max-width:100%;padding:4px 7px;border:1px solid #3c818b;border-radius:5px;background:#17363d;color:#d0f6f6;font-family:inherit;font-size:11px;line-height:1.4;white-space:normal;overflow:visible;text-align:left;cursor:pointer}
+.ov-filter-chips .ov-filter-kind{font-size:10px;color:#8bb1bb;flex:none}
+.ov-filter-chips strong{font-size:11px;font-weight:700;overflow-wrap:anywhere}
+.ov-filter-chips button>span:last-child{font-size:13px;color:#9bdce2;margin-left:auto}
+.ov-active-panel .ov-filter-chips button:hover{background:#1b484f;border-color:#50c4ca}
+.ov-no-filters{font-size:11px;line-height:28px;color:var(--ov-low)}
+.ov-legend-panel{background:color-mix(in srgb,var(--ov-panel) 90%,#0b3941);min-width:0}
+.ov-legend-group{display:grid;grid-template-columns:119px minmax(0,1fr);align-items:start;gap:8px;padding:9px 12px 8px;min-height:53px}
+.ov-legend-group+.ov-legend-group{border-top:1px solid #23404a}
+.ov-legend-heading{display:flex;align-items:center;gap:8px;min-height:29px}
+.ov-legend-heading .ov-donut{width:30px;height:30px}
+.ov-legend-label{display:flex;flex-direction:column;min-width:0;color:var(--ov-ink);font-size:11px;line-height:1.3}
+.ov-legend-label strong{font-weight:700}.ov-legend-label small{font-size:10px;color:var(--ov-low);margin-top:1px;font-variant-numeric:tabular-nums}
+.ov-status-list{display:flex;flex-wrap:wrap;gap:5px;align-items:center;align-content:start;min-width:0}
+.ov-status-list .ov-status-chip{display:flex;align-items:center;gap:5px;min-height:27px;max-width:100%;padding:4px 7px;background:#122630;border:1px solid #2a424d;border-radius:5px;color:#b6c9cd;font-family:inherit;font-size:11px;line-height:17px;text-align:left;cursor:pointer}
+.ov-status-chip>span{overflow-wrap:anywhere}.ov-status-chip i{width:6px;height:6px;border-radius:50%;flex:none;background:var(--status-color)}
+.ov-status-chip b{font-variant-numeric:tabular-nums;color:var(--ov-ink);font-weight:700;margin-left:3px}
+.ov-status-chip:hover{background:#1b3440;border-color:#698791;color:var(--ov-ink)}
+.ov-status-chip[aria-pressed=true]{border-color:var(--status-color,#4c7680);background:color-mix(in srgb,var(--status-color,#74bec6) 17%,#132530);color:#f0fafb}
+.ov-status-chip[aria-pressed=true]>span:last-child:not(:first-child){color:var(--status-color)}
+.ov-status-muted{opacity:.75}.ov-status-all{border-style:dashed;color:#8fb3bd}.ov-status-all[aria-pressed=true]{border-style:solid}
+.ov-filter-shelf button:focus-visible{outline:2px solid #6ad9e1;outline-offset:2px}.ov-filter-shelf button:active{filter:brightness(1.2)}
+.ov-toolbar .ov-source-indicator{margin-left:auto}
+@media(max-width:1366px){.ov-filter-shelf{grid-template-columns:225px minmax(0,1fr)}.ov-legend-group{grid-template-columns:105px minmax(0,1fr)}}
+@media(max-width:1050px){.ov-filter-shelf{grid-template-columns:1fr}.ov-active-panel{border-right:0;border-bottom:1px solid #23404a}.ov-active-panel .ov-filter-chips{min-height:27px}}
+@media(max-width:600px){.ov-legend-group{grid-template-columns:1fr;gap:6px;padding:8px 10px}.ov-active-panel{padding:9px 10px}.ov-status-list{gap:5px}.ov-status-chip,.ov-active-panel .ov-filter-chips button{min-height:44px}.ov-active-panel .ov-clear-filters{min-height:44px;padding:0 5px}}

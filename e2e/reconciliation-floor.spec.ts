@@ -600,7 +600,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await slice('Cards: Waiting For, 1').press('Enter')
   await counts(1, 1)
   expect(await cardIds()).toEqual([fixtureId(4)])
-  await expect(page.getByRole('button', { name: 'Workers statuses: 1 visible, 1 eligible' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Workers statuses' })).toBeVisible()
   await clickStatusSlice(page, 'Cards: In Progress, 4')
   await counts(5, 3) // OR in the card donut; independent workers disappear.
   await clickStatusSlice(page, 'Workers: Running, 2')
@@ -1265,5 +1265,31 @@ for (const width of [1440, 1180, 390]) for (const entry of ['dropdown', 'chip'] 
   for (const name of ['All', 'Actor', 'Event', 'Work']) await expect(types.getByRole('button', { name, exact: true })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Actor dependencies', exact: true })).toContainText('Reviewer')
   await expect(page.getByRole('button', { name: 'Waiting For', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+})
+
+for (const width of [1440, 1180, 390]) test(`filter shelf labelled Waiting For legend opens dependency groups at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 900 })
+  const scene = fixtureScene(), card = scene.cards.find(card => card.id === fixtureId(4))!
+  card.source.properties['Waiting For Type'] = { id: 'type', type: 'select', value: 'Actor', hasMore: false }
+  card.source.properties['Waiting For ID'] = { id: 'dependency', type: 'rich_text', value: 'Review team', hasMore: false }
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
+  await page.goto(base)
+  const legend = page.getByRole('group', { name: 'Filter by card status' })
+  const waiting = legend.getByRole('button', { name: /^Filter Cards: Waiting For,/ })
+  await waiting.click()
+  await expect(waiting).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toBeVisible()
+  const types = page.getByRole('group', { name: 'Waiting For Type' })
+  for (const name of ['All', 'Actor', 'Event', 'Work']) await expect(types.getByRole('button', { name, exact: true })).toBeVisible()
+  await types.getByRole('button', { name: 'Actor', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toContainText('Review team')
+  await page.getByRole('button', { name: 'Remove Cards: Waiting For', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toHaveCount(0)
+  await waiting.focus()
+  await waiting.press('Space')
+  await expect(page.getByRole('region', { name: 'Waiting For work' })).toBeVisible()
+  await legend.getByRole('button', { name: 'All cards statuses' }).click()
+  await expect(waiting).toHaveAttribute('aria-pressed', 'false')
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
 })

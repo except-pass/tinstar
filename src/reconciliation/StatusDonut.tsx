@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { compareStatus } from '../shared/floorStatus'
 
 export interface StatusCount { status: string; count: number }
@@ -7,15 +8,17 @@ export function statusColor(status: string) {
   for (const char of status) hash = (hash * 31 + char.charCodeAt(0)) | 0
   return `hsl(${(hash >>> 0) % 360} 48% 66%)`
 }
-export function StatusDonut({ domain, counts, selected, visible, open, onOpen, onToggle, countNote }: {
+export function StatusDonut({ domain, counts, selected, visible, onClear, onToggle, countNote }: {
   domain: 'cards' | 'workers'; counts: StatusCount[]; selected: string[]; visible: number
-  countNote?: string; open: boolean; onOpen: () => void; onToggle: (status: string) => void
+  countNote?: string; onClear: () => void; onToggle: (status: string) => void
 }) {
   const label = domain === 'cards' ? 'Cards' : 'Workers'
   const options = [...counts, ...selected.filter(status => !counts.some(c => c.status === status)).map(status => ({ status, count: 0 }))].sort((a, b) => compareStatus(a.status, b.status, domain))
   const total = counts.reduce((sum, c) => sum + c.count, 0)
   let offset = 0
-  return <div className="ov-donut-control">
+  const unavailable = countNote === 'unknown' || countNote === 'unavailable'
+  return <section className="ov-legend-group" aria-label={`${label} statuses`}>
+    <div className="ov-legend-heading">
     <svg className="ov-donut" viewBox="0 0 40 40" role="group" aria-label={`${label} status distribution`}>
       <circle cx="20" cy="20" r="15.5" fill="none" stroke="#263b45" strokeWidth="7" />
       {options.filter(c => c.count > 0).map(({ status, count }) => {
@@ -29,11 +32,12 @@ export function StatusDonut({ domain, counts, selected, visible, open, onOpen, o
         return <path key={status} d={path} fill="none" stroke={statusColor(status)} strokeWidth={selected.includes(status) ? 10 : 7} className={selected.length && !selected.includes(status) ? 'ov-slice-unselected' : ''} role="button" tabIndex={0} aria-label={`${label}: ${status}, ${count}`} aria-pressed={selected.includes(status)} onClick={() => onToggle(status)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(status) } }}><title>{status}: {count}{selected.includes(status) ? ' · Selected' : ''}</title></path>
       })}
     </svg>
-    <button type="button" className="ov-donut-trigger" title={countNote} aria-label={`${label} statuses: ${countNote === 'unknown' || countNote === 'unavailable' ? countNote : `${visible} visible, ${total} eligible${countNote ? ` · ${countNote}` : ''}`}`} aria-expanded={open} aria-controls={`ov-${domain}-statuses`} onClick={onOpen}><span>{label}{countNote && <span className="ov-count-note" aria-hidden="true"> · {countNote === 'partial' ? 'partial' : countNote === 'last known' ? 'last known' : '?'}</span>}</span><b>{countNote === 'unknown' || countNote === 'unavailable' ? '?' : `${visible}/${total}`}</b></button>
-    <span className="ov-donut-key" aria-hidden="true">{options.filter(c => c.count).slice(0, 2).map(c => <span key={c.status}><i style={{ background: statusColor(c.status) }} />{c.status} {c.count}</span>)}</span>
-    {open && <section className="ov-popover ov-donut-options" id={`ov-${domain}-statuses`} aria-label={`${label} statuses`}>
-      <header><strong>{label} · {countNote === 'unknown' || countNote === 'unavailable' ? countNote : `${visible} visible / ${total} eligible${countNote ? ` · ${countNote}` : ''}`}</strong><button type="button" aria-label={`Close ${domain} statuses`} onClick={onOpen}>×</button></header>
-      {options.length ? options.map(({ status, count }) => <button type="button" key={status} aria-pressed={selected.includes(status)} onClick={() => onToggle(status)}><i style={{ background: statusColor(status) }} /><span>{status}</span><b>{count}</b>{selected.includes(status) && <span aria-hidden="true">✓</span>}</button>) : <p>No eligible {domain}</p>}
-    </section>}
-  </div>
+    <div className="ov-legend-label" title={countNote}><strong>{label}</strong><small>{unavailable ? countNote : `${visible} / ${total}${countNote ? ` · ${countNote}` : ''}`}</small></div>
+    </div>
+    <div className="ov-status-list" role="group" aria-label={`Filter by ${domain === 'cards' ? 'card' : 'worker'} status`}>
+      <button type="button" className="ov-status-chip ov-status-all" aria-label={`All ${domain} statuses`} aria-pressed={!selected.length} onClick={onClear}>{!selected.length && <span aria-hidden="true">✓</span>}All</button>
+      {options.map(({ status, count }) => <button type="button" key={status} className={`ov-status-chip${selected.length && !selected.includes(status) ? ' ov-status-muted' : ''}`} style={{ '--status-color': statusColor(status) } as CSSProperties} aria-label={`Filter ${label}: ${status}, ${unavailable ? countNote : count}`} aria-pressed={selected.includes(status)} title={`${status}: ${unavailable ? countNote : `${count} (${total ? Math.round(count / total * 100) : 0}%)`}`} onClick={() => onToggle(status)}><i aria-hidden="true" /><span>{status}</span><b>{unavailable ? '—' : count}</b>{selected.includes(status) && <span aria-hidden="true">✓</span>}</button>)}
+      {!options.length && <span className="ov-no-filters">{unavailable ? `${label} ${countNote}` : `No eligible ${domain}`}</span>}
+    </div>
+  </section>
 }
