@@ -100,7 +100,7 @@ use the shared scalar reader (gh-axi by default, or the live Reader broker descr
 in the [installed PR actions guide](../pr-actions.md)), at most four PR reads per refresh and
 no repository crawl. Successful merged identities cache for ten minutes so a
 bounded reader can cover the queue; open/failed reads retry after one minute.
-Failures retain visibly stale facts. The navigation badge and page queue count
+Failures retain visibly stale facts. The navigation badge's legacy queue count
 are unknown (`?`) while any association's GitHub state is unresolved, the Notion
 association source or worker PR source is stale, partial or unavailable, or the local association
 audit is unreadable. Collection-level source warnings remain visible even when
