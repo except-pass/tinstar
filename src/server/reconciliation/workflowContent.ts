@@ -66,16 +66,21 @@ export class WorkflowContent {
     // Incomplete reads cannot establish that a receipt/decision is absent.
     throw new Error('Comments truncated; cannot safely resolve or deduplicate this operation')
   }
-  async sections(id: string, includeStructured = false) {
+  async sections(id: string, includeStructured = false, complete = false) {
     const result: Array<{ id: string; text: string; type: string }> = []; let cursor: string | undefined
-    for (let page = 0; page < 10; page++) {
+    const cursors = new Set<string>()
+    // Only an explicit full-contract read/write requests complete pagination.
+    // Normal managed-brief operations retain their existing bounded reads.
+    for (let page = 0; complete || page < 10; page++) {
       const query = new URLSearchParams({ page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`blocks/${id}/children?${query}`)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete body read')
       for (const block of body.results) if ((block.type === 'paragraph' || includeStructured && ['heading_2', 'code'].includes(block.type)) && !block.archived && !block.in_trash) result.push({ id: block.id, type: block.type, text: plainText(block[block.type]?.rich_text) })
       if (!body.has_more) return result
-      if (!body.next_cursor || body.next_cursor === cursor) break
-      cursor = body.next_cursor
+      const nextCursor = body.next_cursor
+      if (typeof nextCursor !== 'string' || !nextCursor || cursors.has(nextCursor)) break
+      cursor = nextCursor
+      cursors.add(nextCursor)
     }
     throw new Error('Body truncated; cannot safely locate the requested section')
   }
