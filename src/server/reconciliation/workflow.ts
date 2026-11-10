@@ -1,10 +1,10 @@
-import { clawsonMergeTitle, type ClawsonMergeInput } from '../../shared/clawsonMerge'
+import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import type { SourceSnapshot } from './index'
@@ -144,7 +144,7 @@ export class WorkflowOperations {
     return this.serialize('create', parsed.data, actor, () => this.performCreate(parsed.data, actor))
   }
   /** Owner-only PR handoff; shares create_work's Notion writer and durable receipts. */
-  createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<{ at: string; name: string; brief: string }>): Promise<StartWorkResult> {
+  createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<ClawsonMergePlan>): Promise<StartWorkResult> {
     const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
     return this.serialize('create', input, actor, async () => {
       const previous = await this.creations.get(JSON.stringify([actor, input.operation_id]))
@@ -168,7 +168,11 @@ export class WorkflowOperations {
       }
       const prepared = await prepare()
       const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })
-      return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] } })
+      return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] }, children: [
+        heading('Authority'), paragraph(prepared.brief), heading('Step 1 (run once)'), codeBlock(prepared.script),
+        paragraph('If any check line fails (head moved, not mergeable, a red or pending check): STOP and post the output. Otherwise post the final lines and hand back. Nothing else: no other PR, no deploy.'),
+        heading('Return'), paragraph('Post one comment per PR on this card with its PR URL, exact head SHA, command result, and final state + merge commit (with the commit URL on success). On any stop, post the output and do not continue the batch.'),
+      ] })
     })
   }
   private property(card: WorkCard, name: string, value: unknown) {
@@ -418,7 +422,7 @@ export class WorkflowOperations {
       cursors.add(nextCursor)
     }
   }
-  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown> }): Promise<StartWorkResult> {
+  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
     const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = handoff?.signature ?? JSON.stringify(input)
@@ -443,7 +447,7 @@ export class WorkflowOperations {
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
         Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
-      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))]
+      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...(handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value))))]
       await this.creations.put(key, signature)
       attempted = true
       let created: Awaited<ReturnType<WorkflowContent['request']>>
@@ -462,9 +466,9 @@ export class WorkflowOperations {
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
       const fields = Object.keys(values).filter(name => this.matches(card!, name, this.normalized(card!, name, values[name as keyof typeof values])))
       saved.push(...fields)
-      const sections = await this.content.sections(card.id)
-      const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === child.paragraph.rich_text.map(r => r.text.content).join('')))
-      await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(child => child.paragraph.rich_text.map(r => r.text.content).join('')) })
+      const sections = await this.content.sections(card.id, true)
+      const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.type === child.type && section.text === createBlockText(child)))
+      await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(createBlockText) })
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)

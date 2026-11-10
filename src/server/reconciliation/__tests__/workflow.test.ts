@@ -1007,7 +1007,7 @@ it('creates one Clawson merge card with the owner click properties and deduplica
   const workflow = new WorkflowOperations(f.reader, async () => [], root)
   const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [1, 2].map(number => ({ url: `https://github.com/owner/repo/pull/${number}`, head: 'a'.repeat(40) })) }
   const at = '2026-11-10T12:00:00.000Z'
-  const prepared = vi.fn(async () => ({ at, name: 'Admin merge 2 PRs: owner/repo', brief: 'Owner gave the merge word for the two exact PR heads.' }))
+  const prepared = vi.fn(async () => ({ at, name: 'Admin merge 2 PRs: owner/repo', brief: 'Owner gave the merge word for the two exact PR heads.', script: 'set -euo pipefail\n# Two exact PR heads' }))
   const results = await Promise.all([workflow.createClawsonMerge(input, 'owner@example.test', prepared), workflow.createClawsonMerge(input, 'owner@example.test', prepared)])
   for (const result of results) expect(result).toMatchObject({ outcome: 'saved', card: { properties: { Owner: { value: 'Clawson' }, Status: { value: 'In Progress' }, 'Will action': { value: ['Merge'] }, 'Next check-in': { value: { start: at } }, 'Last touched by': { value: 'owner@example.test' } } } })
   const restarted = new WorkflowOperations(f.reader, async () => [], root)
@@ -1015,6 +1015,10 @@ it('creates one Clawson merge card with the owner click properties and deduplica
   expect(prepared).toHaveBeenCalledTimes(1)
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
   expect(f.blocks.some(block => JSON.stringify(block).includes('Owner gave the merge word'))).toBe(true)
+  const createdBlocks = f.requests.find(request => request.method === 'POST' && request.url.endsWith('/pages'))!.body.children
+  expect(createdBlocks.filter((block: any) => block.type === 'heading_2').map((block: any) => block.heading_2.rich_text.map((r: any) => r.text.content).join(''))).toEqual(['Authority', 'Step 1 (run once)', 'Return'])
+  expect(createdBlocks.find((block: any) => block.type === 'code').code).toEqual({ language: 'bash', rich_text: [{ type: 'text', text: { content: 'set -euo pipefail\n# Two exact PR heads' } }] })
+  expect(createdBlocks.some((block: any) => block.paragraph?.rich_text.some((r: any) => r.text.content.includes('a red or pending check): STOP and post the output')))).toBe(true)
   expect(await restarted.createClawsonMerge({ ...input, targets: [input.targets[0]!] }, 'owner@example.test', prepared)).toMatchObject({ code: 'operation-conflict' })
 })
 
@@ -1044,7 +1048,7 @@ it('creates a bounded Clawson card for green PRs across all ten Reader repositor
   for (const [index, target] of input.targets.entries()) {
     expect(brief).toContain(readerRepositories[index])
     expect(brief).toContain(`${index + 1}. ${target.url}\nExact head SHA: ${target.head}`)
-    expect(brief).toContain(`Command: gh pr merge ${target.url} --squash --admin --match-head-commit ${target.head}`)
+    expect(brief).toContain(`gh pr merge ${target.url} --squash --admin --match-head-commit ${target.head}`)
   }
 })
 
@@ -1052,7 +1056,7 @@ it('creates a bounded Clawson card for green PRs across all ten Reader repositor
 it.each(['already merged', 'head changed', 'GitHub unavailable'].flatMap(reason => [0, 1].map(page => ({ reason, page }))))('recovers an uncertain Clawson creation on page $page before preflight reports $reason', async ({ reason, page }) => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-lost-create-')); roots.push(root)
   const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
-  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection' }))
+  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection', script: 'set -euo pipefail\n# Exact authorized selection' }))
   f.controls.lostCreate()
   const workflow = new WorkflowOperations(f.reader, async () => [], root)
   expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })

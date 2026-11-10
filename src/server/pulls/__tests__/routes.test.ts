@@ -232,7 +232,7 @@ it('requires the PR owner principal and UI intent before reading heads or creati
     await prepare()
     return { outcome: 'saved', code: 'saved', message: 'saved', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }
   })
-  const prepare = vi.fn(async () => ({ at: new Date().toISOString(), name: 'Admin merge 2 PRs: owner/repo', brief: 'Exact selected PRs only' }))
+  const prepare = vi.fn(async () => ({ at: new Date().toISOString(), name: 'Admin merge 2 PRs: owner/repo', brief: 'Exact selected PRs only', script: 'set -euo pipefail' }))
   const api = new PullsApi({ scene: async () => ({ ...fixtureScene(), searchIndex: { documents: [], notes: [] } }), workflow }, undefined, root, undefined, undefined, prepare)
   const scope = vi.spyOn(api, 'origin').mockResolvedValue({} as never)
   const server = createServer((req, res) => { void api.handle(req, res) }); server.listen(0, '127.0.0.1'); await once(server, 'listening')

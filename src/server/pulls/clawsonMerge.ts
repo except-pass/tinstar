@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { releasePull } from '../../shared/releases'
-import { clawsonMergeTitle, type ClawsonMergeInput } from '../../shared/clawsonMerge'
+import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { githubJson } from './github'
 
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
@@ -12,7 +12,7 @@ const checksSchema = z.object({ total_count: z.number(), check_runs: z.array(z.o
 const statusSchema = z.object({ total_count: z.number(), sha, statuses: z.array(z.object({ context: z.string(), state: z.string() })) })
 
 /** Fresh, selected-PR reads only. Pin the command to the observed head; never execute it here. */
-export async function prepareClawsonMerge(input: ClawsonMergeInput, actor: string, read = githubJson, now = Date.now) {
+export async function prepareClawsonMerge(input: ClawsonMergeInput, actor: string, read = githubJson, now = Date.now): Promise<ClawsonMergePlan> {
   const at = new Date(now()).toISOString(), pulls: Array<{ url: string; repository: string; head: string }> = []
   const problems: string[] = []
   for (const target of input.targets) {
@@ -54,6 +54,14 @@ export async function prepareClawsonMerge(input: ClawsonMergeInput, actor: strin
     } catch (error) { problems.push(`${identity.url}: ${error instanceof z.ZodError ? 'GitHub returned incomplete merge evidence' : (error as Error).message}.`) }
   }
   if (problems.length) throw new Error(`Nothing sent to Clawson. ${problems.join(' ')}`)
-  return { at, name: clawsonMergeTitle(input),
-    brief: `Owner merge word\n${actor} gave the Merge action via Tin Star’s “Send to Clawson for admin merge” button at ${at}. This authorizes only the PR URLs at the exact heads listed below. Nothing else is authorized.\n\nSteps\nBefore EACH merge, re-read the PR head and all required checks at that exact head. All required checks must be green. Stop and report on this card if any check is red, pending, missing or unknown, the head has changed, or there is a conflict. Do not update branches, change heads, bypass failed checks, substitute PRs, or retry with a different head.\n\n${pulls.map((pull, index) => `${index + 1}. ${pull.url}\nExact head SHA: ${pull.head}\nRequired checks verified green at this head when sent.\nCommand: gh pr merge ${pull.url} --squash --admin --match-head-commit ${pull.head}`).join('\n\n')}\n\nReturn\nPost one comment per PR on this card with its PR URL, exact head SHA, command result, and merge result (including the resulting commit URL on success). On any stop, post the reason and do not continue the batch.` }
+  const script = ['set -euo pipefail', ...pulls.flatMap((pull, index) => [
+    '', `# ${index + 1}. ${pull.url}`, `PR=${pull.url}`, `HEAD=${pull.head}`,
+    'test "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" = "$HEAD"',
+    'test "$(gh pr view "$PR" --json mergeable --jq .mergeable)" = MERGEABLE',
+    `test "$(gh pr checks "$PR" --json bucket --jq '[.[]|select(.bucket=="fail" or .bucket=="pending")]|length')" = 0`,
+    `gh pr merge ${pull.url} --squash --admin --match-head-commit ${pull.head}`,
+    `gh pr view "$PR" --json state,mergeCommit --jq '\"\\(.state) \\(.mergeCommit.oid)\"'`,
+  ])].join('\n')
+  return { at, name: clawsonMergeTitle(input), script,
+    brief: `${actor} gave the Merge action via Tin Star’s “Send to Clawson for admin merge” button at ${at}. Clawson may admin-merge only the PR URLs at the exact heads listed below. Nothing else is authorized.\n\n${pulls.map((pull, index) => `${index + 1}. ${pull.url}\nExact head SHA: ${pull.head}`).join('\n\n')}` }
 }

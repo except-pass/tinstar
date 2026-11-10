@@ -6,6 +6,7 @@ export const clawsonMergeSchema = z.object({
   targets: z.array(z.object({ url: z.string().url(), head: z.string().regex(/^[a-f0-9]{40,64}$/) }).strict()).min(1).max(10),
 }).strict()
 export type ClawsonMergeInput = z.infer<typeof clawsonMergeSchema>
+export interface ClawsonMergePlan { at: string; name: string; brief: string; script: string }
 
 
 export function clawsonMergeTitle(input: ClawsonMergeInput): string {

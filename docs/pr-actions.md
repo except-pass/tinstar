@@ -93,9 +93,12 @@ merge word for only the listed URLs and exact heads, with one command per PR:
 gh pr merge <url> --squash --admin --match-head-commit <sha>
 ```
 
-Clawson must recheck every head and required check immediately before merging,
-stop and report any red check, changed head or conflict, and post each result on
-the card. The button shows the card link and preserves selection. Double-clicks
+The card uses an **Authority** heading and a **Step 1 (run once)** Bash code
+block. Before each merge, the script checks the recorded head, `MERGEABLE` state,
+and zero checks in the `fail` or `pending` buckets. `set -euo pipefail` stops the
+batch on a failed line. Clawson must post the output on any stop, or post each
+final state and merge commit and hand back. Nothing else is authorized: no other
+PR and no deploy. Red and pending checks both stop the merge. The button shows the card link and preserves selection. Double-clicks
 and retries of the same selection in the mounted view reuse the same operation receipt.
 If a creation response is lost, retrying recovers the existing card before fresh
 GitHub preflight, even if a selected PR has since merged or changed or GitHub is

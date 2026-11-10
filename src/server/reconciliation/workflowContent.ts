@@ -11,7 +11,11 @@ export const richText = (content: string) => {
   if (rich_text.length > 100) throw new Error('Text exceeds Notion property limits')
   return { rich_text }
 }
-export const paragraph = (text: string) => ({ object: 'block', type: 'paragraph', paragraph: richText(text) })
+export const paragraph = (text: string) => ({ object: 'block' as const, type: 'paragraph' as const, paragraph: richText(text) })
+export const heading = (text: string) => ({ object: 'block' as const, type: 'heading_2' as const, heading_2: richText(text) })
+export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'code' as const, code: { ...richText(text), language: 'bash' } })
+export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
+export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
 export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
 export const receiptMarker = (actor: string, operationId: string) => `Tin Star operation: ${JSON.stringify([actor, operationId])}`
@@ -60,13 +64,13 @@ export class WorkflowContent {
     // Incomplete reads cannot establish that a receipt/decision is absent.
     throw new Error('Comments truncated; cannot safely resolve or deduplicate this operation')
   }
-  async sections(id: string) {
-    const result: Array<{ id: string; text: string }> = []; let cursor: string | undefined
+  async sections(id: string, includeStructured = false) {
+    const result: Array<{ id: string; text: string; type: string }> = []; let cursor: string | undefined
     for (let page = 0; page < 10; page++) {
       const query = new URLSearchParams({ page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`blocks/${id}/children?${query}`)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete body read')
-      for (const block of body.results) if (block.type === 'paragraph' && !block.archived && !block.in_trash) result.push({ id: block.id, text: plainText(block.paragraph?.rich_text) })
+      for (const block of body.results) if ((block.type === 'paragraph' || includeStructured && ['heading_2', 'code'].includes(block.type)) && !block.archived && !block.in_trash) result.push({ id: block.id, type: block.type, text: plainText(block[block.type]?.rich_text) })
       if (!body.has_more) return result
       if (!body.next_cursor || body.next_cursor === cursor) break
       cursor = body.next_cursor
