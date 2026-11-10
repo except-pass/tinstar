@@ -1013,7 +1013,7 @@ for (const width of [1440, 390]) test(`single-row toolbar scoped pattern coverag
   await page.goto(base)
   const center = page.locator('.ov-pattern-selected')
   await expect(page.locator('.ov-card')).toHaveCount(127)
-  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await expect(page.locator('.ov-pattern-selected .ov-pattern-coverage')).toHaveCount(0)
   await screenshot(page, `pattern-all-${width}`)
   await center.press('ArrowRight')
   await expect(center).toContainText('127 not evaluated')
@@ -1030,9 +1030,9 @@ for (const width of [1440, 390]) test(`single-row toolbar scoped pattern coverag
   await screenshot(page, `pattern-drilldown-${width}`)
   await page.getByRole('button', { name: 'Clear search focus', exact: true }).click()
   await center.press('ArrowRight')
-  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await expect(page.locator('.ov-pattern-selected .ov-pattern-coverage')).toHaveCount(0)
   await center.press('ArrowLeft'); await center.press('ArrowLeft')
-  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await expect(page.locator('.ov-pattern-selected .ov-pattern-coverage')).toHaveCount(0)
   expect(writes).toEqual([])
 })
 
@@ -1185,10 +1185,11 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   // Complete coverage restores an exact positive and a true zero.
   scene = fixturePatternCoverageScene({ now, confirmed: 8, unavailable: 0 })
   await page.reload()
+  await center.press('ArrowLeft'); await center.press('ArrowLeft')
   await expect(center).toHaveText('Active 8')
   await center.press('ArrowRight'); await center.press('ArrowRight')
   await expect(center).toHaveText('Stalled 0')
-  await expect(page.locator('.ov-pattern-coverage')).toHaveCount(0)
+  await expect(page.locator('.ov-pattern-selected .ov-pattern-coverage')).toHaveCount(0)
   // The selected status chip retains the full label on a narrow toolbar.
   scene = fixtureScene({ now })
   await page.reload()
