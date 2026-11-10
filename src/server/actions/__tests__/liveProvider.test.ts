@@ -79,6 +79,7 @@ it('uses verified installation identity, separately from review author, on exact
   expect(fixture.requests.some(request => request.path === '/user' || request.path === '/user/orgs')).toBe(false)
 })
 it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls', '/user', '/repos/fortresspower/cmsandbox/pulls/1/merge',
+  '/repos/fortresspower/cmsandbox/compare/main...release', '/repos/fortresspower/cmsandbox/commits/main',
   '/repos/fortresspower/cmsandbox/git/refs/heads/main', '/repos/fortresspower/cmsandbox/actions/runs/1/rerun', '/repos/fortresspower/cmsandbox/pulls?permissions=write',
   '/repos/fortresspower/cmsandbox/../cmsandbox/pulls', '//attacker.test/repos/fortresspower/cmsandbox/pulls'])('denies scope before minting: %s', async path => {
   const fixture = await setup()
@@ -87,7 +88,7 @@ it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls
 })
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
   expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
-  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents']]) {
+  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents']]) {
     expect(readerScope(`/repos/fortresspower/cmsandbox/${suffix}`).permissions).toEqual({ metadata: 'read', [permission!]: 'read' })
   }
 })

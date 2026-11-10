@@ -43,17 +43,16 @@ async function root() {
 }
 
 describe('default-OFF release transition and owner routing proposals', () => {
-  it('keeps every switch value incapable of enabling a writer', async () => {
+  it('defaults OFF and exposes the operator switch without executing writes', async () => {
     const config = await root(), file = join(config, 'releases', 'automation.json'), { scene, reconcile } = fixture(), data = await reconcile()
     expect(await readAutomationSettings(config)).toEqual(settings)
     for (const enabled of [false, true]) {
       const saved = JSON.stringify({ version: 1, enabled }); await writeFile(file, saved)
       const read = await readAutomationSettings(config), plan = planReleaseAutomation(data, scene, read)
       expect(read).toMatchObject({ configuration: 'configured', requestedEnabled: enabled })
-      expect(plan).toMatchObject({ enabled: false, mode: 'review-only' })
+      expect(plan).toMatchObject({ enabled, mode: enabled ? 'automatic' : 'review-only' })
       expect(plan.proposals).toHaveLength(2)
       expect(await readFile(file, 'utf8')).toBe(saved)
-      if (enabled) expect(plan.warnings.join()).toContain('Enablement requested but blocked')
     }
     for (const invalid of ['{', JSON.stringify({ version: 1, enabled: 'true' }), JSON.stringify({ version: 2, enabled: true })]) {
       await writeFile(file, invalid)
@@ -140,7 +139,7 @@ describe('default-OFF release transition and owner routing proposals', () => {
     const url = `http://127.0.0.1:${port}/api/releases/automation`
     const first = await (await fetch(url)).json(), replay = await (await fetch(url)).json()
     expect(first.data).toEqual(replay.data)
-    expect(first.data).toMatchObject({ mode: 'review-only', enabled: false, requestedEnabled: true, proposals: expect.any(Array) })
+    expect(first.data).toMatchObject({ mode: 'automatic', enabled: true, requestedEnabled: true, proposals: expect.any(Array) })
     expect(first.data.proposals).toHaveLength(2)
     for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) expect((await fetch(url, { method })).status).toBe(400)
     expect(JSON.stringify(scene)).toBe(before)

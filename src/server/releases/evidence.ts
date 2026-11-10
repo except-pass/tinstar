@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { DeploymentReceipt, RequiredTarget } from '../../shared/releaseReconciliation'
 import { releasePull } from '../../shared/releases'
 import { cmsandboxReceipts } from './cmsandbox'
+import { readCoordinatorStore } from './coordinatorStore'
 
 const stamp = z.string().datetime({ offset: true })
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
@@ -17,14 +18,16 @@ const receipt = target.extend({
 })
 const settingsSchema = z.object({
   version: z.literal(1),
-  repositories: z.array(z.object({ repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase()), checkout: z.string().refine(isAbsolute) })).default([]),
+  repositories: z.array(z.object({ repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/).transform(value => value.toLowerCase()), checkout: z.string().refine(value => value === 'github' || isAbsolute(value)) })).default([]),
   requirements: z.array(z.object({ pull: z.string().refine(value => !!releasePull(value)), targets: z.array(target).min(1), exceptions: z.array(z.string()).default([]) })).default([]),
   receiptFiles: z.array(z.string().refine(isAbsolute)).default([]),
+  // Explicit historical review sources cannot authorize automatic writes.
+  coordinatorSnapshots: z.array(z.object({ directory: z.string().refine(isAbsolute), collectedAt: stamp })).default([]),
   // A stale current-state snapshot cannot certify PROD after a later unobserved deployment.
   maxSnapshotAgeSeconds: z.number().positive().default(300),
 })
 export interface EvidenceRead {
-  status: 'fresh' | 'stale' | 'unconfigured' | 'error'
+  status: 'fresh' | 'snapshot' | 'stale' | 'unconfigured' | 'error'
   collectedAt: string | null
   warnings: string[]
   receipts: DeploymentReceipt[]
@@ -58,7 +61,7 @@ export class ReleaseEvidenceReader {
       if (result.requirements.has(identity.id)) return { ...result, status: 'error', warnings: [`Required-target mapping conflicts for ${identity.url}`] }
       result.requirements.set(identity.id, { targets: [...new Map(requirement.targets.map(target => [`${target.target}:${target.component}`, target])).values()], exceptions: requirement.exceptions })
     }
-    if (!settings.receiptFiles.length) { result.warnings.push('No production receipt files configured'); return result }
+    if (!settings.receiptFiles.length && !settings.coordinatorSnapshots.length) { result.warnings.push('No production receipt files configured'); return result }
     result.status = 'fresh'
     const times: string[] = [], identities = new Map<string, string>()
     for (const file of settings.receiptFiles) {
@@ -79,6 +82,19 @@ export class ReleaseEvidenceReader {
       } catch {
         result.status = 'error'; result.warnings.push('Production receipt export is unreadable, unsupported or conflicting; no shipment is certified')
       }
+    }
+    for (const snapshot of settings.coordinatorSnapshots) {
+      try {
+        const rows = await readCoordinatorStore(snapshot.directory)
+        times.push(snapshot.collectedAt)
+        for (const row of rows) {
+          const checked = receipt.parse(row), signature = JSON.stringify(checked), previous = identities.get(checked.id)
+          if (previous && previous !== signature) throw new Error('Conflicting receipt identity')
+          if (!previous) { identities.set(checked.id, signature); result.receipts.push(checked) }
+        }
+        if (result.status === 'fresh') result.status = 'snapshot'
+        result.warnings.push(`Historical coordinator snapshot as of ${snapshot.collectedAt}; review only. It cannot certify current PROD or authorize automatic transitions.`)
+      } catch { result.status = 'error'; result.warnings.push('Coordinator directory is unreadable or incomplete; no shipment is certified') }
     }
     result.collectedAt = times.sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
     return result

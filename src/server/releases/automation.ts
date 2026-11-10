@@ -6,16 +6,16 @@ import type { ReleasesRead } from '../../shared/releases'
 import type { ReleaseAutomationPlan, ReleaseTransitionEvidence, ReleaseTransitionProposal } from '../../shared/releaseAutomation'
 import { receiptHash } from './cmsandbox'
 
-export const rolloutGate = 'Automatic transitions are OFF. Enabling requires parent approval with the board-guide and PM-bot sweep update in the same release. This build has no Notion writer or Desk publisher.'
+export const rolloutGate = 'Automatic transitions are OFF. Owner activation requires the verification checkbox and coordinated board-guide/PM Bot instructions. Historical snapshots are review only.'
 export type AutomationSettings = Pick<ReleaseAutomationPlan, 'requestedEnabled' | 'configuration' | 'warnings'>
 const schema = z.object({ version: z.literal(1), enabled: z.boolean().default(false) })
 
-/** A requested switch cannot activate writes before the coordinated rollout gate.
+/** Read the operator switch; schema and policy approval are rollout prerequisites.
  * Reading this separate optional file does not invalidate deployment evidence. */
 export async function readAutomationSettings(root: string): Promise<AutomationSettings> {
   try {
     const { enabled } = schema.parse(JSON.parse(await readFile(join(root, 'releases', 'automation.json'), 'utf8')))
-    return { requestedEnabled: enabled, configuration: 'configured', warnings: enabled ? ['Enablement requested but blocked: the transition writer is not available in this review-only build.'] : [] }
+    return { requestedEnabled: enabled, configuration: 'configured', warnings: [] }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { requestedEnabled: false, configuration: 'default', warnings: [] }
     return { requestedEnabled: false, configuration: 'error', warnings: ['Release automation configuration is unreadable or invalid; automatic transitions remain OFF.'] }
@@ -29,18 +29,16 @@ function audit(evidence: ReleaseTransitionEvidence[], verify: boolean) {
   ].join('\n')
 }
 
-/** Deterministic proposals only. Replay neither publishes queue items nor changes cards.
- * A future writer must re-read status/evidence and deduplicate this stable proposal ID.
- * Nothing in this build accepts a writer callback or performs that future operation. */
+/** Deterministic proposals only. GET/replay never invokes the scheduled writer. */
 export function planReleaseAutomation(data: ReleasesRead, scene: FloorScene, settings: AutomationSettings): ReleaseAutomationPlan {
-  const result: ReleaseAutomationPlan = { mode: 'review-only', enabled: false, ...settings, warnings: [...settings.warnings, rolloutGate], proposals: [], held: [] }
+  const result: ReleaseAutomationPlan = { mode: settings.requestedEnabled ? 'automatic' : 'review-only', enabled: settings.requestedEnabled, ...settings, warnings: [...settings.warnings, ...(!settings.requestedEnabled ? [rolloutGate] : [])], proposals: [], held: [] }
   const report = data.reconciliation
   if (!report) { result.warnings.push('Reconciliation is unavailable; no transition can be proposed.'); return result }
   for (const decision of report.cards) {
     const card = scene.cards.find(card => card.id === decision.cardId && !card.source.archived && !card.source.in_trash)
     if (!card || card.source.properties.Status?.value !== 'Waiting for Prod Release') continue
     const reasons = [...decision.reasons]
-    if (report.sourceStatus !== 'fresh' || !data.associationsComplete || scene.coverage.intentions.status !== 'fresh' || scene.coverage.intentions.coverage !== 'complete') reasons.push('Fresh complete card associations and production evidence are required')
+    if (!['fresh', 'snapshot'].includes(report.sourceStatus) || !data.associationsComplete || scene.coverage.intentions.status !== 'fresh' || scene.coverage.intentions.coverage !== 'complete') reasons.push('Fresh complete card associations and production evidence are required')
     if (!['would-complete', 'would-verify'].includes(decision.decision)) reasons.push('Required production changes are not all safely live')
     const verify = card.source.properties['Requires production verification']?.value === true
     // Re-read card fields from the same authorized scene rather than inheriting an old decision.
@@ -60,8 +58,8 @@ export function planReleaseAutomation(data: ReleasesRead, scene: FloorScene, set
     if (reasons.length) { result.held.push({ cardId: card.id, reasons: unique(reasons) }); continue }
     evidence.sort((a, b) => a.pull.localeCompare(b.pull) || a.receipt.repository.localeCompare(b.receipt.repository) || a.receipt.component.localeCompare(b.receipt.component) || a.receipt.target.localeCompare(b.receipt.target) || a.receipt.id.localeCompare(b.receipt.id))
     const requiredPulls = unique(decision.requiredPulls), to = verify ? 'In Progress' : 'Done'
-    const id = receiptHash({ cardId: card.id, to, owner: verify ? owner : null, requiredPulls, evidence })
-    const proposal: ReleaseTransitionProposal = { id, cardId: card.id, owner: owner || 'Unassigned', from: 'Waiting for Prod Release', to, kind: verify ? 'verify-in-production' : 'complete', requiredPulls, evidence, auditText: audit(evidence, verify), desk: null }
+    const id = receiptHash({ cardId: card.id, to, owner, requiredPulls, evidence })
+    const proposal: ReleaseTransitionProposal = { id, cardId: card.id, owner, from: 'Waiting for Prod Release', to, kind: verify ? 'verify-in-production' : 'complete', requiredPulls, evidence, auditText: audit(evidence, verify), desk: null }
     if (verify) {
       const title = String(card.source.properties.Name?.value ?? card.id)
       proposal.desk = { owner, item: {

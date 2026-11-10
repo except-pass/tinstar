@@ -17,7 +17,7 @@ export function coordinatorExport(options: { partial?: boolean; rollback?: boole
   const planRef = receiptHash(plan), binding = { release_id: 'v1.24.0', manifest, plan: planRef, baseline: `sha256:${'a'.repeat(64)}` }
   const verified = { kind: step.kind, target: step.target, digest: step.desired, revision: step.config.revision, config_digest: step.config.digest }
   const release = { binding, worker_run: '12345', status: options.partial ? 'stopped' : 'completed', steps: { 'manager-analysis': { status: options.partial ? 'failed' : 'succeeded', verified } } }
-  const event = { schema: 'cmsandbox.release.production-event', schema_version: 1, mode: 'live', previous: null, binding, command: { type: options.partial ? 'finish' : 'close' }, result: { execution_authorized: true }, state: { active: options.partial ? 'v1.24.0' : null, releases: { 'v1.24.0': release } } }
+  const event = { schema: 'cmsandbox.release.production-event', schema_version: 1, mode: 'live', previous: null as string | null, binding, command: { type: options.partial ? 'finish' : 'close' }, result: { execution_authorized: true }, state: { active: options.partial ? 'v1.24.0' : null, releases: { 'v1.24.0': release } } }
   const head = receiptHash(event)
   const bundle: any = { schema: 'tinstar.cmsandbox-production-export.v1', repository: 'fortresspower/cmsandbox', bucket: 'fortresspower-cmsandbox-release-prod-298117917676', collectedAt: '2026-11-06T18:15:00Z', control: { head }, journal: { [head]: event }, journalMetadata: { [head]: { lastModified: '2026-11-06T18:10:00Z' } }, objects: { [manifest]: candidate, [planRef]: plan, [inputRef]: inputs, [buildRef]: build } }
   return { bundle, event, release, candidate, plan, step, source, head }
@@ -64,4 +64,37 @@ describe('native cmsandbox production evidence', () => {
     const metadata = coordinatorExport(); delete metadata.bundle.journalMetadata[head]
     expect(() => cmsandboxReceipts(metadata.bundle)).toThrow('LastModified')
   })
+})
+
+it('reads an exported committed store with a superseded binding and preserved journal timestamps', async () => {
+  const { mkdtemp, mkdir, writeFile, utimes, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os'), { join } = await import('node:path')
+  const { readCoordinatorStore } = await import('../coordinatorStore')
+  const { bundle, event, release } = coordinatorExport()
+  const superseded = { ...event, binding: { ...event.binding, plan: `sha256:${'0'.repeat(64)}` }, state: { releases: {} }, command: { type: 'close' }, result: { status: 'superseded' }, previous: null }
+  const previous = receiptHash(superseded)
+  // Descriptive metadata does not change a deployment identity.
+  release.steps['manager-analysis'].verified.target = { ...release.steps['manager-analysis'].verified.target, read_method: 'Changed display description' } as typeof release.steps['manager-analysis']['verified']['target']
+  event.previous = previous
+  const head = receiptHash(event), at = '2026-11-06T18:10:00Z'
+  const root = await mkdtemp(join(tmpdir(), 'native-store-'))
+  try {
+    await mkdir(join(root, 'journal')); await mkdir(join(root, 'objects'))
+    await writeFile(join(root, 'control.json'), JSON.stringify({ head }))
+    for (const [id, value] of Object.entries({ [previous]: superseded, [head]: event })) {
+      const path = join(root, 'journal', `${id.slice(7)}.json`)
+      await writeFile(path, JSON.stringify(value)); await utimes(path, new Date(at), new Date(at))
+    }
+    for (const [id, value] of Object.entries(bundle.objects)) await writeFile(join(root, 'objects', `${id.slice(7)}.json`), JSON.stringify(value))
+    const receipt = await readCoordinatorStore(root)
+    expect(receipt[0]).toMatchObject({ outcome: 'succeeded', deployedAt: '2026-11-06T18:10:00.000Z' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('invalidates an old completed binding when the committed head supersedes it without a replacement', () => {
+  const { bundle, event, head } = coordinatorExport()
+  const superseded = { ...event, previous: head, state: { releases: {} }, result: { status: 'superseded' } }
+  const digest = receiptHash(superseded)
+  bundle.journal[digest] = superseded; bundle.journalMetadata[digest] = { lastModified: '2026-11-06T18:12:00Z' }; bundle.control.head = digest
+  expect(cmsandboxReceipts(bundle)[0]).toMatchObject({ outcome: 'partial' })
 })

@@ -19,7 +19,7 @@ For worker-to-card associations, see [Notion-owned worker links](docs/notion-wor
 
 Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text. Use the adjacent Pattern Dial for operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
-The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue, with read-only production reconciliation and card completion previews. See its reference for evidence requirements and local link/unlink controls.
+The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue, with production reconciliation, card completion previews and a separately enabled, default-off automatic writer. See its reference for evidence requirements, activation and local link/unlink controls.
 
 For actions on selected PRs in PRs or Releases, see the [PR actions guide](docs/pr-actions.md).
 

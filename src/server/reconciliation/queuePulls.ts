@@ -34,6 +34,15 @@ export async function readGithubScalars(path: string, projection: string): Promi
         failed: checks.filter(row => row.status === 'completed' && !['success', 'neutral', 'skipped'].includes(row.conclusion)).length }
     }
     if (/\/status\?/.test(path)) return { total: raw.total_count, state: raw.state }
+    if (/\/compare\//.test(path)) {
+      const commits = raw.commits as Array<{ sha: string; commit: { message: string } }>
+      return { status: raw.status, merge_base_sha: (raw.merge_base_commit as { sha: string })?.sha, total: raw.total_commits, returned: commits.length,
+        shas: commits.map(commit => commit.sha).join(','), reverts: commits.flatMap(commit => [...commit.commit.message.matchAll(/This reverts commit ([a-f0-9]{40,64})\b/gi)].map(match => match[1])).join(',') }
+    }
+    if (/\/commits\/[a-f0-9]{40,64}$/.test(path)) {
+      const parents = raw.parents as Array<{ sha: string }>
+      return { parents: parents.length, first_parent: parents[0]?.sha ?? null }
+    }
     throw new Error('Scalar Reader operation outside PR evidence scope')
   }
   const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection], { timeout: 5_000, maxBuffer: 64 * 1024 })

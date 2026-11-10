@@ -26,7 +26,7 @@ export interface CardReleaseEligibility {
 }
 export interface ReleaseDryRun {
   mode: 'dry-run'; id: string
-  sourceStatus: 'fresh' | 'stale' | 'unconfigured' | 'error'
+  sourceStatus: 'fresh' | 'snapshot' | 'stale' | 'unconfigured' | 'error'
   collectedAt: string | null; lastSuccessfulAt: string | null
   warnings: string[]; cards: CardReleaseEligibility[]
   targets: Array<{ repository: string; target: string; component: string; version: string | null; deployedSha: string | null; artifactDigest: string | null; receiptUrl: string; observedAt: string }>

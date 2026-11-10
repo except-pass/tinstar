@@ -4,6 +4,7 @@ import type { CardReleaseEligibility, DeploymentReceipt, ReleaseDryRun, TargetRe
 import type { EvidenceRead } from './evidence'
 import { checkReleaseAncestry, type AncestryCheck } from './ancestry'
 import { receiptHash } from './cmsandbox'
+import { unresolvedVerificationRecords, type ReleaseWriteRecord } from './writer'
 
 function latestReceipt(rows: DeploymentReceipt[]) {
   const sorted = [...rows].sort((a, b) => Date.parse(b.deployedAt) - Date.parse(a.deployedAt) || a.id.localeCompare(b.id))
@@ -13,7 +14,7 @@ function latestReceipt(rows: DeploymentReceipt[]) {
   return { receipt: latest ?? null, conflicting: !!conflicting }
 }
 /** Deterministic dry run only: immutable observations in, eligibility out. No domain writes. */
-export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, ancestry: AncestryCheck = checkReleaseAncestry): Promise<ReleasesRead> {
+export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, ancestry: AncestryCheck = checkReleaseAncestry, records: ReleaseWriteRecord[] = []): Promise<ReleasesRead> {
   const pulls: ReleasePull[] = []
   const ancestryCache = new Map<string, Awaited<ReturnType<AncestryCheck>>>()
   for (const original of data.pulls) {
@@ -26,7 +27,7 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
         const selected = latestReceipt(evidence.receipts.filter(receipt => receipt.repository === pull.repository && receipt.environment === 'production' && receipt.target === target.target && receipt.component === target.component))
         const result: TargetReconciliation = { ...target, state: 'unknown', reason: 'Production evidence missing', ancestry: 'unknown', receipt: selected.receipt }
         const receipt = selected.receipt, checkout = evidence.repositories.get(pull.repository)
-        if (evidence.status !== 'fresh') result.reason = `Production evidence source ${evidence.status}`
+        if (!['fresh', 'snapshot'].includes(evidence.status)) result.reason = `Production evidence source ${evidence.status}`
         else if (selected.conflicting) result.reason = 'Conflicting deployment receipts at the same time'
         else if (!receipt) result.reason = 'No production receipt for the exact repository, component and target'
         else if (evidence.collectedAt && Date.parse(receipt.deployedAt) > Date.parse(evidence.collectedAt) + 60_000) result.reason = 'Deployment receipt is newer than the current-state snapshot'
@@ -73,14 +74,15 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
         eligible: decision === 'would-complete', decision, reasons,
         receiptIds: [...new Set(linked.flatMap(pull => pull.deployment?.targets.flatMap(target => target.receipt ? [target.receipt.id] : []) ?? []))].sort() }
     }).sort((a, b) => a.cardId.localeCompare(b.cardId))
-  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.decision === 'would-verify'))
+  const unresolvedCards = new Set(unresolvedVerificationRecords(records).map(row => row.proposal.cardId))
+  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.requiresProductionVerification && (card.decision === 'would-verify' || card.status === 'In Progress' && unresolvedCards.has(card.cardId))))
   const report: ReleaseDryRun = {
     mode: 'dry-run', id: receiptHash({ pulls: pulls.map(pull => ({ id: pull.id, mergeSha: pull.mergeSha, exceptions: pull.exceptions, deployment: pull.deployment })), cards, sourceStatus: evidence.status }),
     sourceStatus: evidence.status, collectedAt: evidence.collectedAt,
     lastSuccessfulAt: evidence.status === 'fresh' && pulls.length > 0 && pulls.every(pull => pull.deployment?.state !== 'unknown') ? evidence.collectedAt : null,
     warnings: [...evidence.warnings], cards,
-    targets: [...new Map(pulls.flatMap(pull => pull.deployment?.targets.flatMap(target => target.receipt ? [{ repository: pull.repository, target: target.target, component: target.component, version: target.receipt.version,
-      deployedSha: target.receipt.deployedSha, artifactDigest: target.receipt.artifactDigest, receiptUrl: target.receipt.receiptUrl, observedAt: target.receipt.deployedAt }] : []) ?? []).map(target => [`${target.repository}:${target.target}:${target.component}`, target])).values()],
+    targets: [...new Map(evidence.receipts.filter(receipt => receipt.environment === 'production').sort((a, b) => Date.parse(a.deployedAt) - Date.parse(b.deployedAt)).map(receipt => ({ repository: receipt.repository, target: receipt.target, component: receipt.component, version: receipt.version,
+      deployedSha: receipt.deployedSha, artifactDigest: receipt.artifactDigest, receiptUrl: receipt.receiptUrl, observedAt: receipt.deployedAt })).map(target => [`${target.repository}:${target.target}:${target.component}`, target])).values()],
   }
   return { ...data, pulls, reconciliation: report }
 }
@@ -90,7 +92,7 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
 export class ReleaseReconciler {
   private cache = new Map<string, { until: number; value: Awaited<ReturnType<AncestryCheck>> }>()
   constructor(private check: AncestryCheck = checkReleaseAncestry, private now = Date.now) {}
-  async get(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead) {
+  async get(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, records: ReleaseWriteRecord[] = []) {
     let budget = 8
     const deadline = this.now() + 10_000
     return reconcileReleases(data, scene, evidence, async (repository, checkout, mergeSha, deployedSha) => {
@@ -104,6 +106,6 @@ export class ReleaseReconciler {
       if (this.cache.size >= 1000) this.cache.delete(this.cache.keys().next().value!)
       this.cache.set(key, { until: this.now() + (value.state === 'unknown' ? 60_000 : 600_000), value })
       return value
-    })
+    }, records)
   }
 }
