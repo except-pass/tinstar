@@ -59,14 +59,15 @@ it('keeps a board over the new bound explicitly partial', async () => {
   expect(f.calls).toHaveLength(NOTION_QUERY_PAGE_LIMIT)
 })
 
-it.each(['select', 'status'])('uses a complete filtered census independently of capped board coverage (%s)', async statusType => {
+it.each(['select', 'status'])('keeps operational and check-in reads scoped independently of history size (%s)', async statusType => {
   const f = fixture(2500, 72, statusType)
   vi.stubGlobal('fetch', f.fetcher)
   const sources = new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token', dataSourceId }, warnings: [] })
   const snapshot = await sources.checkInSnapshot()
-  expect(snapshot.intentions).toMatchObject({ coverage: 'partial', data: { hasMore: true } })
+  expect(snapshot.intentions).toMatchObject({ coverage: 'complete', data: { hasMore: false } })
   expect(snapshot.checkIns).toMatchObject({ status: 'fresh', coverage: 'complete', data: { hasMore: false } })
-  const filtered = f.calls.filter(call => call.filter)
+  expect(f.calls.every(call => !!call.filter)).toBe(true)
+  const filtered = f.calls.filter(call => JSON.stringify(call.filter).includes('Firstmate'))
   expect(filtered).toHaveLength(1)
   expect(filtered[0]!.filter).toEqual({ and: [
     { property: 'Owner', select: { equals: 'Firstmate' } },

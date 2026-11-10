@@ -20,6 +20,14 @@ export class CachedObservation<T> {
   private cached: Observation<T> | null = null
   private pending: Promise<Observation<T>> | null = null
   private retryAt = 0
+  private changes: Array<(data: T) => T> = []
+
+  isCached() { return !!this.pending || !!this.cached && this.now() < this.retryAt }
+
+  updateData(change: (data: T) => T) {
+    if (this.cached?.data) this.cached = { ...this.cached, data: change(this.cached.data) }
+    if (this.pending) this.changes.push(change)
+  }
 
   constructor(private readonly read: () => Promise<ReadResult<T>>, private readonly ttlMs: number,
     private readonly maxAgeMs: number, private readonly failureMessage: string, private readonly now = Date.now, private readonly mergePartial?: (previous: T, current: T) => T) {}
@@ -36,9 +44,11 @@ export class CachedObservation<T> {
   }
 
   private async refresh(): Promise<Observation<T>> {
+    this.changes = []
     const attemptedAt = new Date(this.now()).toISOString()
     try {
       const result = await this.read()
+      for (const change of this.changes) result.data = change(result.data)
       const observed = Date.parse(result.observedAt)
       if (!Number.isFinite(observed) || observed > this.now() + 60_000) throw new Error('invalid source timestamp')
       const previous = this.cached

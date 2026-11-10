@@ -435,3 +435,10 @@ opening duplicate alerts. The CLI emits these records without sending messages
 or creating Notion items. After a verified write, ordinary Tin Star refresh
 reads the declaration and supplies the confirmed gutter edge. The live pilot
 and screenshot/readback evidence remain First Mate's post-merge operator step.
+
+## Policy-aware start work
+
+The Inspector and MCP now share the [start-work operation](features/workflow.md).
+It preserves this native schema unchanged and validates current execution before
+setting In Progress. Tracked external runs use their own consumer-reported
+provenance in Delegated To; they never invent a First Mate home/task identity.

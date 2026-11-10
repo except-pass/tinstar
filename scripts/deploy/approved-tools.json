@@ -3,9 +3,13 @@
   "get_command",
   "get_queue",
   "get_scene",
+  "get_work",
   "get_worker_link_report",
+  "get_workflow_rules",
   "list_ui_sessions",
   "next_queue_item",
   "present_view",
-  "read_record"
+  "read_record",
+  "search_work",
+  "start_work"
 ]

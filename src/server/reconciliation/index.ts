@@ -4,7 +4,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource } from './config'
 import { fleetObservation } from './fleet'
-import { notionObservation, readNotionCard } from './notion'
+import { notionObservation, type WorkScope } from './notion'
 import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
@@ -13,43 +13,57 @@ import { buildQueue } from './queue'
 import { QueuePullReader } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
 import { SearchDocumentCollector } from './searchIndex'
+import { NotionApi } from './notionApi'
+import { WorkReader } from './workReader'
+import { WorkflowOperations } from './workflow'
+import { externalWorkers, searchWorkSchema, getWorkSchema, type StartWorkInput } from '../../shared/workflow'
+import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
+import { workHealth } from '../../shared/workHealth'
+import { workReadback } from './workReadback'
 
-export type SourceSnapshot = Awaited<ReturnType<ReconciliationSources['snapshot']>>
+export type SourceSnapshot = Omit<Awaited<ReturnType<ReconciliationSources['snapshot']>>, 'diagnostics'>
 export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['intentions'] }
 
-/** Shared read-only collection and scene projection; no domain actions. */
+/** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private fleet
-  private notion
+  private workReader
+  readonly workflow
+  readonly notionApi
   private checkIns
   private context
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
 
-  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig()) {
-    this.context = new CardContextReader(config.notion)
+  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi) {
+    this.notionApi = api ?? new NotionApi(fetcher)
+    this.workReader = new WorkReader(config.notion, this.notionApi)
+    this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true))
+    this.context = new CardContextReader(config.notion, this.notionApi.fetch)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
-    this.notion = notionObservation(config.notion)
-    this.checkIns = notionObservation(config.notion, fetch, 'check-ins')
+    this.checkIns = notionObservation(config.notion, this.notionApi.fetch, 'check-ins')
   }
 
-  async snapshot(force = false) {
+  async fleetSnapshot(force = false) {
     // At most four local snapshot processes at once, even for a large farm.
     const homes: Array<{ source: FleetSource & { machineBasis: string }; observation: Awaited<ReturnType<ReturnType<typeof fleetObservation>['get']>> }> = []
-    const notion = this.notion.get(force)
     for (let offset = 0; offset < this.fleet.length; offset += 4) {
       homes.push(...await Promise.all(this.fleet.slice(offset, offset + 4).map(async ({ source, observation }) => ({
         source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' }, observation: await observation.get(force),
       }))))
     }
-    const intentions = await notion
+    return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
+  }
+
+  async snapshot(force = false, scope: WorkScope = {}) {
+    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force)])
     return {
       generatedAt: new Date().toISOString(), scope: 'configured-homes-only',
-      warnings: [...this.config.warnings, ...(!homes.length ? ['No First Mate homes configured; fleet coverage is unknown'] : [])],
+      warnings: [...this.config.warnings, ...(!fleet.length ? ['No First Mate homes configured; fleet coverage is unknown'] : [])],
       // Earlier batches can age while a later home consumes its timeout.
-      fleet: homes.map(row => ({ ...row, observation: ageObservation(row.observation) })), intentions: ageObservation(intentions),
+      fleet, intentions: ageObservation(intentions), diagnostics: { notion: this.notionApi.diagnostics },
     }
   }
 
@@ -62,16 +76,70 @@ export class ReconciliationSources {
     return { ...snapshot, checkIns: ageObservation(checkIns) }
   }
 
-  async currentCard(id: string) { return readNotionCard(this.config.notion, id) }
+  async currentCard(id: string) { return this.workReader.card(id, true) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
 
-  async scene(force = false) {
-    const scene = this.reconciler.reconcile(await this.snapshot(force))
+  async scene(force = false, scope: WorkScope = {}) {
+    const scene = this.reconciler.reconcile(await this.snapshot(force, scope))
     if (this.checkInIndicators) {
       const indicators = await this.checkInIndicators()
       for (const card of scene.cards) card.checkInRequest = indicators.get(card.id)
     }
     return { ...scene, searchIndex: this.search.get(scene) }
+  }
+
+
+  async searchWork(input: unknown) {
+    const args = searchWorkSchema.parse(input)
+    const scope = { owner: args.owner, statuses: args.statuses, initiative: args.initiative, epic: args.epic, checkpoint_before: args.checkpoint_before, history: args.history }
+    const [intentions, fleet] = await Promise.all([this.workReader.query(scope, args.refresh), this.fleetSnapshot(args.refresh)])
+    const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
+    const keys = directNeighbors(scene, searchSeeds(scene, { query: args.query, patterns: args.patterns, facets: [] }, Date.now()))
+    const cards = scene.cards.filter(card => keys.has(`card:${card.id}`)).sort((a, b) => a.id.localeCompare(b.id))
+    const page = cards.slice(args.offset, args.offset + args.limit)
+    const filteredCards = new Set(cards.map(card => card.id)), links = [...scene.claims, ...scene.claimHistory]
+    const cardScoped = !!(args.owner || args.statuses || args.initiative || args.epic || args.checkpoint_before || args.patterns.length)
+    const workers = scene.executions.filter(worker => keys.has(`execution:${worker.id}`) &&
+      (!cardScoped || links.some(link => link.executionId === worker.id && filteredCards.has(link.cardId))))
+    return { scope, coverage: scene.coverage, warnings: scene.warnings, total: cards.length,
+      next_offset: args.offset + args.limit < Math.max(cards.length, workers.length) ? args.offset + args.limit : null,
+      worker_total: workers.length, workers: workReadback(workers.slice(args.offset, args.offset + args.limit).map(worker => ({ ...worker,
+        links: links.filter(link => link.executionId === worker.id),
+        relationship_scope: 'Observed links only; unlinked is not proof of no assignment' }))),
+      records: page.map(card => this.workRecord(scene, card.id)), diagnostics: { notion: this.notionApi.diagnostics } }
+  }
+  private workRecord(scene: ReturnType<SceneReconciler['reconcile']>, id: string) {
+    const card = scene.cards.find(card => card.id === id)
+    const links = [...scene.claims, ...scene.claimHistory].filter(claim => claim.cardId === id)
+    // Source readers already allowlist fields; redact likely credential literals
+    // from ordinary properties/evidence as well as body and comments.
+    return workReadback({ card, links, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
+      findings: scene.findings.filter(finding => finding.cardIds.includes(id)), health: workHealth(scene, id, Date.now()),
+      omissions: 'Allowlisted source metadata only; no raw terminal transcripts or secrets. Query pages and on-demand body/comment reads have explicit bounds.',
+      pull_requests: [...new Set([...(card ? Object.values(card.source.properties).map(property => String(property.value ?? '')) : []),
+        ...scene.executions.filter(worker => links.some(link => link.executionId === worker.id)).map(worker => String(worker.source.pr.url ?? ''))]
+        .flatMap(value => value.match(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g) ?? []))] })
+  }
+  async getWork(input: unknown) {
+    const args = getWorkSchema.parse(input)
+    try {
+      const [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
+      if (args.refresh) this.context.invalidate(args.card_id)
+      const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
+        observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
+      const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
+      return workReadback({ outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
+        ...(args.details ? { context: await this.context.details(card.id) } : {}) })
+    } catch {
+      const known = this.workReader.lastKnown(args.card_id)
+      return { outcome: known ? 'stale' : 'unavailable', ...(known ? { card: workReadback(known.card), observedAt: known.observedAt } : {}),
+        message: 'Card source unavailable or outside configured board; last-known data only, no absence conclusion', coverage: 'unknown' }
+    }
+  }
+  async startWork(input: StartWorkInput, actor: string) {
+    const result = await this.workflow.start(input, actor)
+    if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
+    return workReadback(result)
   }
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
@@ -95,9 +163,10 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
   if (path === '/api/reconciliation/card-context') {
     const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
-    const scene = await sources.scene()
-    if (!id || !scene.cards.some(c => c.id === id)) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
+    if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
+    try { await sources.currentCard(id) }
+    catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue() : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

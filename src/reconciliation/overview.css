@@ -160,3 +160,9 @@
 .ov-toolbar .ov-refresh { display:flex; align-items:center; justify-content:center; flex:none; width:28px; min-height:28px; padding:4px; }
 .ov-refresh[aria-busy="true"] { opacity:.6; }
 .ov-refresh:focus-visible { outline:2px solid #85d2b8; outline-offset:1px; }
+
+.ov-start-work { margin: 12px 0; }
+.ov-start-work form { display: grid; gap: 10px; margin-top: 10px; }
+.ov-start-work label { display: grid; gap: 4px; }
+.ov-start-work input, .ov-start-work select, .ov-start-work textarea { max-width: 100%; min-width: 0; color: inherit; background: var(--bg-surface, #181818); border: 1px solid #666; border-radius: 4px; padding: 6px; }
+.ov-start-work [data-save-outcome="not-saved"], .ov-start-work [data-save-outcome="partially-saved"] { color: #f0bd70; }

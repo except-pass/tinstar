@@ -175,3 +175,12 @@ it('publishes status/worker transitions atomically to rows, dial and status coun
   expect(previews().active.count).toBe(2)
   expect(workHealth(result.current.scene!, fixtureId(4), result.current.now).patterns.stalled.outcome).toBe('no-match')
 })
+
+it('requests history only after an explicit history scope and returns to operational reads', async () => {
+  vi.mocked(apiFetch).mockImplementation(async () => response(fixtureScene({ now: Date.now() })))
+  const { rerender } = renderHook(({ history }) => useFloorScene(true, history), { initialProps: { history: false } })
+  await flush()
+  rerender({ history: true }); await flush()
+  rerender({ history: false }); await flush()
+  expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene', '/api/reconciliation/scene?history=1', '/api/reconciliation/scene'])
+})

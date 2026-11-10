@@ -423,6 +423,14 @@ function groupScene(cards: SceneCard[], executions: Execution[], claims: Claim[]
 export class SceneReconciler {
   private known = new Map<string, Claim>()
 
+  /** Read another scope without treating out-of-scope records as removed. */
+  project(input: SourceSnapshot, now = Date.now()) {
+    const scene = reconcileScene(input, now)
+    const current = new Set(scene.claims.map(claim => claim.id)), cards = new Set(scene.cards.map(card => card.id))
+    return { ...scene, claimHistory: [...this.known.values()].filter(claim => cards.has(claim.cardId) && !current.has(claim.id))
+      .map(claim => ({ ...claim, state: claim.endedAt ? 'historical' as const : 'last-known' as const })),
+      historyScope: 'in-memory observed relationships only; 24h/2000 prior claims; resets on server restart' }
+  }
   reconcile(input: SourceSnapshot, now = Date.now()) {
     const scene = reconcileScene(input, now)
     const current = new Set(scene.claims.map(claim => claim.id))
