@@ -117,6 +117,8 @@ export class CockpitFleet {
     return this.outbox.list(this.homes, message => (message.sourceAnchor ? this.deskRequests : this.attention).some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
   }
 
+  completeDecision(requestId: string) { return this.outbox.completeDecision(requestId) }
+
   private sameCall(card: AttentionCard, message: OutboxMessage): boolean {
     if (message.sourceAnchor) return card.key === message.sourceAnchor && this.homes[card.homeIndex] === message.home
     return this.homes[card.homeIndex] === message.home &&
@@ -132,12 +134,12 @@ export class CockpitFleet {
     return `${message.kind === 'answer' ? 'Answer for' : 'Message about'} ${target} (${card?.headline ?? worker?.objective ?? 'context unavailable'})`
   }
 
-  async submit(input: unknown): Promise<SubmitResult | null> {
+  async submit(input: unknown, decisionResolution?: OutboxMessage['decisionResolution']): Promise<SubmitResult | null> {
     if (!input || typeof input !== 'object') return null
     const value = input as Record<string, unknown>
     const { requestId, anchorKey, kind, text } = value
     if (typeof requestId !== 'string' || !/^tinstar-[a-f0-9-]{36}$/.test(requestId) ||
-      typeof text !== 'string' || !text.trim() || text.length > 10_000 ||
+      typeof text !== 'string' || !text.trim() || text.length > (decisionResolution && kind === 'answer' ? 13_000 : 10_000) ||
       (kind !== 'answer' && kind !== 'message')) return null
     const previous = await this.outbox.get(requestId)
     if (previous) {
@@ -154,6 +156,7 @@ export class CockpitFleet {
     if (!home || !this.homes.includes(home)) return null
     const message: OutboxMessage = {
       requestId, home, kind, text: text.trim(),
+      ...(decisionResolution ? { decisionResolution } : {}),
       ...(anchorKey.startsWith('desk-source:') ? { sourceAnchor: anchorKey } : {}),
       taskId: card ? card.taskId : worker!.id,
       decisionKey: card?.decisionKey ?? null,

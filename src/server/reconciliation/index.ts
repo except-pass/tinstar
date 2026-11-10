@@ -23,6 +23,7 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
+import type { DecisionResolution } from './decisionResolution'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
@@ -136,10 +137,12 @@ export class ReconciliationSources {
   async getWork(input: unknown) {
     const args = getWorkSchema.parse(input)
     try {
-      const [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
+      let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
       if (args.refresh) {
         this.context.invalidate(args.card_id)
         await this.onWorkRefresh?.([card])
+        await this.workflow.reconcileDecisions(card.id, fleet)
+        card = await this.workReader.card(card.id, true)
       }
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
@@ -191,16 +194,42 @@ export class ReconciliationSources {
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
       for (const readiness of Object.keys(queue.counts)) queue.counts[readiness] = queue.items.filter(item => item.readiness === readiness).length
     }
+    queue.readOnly = false // Refresh can finish delivery of an already-recorded owner answer.
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is
     // disclosed; it never becomes a fabricated request age or answer.
-    const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    const deliveries = await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []
+    const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
+    const resolutions = new Map<string, DecisionResolution>()
+    const resolutionIds = new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.filter(item => item.sources.some(source => source.kind === 'firstmate')).flatMap(item => item.cardIds)])
+    for (const id of ids.filter(id => resolutionIds.has(id)).slice(0, 20)) {
+      try {
+        const resolution = await this.workflow.reconcileDecisions(id, snapshot.fleet, false)
+        if (resolution) resolutions.set(id, resolution)
+      } catch { resolutions.set(id, { state: 'verification-needed', message: 'Decision reconciliation needs verification: current Notion history unavailable' }) }
+    }
+    for (const item of queue.items) for (const id of item.cardIds) {
+      const summary = resolutions.get(id)
+      const resolution = summary?.requests?.find(result => item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary?.requests ? summary : undefined)
+      if (resolution) { item.decisionResolution = resolution; if (resolution.state !== 'resolved') { item.oneTouch = false; item.readiness = 'needs-readiness-verification' } }
+    }
+    // Keep an in-flight answer visible even if its source closes before its
+    // delivery acknowledgment arrives. Unrelated asks on that card survive.
+    for (const message of deliveries) {
+      const resolution = message.decisionResolution
+      if (!resolution || resolutions.get(resolution.cardId)?.state === 'resolved' || queue.items.some(item => item.sources.some(source => source.responseAnchor === message.sourceAnchor))) continue
+      queue.items.push({ id: message.sourceAnchor ?? message.requestId, title: `Decision ${resolution.requestId}`, action: null, kind: 'decision', readiness: 'needs-readiness-verification', reasons: [],
+        cardIds: [resolution.cardId], executionIds: [], homeIds: [message.home], decisionKeys: [resolution.requestId], checkpoint: null, oneTouch: false,
+        decisionResolution: resolutions.get(resolution.cardId)?.requests?.find(result => result.request_id === resolution.requestId) ?? resolutions.get(resolution.cardId) ?? { state: 'pending', message: 'Decision recorded · First Mate not yet updated' },
+        evidence: [{ kind: 'card', url: `https://www.notion.so/${resolution.cardId}` }], sources: [] })
+    }
     const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
       contexts.set(id, await this.context.commentDetails(id))
     }))
     if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
+    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     const scene = this.reconciler.project(snapshot)
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized)
     queue.operationalExceptions = executionWarnings(scene)

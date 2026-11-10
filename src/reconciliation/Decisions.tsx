@@ -5,7 +5,9 @@ import { AskSurface } from '../ask/AskSurface'
 import type { QueueItem } from '../server/reconciliation/queue'
 import { cardTitle } from './overviewModel'
 import './decisions.css'
+import '../ask/ask-actions.css'
 import type { NeedsWillItem } from '../server/reconciliation/needsWill'
+import { useWorkSave } from './WorkActions'
 import { decodeRequestText } from './requestText'
 
 export const readinessLabels = {
@@ -27,7 +29,8 @@ export function Decisions() {
   const selectedId = state.selection?.kind === 'card' ? state.selection.id : null
   const flash = state.flash && state.flash.until > Date.now() && state.flash.until !== expiredFlash ? state.flash : null
   useViewSnapshot(views, 'decisions', () => ({ query }), saved => setQuery(saved.query))
-  const entries = (queue?.needsWill ?? queue?.items ?? []).flatMap<DecisionEntry>(item => {
+  const queueItems = queue?.needsWill ?? queue?.items ?? []
+  const entries = queueItems.flatMap<DecisionEntry>(item => {
     if (!item.cardIds.length) return [{ key: item.id, item, id: null, title: decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : null }]
     return item.cardIds.map(id => {
       const card = scene?.cards.find(card => card.id === id)
@@ -96,7 +99,7 @@ export function Decisions() {
         })}
       </div>
       <aside className="decisions-summary" aria-label="Selected decision">
-        {selected ? <AskSurface as="div" subject={{ cardId: selected.id! }}><small>SELECTED CARD</small><h2>{selected.title}</h2><p>{readinessLabels[selected.item.readiness]}</p><p>{selected.action ?? 'Next action not published. Read the source card for context.'}</p><a href={`https://www.notion.so/${selected.id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>{selected.item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">Read evidence ↗</a>)}<small>{selected.id}</small>{selected.item.reasons.map(reason => <p key={reason}>{reason}</p>)}</AskSurface> : <p>{selectedId ? 'Selected card is unavailable in the current queue. Selection is retained while sources refresh.' : 'Select a card to share its focus with MCP.'}</p>}
+        {selected ? <AskSurface as="div" subject={{ cardId: selected.id! }}><small>SELECTED CARD</small><h2>{selected.title}</h2><p>{readinessLabels[selected.item.readiness]}</p><DecisionChoices key={selected.key} entry={selected} items={queueItems} /><p>{selected.action ?? 'Next action not published. Read the source card for context.'}</p><a href={`https://www.notion.so/${selected.id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>{selected.item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">Read evidence ↗</a>)}<small>{selected.id}</small>{selected.item.reasons.map(reason => <p key={reason}>{reason}</p>)}</AskSurface> : <p>{selectedId ? 'Selected card is unavailable in the current queue. Selection is retained while sources refresh.' : 'Select a card to share its focus with MCP.'}</p>}
       </aside>
     </div>
   </section>
@@ -111,4 +114,33 @@ function RequestEvidence({ item, now }: { item: QueueItem; now: number }) {
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
   if (!warnings) return null
   return <details className="decisions-exceptions"><summary>Execution warnings ({warnings.filter(warning => warning.state === 'no-running-worker').length}) · unknown ({warnings.filter(warning => warning.state === 'unknown').length})</summary><p>Advisory observations. Review the card and source before changing its status.</p>{!warnings.length && <p>No execution warnings in observed In Progress cards.</p>}{warnings.map(warning => <article key={warning.cardId}><button type="button" disabled={!canFocus(warning.cardId)} onClick={() => onFocus(warning.cardId)}>{warning.title}</button><strong>{warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{reason}</p>)}{warning.sources.map(source => <small key={source.home}>{source.home} · {source.status} · observed {source.observedAt ?? 'unknown'} · expires {source.expiresAt ?? 'unknown'}</small>)}</article>)}</details>
+}
+
+/** Formal published choices use the same workflow operation as MCP. A saved
+ * answer does not dismiss this source request; only reconciliation can do so. */
+function DecisionChoices({ entry, items }: { entry: DecisionEntry; items: QueueItem[] }) {
+  const [saved, setSaved] = useState<{ items: QueueItem[]; requestId: string; result: import('../shared/workflow').StartWorkResult } | null>(null)
+  const requests = (entry.item as Partial<NeedsWillItem>).requests ?? []
+  const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length)
+  const localStatus = saved?.result.decision_resolution?.message ?? saved?.result.message
+  const resolution = saved ? items.filter(item => item.cardIds.includes(entry.id!))
+    .flatMap(item => item.decisionResolution?.requests ?? (item.decisionResolution ? [item.decisionResolution] : []))
+    .find(status => status.request_id === saved.requestId) : entry.item.decisionResolution
+  const status = saved?.items === items ? localStatus : resolution?.message ?? localStatus
+  return <>{proposals.map(proposal => <ProposalChoices key={proposal.id} cardId={entry.id!} proposal={proposal} onResult={result => setSaved({ items, requestId: proposal.id, result })} />)}{status && <small role="status">{status}</small>}</>
+}
+
+function ProposalChoices({ cardId, proposal, onResult }: { cardId: string; proposal: NeedsWillItem['requests'][number]; onResult: (result: import('../shared/workflow').StartWorkResult) => void }) {
+  const { busy, result, save } = useWorkSave(async () => {})
+  const shownResult = useRef(result)
+  useLayoutEffect(() => {
+    if (result && shownResult.current !== result) onResult(result)
+    shownResult.current = result
+  }, [result, onResult])
+  return <div className="ask-recommendations ask-action-choices" role="group" aria-label={proposal.question ?? 'Decision choices'}>
+    {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={busy || !!result?.decision_resolution} onClick={() => void save('update', {
+      kind: 'answer_decision', card_id: cardId, request_id: proposal.id, option_id: option.id, answer: option.label,
+      next: { owner: 'Firstmate', status: 'Queued' },
+    })}>{option.label}</button>)}
+  </div>
 }

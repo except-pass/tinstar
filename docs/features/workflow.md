@@ -136,7 +136,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
 | `wait` | `dependency`, `unblocks_when`, `follow_up_by`, optional `note`. Enters Waiting For and appends that wait while retaining other waits. |
-| `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. |
+| `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. For source binding and published choices, see [First Mate decision reconciliation](#first-mate-decision-reconciliation). |
 | `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires all wait inputs; Done/Archived requires disposition/evidence. |
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
@@ -170,16 +170,19 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Updates confirm properties and managed sections before writing the history note.
+Except for [source-bound decision answers](#first-mate-decision-reconciliation), updates confirm properties and managed sections before writing the history note.
 If only the note fails, the same process can repair it once, provided the card's
 last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
 with a new operation ID. Definite results that require a fresh attempt set
 `requires_new_operation_id`; the UI offers refresh and explicit re-issue solely
-from that flag, including on cached results. Uncertain saves retain their identity.
+from that flag, including on cached results. For source-bound decision answers,
+a fresh operation ID still resumes the original immutable intent and its
+preconditions; see [decision recovery](#first-mate-decision-reconciliation).
+Uncertain saves retain their identity.
 Other partial failures also require reconciliation by
-the caller. There is no property replay, note-first plan receipt or automatic
-restart recovery. A completed operation's note marker prevents duplicate notes.
+the caller. For these other operations, there is no property replay, note-first plan receipt
+or automatic restart recovery. A completed operation's note marker prevents duplicate notes.
 
 A receipt in the initial creation body recovers lost create responses, with a tiny durable local
 creation latch in `workflow-create-receipts.json` preventing an uncertain POST
@@ -302,7 +305,8 @@ observed running worker. Blank/unreadable links stay unknown. These observations
 never change status, invent worker links or prevent corrective edits. They are
 not business-progress or completion judgments, and no new watchdog is introduced.
 
-The queue endpoint retains read-only GET and allowed-Origin checks. Card asks
+The queue endpoint retains GET and allowed-Origin checks; its bounded reconciliation
+side effects follow [First Mate decision reconciliation](#first-mate-decision-reconciliation). Card asks
 remain visible without owner authorization, with “PR details require owner
 authorization” placeholders instead of PR inventory metadata. PR inventory and
 readiness are collected only after the same check as `/api/pulls`: a loopback
@@ -328,7 +332,9 @@ blocker/owner context, so human responses can close the same request without
 Notion. Until the human edits the ID, its displayed default follows the current
 card watchdog indicator on refresh, including newly created or replacement
 requests. Explicit edits remain intact. Submission and retry intent use that
-same displayed ID; a changed intent receives a new operation ID. Answer selection
+same displayed ID; ordinary changed inputs receive a new operation ID. A
+source-bound proposal with a durable answer intent rejects changed answer/effects,
+even under a new operation ID or actor. Answer selection
 omits known answered requests while retaining legacy source IDs and explicit ID entry. Create/edit/assign,
 start (native or external), checkpoint/wait, request/answer, complete and park
 continue to use the shared backend operations described above. State changes,
@@ -426,3 +432,76 @@ closed or establish delivery/completion. It adds no per-PR requests, history sca
 stores or replay. Association ambiguity, multiple linked PRs and unavailable
 association coverage may require owner verification; cleanup beyond this rule is
 an accepted limitation, without suppressing unrelated asks or exposing PR data.
+
+## First Mate decision reconciliation
+
+Publish a First Mate proposal with `update_work(kind: "request_decision")` and
+`source_request: {home, taskId, kind: "hold" | "decision", id}`. The source must
+be fresh, owner-actionable and explicitly linked to this canonical card. The
+published Notion request retains the exact identity, question and task generation;
+a card ID, title or bare decision key never substitutes for request identity.
+
+Answer that proposal with the existing `answer_decision` operation. UI and MCP
+use the same function. Source approvals leave implementation queued; starting or
+completing implementation is a separate workflow operation. Only the selected
+request's action and caller-specified exact wait are removed. Other asks survive.
+The first durable answer intent is recorded in Notion before property writes.
+It fixes the proposal's answer, source binding and effects. Identical retries,
+including another actor or operation ID, resume that original operation against
+its original preconditions after restart; conflicting answer/effects are rejected.
+A new operation ID cannot supersede the recorded intent or bypass its checks.
+
+If concurrent edits invalidate those preconditions, recovery preserves the edits
+and reports the conflict without replaying the remaining changes. Refresh the
+exact card with `get_work({card_id, refresh: true})` and inspect its current
+properties and Notion proposal, intent and answer history to verify which steps
+saved and which fields conflict. Through the existing card/workflow paths,
+reconcile those fields explicitly only after verifying the intended state; do not
+remove unrelated asks or waits to force a retry. Recovery can proceed when the
+checked fields match their original values or the original operation's intended
+values. If that cannot be established safely, leave the answer pending for
+verification. Keep the original intent and history; refresh retries the same
+scoped reconciliation rather than creating a replacement answer.
+
+The existing fleet outbox delivers the exact answer to that source. Its stable
+request ID is scoped to the source and immutable proposal answer, so retries and
+different consumers converge on one delivery. A saved message or acknowledged
+receipt alone does not resolve Decisions: the acknowledgment and fresh, complete
+source closure must both be observed, then confirmed in Notion. Until then the
+shared projection reports **Decision recorded · First Mate not yet updated**.
+There is no independent poller or request store.
+
+Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
+`get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
+answer can use the same published proposal and this format:
+
+```text
+Tin Star answer: "the-published-proposal-id"
+Answer: R3
+Next owner: Firstmate
+Next status: Queued
+Resolved wait: exact single wait entry
+```
+
+Start the note with `Tin Star answer:` as shown. `Answer:` may contain multiple
+lines. End with consecutive `Next owner:` and `Next status:` lines, optionally
+followed by `Resolved wait:` with one exact wait entry; omit that final line to
+preserve waits. Control-looking lines inside the answer remain prose; only the
+terminal footer supplies the transition and wait. For workflow-generated answers,
+the persisted structured answer data owns the proposal identity and answer.
+
+Refresh records the scoped effects through the same workflow operation and
+retries delivery. A general approval comment, missing binding, contradictory
+answers, changed source question/generation or ambiguous card linkage requires
+verification; it never answers a similarly named request. Notion status edits
+and navigation do not acknowledge First Mate requests.
+
+For an older approval such as the already-approved R3 request, use
+`answer_decision` with `request_id` set to the exact existing proposal/approval
+comment or paragraph ID, `source_request` set to the exact originating request,
+`answer` set to the already-recorded answer, and the existing queued next state.
+This binds and reconciles the old approval without creating another Will request
+or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` when
+those asks were already removed; never clear an unrelated remaining action.
+
+Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.

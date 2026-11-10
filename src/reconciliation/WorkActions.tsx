@@ -10,7 +10,7 @@ type WithoutOperation<T> = T extends unknown ? Omit<T, 'operation_id'> : never
 const actions = [['edit', 'Edit / note'], ['assign', 'Assign / handoff'], ['checkpoint', 'Record checkpoint'], ['wait', 'Record wait'], ['request_decision', 'Request decision'], ['answer_decision', 'Answer decision'], ['complete', 'Complete'], ['park', 'Park']] as const
 const ordinary = ['Name', 'Area', 'Priority', 'Sub-area', 'Attention', 'Initiative', 'Epic', 'Link', 'Due Date', 'Start Date', 'Next action'] as const
 const saveMessage = (result: StartWorkResult) => `${result.outcome === 'saved' ? 'Saved.' : result.outcome === 'partially-saved' ? 'Partially saved.' : 'Not saved.'} ${result.message}${result.saved_fields.length ? ` Confirmed: ${result.saved_fields.join(', ')}.` : ''}`
-function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
+export function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<StartWorkResult | null>(null)
   const attempt = useRef<{ signature: string; input: unknown; id: string }>()
   async function save(values: WithoutOperation<UpdateWorkInput>) {
@@ -49,7 +49,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
   const requests = decisionRequests(sources)
   const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
-  const choices = sources.filter(source => !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
+  const choices = sources.filter(source => !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }

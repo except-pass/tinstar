@@ -9,6 +9,7 @@ import type { AttentionType } from './attention'
 export interface OutboxMessage {
   requestId: string
   sourceAnchor?: string
+  decisionResolution?: { cardId: string; requestId: string; answerId: string }
   home: string
   kind: 'answer' | 'message'
   taskId: string | null
@@ -126,10 +127,10 @@ export class FleetOutbox {
       const receipt = observation?.receipts.find(item => item.request_id === message.requestId)
       const state = !observation ? 'unknown'
         : !receipt ? 'sending'
-        : snapshotReady && message.kind === 'answer' && !callOpen(message) ? 'done'
+        : snapshotReady && message.kind === 'answer' && !callOpen(message) && (!message.decisionResolution || receipt.acknowledged === true) ? 'done'
         : receipt.acknowledged ? 'acknowledged' : 'saved'
       const reply = receipt?.reply?.body ?? null
-      if (state === 'done' || message.kind === 'answer' && reply !== null || Date.now() - (message.sentAt ?? 0) > 86_400_000) finished.add(message.requestId)
+      if (!message.decisionResolution && (state === 'done' || message.kind === 'answer' && reply !== null || Date.now() - (message.sentAt ?? 0) > 86_400_000)) finished.add(message.requestId)
       return { ...message, state, announced: receipt?.announced ?? null, reply, canReceive: observation?.canReceive ?? 'unknown' }
     })
     if (finished.size) {
@@ -140,6 +141,15 @@ export class FleetOutbox {
       }).catch(error => log.warn('fleet', `outbox prune failed: ${(error as Error).message}`))
     }
     return listed
+  }
+
+  completeDecision(requestId: string): Promise<void> {
+    return this.queue(async () => {
+      const messages = await this.load()
+      const next = messages.filter(message => message.requestId !== requestId || !message.decisionResolution)
+      if (messages.length === next.length) return
+      await this.write(next); this.messages = next
+    })
   }
 
   submit(message: OutboxMessage, target: string): Promise<SubmitResult> {

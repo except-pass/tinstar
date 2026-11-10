@@ -160,3 +160,40 @@ it('uses the shared Needs Will projection and shows advisory unknowns and honest
   expect(screen.getByText('Linked home snapshot expired')).toBeInTheDocument()
   expect(document.querySelectorAll('.decisions-row, .decisions-request')).toHaveLength(1)
 })
+
+it('answers a typed published choice through the shared workflow without dismissing the request', async () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, cardIds: [fixtureId(5)] }
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [{ cardId: fixtureId(5), id: 'published-mailbox', action: 'Decision', preserveAction: false, requestedFrom: 'Will', question: 'Choose replication', since: null, sourceId: 'proposal-note', answered: false, options: [{ id: 'r1', label: 'One copy' }, { id: 'r3', label: 'Three copies' }] }] }]
+  workspace.value.queue = queue
+  state.selection = { kind: 'card', id: fixtureId(5) }
+  const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', saved_fields: ['note'], decision_resolution: { state: 'pending', message: 'Decision recorded · First Mate not yet updated' } } })))
+  vi.stubGlobal('fetch', fetch)
+  render(<Decisions />)
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Three copies' })) })
+  const body = JSON.parse(String(fetch.mock.calls[0]![1]!.body))
+  expect(body).toMatchObject({ operation: 'update', input: { kind: 'answer_decision', card_id: fixtureId(5), request_id: 'published-mailbox', option_id: 'r3', answer: 'Three copies', next: { owner: 'Firstmate', status: 'Queued' } } })
+  expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Decision recorded · First Mate not yet updated')
+  expect(document.querySelectorAll('.decisions-row')).toHaveLength(1)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+it('keeps sibling proposal choices enabled and replaces saved status with refreshed reconciliation', async () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, cardIds: [fixtureId(5)] }
+  const request = { cardId: fixtureId(5), id: 'proposal-a', action: 'Decision', preserveAction: false, requestedFrom: 'Will', question: 'First decision', since: null, sourceId: 'a', answered: false, options: [{ id: 'a', label: 'Answer A' }] }
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [request, { ...request, id: 'proposal-b', sourceId: 'b', question: 'Second decision', options: [{ id: 'b', label: 'Answer B' }] }] }, { ...item, id: 'source-b', requestSince: null, ageBasis: 'unknown', pulls: [], requests: [], decisionResolution: { state: 'pending', message: 'Sibling pending', request_id: 'proposal-b' } }]
+  workspace.value.queue = queue
+  state.selection = { kind: 'card', id: fixtureId(5) }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', saved_fields: ['note'], decision_resolution: { state: 'pending', message: 'Decision recorded · First Mate not yet updated' } } }))))
+  const view = render(<Decisions />)
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Answer A' })) })
+  expect(screen.getByRole('button', { name: 'Answer A' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Answer B' })).toBeEnabled()
+  workspace.value.queue = { ...queue, needsWill: [...queue.needsWill, { ...queue.needsWill[0]!, id: 'source-a', decisionResolution: { state: 'verification-needed', message: 'Source A needs verification', request_id: 'proposal-a' } }] }
+  view.rerender(<Decisions />)
+  expect(screen.getByLabelText('Selected decision').querySelector('[role="status"]')).toHaveTextContent('Source A needs verification')
+  expect(screen.getByLabelText('Selected decision').querySelector('[role="status"]')).not.toHaveTextContent('not yet updated')
+  expect(screen.getByRole('button', { name: 'Answer B' })).toBeEnabled()
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Answer B' })) })
+  expect(screen.getByRole('button', { name: 'Answer B' })).toBeDisabled()
+  expect(screen.getByLabelText('Selected decision').querySelectorAll('[role="status"]')).toHaveLength(1)
+})

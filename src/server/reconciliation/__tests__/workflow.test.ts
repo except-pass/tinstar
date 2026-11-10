@@ -1,3 +1,4 @@
+import { queueSignals } from '../queueInputs'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
 import { readerRepositories } from '../../../shared/actions'
 import { checkInReport } from '../checkInWatchdog'
@@ -1150,4 +1151,452 @@ it.each(['receipt store', 'confirmed card'])('preserves Clawson creation uncerta
   expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32) } })
   expect(prepare).toHaveBeenCalledTimes(1)
   expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+})
+
+function decisionFixture() {
+  const f = fixture(), fleet = [f.home]
+  f.home.observation.data!.tasks = []
+  f.home.observation.data!.backlog = [{ id: 'site-merge-mailbox-r3', title: 'Mailbox choice', state: 'held', captain_actionable: true,
+    hold_reason: 'Keep R1 or approve R3?', cardReferences: [{ pageId: id, basis: 'explicit', source: 'notion_page_id' }], ...queueSignals({ hold_kind: 'captain' }) }] as NonNullable<typeof f.home.observation.data>['backlog']
+  f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
+  const source = { home: f.home.source.home, taskId: null, id: 'site-merge-mailbox-r3', kind: 'hold' as const }
+  const messages: import('../../fleet/inbox').ListedMessage[] = []
+  const bridge: import('../decisionResolution').DecisionDelivery = {
+    messages: vi.fn(async () => structuredClone(messages)),
+    submit: vi.fn(async (input, decisionResolution) => {
+      if (!messages.some(message => message.requestId === input.requestId)) messages.push({ requestId: input.requestId, sourceAnchor: input.anchorKey, home: source.home, kind: 'answer', taskId: null,
+        decisionKey: source.id, holdId: source.id, cardType: 'decision', text: input.text, state: 'saved', announced: true, reply: null, canReceive: true, decisionResolution })
+      return { saved: true, error: null, canReceive: true }
+    }), completeDecision: vi.fn(async () => {}),
+  }
+  const workflow = new WorkflowOperations(f.reader, async () => fleet)
+  workflow.decisionDelivery = bridge
+  const request: UpdateWorkInput = { kind: 'request_decision', card_id: id, operation_id: 'publish-r3', request_id: 'r3-proposal', question: 'Keep R1 or approve R3?', action: 'Decision', requested_from: 'Will', source_request: source }
+  const answer: UpdateWorkInput = { kind: 'answer_decision', card_id: id, operation_id: 'answer-r3', request_id: 'r3-proposal', answer: 'R3', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: 'Preserve another request' }
+  return { ...f, workflow, fleet, source, bridge, messages, request, answer }
+}
+
+it('durably binds the source and answers once across UI/MCP actors, retries and restart, preserving other asks', async () => {
+  const f = decisionFixture()
+  expect(await f.workflow.update(f.request, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  await f.workflow.update({ kind: 'request_decision', card_id: id, operation_id: 'other-ask', request_id: 'other-ask', question: 'Choose a release time', action: 'Decision', requested_from: 'Will' }, 'Publisher')
+  const answer = await f.workflow.update(f.answer, 'Tin Star UI')
+  expect(answer).toMatchObject({ outcome: 'partially-saved', decision_resolution: { state: 'pending', request_id: 'r3-proposal' } })
+  expect(f.messages).toHaveLength(1)
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge', 'Decision'])
+  const count = f.comments.length
+  await f.workflow.update(f.answer, 'Tin Star UI')
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet); restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...f.answer, operation_id: 'mcp-retry' }, 'MCP owner')).toMatchObject({ decision_resolution: { state: 'pending', delivery_id: answer.decision_resolution!.delivery_id } })
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  f.home.observation.data!.backlog = []; f.messages[0]!.state = 'done'
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'resolved' })
+  const after = f.comments.length
+  await restarted.reconcileDecisions(id, f.fleet)
+  expect(f.comments).toHaveLength(after)
+  expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Queued')
+})
+
+it('reconciles an explicit direct Notion answer through the same scoped property operation on refresh', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.comments.push({ id: 'direct-owner-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request' }] })
+  expect(await f.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge'])
+  expect((await f.reader.card(id)).properties['Waiting For']!.value).toBe('')
+  const count = f.comments.length
+  await f.workflow.reconcileDecisions(id, f.fleet)
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('recovers the exact selected answer after an interrupted property write and restart without dropping another wait', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  expect(await f.workflow.update(f.answer, 'Tin Star UI')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['decision-answer'] })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  f.controls.failPatch(false)
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet); restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('')
+})
+
+it('does not replay interrupted decision effects over a concurrent Will action edit', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher'); f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Tin Star UI'); f.controls.failPatch(false)
+  f.raw.properties['Will action'].multi_select.push({ name: 'Elevated command' })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet); restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toContain('Elevated command')
+})
+
+it('rejects a mismatched published source and never changes work status for an unstarted approved implementation', async () => {
+  const f = decisionFixture()
+  expect(await f.workflow.update({ ...f.request, source_request: { ...f.source, id: 'unrelated' } } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'not-saved' })
+  await f.workflow.update(f.request, 'Publisher')
+  expect(await f.workflow.update({ ...f.answer, next: { owner: 'Firstmate', status: 'Done' } } as UpdateWorkInput, 'Tin Star UI')).toMatchObject({ outcome: 'not-saved', code: 'decision-work-queued' })
+  expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Queued')
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+})
+
+it('proves source decision UI/MCP receipt parity and before/after queue readback without hiding remaining work', async () => {
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-parity-')); roots.push(root)
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  sources.workflow.decisionDelivery = f.bridge
+  const mcp = new ReconciliationMcp(sources, root)
+  const server = createServer(async (req, res) => { if (await mcp.handle(req, res)) return; await handleReconciliationRequest(sources, req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
+  seedOriginAllowlist(port)
+  const client = new Client({ name: 'decision-parity', version: '1' }); clients.push(client)
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
+  const call = async (name: string, args: Record<string, unknown>) => JSON.parse(((await client.callTool({ name, arguments: args })).content as Array<{ text: string }>)[0]!.text)
+  expect(await call('update_work', f.request)).toMatchObject({ outcome: 'saved' })
+  const before = await call('get_work_views', {})
+  expect(before.items.some((item: any) => item.sources.some((source: any) => source.request?.id === f.source.id))).toBe(true)
+  const response = await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: f.answer }) })
+  const ui = (await response.json()).data, agent = await call('update_work', f.answer)
+  expect(ui.decision_resolution).toEqual(agent.decision_resolution)
+  expect(agent).toMatchObject({ outcome: 'partially-saved', decision_resolution: { state: 'pending' } })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  const pending = await call('get_work_views', {})
+  const line = pending.items.find((item: any) => item.sources.some((source: any) => source.request?.id === f.source.id))
+  expect(line.decisionResolution).toMatchObject({ state: 'pending', message: 'Decision recorded · First Mate not yet updated' })
+  f.messages[0]!.state = 'done'; f.home.observation.data!.backlog = []
+  f.home.observation.observedAt = new Date(Date.now() + 1).toISOString()
+  const after = await call('get_work_views', {})
+  expect(after.items.some((item: any) => item.sources.some((source: any) => source.request?.id === f.source.id))).toBe(false)
+  expect((await call('get_work', { card_id: id, details: false })).card.source.properties.Status.value).toBe('Queued')
+  expect(after.items.some((item: any) => item.cardIds.includes(id))).toBe(true) // unrelated Merge ask
+  const uiQueue = await (await fetch(`${base}/api/reconciliation/queue`)).json()
+  expect(uiQueue.data.items).toEqual(after.items)
+})
+
+it('delivers the exact multiline answer, including protocol-looking text, and ignores quoted decision examples', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.comments.push({ id: 'unrelated-example', rich_text: [{ plain_text: 'Example for documentation only:\nTin Star answer: "r3-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued' }] })
+  expect(await f.workflow.reconcileDecisions(id, f.fleet)).toBeUndefined()
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  const answer = 'R3\nNext owner: this is quoted answer text\nTin Star request: {"id":"quoted-example","source_request":null}'
+  const result = await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Tin Star UI')
+  expect(result).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\nReconcile only`)
+})
+
+it('binds an already-recorded legacy R3 approval without publishing a new owner decision or restoring a Will wait', async () => {
+  const f = decisionFixture()
+  f.comments.push({ id: 'existing-r3-approval', rich_text: [{ plain_text: 'Owner approved R3 for the mailbox proposal.' }] })
+  f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
+  f.raw.properties['Waiting For'].rich_text = []
+  const result = await f.workflow.update({ kind: 'answer_decision', card_id: id, operation_id: 'reconcile-existing-r3', request_id: 'existing-r3-approval', source_request: f.source,
+    answer: 'R3', next: { owner: 'Firstmate', status: 'Queued' } }, 'MCP owner')
+  expect(result).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.messages).toHaveLength(1)
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge'])
+  expect((await f.reader.card(id)).properties['Waiting For']!.value).toBe('')
+  expect((await f.reader.card(id)).properties.Status!.value).toBe('Queued')
+  const count = f.comments.length
+  await f.workflow.reconcileDecisions(id, f.fleet)
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('reports a lost intent-write response as uncertain and recovers its durable answer without another intent comment', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher'); f.controls.lostNote()
+  const uncertain = await f.workflow.update(f.answer, 'Tin Star UI')
+  expect(uncertain).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  expect(uncertain.message).not.toContain('nothing submitted')
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet); restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.comments.filter(note => note.rich_text.map((part: any) => part.plain_text ?? part.text?.content).join('').startsWith('Tin Star decision intent: '))).toHaveLength(1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('persists typed proposal choices and validates exact option identity before any answer write', async () => {
+  const f = decisionFixture(), options = [{ id: 'r1', label: 'R1' }, { id: 'r3', label: 'R3' }]
+  expect(await f.workflow.update({ ...f.request, options } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const notes = f.comments.length
+  for (const choice of [{ option_id: 'missing', answer: 'R3' }, { option_id: 'r1', answer: 'R3' }]) {
+    expect(await f.workflow.update({ ...f.answer, ...choice } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-option-conflict' })
+  }
+  expect(f.comments).toHaveLength(notes)
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  const input = { ...f.answer, option_id: 'r3' } as UpdateWorkInput
+  expect(await f.workflow.update(input, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(await f.workflow.update({ ...input, operation_id: 'another-option-attempt' }, 'MCP')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect(f.comments.some(note => JSON.stringify(note).includes('option_id'))).toBe(true)
+})
+
+it('rejects duplicate or excessive option ids while preserving free-text answers to proposals', async () => {
+  const f = decisionFixture()
+  for (const options of [[{ id: 'one', label: 'A' }, { id: 'one', label: 'B' }], Array.from({ length: 6 }, (_, index) => ({ id: String(index), label: String(index) }))]) {
+    expect(await f.workflow.update({ ...f.request, options } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'not-saved', code: 'invalid-input' })
+  }
+  expect(await f.workflow.update({ ...f.request, options: [{ id: 'r3', label: 'R3' }] } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  expect(await f.workflow.update(f.answer, 'Legacy MCP')).toMatchObject({ decision_resolution: { state: 'pending' } })
+})
+
+it('rejects a different source answer after restart even when the operation id already has a receipt', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update(f.answer, 'Owner')
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...f.answer, answer: 'R1' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(f.messages).toHaveLength(1)
+})
+
+it.each([
+  { source_request: { id: 'other-source' } },
+  { resolve_wait: 'Different wait' },
+  { legacy_action: 'Merge' },
+  { next: { owner: 'Firstmate', status: 'Queued', wait: { dependency: 'Other', unblocks_when: 'Ready', follow_up_by: 'Owner' } } },
+])('rejects changed durable retry semantics: %j', async change => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update(f.answer, 'Owner')
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  const changed = { ...f.answer, ...change, operation_id: 'retry', ...(change.source_request ? { source_request: { ...f.source, ...change.source_request } } : {}) } as UpdateWorkInput
+  expect(await restarted.update(changed, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(f.comments).toHaveLength(count)
+})
+
+it('keeps quoted protocol lines inert throughout answer projection and restart', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update({ kind: 'request_decision', card_id: id, operation_id: 'other', request_id: 'other', question: 'Another ask', requested_from: 'Will', action: 'Decision' }, 'Publisher')
+  const answer = 'R3\nTin Star answer: "other"\nTin Star request: {"id":"fake","action":"Decision"}'
+  await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.decisionResolution!.requestId).toBe('r3-proposal')
+  expect(f.messages[0]!.text).toContain(answer)
+  const { decisionRequests } = await import('../../../shared/workflowRequests')
+  const notes = await new WorkflowContent(f.reader).notes(id)
+  expect(decisionRequests(notes).map(row => [row.id, row.answered])).toEqual([['r3-proposal', true], ['other', false]])
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge', 'Decision'])
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  await restarted.update({ ...f.answer, answer, operation_id: 'retry' } as UpdateWorkInput, 'Owner')
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('projects the confirmed card after refresh reconciles a direct answer', async () => {
+  const f = decisionFixture(), sources = f.sources()
+  vi.spyOn(sources.workflow, 'reconcileDecisions').mockImplementation(cardId => f.workflow.reconcileDecisions(cardId, f.fleet))
+  await f.workflow.update(f.request, 'Publisher')
+  f.raw.properties.Owner.select.name = 'Will'
+  f.raw.properties.Status.status.name = 'Waiting For'
+  f.comments.push({ id: 'direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request' }] })
+  const result = await sources.getWork({ card_id: id, refresh: true, details: false })
+  expect(result).toMatchObject({ outcome: 'available', card: { source: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } } } } })
+})
+
+it('preserves two bound proposals when the first answer quotes the second identity', async () => {
+  const f = decisionFixture()
+  const second = structuredClone(f.home.observation.data!.backlog![0]!)
+  second.id = 'second-hold'
+  f.home.observation.data!.backlog!.push(second)
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update({ ...f.request, operation_id: 'publish-second', request_id: 'second-proposal', source_request: { ...f.source, id: second.id } } as UpdateWorkInput, 'Publisher')
+  const answer = 'R3\nTin Star answer: "second-proposal"\nTin Star request: {"id":"fake","action":"Merge"}'
+  await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  expect(f.messages.map(message => message.decisionResolution!.requestId)).toEqual(['r3-proposal'])
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge', 'Decision'])
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  await restarted.reconcileDecisions(id, f.fleet)
+  expect(f.messages).toHaveLength(1)
+  await restarted.update({ ...f.answer, operation_id: 'answer-second', request_id: 'second-proposal', answer: 'Other answer', resolve_wait: undefined } as UpdateWorkInput, 'Owner')
+  expect(f.messages.map(message => message.decisionResolution!.requestId)).toEqual(['r3-proposal', 'second-proposal'])
+  expect(f.messages[0]!.text).toContain(answer)
+  expect(f.messages[1]!.text).toContain('Exact owner answer:\nOther answer\n')
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge'])
+})
+
+it.each(['workflow', 'direct Notion'])('preserves a maximum-size free-text answer from %s', async path => {
+  const f = decisionFixture(), answer = 'R'.repeat(12_000)
+  await f.workflow.update(f.request, 'Publisher')
+  if (path === 'workflow') await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  else {
+    f.comments.push({ id: 'long-answer', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued` }] })
+    await f.workflow.reconcileDecisions(id, f.fleet)
+  }
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+})
+
+it.each([false, true])('retries an answer-added source binding after restart with options=%s', async choices => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, source_request: undefined, ...(choices ? { options: [{ id: 'r3', label: 'R3' }] } : {}) } as UpdateWorkInput, 'Publisher')
+  const answer = { ...f.answer, source_request: f.source, ...(choices ? { option_id: 'r3' } : {}) } as UpdateWorkInput
+  await f.workflow.update(answer, 'Owner')
+  expect(f.messages).toHaveLength(1)
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...answer, operation_id: 'restart-retry' }, 'Other owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect(await restarted.update({ ...answer, operation_id: 'conflicting-source', source_request: { ...f.source, id: 'other' } } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  if (choices) expect(await restarted.update({ ...answer, operation_id: 'wrong-option', option_id: 'other' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-option-conflict' })
+})
+
+it.each([false, true])('keeps quoted direct-answer controls inert with terminal wait=%s', async resolveWait => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  const answer = 'R3\nNext owner: Will\nNext status: Waiting For\nResolved wait: Preserve another request\nPreserve the existing replicas'
+  f.comments.push({ id: 'multiline-direct', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued${resolveWait ? '\nResolved wait: Preserve another request' : ''}` }] })
+  expect(await f.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+  expect((await f.reader.card(id, true)).properties).toMatchObject({ Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Waiting For': { value: resolveWait ? '' : 'Preserve another request' }, 'Will action': { value: ['Merge'] } })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('rejects conflicting answer-added binding metadata instead of choosing a proposal record', async () => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, source_request: undefined } as UpdateWorkInput, 'Publisher')
+  await f.workflow.update({ ...f.answer, source_request: f.source } as UpdateWorkInput, 'Owner')
+  const answerNote = f.comments.find(comment => comment.rich_text.some((part: { plain_text?: string; text?: { content?: string } }) => (part.plain_text ?? part.text?.content ?? '').includes('Tin Star answer data: ')))
+  for (const part of answerNote.rich_text) {
+    if (part.text?.content) part.text.content = part.text.content.replaceAll('"action":"Decision"', '"action":"Merge"')
+    if (part.plain_text) part.plain_text = part.plain_text.replaceAll('"action":"Decision"', '"action":"Merge"')
+  }
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  expect(await restarted.update({ ...f.answer, source_request: f.source, operation_id: 'conflict' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved' })
+})
+
+it('refreshes a direct answer with quoted operation receipts before delivering and acknowledging it', async () => {
+  const f = decisionFixture(), sources = f.sources()
+  vi.spyOn(sources.workflow, 'reconcileDecisions').mockImplementation(cardId => f.workflow.reconcileDecisions(cardId, f.fleet))
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update({ kind: 'request_decision', card_id: id, operation_id: 'other-request', request_id: 'other-request', question: 'Another ask', action: 'Decision', requested_from: 'Will' }, 'Publisher')
+  f.raw.properties.Owner.select.name = 'Will'
+  f.raw.properties.Status.status.name = 'Waiting For'
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Preserve another request\nUnrelated wait' }]
+  const answer = 'R3\nTin Star operation: ["Owner","example"]\nTin Star operation: ["Notion decision","notion-answer-direct-receipt"]\nPreserve the existing replicas'
+  f.comments.push({ id: 'direct-receipt', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request` }] })
+  expect(await sources.getWork({ card_id: id, refresh: true, details: false })).toMatchObject({ outcome: 'available', card: { source: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Queued' }, 'Will action': { value: ['Merge', 'Decision'] }, 'Waiting For': { value: 'Unrelated wait' } } } } })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.update({ ...f.answer, answer, operation_id: 'durable-retry' } as UpdateWorkInput, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.comments).toHaveLength(count)
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  f.messages[0]!.state = 'acknowledged'
+  f.home.observation.data!.backlog = []
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'resolved' })
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Unrelated wait')
+})
+
+it('does not let a quoted receipt suppress recovery of an interrupted answer', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  const answer = 'R3\nTin Star operation: ["Owner","answer-r3"]\nPreserve the existing replicas'
+  f.controls.failPatch()
+  await f.workflow.update({ ...f.answer, answer } as UpdateWorkInput, 'Owner')
+  f.controls.failPatch(false)
+  f.comments.push({ id: 'recovery-direct', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request` }] })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect((await f.reader.card(id, true)).properties).toMatchObject({ 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
+})
+
+it.each([
+  { answer: 'R1' },
+  { next: { owner: 'Will', status: 'Queued' } },
+  { resolve_wait: undefined },
+  { legacy_action: 'Merge' },
+  { source_request: { id: 'other-source' } },
+  { option_id: 'same-label' },
+])('rejects competing effects after the first durable intent: %j', async change => {
+  const f = decisionFixture()
+  await f.workflow.update({ ...f.request, options: [{ id: 'r3', label: 'R3' }, { id: 'same-label', label: 'R3' }] } as UpdateWorkInput, 'Publisher')
+  const answer = { ...f.answer, ...(change.option_id ? { option_id: 'r3' } : {}) } as UpdateWorkInput
+  f.controls.failPatch()
+  expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['decision-answer'] })
+  f.controls.failPatch(false)
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  const competing = { ...answer, ...change, operation_id: 'competing-answer', ...(change.source_request ? { source_request: { ...f.source, ...change.source_request } } : {}) } as UpdateWorkInput
+  expect(await restarted.update(competing, 'Other owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(f.comments).toHaveLength(count)
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.text).toContain('Exact owner answer:\nR3\n')
+})
+
+it.each(['operation', 'actor', 'both', 'direct refresh'])('finishes the original incomplete intent on an identical %s retry', async retry => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  if (retry === 'direct refresh') f.comments.push({ id: 'identical-direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request' }] })
+  const count = f.comments.length
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  if (retry === 'direct refresh') expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  else {
+    const input = { ...f.answer, operation_id: retry === 'actor' ? f.answer.operation_id : 'new-operation' }
+    expect(await restarted.update(input, retry === 'operation' ? 'Owner' : 'Other owner')).toMatchObject({ operation_id: input.operation_id, decision_resolution: { state: 'pending' } })
+  }
+  expect(f.comments).toHaveLength(count + 1)
+  expect((await f.reader.card(id, true)).properties).toMatchObject({ 'Will action': { value: ['Merge'] }, 'Waiting For': { value: '' } })
+  expect(f.messages).toHaveLength(1)
+  await restarted.reconcileDecisions(id, f.fleet)
+  expect(f.comments).toHaveLength(count + 1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
+it('never treats a conflicting finalized answer as completion of the original intent', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  const data = { request_id: 'r3-proposal', answer: 'R1', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: 'Preserve another request' }
+  f.comments.push({ id: 'conflicting-final', rich_text: [{ plain_text: `Operation: answer_decision\nTin Star answer: "r3-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify(data)}\nTin Star operation: ["Other owner","other-answer"]` }] })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+})
+
+it('never delivers a conflicting direct Notion answer over an incomplete intent', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  f.controls.failPatch()
+  await f.workflow.update(f.answer, 'Owner')
+  f.controls.failPatch(false)
+  f.comments.push({ id: 'competing-direct', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued' }] })
+  const restarted = new WorkflowOperations(f.reader, async () => f.fleet)
+  restarted.decisionDelivery = f.bridge
+  expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
 })

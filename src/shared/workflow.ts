@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { firstMateRequestSchema } from './deskSource'
 const identity = z.string().min(1).max(1024).refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value), 'Use an exact nonempty identity')
 export const cardIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const workerSchema = z.discriminatedUnion('kind', [
@@ -39,15 +40,17 @@ const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Pr
 const checkpointSchema = z.object({ assessment: prose, evidence: prose, next_action: prose,
   next_check_in: z.string().min(1).max(100), confirmation: z.enum(['provisional', 'owner-confirmed']),
   request_id: z.string().uuid().optional(), blocker: prose.optional() }).strict()
+export const decisionOptionsSchema = z.array(z.object({ id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters'), label }).strict()).min(1).max(5)
+  .refine(options => new Set(options.map(option => option.id)).size === options.length, 'Option ids must be unique')
 export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
   z.object({ ...base, kind: z.literal('wait'), dependency: prose, unblocks_when: prose, follow_up_by: label, note: prose.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose,
-    action: label.default('Decision'), requested_from: label }).strict(),
-  z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose,
-    next: z.object(next).strict(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(),
+    action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose, option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
+    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
   z.object({ ...base, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
   z.object({ ...base, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
 ])
@@ -63,23 +66,31 @@ export const workflowRules = {
     'Create requires a declared Owner, Status and Area. Assignment to Firstmate is Queued until real execution.',
     'Start work requires Owner and Area and current tracked execution evidence.',
     'First Mate workers retain exact home, task and spawn-generation identities. External runs retain their system, run reference, card and authenticated reporter; their evidence is consumer-reported, not independently verified.',
-    'Unknown, stale or historical worker evidence does not authorize a new start. Existing cards are never silently repaired; unrelated notes/corrections remain possible.',
+    'Unknown, stale or historical worker evidence does not authorize a new start. Existing worker state is never silently repaired; unrelated notes/corrections remain possible.',
     'Waiting For requires a dependency, what unblocks it and who follows up.',
     'A decision answer names the next Owner/Status and clears only that request. Other asks, waits and worker history survive.',
     'Completion/parking requires a caller-supported disposition; a merge or worker exit never implies business completion.',
     'Next check-in uses America/New_York, date-only means 9 AM. Checkpoints require assessment, evidence, next action and provisional/owner-confirmed attribution. In Progress appointments obey the board ceiling. Ordinary activity never advances them.',
-    'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved; Only a missing note may be repaired in the same process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id; no automatic replay or restart recovery.',
+    'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved. Ordinary workflow has no offline write queue or automatic replay/restart recovery; only a missing note may be repaired in-process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id. Source-bound recorded decisions have the narrow recovery exception described in operations.repair.',
     'UI and MCP use the same serialized operations and authenticated actor. Firstmate pickup is Queued only; active edits are contextual updates, never worker dispatch.',
   ],
   operations: {
     read: ['search_work: current assigned cards, independent of UI filters; history is explicit', 'get_work: exact card, properties/worker evidence and optional bounded body/comments', 'get_work_views: shared Needs Will/PR evidence and advisory execution warnings; no window required'],
     write: ['create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (edit,assign,checkpoint,wait,request_decision,answer_decision,complete,park); use tool schema for coupled fields'],
-    decisions: 'request_decision records request_id, question, requested_from and action. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
+    decisions: 'request_decision records request_id, question, requested_from and action; optional options [{id,label}] publishes up to five choices. answer_decision option_id must match the published choice and answer its exact label. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
     checkpoints: 'checkpoint requires assessment, evidence, next_action, next_check_in, confirmation (provisional or owner-confirmed); include the original watchdog request_id when responding, and blocker when applicable. Business days 8 AM–8 PM Eastern: at most four hours; otherwise no later than 10 AM next business morning. Date-only is 9 AM Eastern; Due Date is a separate delivery deadline.',
-    repair: 'Retry identical operation_id and intent after an uncertain response. A definite result with requires_new_operation_id means refresh and explicitly re-issue. Only a missing history note can be repaired in-process while its confirmed card state is unchanged; no automatic replay.',
+    repair: 'Retry identical operation_id and intent after an uncertain response. A definite result with requires_new_operation_id means refresh and explicitly re-issue. Ordinary repair is limited to a missing history note in-process while its confirmed card state is unchanged. Exception: existing refresh/pickup reconciliation can resume an immutable Notion-recorded decision answer after restart against its original preconditions, bound to the exact First Mate home/task/request kind/id, published question, generation and explicit canonical card link. Unrelated edits prevent replay. The existing outbox delivers the answer; resolution requires both acknowledgment of that exact delivery and fresh, complete source closure, confirmed in Notion. Missing/ambiguous binding, contradictory answers, changed question/generation or ambiguous card linkage require verification; stale/incomplete source evidence never authorizes delivery. See docs/features/workflow.md#first-mate-decision-reconciliation for the authoritative recovery and direct-answer contract.',
   },
   views: ['Associated PR absence suppresses only the merge ask when repository open inventory is fresh, complete and covers that identity: all-open, or authored-or-associated with an active association. Unknown scope and Link/Evidence-only identities outside the scope remain PR state unverified with unknown readiness and no extra lookup. Partial/stale/unavailable coverage retains it as PR state unverified. This infers not-open, never merged, delivered or complete; no extra PR lookups or history are added.', 'Needs Will requires a current explicit ask; green PRs alone do not create merge permission. Request age is unknown unless request history supplies a timestamp; PR creation is labelled separately.', 'In Progress warnings inspect linked sources with their existing freshness windows. Stale or missing evidence is unknown, never stranded. Warnings do not mutate or block existing cards.'],
   retained_dependencies: ['First Mate owns worker dispatch/supervision and its inbox. Tin Star owns pickup/update notices and the mechanical check-in watchdog.', 'The Mac poller and duplicate PM Bot monitors are retired by their owners only after guarded live feed validation. No paused routine is restarted; PM Bot reasoning/reporting remains.'],
+}
+export interface DecisionResolutionStatus {
+  state: 'pending' | 'resolved' | 'verification-needed'
+  message: string
+  delivery_id?: string
+  source_anchor?: string
+  request_id?: string
+  requests?: DecisionResolutionStatus[]
 }
 export interface StartWorkResult {
   outcome: 'saved' | 'not-saved' | 'partially-saved'
@@ -87,6 +98,7 @@ export interface StartWorkResult {
   message: string
   operation_id: string
   saved_fields: string[]
+  decision_resolution?: DecisionResolutionStatus
   requires_new_operation_id?: boolean
   card?: unknown
 }

@@ -71,3 +71,19 @@ it('preserves independent alpha/choose decision and hold bindings on submit and 
     expect(fixtures.submit.mock.lastCall).toEqual([message, description])
   }
 })
+
+it('delivers complete maximum-size workflow answers while retaining ordinary submission limits', async () => {
+  fixtures.snapshot = { schema: 'fm-fleet-snapshot.v1', tasks: [task('alpha')], backlog: { records: [{ id: 'choose', hold_kind: 'captain', captain_actionable: true, body_lines: ['Origin: alpha'] }] } }
+  const fleet = new CockpitFleet(); await fleet.refresh()
+  const answer = 'R'.repeat(12_000)
+  const input = { requestId: `tinstar-${randomUUID()}`, anchorKey: source('alpha', 'choose'), kind: 'answer', text: `Notion card: ${'a'.repeat(32)}\nDecision proposal: ${'p'.repeat(128)}\nExact owner answer:\n${answer}\nReconcile only this source request. Keep implementation Queued until a real worker starts; preserve other asks. Report the source reconciliation through the existing receipt path.` }
+  expect(await fleet.submit(input)).toBeNull()
+  const resolution = { cardId: 'a'.repeat(32), requestId: 'p'.repeat(128), answerId: 'p'.repeat(128) }
+  expect(await fleet.submit(input, resolution)).toMatchObject({ saved: true })
+  const [message] = fixtures.submit.mock.lastCall!
+  expect(message.text).toBe(input.text)
+  expect(message.decisionResolution).toEqual(resolution)
+  fixtures.get.mockResolvedValueOnce(message)
+  expect(await fleet.submit(input, resolution)).toMatchObject({ saved: true })
+  expect(await fleet.submit({ ...input, requestId: `tinstar-${randomUUID()}`, kind: 'message' }, resolution)).toBeNull()
+})
