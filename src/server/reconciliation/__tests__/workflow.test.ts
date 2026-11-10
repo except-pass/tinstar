@@ -10,6 +10,8 @@ import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
 import { WorkflowContent } from '../workflowContent'
+import { FirstmateUpdates } from '../firstmateUpdates'
+import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
@@ -665,4 +667,41 @@ it.each(['brief', 'acceptance_criteria'] as const)('distinguishes definite %s co
       }
     } finally { spy.mockRestore() }
   }
+})
+
+
+it.each(['property', 'body', 'comment'] as const)('preserves an unobserved human %s edit across the real workflow self-write callbacks', async kind => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  const root = await mkdtemp(join(tmpdir(), 'workflow-self-update-')); roots.push(root)
+  const sources = f.sources(root)
+  const feed = new FirstmateUpdates({
+    firstmateWork: async () => ({ status: 'fresh', coverage: 'complete', data: { cards: [await f.reader.card(id, true)] } }) as any,
+    currentCard: cardId => f.reader.card(cardId, true), updateContext: cardId => sources.updateContext(cardId),
+  }, root, async () => ({ deliveryEnabled: true }))
+  f.workflow.onChange = change => feed.confirmed(change)
+  await feed.sweep(true)
+  const initial = await f.reader.card(id, true)
+  await feed.confirmed({ before: initial, card: initial, properties: {}, actor: 'Firstmate', operationId: 'baseline' })
+  vi.setSystemTime(new Date('2026-11-10T15:01:00Z'))
+  f.raw.last_edited_time = new Date().toISOString()
+  if (kind === 'property') f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Human dependency' }]
+  if (kind === 'body') f.blocks[0].paragraph.rich_text = [{ plain_text: 'Human revised body' }]
+  if (kind === 'comment') f.comments.push({ id: 'human', created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: 'Human evidence' }] })
+  expect(await f.workflow.update({ kind: 'edit', card_id: id, operation_id: 'self-note', note: 'Unrelated self note' }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+  vi.setSystemTime(new Date('2026-11-10T15:02:00Z'))
+  const notices = (await feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  const batch = JSON.parse(notices[0]!.body.split('\n').slice(1).join('\n'))
+  expect(batch.actor).toBe('Notion actor unknown')
+  const change = batch.changes[0]
+  if (kind === 'property') expect(change.properties['Waiting For'].after).toBe('Human dependency')
+  if (kind === 'body') expect(change.body_sections).toEqual(['body-1'])
+  if (kind === 'comment') expect(change.comments).toEqual([{ id: 'human', text: 'Human evidence', author: 'human-author' }])
+  expect(change.comments.some((comment: { text: string }) => comment.text.includes('Unrelated self note'))).toBe(false)
+  await feed.ingest({ request_id: notices[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'fixture-note', request_id: inboxRequestId(notices[0]!.request_id) } })
+  const persisted = JSON.parse(await readFile(feed.path, 'utf8'))
+  expect(persisted.batches).toHaveLength(1)
+  expect(await f.workflow.update({ kind: 'edit', card_id: id, operation_id: 'another-self-note', note: 'Self-only follow-up' }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+  expect(JSON.parse(await readFile(feed.path, 'utf8')).batches).toHaveLength(1)
 })

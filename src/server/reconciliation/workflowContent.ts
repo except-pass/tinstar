@@ -17,6 +17,7 @@ export interface WorkflowNote { id: string; text: string; author?: string; creat
 export const receiptMarker = (actor: string, operationId: string) => `Tin Star operation: ${JSON.stringify([actor, operationId])}`
 export const decisionMarker = (id: string) => `Tin Star decision: ${JSON.stringify(id)}`
 export const sectionMarker = (name: string) => `Tin Star section: ${name}`
+export const sectionText = (name: string, text: string) => `${sectionMarker(name)}\n${name === 'brief' ? 'Brief' : 'Acceptance criteria'}\n${text}`
 
 /** Raw internal content is used for exact write preconditions/receipts only.
  * Conversational readbacks still pass through the application's redactor. */
@@ -73,7 +74,7 @@ export class WorkflowContent {
     throw new Error('Body truncated; cannot safely locate the requested section')
   }
   async section(id: string, name: string, text: string, expected?: string) {
-    const marker = sectionMarker(name), desired = `${marker}\n${name === 'brief' ? 'Brief' : 'Acceptance criteria'}\n${text}`
+    const marker = sectionMarker(name), desired = sectionText(name, text)
     const sections = await this.sections(id), matches = sections.filter(block => block.text.split('\n')[0] === marker)
     if (matches.length > 1) throw new ManagedSectionConflict('Duplicate managed sections; correct the specific section before replacing it')
     const found = matches[0]

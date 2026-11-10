@@ -3,7 +3,7 @@ import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInp
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import type { SourceSnapshot } from './index'
@@ -17,7 +17,7 @@ const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, c
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
 class WorkflowError extends Error { constructor(readonly code: string, message: string, readonly requiresNewOperationId = false) { super(message) } }
-export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; notes?: string[]; sections?: string[] }
+export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; properties: Record<string, unknown>; notes?: string[]; sections?: string[]; sectionTexts?: string[] }
 export class WorkflowOperations {
   onChange?: (change: WorkflowChange) => Promise<void>
   private content: WorkflowContent
@@ -110,7 +110,7 @@ export class WorkflowOperations {
       // edits or Last edited time. Direct edits can still race Notion PATCH.
       const current = await this.reader.card(input.card_id, true)
       if (!same(relevant(current, input.worker.kind), initial)) return result('not-saved', 'conflict', 'Relevant card properties changed during validation; read and retry', current)
-      if (fields.every(field => same(current.properties[field]?.value, desired[field]))) { this.reader.confirm(current); await this.changed({ before: card, card: current, actor, operationId: input.operation_id }); return result('saved', 'already-saved', 'Start work already saved', current, fields) }
+      if (fields.every(field => same(current.properties[field]?.value, desired[field]))) { this.reader.confirm(current); await this.changed({ before: card, card: current, actor, operationId: input.operation_id, properties: {} }); return result('saved', 'already-saved', 'Start work already saved', current, fields) }
       const config = this.reader.config!
       attempted = true
       const response = await this.reader.api.fetch(`https://api.notion.com/v1/pages/${input.card_id}`, { method: 'PATCH', redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -121,7 +121,7 @@ export class WorkflowOperations {
       } else await response.body?.cancel()
       const saved = await this.reader.card(input.card_id, true)
       this.reader.confirm(saved)
-      await this.changed({ before: card, card: saved, actor, operationId: input.operation_id })
+      await this.changed({ before: card, card: saved, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.filter(field => same(saved.properties[field]?.value, desired[field])).map(field => [field, desired[field]])) })
       const savedFields = fields.filter(field => same(saved.properties[field]?.value, desired[field]))
       return savedFields.length === fields.length ? result('saved', 'saved', 'Start work saved and confirmed', saved, savedFields)
         : result('partially-saved', 'readback-mismatch', 'Readback differs from the requested start; only listed fields are confirmed. Read the card and retry.', saved, savedFields)
@@ -301,9 +301,9 @@ export class WorkflowOperations {
   }
   private async performUpdate(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
-    let attempted = false, card: WorkCard | undefined, notePending: string | undefined
+    let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined
     const repair = this.noteRepairs.get(key)
-    const saved: string[] = [...(repair?.result.saved_fields ?? [])], sections: string[] = []
+    const saved: string[] = [...(repair?.result.saved_fields ?? [])], sections: string[] = [], sectionTexts: string[] = []
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields: [...saved], ...(card ? { card } : {}) })
     try {
       card = await this.reader.card(input.card_id, true)
@@ -312,7 +312,7 @@ export class WorkflowOperations {
       if (receipt) {
         this.noteRepairs.delete(key)
         this.reader.confirm(card)
-        await this.changed({ before: card, card, actor, operationId: input.operation_id, notes: [receipt.text] })
+        await this.changed({ card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
         return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
       }
       if (repair) {
@@ -321,6 +321,7 @@ export class WorkflowOperations {
           this.noteRepairs.delete(key)
           return { ...result('partially-saved', 'card-changed', 'Previously listed steps saved; the card changed since that partial write. Nothing else submitted. Review current state and re-issue with a new operation_id.'), requires_new_operation_id: true }
         }
+        contentBefore = card
         notePending = repair.note
       } else {
         if (input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh and re-issue with a new operation_id', true)
@@ -338,12 +339,13 @@ export class WorkflowOperations {
         }
         this.reader.confirm(card)
         saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan.desired[name])))
-        await this.changed({ before, card, actor, operationId: input.operation_id })
+        await this.changed({ before, card, actor, operationId: input.operation_id, properties: Object.fromEntries(saved.map(name => [name, card!.properties[name]?.value])) })
         if (saved.length !== Object.keys(plan.desired).length) return { ...result('partially-saved', 'readback-mismatch', 'Only listed properties confirmed saved. Review current state and re-issue with a new operation_id; no properties will be replayed.'), requires_new_operation_id: true }
+        contentBefore = card
         for (const [name, text] of Object.entries(plan.sections)) {
           attempted = true
           await this.content.section(card.id, name, text, plan.sectionOriginal[name])
-          saved.push(name); sections.push(name)
+          saved.push(name); sections.push(name); sectionTexts.push(sectionText(name, text))
         }
         card = await this.reader.card(card.id, true)
         notePending = plan.note
@@ -353,7 +355,7 @@ export class WorkflowOperations {
       saved.push('note')
       this.noteRepairs.delete(key)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
-      await this.changed({ before: card, card, actor, operationId: input.operation_id, notes: [notePending], sections })
+      await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending], sections, sectionTexts })
       return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
       if (error instanceof ManagedSectionConflict) return { ...result(saved.length ? 'partially-saved' : 'not-saved', 'conflict', `${error.message}. Review current state and re-issue with a new operation_id.`), requires_new_operation_id: true }
@@ -385,7 +387,7 @@ export class WorkflowOperations {
         if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) {
           card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
           await this.creations.put(key, signature, card.id)
-          await this.changed({ card, actor, operationId: input.operation_id })
+          await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
           return result('saved', 'already-saved', 'Card creation already saved', ['card'])
         }
       }
@@ -395,7 +397,7 @@ export class WorkflowOperations {
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
         Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
-      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(`${sectionMarker(name)}\n${name === 'brief' ? 'Brief' : 'Acceptance criteria'}\n${value}`))]
+      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))]
       await this.creations.put(key, signature)
       attempted = true
       const created = await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config.dataSourceId }, properties, children })
@@ -405,7 +407,7 @@ export class WorkflowOperations {
       const sections = await this.content.sections(card.id)
       const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === child.paragraph.rich_text.map(r => r.text.content).join('')))
       if (complete) await this.creations.put(key, signature, card.id)
-      await this.changed({ card, actor, operationId: input.operation_id, sections: Object.keys(input.content ?? {}) })
+      await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(child => child.paragraph.rich_text.map(r => r.text.content).join('')) })
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
       if (error instanceof WorkflowError) return result('not-saved', error.code, error.message)

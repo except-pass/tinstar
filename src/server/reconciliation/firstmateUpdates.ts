@@ -11,6 +11,7 @@ import type { WorkCard } from './workReader'
 import type { WorkflowChange } from './workflow'
 import type { CardContextRead } from './cardContext'
 import { workReadback } from './workReadback'
+import { receiptMarker } from './workflowContent'
 
 const scalar = (card: WorkCard, name: string) => String(card.properties[name]?.value ?? '')
 const owned = (card: WorkCard) => !card.archived && !card.in_trash && scalar(card, 'Owner').toLowerCase() === 'firstmate'
@@ -29,6 +30,7 @@ const batchSchema = z.object({ requestId: z.string().uuid(), actor: z.string(), 
 const stateSchema = z.object({ cards: z.record(storedCard), batches: z.array(batchSchema) })
 type State = z.infer<typeof stateSchema>
 type Item = z.infer<typeof itemSchema>
+const boundedItem = (item: Item): Item => JSON.parse(JSON.stringify(workReadback(item), (_key, value) => typeof value === 'string' && value.length > 1500 ? `${value.slice(0, 1500)} [truncated; read current card]` : Array.isArray(value) ? value.slice(0, 30) : value))
 const writers = new Map<string, Promise<unknown>>()
 type Sources = Pick<ReconciliationSources, 'firstmateWork' | 'currentCard' | 'updateContext'>
 
@@ -81,7 +83,9 @@ export class FirstmateUpdates {
   }
   async confirmed(change: WorkflowChange) {
     this.mutations.set(change.card.id, ++this.version)
-    return this.observe(change.card, change.actor, undefined, change)
+    const context = this.baselines.has(change.card.id) && (active(change.card) || !!change.before && active(change.before))
+      ? await this.sources.updateContext(change.card.id).catch(() => undefined) : undefined
+    return this.observe(change.card, change.actor, context, change)
   }
   private async observe(card: WorkCard, actor: string, context?: CardContextRead, own?: WorkflowChange) {
     return this.change(state => {
@@ -90,6 +94,33 @@ export class FirstmateUpdates {
       const contentSeen = own && old?.operations?.includes(own.operationId)
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}
+      if (own && old && baseline) {
+        const effects = own.properties
+        const external = { ...after }
+        for (const [name, value] of Object.entries(effects)) {
+          if (JSON.stringify(after[name]) === JSON.stringify(value)) {
+            if (name in before) external[name] = before[name]
+            else delete external[name]
+          }
+        }
+        const externalChanges = diff(baseline.properties, external)
+        const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
+        const ownNote = (text: string) => own.notes?.some(note => note.split('\n').includes(receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
+        const ownSection = (text: string) => own.sectionTexts?.some(section => text === contextText(section))
+        const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block.text) &&
+          (baseline.details ? !baseline.details.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
+          .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
+        const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !contentSeen
+        const sections = (context?.blocks ?? []).filter(block => block.type !== 'comment' && !ownSection(block.text) &&
+          (baseline.details ? baseline.details.find(previous => previous.id === block.id)?.text !== block.text : priorEdit)).map(block => block.id)
+        if (context?.outcome === 'available') sections.push(...(baseline.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
+        if ((active(card) || !!own.before && active(own.before)) && (Object.keys(externalChanges).length || comments.length || sections.length || priorEdit)) {
+          this.add(state, 'Notion actor unknown', boundedItem({ kind: 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`,
+            current: after, properties: externalChanges, comments, body_sections: sections,
+            ...(!context || context.outcome !== 'available' || !baseline.details ? { omissions: 'Body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed.' } : {}) }))
+        }
+        for (const name of Object.keys(changes)) if (!(name in effects) || JSON.stringify(after[name]) !== JSON.stringify(effects[name])) delete changes[name]
+      }
       const newPickup = queued(card) && !old?.queued
       const enrichPickup = queued(card) && own && !contentSeen && (own.notes?.length || own.sections?.length) && state.batches.some(batch => batch.actor === actor && !batch.offered && batch.items.some(item => item.card_id === card.id && item.kind === 'pickup'))
       const newUpdate = !newPickup && (active(card) || !!own?.before && active(own.before)) && !firstmateActor(actor) &&
@@ -102,7 +133,7 @@ export class FirstmateUpdates {
         const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections,
           ...(!own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
         // Redaction is an output boundary; raw current-state comparisons stay exact.
-        const bounded = JSON.parse(JSON.stringify(workReadback(item), (_key, value) => typeof value === 'string' && value.length > 1500 ? `${value.slice(0, 1500)} [truncated; read current card]` : Array.isArray(value) ? value.slice(0, 30) : value)) as Item
+        const bounded = boundedItem(item)
         this.add(state, actor, bounded)
       }
       const operations = [...(old?.operations ?? []), ...(!contentSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
