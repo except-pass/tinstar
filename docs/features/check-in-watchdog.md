@@ -43,7 +43,11 @@ exact Notion page and verifies both page ID and configured data source. Changed
 owner, status, checkpoint, trash or archive suppress the original request.
 Preflight reads have a five-second timeout; bridge batches attempt at most
 three pages and rotate so one failed page does not starve the rest. This keeps
-the existing puller's 20-second HTTP read bound. Fleet refreshes stay on the
+the existing puller's 20-second HTTP read bound. External reads run outside the
+serialized writer so slow Notion responses do not hold up receipt ingestion or
+card indicators. Before freezing a delivery, the writer reloads the ledger and
+reconciles the preflight result against current request and receipt state.
+Fleet refreshes stay on the
 source-refresh path rather than delaying bridge work. A suppressed appointment
 never silently acquires another request ID.
 
@@ -96,7 +100,9 @@ same completed text. Tin Star records that immutable reply separately from
 resolution. It verifies an uncached Notion paragraph/comment with the original
 request ID, a valid date after the request, substantive progress/evidence,
 blocker/owner, next action, attribution matching `Last touched by`, and next
-checkpoint matching the current property. An active In Progress checkpoint
+checkpoint matching the current property. An offset-free next timestamp in the
+report uses that property's explicit timezone when comparing the instants.
+An active In Progress checkpoint
 must fit the board ceiling (four hours during business-day 8 AM–8 PM ET working
 hours, otherwise 10 AM the next business morning). A real dependency date on
 Waiting For may be later. Done/Archived can use `Next check-in: closed` with a
