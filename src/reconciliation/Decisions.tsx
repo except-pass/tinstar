@@ -22,17 +22,15 @@ export const readinessLabels = {
   'future-or-conditional': 'Waiting on a prerequisite',
 }
 const sourceStale = (item: QueueItem, now: number) => item.sources.some(source => !['fresh', 'partial'].includes(source.status) || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
-interface DecisionEntry { key: string; item: QueueItem; id: string | null; title: string; question: string | null; recommendation: string | null }
+interface DecisionEntry { key: string; item: QueueItem; id: string | null; title: string; question: string | null }
 function decisionCopy(item: QueueItem, title: string) {
   const request = item as Partial<NeedsWillItem>
   const action = request.requests?.find(request => request.question)?.question ?? item.action
   const prose = displayRequestText(action ?? title, 'Read the source to verify this request.')
-  const recommendation = /\b(?:recommendation\s*:?|recommends?)\s+(.+?)(?:\s*\(card|$)/i.exec(prose)
-  const question = prose.split(/\b(?:recommendation\s*:?|recommends?)\s+/i)[0]!.replace(/^owner\s*:\s*/i, '').trim()
+  const question = prose.replace(/^owner\s*:\s*/i, '').trim()
   const cleanTitle = displayRequestText(title).replace(/^(?:owner|decision)\s*:\s*/i, '').trim()
   return { title: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? cleanTitle : question,
-    question: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? question : null,
-    recommendation: recommendation?.[1]?.replace(/[.\s]+$/, '') ?? null }
+    question: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? question : null }
 }
 
 /** One row per existing canonical request. Opening it shares card focus, never
@@ -53,7 +51,7 @@ export function Decisions() {
   })
   useEffect(() => { setOpenedId(null) }, [selectedId])
   const selected = entries.find(entry => entry.key === (state.queueOpen ? state.queueItemId : openedId)) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
-  const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.recommendation ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
+  const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
   const visible = entries.filter(entry => matches(entry) || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
   const unavailable = !!queueError || !!error
   const incomplete = !!queue?.pullCoverage && (!queue.pullCoverage.associationsComplete || queue.pullCoverage.repositories.some(repo => repo.status !== 'fresh' || !repo.complete)) || queue && [queue.coverage.intentions, ...queue.coverage.fleet].some(source => !['fresh', 'partial'].includes(source.status) || source.coverage !== 'complete' || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
@@ -111,7 +109,7 @@ export function Decisions() {
             setOpenedId(item.id)
             if (id && canFocus(id)) send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })
           }}><div><strong>{entry.title}</strong>{entry.question && <span>{entry.question}</span>}
-            <small>{stale ? 'Needs verification' : item.readiness !== 'ready-now' ? readinessLabels[item.readiness] : entry.recommendation ? `First Mate recommends ${entry.recommendation}` : 'Question and evidence inside'}</small>
+            <small>{stale ? 'Needs verification' : item.readiness !== 'ready-now' ? readinessLabels[item.readiness] : 'Question and evidence inside'}</small>
           </div><span className="decisions-open">Open</span></button>
           return id ? <AskSurface as="div" subject={{ cardId: id }} key={entry.key}>{row}</AskSurface> : <div key={entry.key}>{row}</div>
         })}
@@ -149,7 +147,6 @@ function DecisionDetail({ entry, items, unavailable, onClose }: { entry: Decisio
     <header><h2>{entry.title}</h2><button type="button" aria-label="Close decision" onClick={onClose}>×</button></header>
     {entry.question && <p>{entry.question}</p>}
     <DecisionChoices key={entry.key} entry={entry} items={items} />
-    {entry.recommendation && <p>First Mate recommends {entry.recommendation}</p>}
     {!ready && <p role="status">{item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite. Verify it has cleared before answering.' : 'This request needs verification before you act.'}</p>}
     {id && <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>}
     {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Open PR' : 'Read evidence'} ↗</a>)}
@@ -168,7 +165,7 @@ function DecisionDetail({ entry, items, unavailable, onClose }: { entry: Decisio
         {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details className="decisions-evidence"><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready && request.kind !== 'notion-card' && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
       </section>
     })}
-    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer or update decision</summary><WorkActions card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
     <details className="decisions-evidence"><summary>Technical details</summary>
       <p>{request.requestSince ? `Oldest recorded open ask: ${request.requestSince}` : 'Request age unknown'}</p>
       {request.pulls?.map(pull => <p key={pull.id}>{pull.repository} #{pull.number} · PR opened {pull.createdAt} (not request age) · {pull.readiness?.checks ?? 'Checks unverified'}</p>)}

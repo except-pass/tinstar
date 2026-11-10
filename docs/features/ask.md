@@ -75,9 +75,9 @@ workspace directly. Source health remains an on-demand Overview view; worker
 switching stays available in worker detail.
 
 **Needs you**, **Waiting** and **History** provide one compact text control with
-conversation counts. Needs you shows unread answers, failed deliveries and retained answered conversations. Formal requests remain in Decisions and do not contribute to Discuss counts.
+conversation counts. Needs you shows unread answers, failed deliveries and answers with structured actions. Formal requests remain in Decisions and do not contribute to Discuss counts.
 Waiting contains questions whose latest turn has no answer, unless an unread
-answer or known failure still needs attention. History contains dismissed
+answer or known failure still needs attention. History contains dismissed or read, completed
 conversations and supports search across their questions, source names and answers.
 Follow-up turns count as one conversation and retain their own request identities.
 Expired source evidence or failed queue reads never contribute ready decisions.

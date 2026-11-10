@@ -112,7 +112,7 @@ function WorkspaceRail({ closeRequest, openRequest }: {
   const previousExpanded = useRef<{ id: string; view: DeskView } | null>(null)
   // Follow an intentionally opened thread when a reply/read changes its view.
   // Resolve during render so its inline composer never unmounts between views.
-  const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && expandedGroup.view !== 'history')
+  const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && !expandedGroup.turns.every(turn => !!turn.dismissed_at))
   const view = followExpanded ? expandedGroup.view : selectedView ?? (counts['needs-you'] || !counts.waiting ? 'needs-you' : 'waiting')
   useEffect(() => {
     if (followExpanded) setSelectedView(expandedGroup.view)

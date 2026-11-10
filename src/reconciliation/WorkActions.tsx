@@ -5,6 +5,7 @@ import type { StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared
 
 import { decisionRequests } from '../shared/workflowRequests'
 import { workflowSaved } from './workflowSaved'
+import { displayRequestText } from '../shared/requestText'
 
 type WithoutOperation<T> = T extends unknown ? Omit<T, 'operation_id'> : never
 const actions = [['edit', 'Edit / note'], ['assign', 'Assign / handoff'], ['checkpoint', 'Record checkpoint'], ['wait', 'Record wait'], ['request_decision', 'Request decision'], ['answer_decision', 'Answer decision'], ['complete', 'Complete'], ['park', 'Park']] as const
@@ -32,8 +33,8 @@ export function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>
 const field = (label: string, value: string, set: (value: string) => void, required = true, multiline = false) => <label>{label}{multiline ? <textarea required={required} maxLength={12000} value={value} onChange={e => set(e.target.value)} /> : <input required={required} value={value} onChange={e => set(e.target.value)} />}</label>
 
 /** These forms collect consumer intent; the same backend policy serves MCP. */
-export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
-  const [kind, setKind] = useState<UpdateWorkInput['kind']>('edit')
+export function WorkActions({ card, onSaved, sources = [], answerOnly = false }: { answerOnly?: boolean; card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
+  const [kind, setKind] = useState<UpdateWorkInput['kind']>(answerOnly ? 'answer_decision' : 'edit')
   const [owner, setOwner] = useState(String(card.source.properties.Owner?.value ?? ''))
   const [status, setStatus] = useState('Queued'), [note, setNote] = useState('')
   const [property, setProperty] = useState<typeof ordinary[number]>('Name'), [value, setValue] = useState(''), [changeProperty, setChangeProperty] = useState(false)
@@ -76,8 +77,8 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     else input = { ...base, kind, disposition: note, status: status === 'Archived' ? 'Archived' : 'Backlog' }
     await save(input)
   }
-  return <details className="ov-start-work ov-work-actions"><summary>Update work</summary><form onSubmit={event => void submit(event)}>
-    <label>Operation<select value={kind} onChange={e => { setKind(e.target.value as typeof kind); setStatus('Queued') }}>{actions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+  return <details className="ov-start-work ov-work-actions"><summary>{answerOnly ? 'Answer decision' : 'Update work'}</summary><form onSubmit={event => void submit(event)}>
+    {!answerOnly && <label>Operation<select value={kind} onChange={e => { setKind(e.target.value as typeof kind); setStatus('Queued') }}>{actions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>}
     {kind === 'edit' && <>
       <label><input type="checkbox" checked={changeProperty} onChange={e => setChangeProperty(e.target.checked)} /> Change an ordinary property</label>
       {changeProperty && <><label>Property<select value={property} onChange={e => setProperty(e.target.value as typeof property)}>{ordinary.map(name => <option key={name}>{name}</option>)}</select></label>{field('New value (relation IDs separated by commas)', value, setValue, false)}</>}
@@ -88,7 +89,7 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
     {(kind === 'wait' || kind === 'answer_decision' && status === 'Waiting For') && <>{field('Named dependency', dependency, setDependency, true, true)}{field('What unblocks it', unblocks, setUnblocks, true, true)}{field('Who follows up', followUp, setFollowUp)}</>}
     {(kind === 'request_decision' || kind === 'answer_decision') && field('Decision request ID', requestId, setRequestId)}
     {kind === 'request_decision' && <>{field('Requested from', requestedFrom, setRequestedFrom)}{field('Will action', action, setAction)}</>}
-    {kind === 'answer_decision' && choices.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{choices.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text.slice(0, 100)}</option> })}</select></label>}
+    {kind === 'answer_decision' && choices.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{choices.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{displayRequestText(source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text).slice(0, 100)}</option> })}</select></label>}
     {kind === 'answer_decision' && field('Legacy action tag explicitly resolved (optional)', legacyAction, setLegacyAction, false)}
     {kind === 'answer_decision' && field('Exact wait text resolved (optional; preserves other waits)', resolvedWait, setResolvedWait, false, true)}
     {kind === 'answer_decision' && status === 'In Progress' && <>

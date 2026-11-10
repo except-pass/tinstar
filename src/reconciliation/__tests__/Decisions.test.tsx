@@ -226,3 +226,25 @@ it('keeps coordination bundles in diagnostics rather than presenting one omnibus
   expect(note.closest('details')).not.toHaveAttribute('open')
   expect(screen.getByText(/Some requests need verification/)).toBeVisible()
 })
+
+it('preserves recommendation verbs as questions and hides workflow protocol metadata', async () => {
+  const queue = fixtureQueue()
+  queue.items = [{ ...queue.items[0]!, cardIds: [fixtureId(5)], action: 'Should we recommend 3 replicas or keep 1?' }]
+  workspace.value.queue = queue
+  const original = 'Question: Keep 1 replica or move to 3?\nTin Star request: {"id":"private-request","action":"Decision","preserve_action":true}'
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'note', text: original }] } }))))
+  render(<Decisions />)
+  fireEvent.click(document.querySelector('.decisions-row')!)
+  const evidence = await screen.findByText('Question: Keep 1 replica or move to 3?')
+  expect(evidence).toBeVisible()
+  expect(evidence).not.toHaveTextContent('private-request')
+  const detail = screen.getByLabelText('Selected decision')
+  expect(detail).toHaveTextContent('Should we recommend 3 replicas or keep 1?')
+  expect(detail).not.toHaveTextContent('First Mate recommends')
+  expect(within(detail).queryByLabelText('Operation')).toBeNull()
+  expect(within(detail).queryByText('Edit / note')).toBeNull()
+  expect(within(detail).getByLabelText('Answer')).toBeInTheDocument()
+  const technical = within(detail).getByText('Technical details').closest('details')!
+  expect(technical).not.toHaveAttribute('open')
+  expect(technical).toHaveTextContent('private-request')
+})

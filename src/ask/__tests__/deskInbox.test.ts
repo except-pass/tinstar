@@ -30,11 +30,11 @@ it('moves a read conversation with a pending follow-up to Waiting without hiding
   expect(deskConversations([followUp, first])[0]).toMatchObject({ view: 'waiting', unread: false, latest: followUp, turns: [first, followUp] })
 })
 
-it('keeps read answers quiet in the inbox and ranks genuine unread replies before newer read threads', () => {
+it('moves read completed answers to History and ranks genuine unread replies before newer read threads', () => {
   const unread = request({ status: 'answered', reply })
   const read = request({ status: 'answered', reply, read_at: '2026-11-09T19:02:00Z', updated_at: '2026-11-09T20:00:00Z' })
   expect(deskConversations([read, unread]).map(group => [group.id, group.view, group.unread])).toEqual([
-    [unread.conversation_id, 'needs-you', true], [read.conversation_id, 'needs-you', false],
+    [unread.conversation_id, 'needs-you', true], [read.conversation_id, 'history', false],
   ])
   expect(unread.read_at).toBeNull()
 })
@@ -52,4 +52,9 @@ it('classifies a saved question with a confirmed wake failure as actionable', ()
   const item = request({ status: 'delivered', error: 'First Mate saved the question but was not woken. Retry delivery.' })
   expect(answerStatus(item)).toBe('Delivery failed')
   expect(deskConversations([item])[0]).toMatchObject({ view: 'needs-you', failed: true })
+})
+
+it('keeps a read answer with a structured action in Needs you', () => {
+  const item = request({ reply: { ...reply, suggested_actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the work' }] }, read_at: '2026-11-09T19:02:00Z' })
+  expect(deskConversations([item])[0]).toMatchObject({ view: 'needs-you', unread: false })
 })

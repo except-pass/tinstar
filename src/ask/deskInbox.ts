@@ -22,7 +22,7 @@ export function deskConversations(items: AskItem[]) {
     const archived = turns.every(turn => !!turn.dismissed_at)
     const unread = !archived && turns.some(turn => !turn.dismissed_at && turn.reply && !turn.read_at)
     const failed = turns.some(turn => !turn.dismissed_at && deliveryFailed(turn))
-    const view: DeskView = archived ? 'history' : unread || failed || latest.reply ? 'needs-you' : 'waiting'
+    const view: DeskView = archived ? 'history' : unread || failed || latest.reply?.suggested_actions.some(action => typeof action !== 'string') ? 'needs-you' : latest.reply ? 'history' : 'waiting'
     const updatedAt = turns.reduce((latest, turn) => turn.updated_at > latest ? turn.updated_at : latest, '')
     return { id, turns, latest, unread, failed, view, updatedAt }
   }).sort((a, b) => Number(b.unread) - Number(a.unread) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
