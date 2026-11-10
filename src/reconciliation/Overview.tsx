@@ -13,7 +13,7 @@ import { workerFact as recordedWorkerFact } from '../shared/workerEvidence'
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from './overviewEvidence'
 import { FloorToolbar } from './FloorToolbar'
 import { SmartSearch } from './SmartSearch'
-import { hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
+import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
 import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
@@ -349,7 +349,8 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   useEffect(() => { setHovered(null) }, [state.revision])
   // The existing search can explicitly reveal a card outside its status scope.
   // Preserve that temporary native result, then restore Waiting For on search exit.
-  const outsideWaitingFor = state.searchFocus?.some(item => item.kind === 'card' && scene?.cards.some(card => card.id === item.id && cardStatus(card) !== 'Waiting For'))
+  const focusedContext = scene && state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
+  const outsideWaitingFor = scene?.cards.some(card => focusedContext?.has(`card:${card.id}`) && cardStatus(card) !== 'Waiting For')
   const waiting = waitingForActive(state) && !outsideWaitingFor
   const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
   const [waitingOpen, setWaitingOpen] = useState<ReadonlySet<string> | null>(readWaitingForExpansion)
