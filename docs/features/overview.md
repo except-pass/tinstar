@@ -224,8 +224,7 @@ and select **Waiting For**, to show dependency groups in either density. Both
 controls are reachable with Tab and activate with Enter or Space; in the pattern
 list, use arrow keys and Enter to select the entry. These entries select only
 Waiting For in the card status filter while preserving worker status choices.
-The chip shows its pressed state and clears the card status selection when clicked
-again. Selecting only **Waiting For** in the card status donut/menu, or as the sole
+The chip shows its pressed state and keeps the view open when clicked again. Selecting only **Waiting For** in the card status donut/menu, or as the sole
 Custom status, also replaces the Work organizer with dependency groups.
 The Workers pane retains its organizer, worker status choices and
 relationship context instead of narrowing to workers linked to Waiting For cards.

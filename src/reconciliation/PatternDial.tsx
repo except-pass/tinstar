@@ -90,7 +90,7 @@ export function PatternDial({ scene, state, send, now, coverage, onInspectCovera
   const chooseMenu = (pattern: typeof menuPatterns[number]) => {
     if (pattern !== 'waiting-for') { choose(pattern, true); return }
     hide(); closeMenu(true)
-    send({ type: 'set-donut-filter', filter: { cards: ['Waiting For'], workers: state.donutFilter?.workers ?? [] } })
+    send({ type: 'enter-waiting-for' })
   }
   const step = (direction: number) => choose(dialPatterns[(index + direction + dialPatterns.length) % dialPatterns.length]!)
   const openMenu = () => { hide(); setActive(index); setMenu(true) }
