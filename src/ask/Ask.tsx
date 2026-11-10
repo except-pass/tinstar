@@ -11,8 +11,12 @@ import { AskActions, AskSelectionRejected } from './AskActions'
 import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
-import { answerStatus, deliveryFailed, deskConversations, type DeskView } from './deskInbox'
+import { answerStatus, deliveryFailed, deskConversations, mostRecentAnswer, type DeskView } from './deskInbox'
 import { VoiceInput } from './VoiceInput'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { conversationTitle } from './deskInbox'
+import { displayRequestText } from '../shared/requestText'
 import './ask.css'
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -210,15 +214,15 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
       {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); edited() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); edited() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
       </>}
     {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
-    <label>{inline ? 'Reply to First Mate' : embedded ? `Question about ${label}` : 'Question'}<textarea autoFocus={!inline && !embedded || !!seed.question} required maxLength={4000} value={question} aria-busy={busy || voiceBusy} readOnly={busy || voiceBusy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Ask a follow-up in this conversation…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
-    {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
+    <label><span className={inline ? 'ask-sr-only' : undefined}>{inline ? 'Reply to First Mate' : embedded ? `Question about ${label}` : 'Question'}</span><textarea autoFocus={!inline && !embedded || !!seed.question} required maxLength={4000} value={question} aria-busy={busy || voiceBusy} readOnly={busy || voiceBusy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Message First Mate…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
+    {error && <><p role="alert">Message could not be sent. Try again.</p><details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{error}</p></details></>}
     <VoiceInput disabled={busy || !bound} onBusyChange={setVoiceBusy} onTranscript={async transcript => {
       const next = [question.trim(), transcript].filter(Boolean).join('\n')
       setQuestion(next); edited()
       if (next.length > 4000) { setError('Recording added to draft. Shorten it to 4,000 characters before sending.'); return }
       await send(next)
     }} />
-    <footer>{!inline && !embedded && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" disabled={busy || voiceBusy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send reply' : embedded ? 'Send to First Mate' : 'Send question'}</button></footer>
+    <footer>{!inline && !embedded && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" aria-label={inline ? 'Send reply' : undefined} disabled={busy || voiceBusy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send' : embedded ? 'Send to First Mate' : 'Send question'}</button></footer>
   </form>
   return inline || embedded ? form : <dialog ref={ref} className="ask-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!busy) close() }}>{form}</dialog>
 }
@@ -248,43 +252,85 @@ function sourceAvailable(item: AskItem, scene: FloorScene | null) {
   if (target?.kind === 'claim') return !!scene?.claims.some(claim => claim.id === target.id && scene.cards.some(card => card.id === claim.cardId && !card.source.in_trash && !card.source.archived))
   return !!scene?.cards.some(card => card.id === item.context.anchor.page_id && !card.source.in_trash && !card.source.archived)
 }
+function MessageText({ text }: { text: string }) {
+  // Some older user turns quote the validator wall the old UI inserted. Keep
+  // that exact message inspectable without repeating protocol text as prose.
+  const diagnostic = /["“]?\d+ suggested actions? (?:were|was) rejected:|\bfm-hold-v\d:|\binstruction: URLs and link syntax/i.exec(text)
+  const prose = diagnostic ? text.slice(0, diagnostic.index).trim() : text
+  const display = displayRequestText(prose, 'Message details available below')
+  const hasDetails = !!diagnostic || display === 'Message details available below'
+  return <div className="ask-message-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ children, href, title }) => <a href={href} title={title} target="_blank" rel="noreferrer">{children}</a> }}>{display}</ReactMarkdown>{hasDetails && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><pre>{text}</pre></details>}</div>
+}
+function MessageTime({ at }: { at: string }) {
+  return <time dateTime={at} title={new Date(at).toLocaleString()}>{new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+}
 function AskDelivery({ item, controls, now }: { item: AskItem; controls: AskControls; now: number }) {
-  return <div>
-    <p role="status">{answerStatus(item)}{deliveryFailed(item) && item.error ? ` · ${item.error}` : ''}</p>
-    <details className="ask-delivery-diagnostics"><summary>Delivery details</summary>
+  return <div className="ask-delivery">
+    <p role="status">{item.status === 'delivered' && !deliveryFailed(item) ? 'Delivered · Waiting for answer' : deliveryFailed(item) ? 'Delivery failed' : 'Waiting for answer'}</p>
+    <details className="ask-delivery-diagnostics"><summary>Technical details</summary>
       <p>{item.status === 'delivered' ? 'Delivered' : item.status === 'failed' ? 'Delivery failed' : 'Sent'}{item.error ? ` · ${item.error}` : ''}</p>
       {Date.parse(item.created_at) < now - 120_000 && <p>Waiting for First Mate’s answer. First Mate may be offline.</p>}
+      <code>{item.request_id}</code>
     </details>
     {deliveryFailed(item) && <button type="button" aria-label={`Retry delivery: ${item.question}`} onClick={() => controls.action(item, 'retry')}>Retry delivery</button>}
   </div>
 }
 function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskControls; now: number }) {
   const latest = turns.at(-1)!
-  const latestAnswer = turns.filter(turn => turn.reply).sort((a, b) => Date.parse(a.answered_at ?? a.created_at) - Date.parse(b.answered_at ?? b.created_at)).at(-1)
+  const latestAnswer = mostRecentAnswer(turns)
   const seed = controls.replySeed?.conversationId === latest.conversation_id ? controls.replySeed : null
+  const viewport = useRef<HTMLDivElement>(null), nearBottom = useRef(true)
+  // Reply timestamps can interleave with later questions. Sort message events,
+  // not request pairs, and never render action selections twice.
+  const messages = turns.flatMap(turn => [{ key: `${turn.request_id}:user`, turn, sender: 'You', at: turn.action_selection?.selected_at ?? turn.created_at },
+    ...(turn.reply ? [{ key: `${turn.request_id}:reply`, turn, sender: 'First Mate', at: turn.answered_at ?? turn.created_at }] : [])])
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
+  const signature = messages.map(message => message.key).join('|')
+  const unread = turns.some(turn => turn.reply && !turn.read_at && !turn.dismissed_at)
+  useLayoutEffect(() => {
+    const element = viewport.current
+    if (element && nearBottom.current) element.scrollTop = element.scrollHeight
+  }, [signature])
   return <section className="ask-thread" id={`ask-thread-${latest.conversation_id}`} aria-label={`Answer thread: ${turns[0]!.question}`}>
-    <header><strong>Conversation</strong><button type="button" onClick={event => { controls.collapse(); event.currentTarget.closest('[data-ask-id]')?.querySelector<HTMLElement>('.ask-preview')?.focus({ preventScroll: true }) }}>Collapse answer</button></header>
-    {!sourceAvailable(latest, controls.scene) && <p role="status">The original task is no longer on the floor.</p>}
-    {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Open originating source ↗</a>}
-    {turns.map(turn => {
-      const selected = turns.find(item => item.action_selection?.answer_id === turn.request_id)
-      return <section className="ask-turn" key={turn.request_id} aria-label={`Question: ${turn.question}`}>
-      {turn.action_selection && <p className="ask-action-explanation">Selected by {turn.action_selection.actor} · <time dateTime={turn.action_selection.selected_at}>{new Date(turn.action_selection.selected_at).toLocaleString()}</time></p>}
-      <p className="ask-thread-question">{turn.question}</p>
-      {turn.captured_selection && <blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote>}
-      {turn.reply ? <><h3 {...askElement('answer', 'First Mate answer')}>{turn.reply.summary}</h3><p {...askElement('answer', 'Answer detail')} className="ask-detail">{turn.reply.detail}</p>
-        {turn.reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a>)}
-        <AskActions answerId={turn.request_id} suggestions={turn.reply.suggested_actions} superseded={latestAnswer?.request_id !== turn.request_id}
-          selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, error: selected.error } : null} onSelect={controls.selectAction} />
-      </> : <AskDelivery item={turn} controls={controls} now={now} />}
-    </section>})}
-    <footer><button type="button" onClick={() => controls.returnTo(latest)}>Return to source</button>{controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}</footer>
+    <header className="ask-thread-header"><h3>{conversationTitle(turns)}</h3><div>
+      {unread && <button type="button" className="ask-thread-unread" aria-label="Read new answer" onClick={() => { controls.returnTo(latest); nearBottom.current = true; if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight }}>New answer</button>}
+      <button type="button" className="ask-source-return" aria-label="Return to source" title="Return to source" onClick={() => controls.returnTo(latest)}>↗</button>
+      <button type="button" aria-label="Collapse answer" onClick={controls.collapse}>×</button>
+    </div></header>
+    <div className="ask-messages" ref={viewport} onScroll={event => { const element = event.currentTarget; nearBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64 }}>
+      {messages.map(({ key, turn, sender, at }) => {
+        const incoming = sender === 'First Mate', reply = turn.reply
+        const selected = turns.find(item => item.action_selection?.answer_id === turn.request_id)
+        const superseded = latestAnswer?.request_id !== turn.request_id
+        const unavailable = !!reply?.rejected_actions?.length && !reply.suggested_actions.some(action => typeof action !== 'string')
+        const summary = reply?.summary.trim() ?? '', detail = reply?.detail.trim() ?? ''
+        // Legacy replies often store a summary prefix of the full detail.
+        const text = detail.startsWith(summary) ? detail : summary === detail || !detail ? summary : `${summary}\n\n${detail}`
+        return <section key={key} className={`ask-message ${incoming ? 'is-incoming' : 'is-outgoing'}`} data-unread={incoming && !turn.read_at && !turn.dismissed_at} aria-label={incoming ? 'First Mate reply' : `Question: ${turn.question}`}>
+          <header><strong>{sender}</strong><MessageTime at={at} /></header>
+          {incoming && reply ? <>
+            <div {...askElement('answer', 'First Mate answer', detail.startsWith(summary) ? text : summary)}><MessageText text={detail.startsWith(summary) ? text : summary} /></div>{!detail.startsWith(summary) && detail && <div {...askElement('answer', 'Answer detail', detail)}><MessageText text={detail} /></div>}
+            {!!reply.references.length && <div className="ask-message-references">{reply.references.map((reference, index) => <a key={index} href={reference.url} target="_blank" rel="noreferrer">{/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(reference.url) ? `Open PR #${reference.url.match(/\d+\/?$/)?.[0].replace('/', '')}` : reference.label} ↗</a>)}</div>}
+            {unavailable && <p className="ask-action-unavailable">One-click action unavailable{!superseded && <button type="button" onClick={() => controls.open({ question: 'Please resend the one-click choices for your last answer.' }, latest)}>Request new choices</button>}</p>}
+            <AskActions answerId={turn.request_id} suggestions={reply.suggested_actions} superseded={superseded}
+              selection={selected ? { action_id: selected.action_selection!.action_id, status: selected.status, error: selected.error } : null} onSelect={controls.selectAction} />
+            {!!reply.rejected_actions?.length && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><pre>{JSON.stringify(reply.rejected_actions, null, 2)}</pre></details>}
+          </> : <>
+            <MessageText text={turn.action_selection ? `Requested: ${turn.action_selection.label}` : turn.question} />
+            {turn.captured_selection && <details className="ask-delivery-diagnostics"><summary>Selected context</summary><blockquote>{turn.captured_selection.element?.value ?? turn.captured_selection.field_value}</blockquote></details>}
+            {!turn.reply && <AskDelivery item={turn} controls={controls} now={now} />}
+          </>}
+        </section>
+      })}
+      <div className="ask-thread-context">
+        {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Open originating source ↗</a>}
+        {controls.canBack && <button type="button" onClick={controls.onBack}>Back to previous view</button>}
+        <details className="ask-delivery-diagnostics"><summary>Technical details</summary>{!sourceAvailable(latest, controls.scene) && <p>Original source is outside the current view.</p>}<pre>{JSON.stringify(turns.map(turn => ({ request_id: turn.request_id, status: turn.status, error: turn.error, action_selection: turn.action_selection })), null, 2)}</pre></details>
+      </div>
+    </div>
     <AskComposer key={seed?.key ?? latest.conversation_id} inline scene={controls.scene} state={controls.state} parent={latest}
       seed={{ ...(latest.context.target ? { target: latest.context.target, view: latest.context.view } : { cardId: latest.context.anchor.page_id }), ...seed?.seed }}
-      clientKey={latest.conversation_id} submit={controls.submit} close={() => {
-        const thread = document.getElementById(`ask-thread-${latest.conversation_id}`)
-        thread?.querySelector<HTMLButtonElement>('header button')?.focus()
-      }} />
+      clientKey={latest.conversation_id} submit={controls.submit} close={() => viewport.current?.closest('section')?.querySelector<HTMLButtonElement>('[aria-label="Collapse answer"]')?.focus()} />
   </section>
 }
 export function AskDesk({ now, view, showEmpty = true }: { now: number; view: DeskView; showEmpty?: boolean }) {
@@ -294,24 +340,31 @@ export function AskDesk({ now, view, showEmpty = true }: { now: number; view: De
   useEffect(() => {
     if (archived && controls?.items.some(item => item.conversation_id === archived.conversation_id && !item.dismissed_at)) setArchived(null)
   }, [archived, controls?.items])
+  const previousExpanded = useRef<string | null>(null), desk = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    if (!controls?.expanded && previousExpanded.current) document.querySelector<HTMLElement>(`[data-conversation-id="${previousExpanded.current}"]`)?.querySelector<HTMLButtonElement>('.ask-preview')?.focus({ preventScroll: true })
+    if (controls?.expanded && controls.expanded !== previousExpanded.current && desk.current) desk.current.scrollTop = 0
+    previousExpanded.current = controls?.expanded ?? null
+  }, [controls?.expanded])
   if (!controls) return null
   const history = view === 'history'
-  const groups = deskConversations(controls.items).map(group => ({ ...group, visible: group.view === view && (!history || !search || group.turns.some(item => `${item.question} ${item.context.anchor.label} ${item.reply?.summary ?? ''} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))) })).filter(group => group.visible || group.id === controls.expanded)
-  return <section className="ask-desk" aria-label="Questions for First Mate">
+  const groups = deskConversations(controls.items).map(group => ({ ...group, visible: group.view === view && (!history || !search || group.turns.some(item => `${item.question} ${item.context.anchor.label} ${item.reply?.summary ?? ''} ${item.reply?.detail ?? ''}`.toLowerCase().includes(search.toLowerCase()))) })).filter(group => group.visible || group.id === controls.expanded).sort((a, b) => Number(b.id === controls.expanded) - Number(a.id === controls.expanded))
+  return <section ref={desk} className="ask-desk" data-thread-open={!!controls.expanded} aria-label="Questions for First Mate">
     {archived && <div role="status">Conversation archived. <button type="button" aria-label="Undo archive" onClick={() => { controls.action(archived, 'restore'); setArchived(null) }}>Undo</button></div>}
-    {controls.error && <p role="status">{controls.error}. Questions will refresh automatically.</p>}
+    {controls.error && <><p role="status">Discuss is temporarily unavailable. Try again.</p><details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{controls.error}</p></details></>}
     {history && <input aria-label="Search question history" type="search" value={search} onChange={event => setSearch(event.target.value)} />}
-    {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers and decisions appear here.'}</p>}
+    {showEmpty && !groups.some(group => group.visible) && <p>{history ? 'No matching questions in history.' : view === 'waiting' ? 'No questions waiting for an answer.' : 'New answers appear here.'}</p>}
     {groups.map(group => {
       const { latest: item, turns, unread } = group, expanded = controls.expanded === item.conversation_id
-      const answer = turns.filter(turn => turn.reply).sort((a, b) => Number(!a.read_at) - Number(!b.read_at) || (a.answered_at ?? a.created_at).localeCompare(b.answered_at ?? b.created_at)).at(-1)
-      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-unread={unread} data-expanded={expanded}>
-        <button type="button" className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
+      const answer = mostRecentAnswer(turns)
+      const preview = answer?.reply?.summary && displayRequestText(answer.reply.summary) !== conversationTitle(turns) ? displayRequestText(answer.reply.summary) : null
+      return <AskSurface as="article" hidden={!group.visible} subject={item.context.target ? { followUpTo: item.request_id, target: item.context.target, label: item.context.anchor.label, view: item.context.view } : { followUpTo: item.request_id, cardId: item.context.anchor.page_id, view: item.context.view }} key={item.conversation_id} data-ask-id={item.request_id} data-conversation-id={item.conversation_id} data-unread={unread} data-expanded={expanded}>
+        <button type="button" hidden={expanded} data-has-preview={!!preview} className="ask-preview" aria-expanded={expanded} aria-controls={`ask-thread-${item.conversation_id}`} onClick={() => controls.returnTo(item)}>
           <small {...askElement('status', 'Question status')}>{unread ? 'New answer' : group.failed ? 'Delivery failed' : item.reply ? 'Answered' : answerStatus(item)} · {ageLabel(Date.parse(group.updatedAt), now)}</small>
-          <strong {...askElement('question', 'Question')}>{turns[0]!.question}</strong><span {...askElement('title', 'Originating item')}>{item.context.anchor.label}</span>{!expanded && answer?.reply && <p {...askElement('answer', 'First Mate answer')}>{answer.reply.summary}</p>}
+          <strong {...askElement('question', 'Question')}>{conversationTitle(turns)}</strong><span {...askElement('title', 'Originating item')}>{displayRequestText(item.context.anchor.label, 'First Mate')}</span>{preview && <p>{preview}</p>}
         </button>
         {expanded && <AskThread turns={turns} controls={controls} now={now} />}
-        <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} title={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 3h14v4H3zM5 7v10h10V7M10 9v5m-3-3 3 3 3-3" /></svg>}</button>
+        {!expanded && <button type="button" className="ask-archive" aria-label={history ? 'Restore to inbox' : 'Archive conversation'} title={history ? 'Restore to inbox' : 'Archive conversation'} onClick={() => { controls.action(item, history ? 'restore' : 'dismiss'); if (!history) setArchived(item) }}>{history ? 'Restore' : <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M3 3h14v4H3zM5 7v10h10V7M10 9v5m-3-3 3 3 3-3" /></svg>}</button>}
       </AskSurface>
     })}
   </section>

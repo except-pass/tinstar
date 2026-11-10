@@ -67,6 +67,7 @@ describe('Overview shell and retained terminal navigation', () => {
       request: { home: worker.home, taskId: worker.id, id: 'go', kind: 'decision' },
       observedAt: new Date().toISOString(), expiresAt: null, status: 'fresh', coverage: 'complete' }]
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    Element.prototype.scrollIntoView = vi.fn()
     vi.stubGlobal('fetch', (input: RequestInfo) => {
       const url = String(input)
       if (url.endsWith('/api/reconciliation/scene')) return Promise.resolve(json({ ok: true, data: fixtureScene() }))
@@ -77,7 +78,11 @@ describe('Overview shell and retained terminal navigation', () => {
     })
     const { container } = render(<App />)
     expect(screen.queryByRole('button', { name: 'Find worker' })).toBeNull()
-    await screen.findByLabelText('Request inspector')
+    await screen.findByLabelText('Questions for First Mate')
+    expect(screen.queryByLabelText('Request inspector')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Decisions' }))
+    fireEvent.click((await screen.findAllByText('Build live reconciliation'))[0]!)
+    await screen.findByLabelText('Selected decision')
     expect(container.querySelector('.cockpit-attention-card')).toBeNull()
     expect(screen.queryByText('Respond through First Mate')).toBeNull()
     expect(screen.queryByRole('textbox', { name: 'Answer this decision' })).toBeNull()
@@ -158,13 +163,16 @@ describe('Overview shell and retained terminal navigation', () => {
       workers = []
       await act(async () => { polls.forEach(poll => poll()) })
       expect(await screen.findByRole('heading', { name: 'No such worker' })).toBeTruthy()
-      fireEvent.click(screen.getByText('Retained worker notes · 1'))
+      fireEvent.click(screen.getByRole('button', { name: 'Decisions' }))
+      fireEvent.click(screen.getByText('Retained worker notes', { exact: true }))
       expect(screen.getAllByText('Retained deployment note', { selector: 'p' })).toHaveLength(1)
       fireEvent.click(screen.getByText('Delivery details', { selector: 'summary' }))
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' })) })
       expect(posts).toEqual([{ requestId: 'retained-id', kind: 'message', text: 'Retained deployment note' }])
       expect(await screen.findByText('Retained reply', { selector: 'p' })).toBeTruthy()
       fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Decisions' }))
+      fireEvent.click(screen.getByText('Retained worker notes', { exact: true }))
       expect(await screen.findByText('Retained reply', { selector: 'p' })).toBeTruthy()
       expect(screen.queryByRole('button', { name: 'Message receipts' })).toBeNull()
     } finally { timer.mockRestore() }

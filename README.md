@@ -11,7 +11,7 @@ Overview is the primary home: independent Workers and Notion cards share groups 
 For Codex worker-state collection and machine-local setup, see the
 [Codex activity reference](docs/features/codex-activity.md).
 
-**Your desk** stays available across Overview, Decisions, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Desk button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
+**Discuss** stays available across Overview, Decisions, PRs, Releases and worker views, retaining questions, drafts and answers while you navigate. Collapse or resize its desktop rail, or open it from the mobile Discuss button. See the [Ask reference](docs/features/ask.md) for sizing controls and saved preferences.
 
 Use **Update work** in a card’s Inspector to record assignments, checkpoints, waits, decisions and completion. Use **Start work** to link an executing worker. Authenticated agents create and update cards through MCP; see [shared workflow operations](docs/features/workflow.md) for requirements, readback and retained dependencies.
 
@@ -27,15 +27,15 @@ The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only
 
 The [Next check-in watchdog](docs/features/check-in-watchdog.md) requests overdue status updates through First Mate and shows a quiet line on the relevant card until Notion readback verifies the answer.
 
-Open a Desk request's source inspector to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
+Open a Decisions request to answer or dismiss a ready First Mate request, open its existing terminal when available, or read its Notion card. See the [queue reference](docs/features/reconciliation-queue.md) for readiness and source identity rules.
 
-Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Desk**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
+Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Discuss**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 
-Expand a Desk conversation and use **Reply to First Mate** to continue inline with its prior questions and answers. Enter sends; Shift+Enter adds a line. The same composer is embedded in expanded Inspectors, PR details and Releases. Hold **Talk** and release to transcribe and send, or tap to start/stop; Cancel never sends. See the [local voice runbook](docs/features/voice.md) for setup, limits and text fallback.
+Expand a Discuss conversation and use **Reply to First Mate** to continue inline with its prior questions and answers. Enter sends; Shift+Enter adds a line. The same composer is embedded in expanded Inspectors, PR details and Releases. Hold **Talk** and release to transcribe and send, or tap to start/stop; Cancel never sends. See the [local voice runbook](docs/features/voice.md) for setup, limits and text fallback.
 
 Use **Open in ChatGPT** on an Overview work card or PR row for an external discussion. See the [Open in ChatGPT reference](docs/features/open-in-chatgpt.md) for URL prefill limits, copy-prompt recovery and metadata privacy.
 
-The activity strip provides **Overview**, **Decisions**, **PRs** and **Releases**. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the review table, repository scope and required owner access. The **Desk** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
+The activity strip provides **Overview**, **Decisions**, **PRs** and **Releases**. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the review table, repository scope and required owner access. The **Discuss** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
 A worker opens a live terminal with its objective, project, worktree, branch and pull request in a detail rail (**Details** on windows 1200px wide or narrower). In the collapsible prompt composer, **Ctrl+Enter** (or **Cmd+Enter**) pastes the prompt into the worker's pane and presses Enter. It retains recent prompts, stash slots and quick menu keys. Paste a screenshot or drop a file to upload it under the config root's `screenshots/` folder and insert its `@path`. Mark a worker **Direct** in the detail rail to indicate you are working with it yourself; First Mate receives an inbox note when the mark changes. A snapshot kind of `secondmate` shows a **Second mate** badge in that rail. Each worker keeps the same face and color across reloads.
 
@@ -56,7 +56,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-For Desk response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, open **Retained worker notes** in Desk. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
+For Decisions response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, its retained notes remain available under the Decisions diagnostics. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
 
 ## Quick start
 

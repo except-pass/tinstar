@@ -1,8 +1,13 @@
+import { displayRequestText } from '../shared/requestText'
 import type { AskItem } from '../shared/ask'
 
 // A saved note can be delivered while waking First Mate explicitly failed.
 export function deliveryFailed(item: AskItem) {
   return !item.reply && (item.status === 'failed' || !!item.error)
+}
+
+export function mostRecentAnswer(turns: AskItem[]) {
+  return turns.filter(turn => turn.reply).sort((a, b) => Date.parse(a.answered_at ?? a.created_at) - Date.parse(b.answered_at ?? b.created_at)).at(-1)
 }
 
 export type DeskView = 'needs-you' | 'waiting' | 'history'
@@ -21,12 +26,24 @@ export function deskConversations(items: AskItem[]) {
     const archived = turns.every(turn => !!turn.dismissed_at)
     const unread = !archived && turns.some(turn => !turn.dismissed_at && turn.reply && !turn.read_at)
     const failed = turns.some(turn => !turn.dismissed_at && deliveryFailed(turn))
+    const answer = mostRecentAnswer(turns)
+    const hasActions = !!latest.reply && !answer?.dismissed_at && answer?.reply?.suggested_actions.some(action => typeof action !== 'string')
+    const attention = !archived && (unread || failed || !!hasActions)
     const view: DeskView = archived ? 'history' : unread || failed || latest.reply ? 'needs-you' : 'waiting'
     const updatedAt = turns.reduce((latest, turn) => turn.updated_at > latest ? turn.updated_at : latest, '')
-    return { id, turns, latest, unread, failed, view, updatedAt }
+    return { id, turns, latest, unread, failed, attention, view, updatedAt }
   }).sort((a, b) => Number(b.unread) - Number(a.unread) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))
 }
 
 export function answerStatus(item: AskItem) {
   return item.reply ? item.read_at ? 'Answered' : 'New answer' : deliveryFailed(item) ? 'Delivery failed' : 'Waiting for answer'
+}
+
+/** Prefer the newest human question over a selection instruction. Action-only
+ * legacy conversations use First Mate's retained summary or action label. */
+export function conversationTitle(turns: AskItem[]) {
+  const latest = turns.at(-1)!
+  const question = [...turns].reverse().find(turn => !turn.action_selection)
+  const title = question?.question ?? latest.reply?.summary ?? latest.action_selection?.label ?? latest.question
+  return displayRequestText(title, 'Conversation with First Mate')
 }

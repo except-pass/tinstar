@@ -10,6 +10,7 @@ import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
 import type { ExecutionWarning } from './workflowViews'
+import { requestText, isCoordinationRequest, displayRequestText } from '../../shared/requestText'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
@@ -76,13 +77,25 @@ function lower(item: QueueItem, readiness: QueueReadiness, reason: string) {
   item.reasons.push(reason)
 }
 function restrictAction(item: QueueItem, value: string | null): boolean {
+  if (value) {
+    const decoded = requestText(value)
+    if (decoded === null || !displayRequestText(decoded, '')) {
+      lower(item, 'needs-readiness-verification', 'Request text could not be decoded; verify the originating request')
+      return true
+    }
+    value = decoded
+    if (isCoordinationRequest(value)) {
+      lower(item, 'needs-readiness-verification', 'Operational coordination contains separate requests, not one resolvable decision')
+      return true
+    }
+  }
   const action = value?.replace(/^(?:decide|choose|determine)\s+(?:if|when)\b/i, '')
   let restricted = false
   if (action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
     restricted = true
     lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
   }
-  if (value && /\bthen\b|;\s*\w|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(value)) {
+  if (value && /\bthen\b|;\s*(?:then\s+)?(?:review|verify|test|build|run|deploy|release|merge|approve)\b|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(value)) {
     restricted = true
     lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
   }
@@ -198,6 +211,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       // A Notion status change is not an acknowledgment of a First Mate request.
       const item = blank(call.key, call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
+      restrictAction(item, call.headline)
       restrictAction(item, text(hold?.hold_reason))
       restrictAction(item, text(task?.backlog.hold_reason))
       item.homeIds.push(home.source.home)

@@ -6,7 +6,8 @@ import { existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync
 import { AskApi } from '../src/server/ask/routes'
 import { askItemSchema } from '../src/shared/ask'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { decideStaticServe } from '../src/server/staticServe'
 import { fixtureId, fixtureQueue, fixtureScene } from '../test-fixtures/reconciliation/scenes'
 
@@ -45,8 +46,8 @@ test.beforeEach(async ({ page }) => {
 test('one persistent Desk across sections with pointer/keyboard sizing and reload preferences', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(base)
-  const desk = page.getByRole('complementary', { name: 'Your desk' }), separator = page.getByRole('separator', { name: 'Resize Your desk' })
-  await desk.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  const desk = page.getByRole('complementary', { name: 'Discuss' }), separator = page.getByRole('separator', { name: 'Resize Discuss' })
+  await desk.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
   await expect(desk.getByText('Independent question 0')).toBeVisible()
   await desk.evaluate(element => { (element as HTMLElement).dataset.mountWitness = 'same-desk' })
   const divider = (await separator.boundingBox())!
@@ -62,12 +63,12 @@ test('one persistent Desk across sections with pointer/keyboard sizing and reloa
   }
   await separator.focus(); await page.keyboard.press('ArrowLeft')
   await expect(separator).toHaveAttribute('aria-valuenow', '456')
-  await desk.getByRole('button', { name: 'Collapse Your desk' }).click()
+  await desk.getByRole('button', { name: 'Collapse Discuss' }).click()
   await expect(desk).toBeHidden()
-  await expect(page.getByRole('button', { name: /Open Your desk/ })).toBeFocused()
+  await expect(page.getByRole('button', { name: /Open Discuss/ })).toBeFocused()
   await page.reload()
-  await expect(page.getByRole('complementary', { name: 'Your desk' })).toBeHidden()
-  await page.getByRole('button', { name: /Open Your desk/ }).click()
+  await expect(page.getByRole('complementary', { name: 'Discuss' })).toBeHidden()
+  await page.getByRole('button', { name: /Open Discuss/ }).click()
   await expect(separator).toHaveAttribute('aria-valuenow', '456')
   await page.setViewportSize({ width: 900, height: 900 })
   await expect(separator).toHaveAttribute('aria-valuenow', '438')
@@ -80,13 +81,13 @@ test('one accessible mobile sheet retains its inbox on close and section navigat
   await page.setViewportSize({ width: 390, height: 844 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto(`${base}/?view=pulls`)
-  const trigger = page.getByRole('button', { name: /Open Your desk/ })
+  const trigger = page.getByRole('button', { name: /Open Discuss/ })
   await expect(trigger).toHaveCount(1)
   await trigger.click()
-  const sheet = page.getByRole('dialog', { name: 'Your desk' })
+  const sheet = page.getByRole('dialog', { name: 'Discuss' })
   await sheet.evaluate(element => { (element as HTMLElement).dataset.mountWitness = 'mobile-desk' })
-  await expect(sheet.getByRole('button', { name: 'Close Your desk' })).toBeFocused()
-  await sheet.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await expect(sheet.getByRole('button', { name: 'Close Discuss' })).toBeFocused()
+  await sheet.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
   await expect(sheet.getByText('Independent question 0')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(sheet).toBeHidden(); await expect(trigger).toBeFocused()
@@ -120,17 +121,17 @@ test('typed CI Ask returns from Releases to its exact PR after an independent an
   await page.goto(`${base}/?view=pulls`)
   await page.getByRole('button', { name: 'Inspect owner/repo#17', exact: true }).click()
   await page.locator('.pr-row[data-ask-origin="owner/repo#17"] [data-ask-field="ci"]').click({ button: 'right' })
-  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue('What is happening with CI for this PR?')
+  await expect(page.getByRole('textbox', { name: 'Question', exact: true })).toHaveValue('What is happening with CI for this PR?')
   expect(requests).toHaveLength(0)
-  await page.getByRole('textbox', { name: 'Question' }).fill('Isolated fixture CI question')
+  await page.getByRole('textbox', { name: 'Question', exact: true }).fill('Isolated fixture CI question')
   await page.getByRole('button', { name: 'Send question' }).click()
-  await expect(page.locator('.ask-preview').getByText('Isolated fixture CI question', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Isolated fixture CI question')
   expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: 'ci', view: { scene: 'pulls' } })
   expect(requests[0]).not.toHaveProperty('card_id')
   await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
   records = records.map(row => ({ ...row, status: 'answered', reply: { summary: 'Isolated correlated answer', detail: 'Fixture evidence detail', references: [], suggested_actions: [] } }))
-  await expect(page.locator('.ask-desk').getByText('Isolated correlated answer', { exact: true }).first()).toBeVisible({ timeout: 10_000 })
-  await page.getByRole('button', { name: /New answer.*Isolated fixture CI question/ }).click()
+  await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Isolated correlated answer', { timeout: 10_000 })
+  await page.getByRole('button', { name: 'Read new answer' }).click()
   await expect(page.locator('.pr-row')).toHaveCount(1)
   await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', pull.id)
   await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Isolated correlated answer')
@@ -169,7 +170,7 @@ for (const mode of ['release', 'receipt', 'removed-target', 'wrong-component', '
 }
 
 test('real Ask HTTP service persists independent typed questions and enforces source and owner boundaries', async ({ page, request }, testInfo) => {
-  const root = mkdtempSync(resolve('.ask-live-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
+  const root = mkdtempSync(join(tmpdir(), 'tinstar-ask-live-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const token = 'disposable-bridge-token-0000000000000000'
   const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test', 'other@example.test'], bridgeToken: token }), { pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => ({ pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false, generatedAt: scene.generatedAt }) })
   liveAsk = createApi()
@@ -194,12 +195,12 @@ test('real Ask HTTP service persists independent typed questions and enforces so
     await page.setExtraHTTPHeaders(headers)
     await page.route('**/api/ask/**', route => route.continue())
     await page.goto(base)
-    await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+    await page.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
     await expect(page.getByText(body.question, { exact: true })).toBeVisible()
     await page.getByRole('navigation').getByRole('button', { name: /^Releases/ }).click()
     liveAsk = createApi()
     await page.reload()
-    await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+    await page.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
     await expect(page.getByText('Live verified relationship question', { exact: true })).toBeVisible()
     for (const [index, row] of [first.body.data, second.body.data].entries()) {
       const bridgeHeaders = { Authorization: `Bearer ${token}` }
@@ -231,7 +232,7 @@ for (const width of [1440, 390]) {
     await page.route('**/api/ask/requests/*/read', route => route.fulfill({ json: { ok: true, data: {} } }))
     await page.setViewportSize({ width, height: 900 })
     await page.goto(`${base}/?view=releases`)
-    if (width === 390) await page.getByRole('button', { name: /Open Your desk/ }).click()
+    if (width === 390) await page.getByRole('button', { name: /Open Discuss/ }).click()
     await page.getByRole('button', { name: /New answer.*Explain closed PR evidence/ }).click()
     await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', id)
     await expect(page.getByText('Closed PR authoritative description')).toBeVisible()
@@ -241,7 +242,7 @@ for (const width of [1440, 390]) {
     await expect(page.locator('.pr-row.ask-origin')).toBeFocused()
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: testInfo.outputPath(`closed-return-${width}.png`), fullPage: true })
-    if (width === 390) await page.getByRole('dialog', { name: 'Your desk' }).getByRole('button', { name: 'Close Your desk' }).click()
+    if (width === 390) await page.getByRole('dialog', { name: 'Discuss' }).getByRole('button', { name: 'Close Discuss' }).click()
     await page.getByRole('button', { name: 'Show all PRs in this view' }).click()
     await expect(page.getByRole('textbox', { name: 'Find PRs' })).toHaveValue(view.query)
     await expect(page.locator('.pr-row')).toHaveCount(0)
@@ -286,8 +287,8 @@ test('inline neighbors survive real browser Back to Releases filters and groupin
   await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Both verified endpoints')
   await page.screenshot({ path: testInfo.outputPath('inline-link-desktop.png') })
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.getByRole('button', { name: /^Open Your desk/ }).click()
-  const sheet = page.getByRole('dialog', { name: 'Your desk' })
+  await page.getByRole('button', { name: /^Open Discuss/ }).click()
+  const sheet = page.getByRole('dialog', { name: 'Discuss' })
   await expect(sheet.getByRole('region', { name: /Answer thread/ })).toBeVisible()
   const bounds = await sheet.boundingBox()
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
@@ -310,7 +311,7 @@ test('compact unread previews pulse only until opened and respect reduced motion
   const cards = page.locator('.ask-desk article')
   await expect(cards).toHaveCount(3)
   const heights = await cards.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))
-  for (const height of heights) expect(height).toBeLessThanOrEqual(110)
+  for (const height of heights) expect(height).toBeLessThanOrEqual(96)
   await testInfo.attach('Collapsed card heights', { body: JSON.stringify(heights), contentType: 'application/json' })
   const accent = page.locator('.ask-desk article[data-ask-id="00000000-0000-4000-8000-000000000000"]')
   const archiveBesideTitle = async () => {
@@ -327,20 +328,28 @@ test('compact unread previews pulse only until opened and respect reduced motion
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await accent.evaluate(node => getComputedStyle(node, '::before').animationName)).toBe('none')
   await page.setViewportSize({ width: 390, height: 844 })
-  const open = page.getByRole('button', { name: /Open Your desk/ })
-  if (await open.isVisible()) await open.click()
+  const open = page.getByRole('button', { name: /Open Discuss/ })
+  await expect(open).toBeVisible()
+  await open.click()
   await expect(accent.getByRole('button', { name: 'Archive conversation', exact: true })).toBeVisible()
   await archiveBesideTitle()
   await page.screenshot({ path: testInfo.outputPath('compact-mobile-reduced-motion.png') })
   await accent.locator('.ask-preview').click()
   await expect(page.getByText('The complete evidence remains available.')).toBeVisible()
   await expect(accent).toHaveAttribute('data-unread', 'false')
+  const reply = page.getByRole('textbox', { name: 'Reply to First Mate' })
+  await reply.focus()
+  await page.setViewportSize({ width: 390, height: 480 })
+  expect((await reply.boundingBox())!.y + (await reply.boundingBox())!.height).toBeLessThanOrEqual(480)
+  await expect(page.getByRole('button', { name: 'Send reply' })).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole('button', { name: 'Collapse answer' }).click()
   await archiveBesideTitle()
 })
 
 test('live Desk archive survives polling, immediate Undo, unseen follow-up, restart and a later unread answer', async ({ page, request, browser }, testInfo) => {
   page.setDefaultTimeout(8000)
-  const root = mkdtempSync(resolve('.ask-live-'))
+  const root = mkdtempSync(join(tmpdir(), 'tinstar-ask-live-'))
   const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }, token = 'disposable-bridge-token-0000000000000000'
   const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   liveAsk = createApi(); seedOriginAllowlist(Number(new URL(base).port))
@@ -413,7 +422,7 @@ test('live Desk archive survives polling, immediate Undo, unseen follow-up, rest
       await route.fulfill({ json: path === '/api/quota' ? data : { ok: true, data } })
     })
     await other.goto(base)
-    const otherTrigger = other.getByRole('button', { name: /Open Your desk/ })
+    const otherTrigger = other.getByRole('button', { name: /Open Discuss/ })
     if (await otherTrigger.isVisible()) await otherTrigger.click()
     await other.getByRole('button', { name: /^Needs you/ }).click()
     await expect(other.locator('.ask-desk article')).toHaveAttribute('data-unread', 'false')
@@ -436,7 +445,8 @@ test('retained worker note exposes targeted retry and reply after its worker lea
     else await route.fulfill({ json: { ok: true, data: [note] } })
   })
   await page.goto(base)
-  await page.getByText('Retained worker notes · 1').click()
+  await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await page.getByText('Retained worker notes', { exact: true }).click()
   const retained = page.locator('.cockpit-messages')
   await expect(retained).toContainText('Delivery failed')
   await retained.getByText('Delivery details').click()
@@ -448,22 +458,22 @@ test('retained worker note exposes targeted retry and reply after its worker lea
   await page.screenshot({ path: testInfo.outputPath('retained-worker-note.png') })
 })
 
-test('verified decisions stay ahead of waiting conversations and expired evidence is not actionable', async ({ page }, testInfo) => {
+test('formal decisions remain in Decisions and never enter conversation tab counts', async ({ page }, testInfo) => {
   let queue = fixtureQueue()
-  const ready = queue.items.filter(item => item.readiness === 'ready-now' && item.sources.every(source => ['fresh', 'partial'].includes(source.status)))
-  expect(ready.length).toBeGreaterThan(0)
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: queue } }))
   await page.goto(base)
-  const tabs = page.getByRole('navigation', { name: 'Desk views' })
-  await expect(tabs.getByRole('button', { name: `Needs you ${ready.length}`, exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tabs.getByRole('button', { name: 'Waiting 2', exact: true })).toBeVisible()
-  await expect(page.getByRole('region', { name: 'Desk queue' })).toBeVisible()
-  await expect(page.locator('.ask-desk article')).toHaveCount(0)
-  await page.screenshot({ path: testInfo.outputPath('verified-queue.png') })
+  const tabs = page.getByRole('navigation', { name: 'Discuss views' })
+  await expect(tabs.getByRole('button', { name: 'Needs you 0', exact: true })).toBeVisible()
+  await expect(tabs.getByRole('button', { name: 'Waiting 2', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.global-desk .ov-queue')).toHaveCount(0)
+  await expect(page.locator('.ask-desk article')).toHaveCount(2)
+  await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await expect(page.locator('.decisions-row')).not.toHaveCount(0)
+  await page.screenshot({ path: testInfo.outputPath('separate-decisions.png') })
   queue = { ...queue, items: queue.items.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, expiresAt: '2020-01-01T00:00:00Z' })) })) }
   await page.reload()
-  await expect(tabs.getByRole('button', { name: 'Needs you 0', exact: true })).toBeVisible()
-  await tabs.getByRole('button', { name: 'Needs you 0', exact: true }).click()
+  await page.locator('.decisions-row').first().click()
+  await expect(page.getByLabel('Selected decision')).toContainText('needs verification')
   await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
 })
 
@@ -478,7 +488,7 @@ test('delivered questions offer waiting copy while genuine failures alone expose
   await page.getByRole('button', { name: 'Retry delivery: failed delivery check', exact: true }).click()
   expect(retries).toHaveLength(1)
   await page.getByRole('button', { name: 'Collapse answer' }).click()
-  await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await page.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
   await expect(page.locator('.ask-preview')).toContainText('Waiting for answer')
   await page.locator('.ask-preview').click()
   await expect(page.getByRole('button', { name: /Retry delivery/ })).toHaveCount(0)
@@ -491,22 +501,22 @@ test('answer arriving while an expanded waiting thread is collapsed stays unread
   await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
   await page.route('**/api/ask/requests/*/read', route => { reads++; record = { ...record, read_at: new Date().toISOString() }; return route.fulfill({ json: { ok: true, data: record } }) })
   await page.goto(base)
-  await page.getByRole('navigation', { name: 'Desk views' }).getByRole('button', { name: /^Waiting/ }).click()
+  await page.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
   await page.locator('.ask-preview').click()
-  await page.getByRole('button', { name: 'Collapse Your desk' }).click()
+  await page.getByRole('button', { name: 'Collapse Discuss' }).click()
   record = { ...record, status: 'answered', reply: { summary: 'Answer arrived while closed', detail: 'New evidence', references: [], suggested_actions: [] } }
   await page.waitForTimeout(5500)
-  await page.getByRole('button', { name: /Open Your desk/ }).click()
+  await page.getByRole('button', { name: /Open Discuss/ }).click()
   await expect(page.locator('.ask-desk article')).toHaveAttribute('data-unread', 'true')
   expect(reads).toBe(0)
   await page.screenshot({ path: testInfo.outputPath('unopened-arrival.png') })
-  await page.locator('.ask-preview').click()
+  await page.getByRole('button', { name: 'Read new answer' }).click()
   await expect(page.locator('.ask-desk article')).toHaveAttribute('data-unread', 'false')
   expect(reads).toBe(1)
 })
 
 test('live Desk quietly drops invalid recommendations and returns sender receipts', async ({ page, request }, testInfo) => {
-  const root = mkdtempSync(resolve('.ask-live-'))
+  const root = mkdtempSync(join(tmpdir(), 'tinstar-ask-live-'))
   const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const token = 'disposable-rejection-token-000000000000'
   const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
@@ -545,7 +555,7 @@ test('live Desk quietly drops invalid recommendations and returns sender receipt
       const screenshot = process.env.REJECTION_EVIDENCE_DIR ? resolve(process.env.REJECTION_EVIDENCE_DIR, `${process.env.REJECTION_CAPTURE_PREFIX ?? 'after'}-${kind}.png`) : testInfo.outputPath(`${kind}.png`)
       await page.screenshot({ path: screenshot, fullPage: true })
       await expect(page.locator('body')).not.toContainText('suggested actions were rejected')
-      await expect(page.locator('body')).not.toContainText('URLs and link syntax')
+      await expect(thread.getByText(/URLs and link syntax/)).toBeHidden()
       expect(receipt.reply_warnings).toHaveLength(kind === 'mixed' ? 2 : actions.length)
       expect((await call('bridge', update, sender)).reply_warnings).toEqual(receipt.reply_warnings)
       const saved = (await call('requests')).find((row: { request_id: string }) => row.request_id === first.request_id)
@@ -594,4 +604,32 @@ else:
     if (process.env.REJECTION_EVIDENCE_DIR) writeFileSync(resolve(process.env.REJECTION_EVIDENCE_DIR, `${process.env.REJECTION_CAPTURE_PREFIX ?? 'after'}-http.json`), JSON.stringify(transcript, null, 2))
     liveAsk = undefined; rmSync(root, { recursive: true, force: true })
   }
+})
+
+
+test('a new reply anchors only when the reader is already at the latest exchange', async ({ page }) => {
+  const conversationId = '10000000-0000-4000-8000-000000000099'
+  let records = Array.from({ length: 8 }, (_, index) => askItemSchema.parse({
+    request_id: `00000000-0000-4000-8000-00000000000${index}`, conversation_id: conversationId,
+    question: `Question ${index}`, input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Long conversation', url: null, observed_at: null }, view: { scene: 'overview' } },
+    created_at: `2026-11-10T10:0${index}:00Z`, updated_at: `2026-11-10T10:0${index}:30Z`, answered_at: `2026-11-10T10:0${index}:30Z`, status: 'answered',
+    reply: { summary: `Answer ${index}`, detail: 'Read [supporting report](https://example.test/report). Retained context and supporting evidence. '.repeat(20), references: [], suggested_actions: [] }, read_at: null, dismissed_at: null, error: null,
+  }))
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
+  await page.route('**/api/ask/requests/*/read', route => {
+    records = records.map(record => route.request().url().includes(record.request_id) ? { ...record, read_at: new Date().toISOString() } : record)
+    return route.fulfill({ json: { ok: true, data: {} } })
+  })
+  await page.goto(base)
+  await page.locator('.ask-preview').click()
+  const viewport = page.locator('.ask-messages')
+  await expect(viewport.getByRole('link', { name: 'supporting report' }).first()).toHaveAttribute('href', 'https://example.test/report')
+  await expect.poll(() => viewport.evaluate(element => element.scrollTop > 0)).toBe(true)
+  await viewport.evaluate(element => { element.scrollTop = 100; element.dispatchEvent(new Event('scroll')) })
+  records = [...records, { ...records[7]!, request_id: '00000000-0000-4000-8000-000000000099', question: 'Latest follow-up', read_at: null, created_at: '2026-11-10T10:09:00Z', updated_at: '2026-11-10T10:09:30Z', answered_at: '2026-11-10T10:09:30Z', reply: { summary: 'New evidence arrived', detail: 'New evidence arrived', references: [], suggested_actions: [] } }]
+  await expect(viewport.getByText('New evidence arrived', { exact: true })).toBeAttached({ timeout: 10000 })
+  expect(await viewport.evaluate(element => element.scrollTop)).toBe(100)
+  await page.getByRole('button', { name: 'Read new answer' }).click()
+  await expect.poll(() => viewport.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
+  await expect(page.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
 })

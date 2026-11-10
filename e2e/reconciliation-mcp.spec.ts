@@ -202,7 +202,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   let nextAck = await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: beforeNext.state.revision })
   if (nextAck.outcome === 'queued') await expect.poll(async () => { nextAck = await call('get_command', { scene_id: first, command_id: 'next' }); return nextAck.outcome }).toBe('applied')
   expect(nextAck.outcome).toBe('applied')
-  await expect(page.getByLabel('Desk queue')).toHaveAttribute('data-queue-item-id', queue.items[1]!.id)
+  await expect(page.getByLabel('Selected decision')).toHaveAttribute('data-decision-id', queue.items[1]!.id)
   expect((await call('get_queue', { scene_id: first })).items[0].readiness).toBe('ready-now')
   await present(page, { type: 'clear-transient' }, 'clear-flash-before-navigation')
   await present(page, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }, 'hide-desk-task')
@@ -215,7 +215,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`).first()).toBeFocused()
   await expect(page.locator('.ov-line.desk-target')).toHaveCount(2)
   await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('Desk queue')).toBeVisible()
+  await expect(page.getByLabel('Selected decision')).toHaveCount(0)
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
   // Hold command delivery; a direct click occurs after enqueue and before receipt.
@@ -266,7 +266,7 @@ test('Decisions shares conditional selection and visible MCP flashes on desktop 
   const row = page.locator(`.decisions-row[data-card-id="${dirtId}"]`)
   const search = page.getByRole('searchbox', { name: 'Search decisions' })
   await search.fill('Dirt Computing')
-  await expect(row).toContainText('Future or conditional')
+  await expect(row).toContainText('Waiting on a prerequisite')
   await row.click()
   await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: dirtId })
   await expect(page.getByLabel('Selected decision')).toContainText(dirtTitle)
@@ -322,7 +322,8 @@ test('Decisions reports unavailable sources and never acknowledges a flash witho
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ status: 503, json: { ok: false } }))
   await page.goto(`${base}/?view=decisions`)
   const scene_id = await windowId(page)
-  await expect(page.getByRole('status').filter({ hasText: 'Queue source unavailable' })).toBeVisible()
+  await page.getByText('Some requests need verification · Details', { exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: 'Requests could not refresh' })).toBeVisible()
   await expect(page.locator('.decisions-row')).toHaveCount(0)
   const current = await call('get_scene', { scene_id })
   let ack = await call('present_view', { scene_id, command_id: 'decisions-unavailable-flash', expected_revision: current.state.revision, action: { type: 'flash', targets: [{ kind: 'card', id: dirtId }] } })
@@ -375,22 +376,24 @@ test('Decisions restores replaced and cleared flashes and keeps manual scroll ow
 test('Decisions shows unknown actions, unlinked requests and stale coverage honestly', async ({ page }) => {
   const altered = structuredClone(queue)
   altered.items = [
-    { ...altered.items[0]!, id: 'unknown-action-proof', cardIds: [fixtureId(4)], action: null },
+    { ...altered.items[0]!, id: 'unknown-action-proof', cardIds: [fixtureId(4)], action: null, readiness: 'needs-readiness-verification', oneTouch: false },
     { ...altered.items[0]!, id: 'unlinked-proof', title: 'Unlinked recovery request', cardIds: [], evidence: [] },
   ]
   altered.coverage.intentions.status = 'stale'
   const ownershipScene = structuredClone(scene)
   ownershipScene.cards.find(card => card.id === fixtureId(4))!.nextAction = 'Will'
-  await page.route('**/api/reconciliation/scene', route => route.fulfill({ json: { ok: true, data: ownershipScene } }))
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: ownershipScene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: altered } }))
   await page.goto(`${base}/?view=decisions`)
   await windowId(page)
-  await expect(page.getByRole('status').filter({ hasText: 'Some sources are stale' })).toBeVisible()
+  await page.getByText('Some requests need verification · Details', { exact: true }).click()
+  await expect(page.getByText('Some evidence is stale or unavailable. Retained requests do not establish that all work is clear.')).toBeVisible()
   await page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`).click()
-  await expect(page.getByLabel('Selected decision')).toContainText('Next action not published')
+  await expect(page.getByLabel('Selected decision')).toContainText('This request needs verification before you act.')
   await expect(page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`)).not.toContainText('Will')
   await page.getByLabel('Decision requests').getByText('Unlinked recovery request', { exact: true }).click()
-  await expect(page.getByText('No linked card; card focus and flash are unavailable.')).toBeVisible()
+  await expect(page.getByLabel('Selected decision').getByRole('heading')).toHaveText('Unlinked recovery request')
+  await expect(page.getByLabel('Selected decision').getByRole('link', { name: 'Read Notion card' })).toHaveCount(0)
   const directory = process.env.TINSTAR_MCP_PROOF
   if (directory) await page.screenshot({ path: join(directory, 'decisions-stale-unlinked.png'), fullPage: true })
 })

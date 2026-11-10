@@ -111,7 +111,7 @@ export function VoiceInput({ disabled, onTranscript, onBusyChange }: { disabled:
     }
   }, [])
   const recording = phase === 'recording' || phase === 'requesting'
-  return <div className="ask-voice" data-recording={recording} onKeyDown={event => { if (event.key === 'Escape' && phase !== 'idle') { event.preventDefault(); event.stopPropagation(); cancel() } }}>
+  return <div className="ask-voice" data-recording={recording} data-phase={phase} onKeyDown={event => { if (event.key === 'Escape' && phase !== 'idle') { event.preventDefault(); event.stopPropagation(); cancel() } }}>
     <button type="button" className="ask-mic" aria-label={recording ? 'Stop recording and send' : 'Record voice question'} aria-pressed={recording} aria-describedby={helpId} disabled={disabled || phase === 'transcribing'}
       onPointerDown={event => {
         if (event.button !== 0 || disabled || phase === 'transcribing') return

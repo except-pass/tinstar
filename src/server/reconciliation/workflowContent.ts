@@ -1,3 +1,4 @@
+import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
 
@@ -19,9 +20,9 @@ export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<type
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
 export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
-export const receiptMarker = (actor: string, operationId: string) => `Tin Star operation: ${JSON.stringify([actor, operationId])}`
-export const decisionMarker = (id: string) => `Tin Star decision: ${JSON.stringify(id)}`
-export const sectionMarker = (name: string) => `Tin Star section: ${name}`
+export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`
+export const decisionMarker = (id: string) => `${workflowMarkers.decision} ${JSON.stringify(id)}`
+export const sectionMarker = (name: string) => `${workflowMarkers.section} ${name}`
 export const sectionText = (name: string, text: string) => `${sectionMarker(name)}\n${name === 'brief' ? 'Brief' : 'Acceptance criteria'}\n${text}`
 
 /** Raw internal content is used for exact write preconditions/receipts only.

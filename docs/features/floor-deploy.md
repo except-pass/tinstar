@@ -115,7 +115,7 @@ published Mac puller's compatibility is a separate CI contract check.
 
 `synthetic_id` is private stored metadata, omitted from public Ask items. Ordinary
 bridge reads exclude synthetic rows from **both pending and tracked** work;
-ordinary bridge updates and conversation reads cannot address them. Desk lists,
+ordinary bridge updates and conversation reads cannot address them. Discuss lists,
 follow-ups, selections and row actions cannot find them. Only bridge reads with
 that exact `?synthetic_id=<uuid>` see smoke work. Owner conversation reads with
 the partition require both owner and bridge credentials.

@@ -1,3 +1,4 @@
+import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
@@ -335,7 +336,7 @@ export class WorkflowOperations {
         const preserve = related.length ? related.some(row => row.preserve_action) : tags.includes(input.action)
         set('Will action', [...new Set([...tags, input.action])])
         const binding = input.source_request ? bindDecision(await this.fleet(), input.source_request, card.id) : {}
-        note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\nTin Star request: ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...binding })}`
+        note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\n${workflowMarkers.request} ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...binding })}`
       } else {
         let request = requests.find(row => row.id === input.request_id)
         if (!request && (!answered.has(input.request_id) || input.source_request)) {
@@ -357,7 +358,7 @@ export class WorkflowOperations {
           if (!published?.source_request) {
             const binding = bindDecision(await this.fleet(), input.source_request, card.id)
             answerBinding = { id: input.request_id, action: request.action, preserve_action: request.preserve_action, ...binding }
-            note += `\n${decisionMarker(input.request_id)}\nTin Star request: ${JSON.stringify(answerBinding)}`
+            note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.request} ${JSON.stringify(answerBinding)}`
           }
         }
         transition(input.next.owner, input.next.status)
@@ -384,7 +385,7 @@ export class WorkflowOperations {
           if (entries.filter(entry => entry === resolved).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry')
           set('Waiting For', entries.filter(entry => entry !== resolved).join('\n'))
         }
-        note += `\n${decisionMarker(input.request_id)}\nTin Star answer: ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\nTin Star answer data: ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
+        note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
       }
     } else if (input.kind === 'complete' || input.kind === 'park') {
       // Closing/corrective transitions remain possible on an imperfect old card.
@@ -443,7 +444,7 @@ export class WorkflowOperations {
           }
         }
       }
-      const pendingMarker = `Tin Star decision pending: ${JSON.stringify([actor, input.operation_id])}`
+      const pendingMarker = `${workflowMarkers.decisionPending} ${JSON.stringify([actor, input.operation_id])}`
       const pending = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.actor === actor && row.input?.operation_id === input.operation_id)
       const receipt = notes.find(note => workflowNoteHasMarker(note, marker))
       if (input.kind === 'answer_decision' && decisionProposals(notes).some(row => row.id === input.request_id && row.source_request)) {
@@ -486,7 +487,7 @@ export class WorkflowOperations {
         card = current
         if (!pending && input.kind === 'answer_decision' && (input.source_request || notes.some(note => note.text.includes('"source_request":')))) {
           attempted = true
-          await this.content.note(card.id, `Tin Star decision intent: ${JSON.stringify({ actor, input, original: plan.original })}`, pendingMarker)
+          await this.content.note(card.id, `${workflowMarkers.decisionIntent} ${JSON.stringify({ actor, input, original: plan.original })}`, pendingMarker)
           saved.push('decision-answer')
         }
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))

@@ -289,7 +289,7 @@ launchd continues checking eligibility every 60 seconds without network, clavis
 or inbox work during backoff. Overlapping ticks exit without work or counter
 writes. Process death releases the lock and retains an interrupted health marker.
 Retries use the same request IDs; no automatic model investigation is started.
-Inbox capture/wake failures retain the existing Desk error and explicit Retry
+Inbox capture/wake failures retain the existing Discuss error and explicit Retry
 delivery behavior. Renew expired credentials in clavis, check connectivity for
 network errors, or check inbox readiness; deterministic polling recovers after
 the next eligible tick. Diagnostics never echo secrets, bodies or subprocess
@@ -310,7 +310,7 @@ Before a real rollout, Firstmate records the PR and dev proof on the existing
 The Mac operator owns actual install/login/reboot proof: retire the registered
 check, run the install command, verify healthy status and increasing no-op counts
 for ten minutes with no new notes/wakes, then send one owner-authenticated Ask.
-Confirm one real inbox note, real primary reply, Answered in Desk, and return to
+Confirm one real inbox note, real primary reply, Answered in Discuss, and return to
 the source card/PR with its original filters. Reinstall and reboot/login, verify
 continued health without duplicate delivery, then exercise disable/enable and
 uninstall if required. Linux fixture evidence cannot establish launchd, clavis

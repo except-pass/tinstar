@@ -93,7 +93,7 @@ describe('PR-first Releases', () => {
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('Dry run: Requires production verification')).toBeTruthy()
     expect(within(dialog).getByText('Dry run: Would mark Done')).toBeTruthy()
-    expect(within(dialog).getAllByText('No Notion or Desk transition is performed.')).toHaveLength(2)
+    expect(within(dialog).getAllByText('No Notion or decision transition is performed.')).toHaveLength(2)
     expect(within(dialog).queryByRole('button', { name: /mark Done|complete card/i })).toBeNull()
   })
 

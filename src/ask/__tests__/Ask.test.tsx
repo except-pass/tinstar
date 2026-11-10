@@ -185,7 +185,7 @@ describe('one-card text Ask and Desk', () => {
     // Answer anchors use the shared focus lens: retain the target and its
     // direct counterparts while leaving persisted filters unchanged.
     expect([...new Set([...container.querySelectorAll<HTMLElement>('.ov-card')].map(card => card.dataset.entityId))]).toEqual([fixtureId(1)])
-    expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
+    expect(screen.queryByText('Original source is outside the current view.')).toBeNull()
   })
   it('offers the original source when a retained card is trashed', async () => {
     records = [seed()]
@@ -200,7 +200,7 @@ describe('one-card text Ask and Desk', () => {
     mount()
     await waitFor(() => expect(screen.getByLabelText('Questions for First Mate')).toHaveTextContent('New answer'))
     fireEvent.click(screen.getByRole('button', { name: /New answer.*Why is this waiting/ }))
-    expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('no longer on the floor')
+    expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('outside the current view')
     expect(screen.getByRole('link', { name: /Open originating source/ })).toHaveAttribute('href', original.context.anchor.url)
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.change(screen.getByRole('textbox', { name: 'Reply to First Mate' }), { target: { value: 'What evidence changed?' } })
@@ -268,7 +268,7 @@ it('offers blank Ask for collapsed card and worker identities without expanding 
 it('right-click background stays blank and outside/link context menus stay native', () => {
   const { container } = mount(), task = card(container)
   const outside = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
-  fireEvent(screen.getByRole('heading', { name: 'Desk' }), outside)
+  fireEvent(screen.getByRole('heading', { name: 'Discuss' }), outside)
   expect(outside.defaultPrevented).toBe(false)
   expect(screen.queryByRole('dialog')).toBeNull()
   fireEvent.contextMenu(task)
@@ -301,7 +301,7 @@ it('right-click relationship carries its canonical claim identity, with keyboard
 it('Desk starts with records and omits intro chrome; archive is directly accessible', async () => {
   records = [seed()]
   mount()
-  const desk = screen.getByLabelText('Your desk')
+  const desk = screen.getByLabelText('Discuss')
   await waitFor(() => expect(desk).toHaveTextContent('Why is this waiting?'))
   for (const text of ['No verified Notion card ready.', 'First Mate requests', 'Questions', 'Ask about a task']) expect(within(desk).queryByText(text)).toBeNull()
   expect(within(desk).queryByText(/Later & needs verification/)).toBeNull()
@@ -370,7 +370,7 @@ it.each(['detailed', 'compact'] as const)('returns a retained claim answer to on
   const lines = [...container.querySelectorAll('.ov-line.flashed')]
   expect(lines).toHaveLength(1)
   expect(lines[0]!.parentElement!.querySelector('.ov-relationship-hit')).toHaveAttribute('data-claim-id', claims[0]!.id)
-  expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
+  expect(screen.queryByText('Original source is outside the current view.')).toBeNull()
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
 })
 
@@ -395,7 +395,7 @@ it('returns an unverified Detailed relationship answer after reload and filterin
   const returned = [...container.querySelectorAll<SVGPathElement>('.ov-relationship-hit')].find(line => line.dataset.claimId === claim.id)!
   expect(returned.previousElementSibling).toHaveClass('flashed')
   expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(1)
-  expect(screen.queryByText('The original task is no longer on the floor.')).toBeNull()
+  expect(screen.queryByText('Original source is outside the current view.')).toBeNull()
 })
 
 it('reports a missing relationship even when its card remains available', async () => {
@@ -405,7 +405,7 @@ it('reports a missing relationship even when its card remains available', async 
   records = [original]
   const { container } = mount()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
-  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('no longer on the floor')
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('outside the current view')
   expect(container.querySelectorAll('.ov-line.flashed')).toHaveLength(0)
 })
 
@@ -417,7 +417,7 @@ it('groups correlated follow-ups into one inline thread and switches independent
   mount()
   const desk = screen.getByLabelText('Questions for First Mate')
   await waitFor(() => expect(desk.querySelectorAll('[data-ask-id]')).toHaveLength(2))
-  fireEvent.click(within(desk).getByRole('button', { name: /New answer.*Why is this waiting/ }))
+  fireEvent.click(within(desk).getByRole('button', { name: /New answer.*What changed next/ }))
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('What changed next?')
   expect(within(desk).getByRole('button', { name: /New answer.*Independent investigation/ })).toBeVisible()
   fireEvent.click(within(desk).getByRole('button', { name: /New answer.*Independent investigation/ }))
@@ -440,7 +440,7 @@ it.each([['failed', 'Delivery failed'], ['sent', null], ['delivered', null], ['d
   records = [first, followUp, neighbor]
   mount()
   const desk = screen.getByLabelText('Questions for First Mate')
-  const preview = await within(desk).findByRole('button', { name: /New answer.*Why is this waiting/ })
+  const preview = await within(desk).findByRole('button', { name: /New answer.*Answered follow-up/ })
   const retryName = `Retry delivery: ${first.question}`
   expect(within(desk).queryByRole('button', { name: retryName })).toBeNull()
   expect(preview.querySelector('small')).not.toHaveTextContent(/pending|failed/)
@@ -448,7 +448,7 @@ it.each([['failed', 'Delivery failed'], ['sent', null], ['delivered', null], ['d
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   const earlier = within(thread).getByRole('region', { name: `Question: ${first.question}` })
   expect(within(earlier).getByRole('status')).toHaveTextContent(failed ? 'Delivery failed' : 'Waiting for answer')
-  const details = within(earlier).getByText('Delivery details')
+  const details = within(earlier).getByText('Technical details')
   fireEvent.click(details)
   expect(earlier).toHaveTextContent(status === 'failed' ? 'Delivery failed' : status === 'sent' ? 'Sent' : 'Delivered')
   if (failed) {
@@ -466,7 +466,7 @@ it('keeps independently pending turns inspectable in one Waiting conversation wi
   records = [first, second]
   mount()
   fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
-  const preview = await screen.findByRole('button', { name: /Waiting for answer.*First pending question/ })
+  const preview = await screen.findByRole('button', { name: /Waiting for answer.*Second pending question/ })
   fireEvent.click(preview)
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   for (const turn of [first, second]) expect(within(thread).getByRole('region', { name: `Question: ${turn.question}` })).toBeVisible()
@@ -537,7 +537,7 @@ it('keeps the reply inline across three turns, reloads and an independent thread
   expect(records.filter(row => row.conversation_id === first.conversation_id)).toHaveLength(3)
   view.unmount(); mount()
   fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
-  fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Who can review it/ }))
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   for (const question of [first.question, 'Can it proceed?', 'Who can review it?']) expect(thread).toHaveTextContent(question)
   expect(thread).not.toHaveTextContent('Unrelated thread')
@@ -565,7 +565,7 @@ it('preserves an uncertain inline draft and exact retry envelope after a refresh
   records.push({ ...seed(), conversation_id: original.conversation_id, question: 'Arrived on another device', created_at: '2099-01-01T00:00:00Z' })
   const refresh = intervals.mock.calls.find(([, delay]) => delay === 5000)![0] as () => void
   await act(async () => refresh())
-  await screen.findByText('Arrived on another device')
+  await screen.findAllByText('Arrived on another device')
   fireEvent.keyDown(field, { key: 'Enter' })
   await waitFor(() => expect(attempts).toHaveLength(2))
   expect(attempts[1]).toEqual(attempts[0])
@@ -580,8 +580,10 @@ it('routes a semantic Ask on retained Desk advice into the same inline conversat
   const original = seed(); records = [original]
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this waiting/ }))
-  const answer = within(screen.getByRole('region', { name: /Answer thread/ })).getByRole('heading', { name: original.reply!.summary })
+  const answer = within(screen.getByRole('region', { name: /Answer thread/ })).getByText(original.reply!.summary)
   fireEvent.contextMenu(answer)
+  // Typing the follow-up takes place after the gesture's synthesized-click window.
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(screen.getByLabelText('Element context').textContent).toContain(original.reply!.summary)
   const field = screen.getByRole('textbox', { name: 'Reply to First Mate' })
@@ -591,7 +593,7 @@ it('routes a semantic Ask on retained Desk advice into the same inline conversat
   await waitFor(() => expect(field).toHaveValue(''))
   expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toBe(field)
   fireEvent.click(screen.getByRole('button', { name: 'Collapse answer' }))
-  fireEvent.click(screen.getByRole('button', { name: /Waiting for answer.*Why is this waiting/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Waiting for answer.*What did you mean by that/ }))
   const reopened = screen.getByRole('textbox', { name: 'Reply to First Mate' })
   expect(reopened).toHaveValue('')
   expect(screen.queryByLabelText('Element context')).toBeNull()
@@ -637,8 +639,28 @@ it('shows the reply and the valid action, and hides rejection reasons from the o
   expect(thread).toHaveTextContent('The valid choice is still available.')
   expect(within(thread).getByRole('button', { name: 'Keep open: Retain the card until the review lands' })).toBeEnabled()
   expect(within(thread).getAllByRole('button', { name: /Keep open/ })).toHaveLength(1)
-  expect(document.body.textContent).not.toMatch(hidden)
+  expect(screen.getByText(/URLs and link syntax/).closest('details')).not.toHaveAttribute('open')
+  expect(screen.queryByText('One-click action unavailable')).toBeNull()
   expect(document.querySelector('.ask-action-rejections')).toBeNull()
+})
+
+it('keeps invalid actions behind Technical details and offers regeneration without claiming success', async () => {
+  const original = seed()
+  original.reply!.rejected_actions = [
+    { index: 0, id: 'bad-link', reason: 'instruction: URLs and link syntax are not allowed; put URLs in references' },
+    { index: 1, reason: 'id: Required' },
+  ]
+  records = [original]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /New answer/ }))
+  expect(screen.queryByRole('note')).toBeNull()
+  expect(screen.getByText(/One-click action unavailable/)).toBeVisible()
+  const diagnostics = screen.getByText(/"bad-link"/).closest('details')!
+  expect(diagnostics.open).toBe(false)
+  expect(screen.getByText(original.reply!.detail)).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Request new choices' }))
+  expect(screen.getByRole('textbox', { name: 'Reply to First Mate' })).toHaveValue('Please resend the one-click choices for your last answer.')
+  expect(requests).toHaveLength(0)
 })
 
 // Remounting the answered thread exceeds 5s beside another suite.
@@ -646,7 +668,7 @@ it('selects one saved recommendation inline, keeps the shared composer/draft and
   const original = recommendedAnswer(); records = [original]
   const view = mount()
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*Why is this overdue/ }))
-  fireEvent.contextMenu(within(screen.getByRole('region', { name: /Answer thread/ })).getByRole('heading', { name: original.reply!.summary }))
+  fireEvent.contextMenu(within(screen.getByRole('region', { name: /Answer thread/ })).getByText(original.reply!.summary))
   // The operator reads/edits the captured context before making a later choice;
   // this is separate from the gesture's synthesized-click suppression window.
   vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5000)
@@ -659,7 +681,7 @@ it('selects one saved recommendation inline, keeps the shared composer/draft and
   expect(JSON.parse(String(calls[0]![1]!.body))).toEqual({ answer_id: original.request_id, action_id: 'close-done', client_key: expect.any(String) })
   const thread = screen.getByRole('region', { name: /Answer thread/ })
   expect(thread).toHaveTextContent('Requested')
-  expect(thread).toHaveTextContent('Selected by owner@example.test')
+  expect(thread).toHaveTextContent('Requested: Close as Done')
   expect(thread).toHaveTextContent(original.reply!.detail)
   expect(within(thread).getByRole('link', { name: /Evidence/ })).toBeVisible()
   expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
@@ -674,9 +696,9 @@ it('selects one saved recommendation inline, keeps the shared composer/draft and
   expect(records[2]!.conversation_id).toBe(original.conversation_id)
   view.unmount(); mount()
   fireEvent.click(screen.getByRole('button', { name: /^Waiting(?: \d+)?$/ }))
-  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Why is the regression test sufficient/ }))
   expect(screen.getByRole('button', { name: choiceName })).toBeDisabled()
-  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Selected by owner@example.test')
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Requested: Close as Done')
 }, 30_000)
 
 it('disables old recommendations by actual reply time, including a late answer to an earlier question', async () => {
@@ -684,7 +706,7 @@ it('disables old recommendations by actual reply time, including a late answer t
   first.answered_at = '2099-01-02T00:00:00Z'
   records = [first, second]
   const view = mount()
-  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Why is the regression test sufficient/ }))
   let choices = screen.getAllByRole('button', { name: choiceName })
   expect(choices[0]).toBeDisabled()
   expect(choices[1]).toBeEnabled()
@@ -692,10 +714,10 @@ it('disables old recommendations by actual reply time, including a late answer t
   view.unmount()
   first.answered_at = '2099-01-04T00:00:00Z'
   mount()
-  fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Why is the regression test sufficient/ }))
   choices = screen.getAllByRole('button', { name: choiceName })
-  expect(choices[0]).toBeEnabled()
-  expect(choices[1]).toBeDisabled()
+  expect(choices[0]).toBeDisabled()
+  expect(choices[1]).toBeEnabled()
 })
 
 it('shows a conflicting two-device selection clearly and reconciles through the existing refresh', async () => {
@@ -707,7 +729,8 @@ it('shows a conflicting two-device selection clearly and reconciles through the 
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Why is this overdue/ }))
   fireEvent.click(screen.getByRole('button', { name: choiceName }))
-  await screen.findByText('Selection not requested: Another action was already selected for this answer')
+  await screen.findByText('Blocked · Request unavailable')
+  expect(screen.getByText('Another action was already selected for this answer').closest('details')).not.toHaveAttribute('open')
   expect(screen.queryByText('Requested')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
   expect(records).toHaveLength(1)
@@ -1083,7 +1106,7 @@ it('keeps a later answer unread in an already expanded waiting conversation', as
   records = [{ ...seed(), status: 'sent', reply: null }]
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   const { container } = mount()
-  fireEvent.click(within(screen.getByRole('navigation', { name: 'Desk views' })).getByRole('button', { name: /^Waiting/ }))
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Discuss views' })).getByRole('button', { name: /^Waiting/ }))
   const preview = await screen.findByRole('button', { name: /Waiting for answer.*Why is this waiting/ })
   fireEvent.click(preview)
   expect(preview).toHaveAttribute('aria-expanded', 'true')
@@ -1181,4 +1204,39 @@ it.each(['card', 'worker', 'relationship'] as const)('embeds the shared composer
   const anchor = kind === 'card' ? { card_id: fixtureId(1) } : { target: { kind: kind === 'worker' ? 'execution' : 'claim', id: target.getAttribute(kind === 'worker' ? 'data-entity-id' : 'data-claim-id') } }
   expect(requests[0]).toMatchObject({ ...anchor, question: 'Explain this item.', view: { scene: 'overview' } })
   expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+it('restores a read completed answer to the list without attention or an unread accent', async () => {
+  const at = new Date().toISOString()
+  records = [{ ...seed(), read_at: at, dismissed_at: at }]
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /^History/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore to inbox' }))
+  fireEvent.click(screen.getByRole('button', { name: /^Needs you/ }))
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  await waitFor(() => expect(records[0]).toMatchObject({ read_at: at, dismissed_at: null }))
+})
+it('undoes archive of a read answer without changing its read state or badge count', async () => {
+  const at = new Date().toISOString()
+  records = [{ ...seed(), read_at: at }]
+  mount()
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  fireEvent.click(screen.getByRole('button', { name: 'Archive conversation' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Undo archive' }))
+  expect(await screen.findByRole('button', { name: /Answered.*Why is this waiting/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 0')
+  await waitFor(() => expect(records[0]).toMatchObject({ read_at: at, dismissed_at: null }))
+})
+it('counts unread answers and current actions separately from quiet list membership', async () => {
+  const quiet = { ...seed(), read_at: new Date().toISOString(), question: 'Completed question' }
+  const actionable = { ...seed(), read_at: new Date().toISOString(), question: 'Action question' }
+  actionable.reply!.suggested_actions = [{ id: 'review', label: 'Review', instruction: 'Review the result' }]
+  records = [quiet, actionable, { ...seed(), question: 'Unread question' }]
+  mount()
+  expect(await screen.findByRole('button', { name: /Answered.*Completed question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /Answered.*Action question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /New answer.*Unread question/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /^Needs you/ })).toHaveTextContent('Needs you 2')
 })

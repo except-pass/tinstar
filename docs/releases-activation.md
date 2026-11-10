@@ -45,7 +45,7 @@ worker or prematurely replace live instructions.
 > production verification** on a card that needs an explicit production check.
 > When all required changes deploy, Tin Star moves that card to **In Progress**
 > with explicit production-check context and routes the check to its current
-> responsible owner in Your Desk. The owner records the explicit result on the
+> responsible owner in Decisions. The owner records the explicit result on the
 > card and uses the existing work workflow to mark Done only after the check
 > succeeds. Opening a view, merging a PR or acknowledging a request is not a
 > successful check. A neighboring unchecked eligible card closes automatically.

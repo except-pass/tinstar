@@ -7,7 +7,7 @@ export function ReleaseAutomationSummary({ plan }: { plan?: ReleaseAutomationPla
     <strong>Automatic transitions {plan.enabled ? 'ON · scheduled reconciliation' : 'OFF · review only'}</strong>
     {plan.warnings.map(warning => <p key={warning}>{warning}</p>)}
     <p>{plan.proposals.filter(proposal => proposal.kind === 'complete').length} proposed completions · {plan.proposals.filter(proposal => proposal.kind === 'verify-in-production').length} proposed owner checks · {plan.held.length} held cards</p>
-    <a href={apiUrl('/api/releases/automation')} target="_blank" rel="noreferrer">Inspect transition and Desk drafts ↗</a>
+    <a href={apiUrl('/api/releases/automation')} target="_blank" rel="noreferrer">Inspect transition and decision drafts ↗</a>
   </div>
 }
 
@@ -18,7 +18,7 @@ export function CardReleaseProposal({ plan, cardId }: { plan?: ReleaseAutomation
   return <details className="rel-dry-run">
     <summary>Proposed {proposal.to}{proposal.desk ? ` · verification for ${proposal.desk.owner}` : ''} · {plan?.enabled ? 'scheduled' : 'OFF'}</summary>
     <p>{proposal.from} → {proposal.to}. Viewing this proposal executes no transition.</p>
-    {proposal.desk && <p>Desk draft for {proposal.desk.owner}: {proposal.desk.item.action} This draft has not been published to Your Desk.</p>}
+    {proposal.desk && <p>Decision draft for {proposal.desk.owner}: {proposal.desk.item.action} This draft has not been published.</p>}
     <p className="rel-evidence-text">{proposal.auditText}</p>
     <small>Proposal ID: {proposal.id}</small>
   </details>

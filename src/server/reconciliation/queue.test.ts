@@ -262,6 +262,20 @@ describe('desk queue correctness', () => {
       .toMatchObject({ action: 'Merge this PR', readiness: 'ready-now', oneTouch: true })
   })
 
+  it('classifies encoded production acceptance by decoded timing without changing source identity', () => {
+    const question = 'After the next prod release: may this home submit one PROD report job for acceptance?'
+    const encoded = `fm-hold-v1:${Buffer.from(question).toString('base64')}`
+    const result = build(snapshot([], [], [hold({ hold_reason: encoded })]))
+    expect(result.items[0]).toMatchObject({ title: encoded, readiness: 'future-or-conditional', oneTouch: false })
+    expect(result.items[0]!.sources.find(source => source.request?.kind === 'hold')).toMatchObject({ request: { id: 'hold' }, readiness: 'future-or-conditional' })
+  })
+
+  it.each(['fm-hold-v1:invalid!', 'Owner calls via main: bus restore, tariff route, designer restart timing'])(
+    'never makes an unsupported or aggregate record immediately actionable: %s', hold_reason => {
+      const result = build(snapshot([], [], [hold({ hold_reason })]))
+      expect(result.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+    })
+
   it('retains textually conditional and multi-step actions until prerequisites are verified', () => {
     for (const action of ['Merge after release', 'Merge when CI passes', 'Merge tomorrow', 'Merge if approved']) {
       expect(build(snapshot([mergeCard({ 'Next action': action })]), new Map([[pull, readyPull()]])).items[0]?.readiness).toBe('future-or-conditional')

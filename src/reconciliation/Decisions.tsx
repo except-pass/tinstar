@@ -1,52 +1,73 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { useViewSnapshot } from '../ask/workspaceHistory'
 import { AskSurface } from '../ask/AskSurface'
+import { apiFetch } from '../apiClient'
 import type { QueueItem } from '../server/reconciliation/queue'
+import type { NeedsWillItem } from '../server/reconciliation/needsWill'
 import { cardTitle } from './overviewModel'
+import { decodeRequestText, displayRequestText } from './requestText'
+import { isCoordinationRequest } from '../shared/requestText'
+import { SourceActions } from './QueuePanel'
+import { useWorkSave, WorkActions } from './WorkActions'
+import { WorkerNotes, ResponseRetry } from '../cockpit/shell/present'
+import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
+import { requestAnchor } from '../shared/deskSource'
 import './decisions.css'
 import '../ask/ask-actions.css'
-import type { NeedsWillItem } from '../server/reconciliation/needsWill'
-import { useWorkSave } from './WorkActions'
-import { decodeRequestText } from './requestText'
 
 export const readinessLabels = {
-  'ready-now': 'Ready now',
-  'needs-readiness-verification': 'Needs readiness verification',
-  'future-or-conditional': 'Future or conditional',
+  'ready-now': 'Open question',
+  'needs-readiness-verification': 'Needs verification',
+  'future-or-conditional': 'Waiting on a prerequisite',
 }
-interface DecisionEntry { key: string; item: QueueItem; id: string | null; title: string; action: string | null }
 const sourceStale = (item: QueueItem, now: number) => item.sources.some(source => !['fresh', 'partial'].includes(source.status) || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
+interface DecisionEntry { key: string; item: QueueItem; id: string | null; title: string; question: string | null }
+function decisionCopy(item: QueueItem, title: string) {
+  const request = item as Partial<NeedsWillItem>
+  const action = request.requests?.find(request => request.question)?.question ?? item.action
+  const prose = displayRequestText(action ?? title, 'Read the source to verify this request.')
+  const question = prose.replace(/^owner\s*:\s*/i, '').trim()
+  const cleanTitle = displayRequestText(title).replace(/^(?:owner|decision)\s*:\s*/i, '').trim()
+  return { title: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? cleanTitle : question,
+    question: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? question : null }
+}
 
-/** The list is a projection of the existing queue; card focus belongs to the
- * shared presentation, including when this section unmounts. */
+/** One row per existing canonical request. Opening it shares card focus, never
+ * creates a second decision, approval or read/archive state. */
 export function Decisions() {
-  const { scene, error, queue, queueError, state, send, connection, bridgeError, now, views } = useDeskWorkspace()
-  const [query, setQuery] = useState('')
-  const list = useRef<HTMLDivElement>(null)
-  const interaction = useRef(0)
+  const workspace = useDeskWorkspace()
+  const { scene, error, queue, queueError, state, send, connection, bridgeError, now, views } = workspace
+  const [query, setQuery] = useState(''), [openedId, setOpenedId] = useState<string | null>(null)
+  const list = useRef<HTMLDivElement>(null), interaction = useRef(0)
   const [expiredFlash, setExpiredFlash] = useState<number | null>(null)
   const selectedId = state.selection?.kind === 'card' ? state.selection.id : null
   const flash = state.flash && state.flash.until > Date.now() && state.flash.until !== expiredFlash ? state.flash : null
   useViewSnapshot(views, 'decisions', () => ({ query }), saved => setQuery(saved.query))
-  const queueItems = queue?.needsWill ?? queue?.items ?? []
-  const entries = queueItems.flatMap<DecisionEntry>(item => {
-    if (!item.cardIds.length) return [{ key: item.id, item, id: null, title: decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : null }]
-    return item.cardIds.map(id => {
-      const card = scene?.cards.find(card => card.id === id)
-      return { key: `${item.id}:${id}`, item, id, title: card ? cardTitle(card) : decodeRequestText(item.title), action: item.action ? decodeRequestText(item.action) : null }
-    })
+  const coordination = (queue?.needsWill ?? queue?.items ?? []).filter(item => isCoordinationRequest(item.title))
+  const entries: DecisionEntry[] = (queue?.needsWill ?? queue?.items ?? []).filter(item => !isCoordinationRequest(item.title)).map(item => {
+    const id = item.cardIds[0] ?? null, card = scene?.cards.find(card => card.id === id)
+    return { key: item.id, item, id, ...decisionCopy(item, card ? cardTitle(card) : item.title) }
   })
-  const selected = selectedId ? entries.find(entry => entry.id === selectedId) : undefined
-  const matches = (entry: typeof entries[number]) => `${entry.title} ${entry.id ?? ''} ${entry.item.title} ${entry.action ?? ''} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
-  const visible = entries.filter(entry => matches(entry) || !!entry.id && entry.id === selectedId || !!entry.id && flash?.ids.includes(`card:${entry.id}`))
+  useEffect(() => {
+    setOpenedId(current => current && entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId ?? '') ? current : null)
+  }, [selectedId])
+  const queueCardId = state.queueOpen ? state.queueCardId : null
+  const selected = state.queueOpen
+    ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
+    : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
+  const contextCardId = queueCardId && !selected ? queueCardId : null
+  const closeDetail = () => { setOpenedId(null); send({ type: 'close-queue' }); send({ type: 'clear-selection' }) }
+  const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
+  const visible = entries.filter(entry => matches(entry) || state.queueOpen && entry.key === selected?.key || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
   const unavailable = !!queueError || !!error
   const incomplete = !!queue?.pullCoverage && (!queue.pullCoverage.associationsComplete || queue.pullCoverage.repositories.some(repo => repo.status !== 'fresh' || !repo.complete)) || queue && [queue.coverage.intentions, ...queue.coverage.fleet].some(source => !['fresh', 'partial'].includes(source.status) || source.coverage !== 'complete' || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
   const canFocus = (id: string) => !unavailable && !!scene?.cards.some(card => card.id === id)
   useLayoutEffect(() => {
-    if (!selectedId) return
-    list.current?.querySelector<HTMLElement>(`[data-card-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
-  }, [state.selection, !!selected])
+    if (state.queueOpen && selected) {
+      Array.from(list.current?.querySelectorAll<HTMLElement>('[data-decision-id]') ?? []).find(row => row.dataset.decisionId === selected.key)?.scrollIntoView({ block: 'nearest' })
+    } else if (selectedId) list.current?.querySelector<HTMLElement>(`[data-card-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [state.selection, state.queueOpen, selected?.key])
   useLayoutEffect(() => {
     const current = state.flash, viewport = list.current
     if (!current || current.until <= Date.now() || !viewport) return
@@ -79,41 +100,101 @@ export function Decisions() {
       for (const event of events) document.removeEventListener(event, takeOwnership, true)
     }
   }, [state.flash])
+  const retainedNotes = (workspace.messages ?? []).filter(message => message.kind === 'message' && !(workspace.workers ?? []).some(worker => worker.home === message.home && worker.id === message.taskId))
+  const needsVerification = unavailable || incomplete || bridgeError || !!queue?.warnings?.length || !!queue?.operationalExceptions?.length || !!coordination.length
   return <section className="decisions" aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
-    <header><span className="cockpit-eyebrow">SHARED QUEUE</span><h1>Decisions</h1><p>Needs Will: outstanding asks and merge requests with their current evidence. Select a card to work on it from Your desk.</p></header>
-    {bridgeError && <p role="status">MCP connection delayed. Local browsing remains available.</p>}
-    {unavailable && <p role="status">{queueError ?? error} Shared card focus is unavailable until sources recover.</p>}
-    {incomplete && <p role="status">Some sources are stale or unavailable. Retained requests are last-known; this list cannot establish that all work is clear.</p>}
-    {queue?.warnings?.map(warning => <p role="status" key={warning}>{warning}</p>)}
-    <ExecutionWarnings warnings={queue?.operationalExceptions} onFocus={id => send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })} canFocus={canFocus} />
-    <label className="decisions-search">Search decisions<input type="search" value={query} onChange={event => { interaction.current++; setQuery(event.target.value) }} placeholder="Title, card ID or next action" /></label>
-    <div className="decisions-layout">
+    <header><h1>Decisions</h1></header>
+    <label className="decisions-search"><span className="ask-sr-only">Search decisions</span><input type="search" value={query} onChange={event => { interaction.current++; setQuery(event.target.value) }} placeholder="Need a decision? Search title, card or topic…" /></label>
+    <div className="decisions-layout" data-selected={!!selected || !!contextCardId}>
       <div className="decisions-list" ref={list} aria-label="Decision requests">
         {!queue && !queueError && <p role="status">Reading decision sources…</p>}
-        {queue && !visible.length && <p role="status">{unavailable || incomplete ? 'No matching requests in available records. Source coverage is incomplete.' : query ? 'No matching requests.' : 'No requests in the current queue. This does not certify all work is clear.'}</p>}
+        {queue && !visible.length && <p role="status">{unavailable || incomplete ? 'No matching requests in available records. Some evidence needs verification.' : query ? 'No matching requests.' : 'No decisions in the current queue.'}</p>}
         {visible.map(entry => {
-          const { item, id } = entry
-          const flashed = !!id && !!flash?.ids.includes(`card:${id}`)
-          const details = <><strong>{entry.title}</strong><small>{readinessLabels[item.readiness]}{sourceStale(item, now) ? ' · Source stale / unavailable' : ''}</small>{entry.action && <span>{entry.action}</span>}<RequestEvidence item={item} now={now} />{!matches(entry) && <small>Shared target shown outside search</small>}</>
-          return id ? <AskSurface as="div" subject={{ cardId: id }} key={entry.key}><button type="button" className={`decisions-row${selectedId === id ? ' selected' : ''}${flashed ? ' flashed' : ''}`} data-card-id={id} aria-pressed={selectedId === id} disabled={!canFocus(id)} onClick={() => send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })}>{details}{!canFocus(id) && <small>Card unavailable in the source scene. <span>Use the source link below.</span></small>}</button>{!canFocus(id) && <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read source card ↗</a>}</AskSurface> : <details className="decisions-request" key={entry.key}><summary>{details}</summary><p>No linked card; card focus and flash are unavailable.</p>{item.sources.map((source, index) => <p key={index}>{source.request?.kind} · {source.request?.taskId ?? source.id}{source.action ? ` · ${decodeRequestText(source.action)}` : ''}</p>)}{item.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">Read evidence ↗</a>)}</details>
+          const { item, id } = entry, stale = sourceStale(item, now)
+          const flashed = item.cardIds.some(id => flash?.ids.includes(`card:${id}`))
+          const row = <button type="button" className={`decisions-row${selected?.key === entry.key ? ' selected' : ''}${flashed ? ' flashed' : ''}`} data-card-id={id ?? undefined} data-decision-id={item.id} aria-pressed={selected?.key === entry.key} onClick={() => {
+            if (state.queueOpen) send({ type: 'close-queue' })
+            setOpenedId(item.id)
+            if (id && canFocus(id)) send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })
+          }}><div><strong>{entry.title}</strong>{entry.question && <span>{entry.question}</span>}
+            <small>{stale ? 'Needs verification' : item.readiness !== 'ready-now' ? readinessLabels[item.readiness] : 'Question and evidence inside'}</small>
+          </div><span className="decisions-open">Open</span></button>
+          return id ? <AskSurface as="div" subject={{ cardId: id }} key={entry.key}>{row}</AskSurface> : <div key={entry.key}>{row}</div>
         })}
       </div>
-      <aside className="decisions-summary" aria-label="Selected decision">
-        {selected ? <AskSurface as="div" subject={{ cardId: selected.id! }}><small>SELECTED CARD</small><h2>{selected.title}</h2><p>{readinessLabels[selected.item.readiness]}</p><DecisionChoices key={selected.key} entry={selected} items={queueItems} /><p>{selected.action ?? 'Next action not published. Read the source card for context.'}</p><a href={`https://www.notion.so/${selected.id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>{selected.item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">Read evidence ↗</a>)}<small>{selected.id}</small>{selected.item.reasons.map(reason => <p key={reason}>{reason}</p>)}</AskSurface> : <p>{selectedId ? 'Selected card is unavailable in the current queue. Selection is retained while sources refresh.' : 'Select a card to share its focus with MCP.'}</p>}
-      </aside>
+      {selected && <DecisionDetail key={selected.key} entry={selected} items={queue?.needsWill ?? queue?.items ?? []} unavailable={unavailable} onClose={closeDetail} />}
+      {contextCardId && <aside className="decisions-summary" aria-label="Card context">
+        <header><h2>Card context</h2><button type="button" aria-label="Close card context" onClick={closeDetail}>×</button></header>
+        <DecisionCardContext key={contextCardId} id={contextCardId} />
+      </aside>}
     </div>
+    {needsVerification && <details className="decisions-diagnostics"><summary>Some requests need verification · Details</summary>
+      {bridgeError && <p>MCP connection delayed. Local browsing remains available.</p>}
+      {unavailable && <p role="status">Requests could not refresh. Shared card focus is unavailable until sources recover.</p>}
+      {incomplete && <p>Some evidence is stale or unavailable. Retained requests do not establish that all work is clear.</p>}
+      {queue?.warnings?.map(warning => <p key={warning}>{warning}</p>)}
+      {!!coordination.length && <details><summary>Operational coordination</summary>{coordination.map(item => <p key={item.id}>{displayRequestText(item.title)}</p>)}</details>}
+      <ExecutionWarnings warnings={queue?.operationalExceptions} onFocus={id => send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })} canFocus={canFocus} />
+    </details>}
+    {!!retainedNotes.length && <details className="decisions-diagnostics"><summary>Retained worker notes</summary><WorkerNotes messages={retainedNotes} submit={workspace.submit} /></details>}
   </section>
 }
 
-function RequestEvidence({ item, now }: { item: QueueItem; now: number }) {
+function DecisionDetail({ entry, items, unavailable, onClose }: { entry: DecisionEntry; items: QueueItem[]; unavailable: boolean; onClose: () => void }) {
+  const { now, submit, messages = [], workers = [] } = useDeskWorkspace()
+  const { item } = entry
+  const ready = !unavailable && item.readiness === 'ready-now' && !sourceStale(item, now)
   const request = item as Partial<NeedsWillItem>
-  if (!request.pulls) return null
-  const age = request.requestSince ? Math.max(0, Math.floor((now - Date.parse(request.requestSince)) / 3600_000)) : null
-  return <>{request.prDetails && <small>{request.prDetails}</small>}<small>{age === null ? 'Request age unknown' : `Oldest recorded open ask: ${age}h (${request.requestSince})`}</small>{request.requests?.map(ask => <small key={ask.id}>{ask.question ?? ask.action} · request {ask.id}</small>)}{request.pulls.map(pull => <small key={pull.id}>{pull.repository} #{pull.number} · {pull.freshness === 'fresh' && pull.readiness?.status === 'fresh' && (!pull.readiness.expiresAt || Date.parse(pull.readiness.expiresAt) > now) ? pull.readiness.checks : 'checks unknown / stale'} · PR opened {pull.createdAt} (not request age)</small>)}</>
+  return <aside className="decisions-summary" aria-label="Selected decision" data-decision-id={item.id}>
+    <header><h2>{entry.title}</h2><button type="button" aria-label="Close decision" onClick={onClose}>×</button></header>
+    {entry.question && <p>{entry.question}</p>}
+    <DecisionChoices key={entry.key} entry={entry} items={items} />
+    {!ready && <p role="status">{item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite. Verify it has cleared before answering.' : 'This request needs verification before you act.'}</p>}
+    {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Open PR' : 'Read evidence'} ↗</a>)}
+    {item.sources.filter(source => source.request && source.request.kind !== 'notion-card').map((source, index) => {
+      const pending = messages.find(message => message.kind === 'answer' && message.sourceAnchor === source.responseAnchor)
+      const request = source.request!
+      const matches = workers.filter(worker => worker.home === request.home && worker.id === request.taskId)
+      const worker = matches.length === 1 ? matches[0] : null
+      const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
+      const linked = route ? findLinkedWorker(workers, route) : null
+      const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
+      return <section key={`${source.id}:${source.field}:${index}`} className="decisions-response" aria-label="Decision response">
+        <p>{displayRequestText(source.action ?? '', 'Read the source to verify this question.')}</p>
+        {href && <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}
+        {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details className="decisions-evidence"><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready && request.kind !== 'notion-card' && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
+      </section>
+    })}
+    {item.cardIds.map(id => <DecisionCardContext key={id} id={id} />)}
+    <details className="decisions-evidence"><summary>Technical details</summary>
+      <p>{request.requestSince ? `Oldest recorded open ask: ${request.requestSince}` : 'Request age unknown'}</p>
+      {request.pulls?.map(pull => <p key={pull.id}>{pull.repository} #{pull.number} · PR opened {pull.createdAt} (not request age) · {pull.readiness?.checks ?? 'Checks unverified'}</p>)}
+      <pre>{JSON.stringify({ request: item }, null, 2)}</pre>
+    </details>
+  </aside>
+}
+function DecisionCardContext({ id }: { id: string }) {
+  const { scene, refreshAfterMutation, send } = useDeskWorkspace()
+  const card = scene?.cards.find(card => card.id === id)
+  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
+      if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' })
+    }).catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
+    return () => controller.abort()
+  }, [id])
+  return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
+    <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>
+    {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
+    {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
+    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>
+  </section>
 }
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
-  if (!warnings) return null
-  return <details className="decisions-exceptions"><summary>Execution warnings ({warnings.filter(warning => warning.state === 'no-running-worker').length}) · unknown ({warnings.filter(warning => warning.state === 'unknown').length})</summary><p>Advisory observations. Review the card and source before changing its status.</p>{!warnings.length && <p>No execution warnings in observed In Progress cards.</p>}{warnings.map(warning => <article key={warning.cardId}><button type="button" disabled={!canFocus(warning.cardId)} onClick={() => onFocus(warning.cardId)}>{warning.title}</button><strong>{warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{reason}</p>)}{warning.sources.map(source => <small key={source.home}>{source.home} · {source.status} · observed {source.observedAt ?? 'unknown'} · expires {source.expiresAt ?? 'unknown'}</small>)}</article>)}</details>
+  if (!warnings?.length) return null
+  return <details><summary>Worker evidence</summary>{warnings.map(warning => <article key={warning.cardId}><button type="button" disabled={!canFocus(warning.cardId)} onClick={() => onFocus(warning.cardId)}>{warning.title}</button><strong>{warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{decodeRequestText(reason)}</p>)}</article>)}</details>
 }
 
 /** Formal published choices use the same workflow operation as MCP. A saved

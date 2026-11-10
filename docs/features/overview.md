@@ -179,7 +179,7 @@ Not applicable; other statuses distinguish missing, upcoming, overdue and
 invalid checkpoints using the calendar rules above.
 
 Task and worker headers carry an Inspect panel icon in both densities, including
-collapsed rows. It opens the separate Inspector while Desk remains available.
+collapsed rows. It opens the separate Inspector while Discuss remains available.
 For swipe entry, see the shared [Ask/Inspector gesture contract](ask.md).
 Outside [Waiting For grouping](#waiting-for-dependency-groups), clicking
 the row or card body in either view expands or collapses it. The Inspector exposes metadata, related records, connection
@@ -190,19 +190,19 @@ Worker terminal links use the exact-home resolver and open the safe viewer
 separately. The Inspector exposes [Update work and Start work](workflow.md).
 Closing the Inspector restores focus to the floor card.
 
-The [Ask reference](ask.md) owns the Desk inbox layout, question submission,
+The [Ask reference](ask.md) owns the Discuss inbox layout, question submission,
 answers and history. The [queue reference](reconciliation-queue.md) owns
 operational request visibility, readiness, source identity and per-source response controls.
-Clicking a Desk card navigates by canonical task ID without opening the Inspector
+Clicking a Discuss card navigates by canonical task ID without opening the Inspector
 or moving the queue position: it expands the required groups and can reveal the
 card through base status, search and donut exclusions using a temporary exception
 for that card only, then scrolls and focuses the first matching floor
 reference deterministically, then flashes the card and its current confirmed
 explicit worker connections. A persistent highlight and navigation reveal remain
-after the flash. Another Desk target replaces the reveal; changing or clearing
+after the flash. Another Discuss target replaces the reveal; changing or clearing
 search, restoring the search view, or Reset clears it. Saved grouping, order,
 search and status choices stay intact during navigation. If the card is missing
-from the current scene, the Desk reports that it is not on the floor and offers that clicked card's own
+from the current scene, the Discuss reports that it is not on the floor and offers that clicked card's own
 Notion link. Navigation never answers, dismisses or writes a source record;
 Answer/Dismiss remain separate explicit controls. The [Ask reference](ask.md)
 owns mobile conversation navigation; reduced motion uses static highlighting.

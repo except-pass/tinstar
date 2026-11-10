@@ -150,7 +150,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
       next.flash = { ids: [semanticId({ kind: 'card', id: action.cardId }), ...claims.map(c => semanticId({ kind: 'claim', id: c.id }))], until: now + 1850 }
       break
     }
-    case 'focus': next.selection = action.target; next.exceptionsOnly = false; break
+    case 'focus': next.selection = action.target; next.queueOpen = false; next.queueCardId = null; next.exceptionsOnly = false; break
     case 'set-exceptions': next.exceptionsOnly = action.enabled; break
     case 'set-roadmap': next.roadmapExpanded = action.expanded; break
     case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)) }; break

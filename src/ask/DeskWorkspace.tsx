@@ -3,10 +3,6 @@ import type { Draft, OutboxMessage, SubmitResult, Worker } from '../cockpit/shel
 import { useFloorScene } from '../reconciliation/useFloorScene'
 import { useDeskQueue } from '../reconciliation/useDeskQueue'
 import { usePresentation } from '../reconciliation/usePresentation'
-import { WorkerNotes } from '../cockpit/shell/present'
-import { QueuePanel } from '../reconciliation/QueuePanel'
-import { decisionItems } from '../shared/reconciliationQueue'
-import type { PresentationAction } from '../shared/reconciliationPresentation'
 import { AskDesk, AskProvider, useAskControls } from './Ask'
 import { deskConversations, type DeskView } from './deskInbox'
 import { DeskRail } from './DeskRail'
@@ -24,7 +20,7 @@ function overviewTarget(target: AskReturn['target']) {
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
   views?: WorkspaceHistory; origin?: AskReturn; clearOrigin?: () => void
-  queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void
+  queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void; workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>
 }
 const WorkspaceContext = createContext<Workspace | null>(null)
 export function useDeskWorkspace() {
@@ -33,29 +29,28 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, workers, messages, submit, children }: {
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, onDecisions, workers, messages, submit, children }: {
   views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
-  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void
+  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
   const [history, setHistory] = useState(false)
-  const floor = useFloorScene(overviewActive || decisionsActive, history), { queue, error: queueError } = useDeskQueue()
-  const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError)
-  // All/custom are explicit requests for records outside the operational scope.
-  // MCP work queries choose their own scope and never inherit this UI state.
-  useEffect(() => { setHistory(presentation.state.statusFilter?.preset === 'all' || presentation.state.statusFilter?.preset === 'custom') }, [presentation.state.statusFilter?.preset])
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
-  const openDesk = useCallback(() => setOpenRequest(value => value + 1), [])
-  const send = useCallback((action: PresentationAction) => {
-    const result = presentation.send(action)
-    if (result?.outcome === 'applied' && (action.type === 'navigate-card' || action.type === 'reveal-search')) {
+  const floor = useFloorScene(overviewActive || decisionsActive, history), { queue, error: queueError } = useDeskQueue()
+  const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError, action => {
+    if (action.type === 'open-queue' || action.type === 'navigate-queue') {
+      if (!decisionsActive) onDecisions?.()
+    } else {
       if (action.type === 'navigate-card') setCloseRequest(value => value + 1)
       if (!overviewActive) onOverview()
     }
-    return result
-  }, [presentation.send, onOverview, overviewActive])
-  useEffect(() => { if (presentation.state.queueOpen) openDesk() }, [presentation.state.queueOpen, presentation.state.queueItemId, presentation.state.queueCardId, openDesk])
+  })
+  // All/custom are explicit requests for records outside the operational scope.
+  // MCP work queries choose their own scope and never inherit this UI state.
+  useEffect(() => { setHistory(presentation.state.statusFilter?.preset === 'all' || presentation.state.statusFilter?.preset === 'custom') }, [presentation.state.statusFilter?.preset])
+  const openDesk = useCallback(() => setOpenRequest(value => value + 1), [])
+  const send = presentation.send
   const [density, setDensity] = useState<OverviewDensity>(loadOverviewDensity)
   const [openRelationships, setOpenRelationships] = useState<Target[]>([])
   const [detailedCollapsed, setDetailedCollapsed] = useState<string[]>([])
@@ -89,7 +84,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk }
+  const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
     <AskProvider scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
       if (destination.section === 'overview') search.remember()
@@ -100,38 +95,33 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
         if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
-      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} onClose={() => presentation.send({ type: 'close-queue' })} workers={workers} messages={messages} submit={submit} /></div>
+      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>
 }
-function WorkspaceRail({ closeRequest, openRequest, onClose, workers, messages, submit }: {
-  closeRequest: number; openRequest: number; onClose: () => void
-  workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>
+function WorkspaceRail({ closeRequest, openRequest }: {
+  closeRequest: number; openRequest: number
 }) {
-  const { scene, state, send, queue, queueError, now } = useDeskWorkspace()
+  const { now } = useDeskWorkspace()
   const controls = useAskControls()
   const groups = deskConversations(controls?.items ?? [])
   const unread = groups.filter(group => group.unread).length
-  const decisions = queue && !queueError ? decisionItems(queue, now).length : 0
-  const counts = { 'needs-you': decisions + groups.filter(group => group.view === 'needs-you').length, waiting: groups.filter(group => group.view === 'waiting').length, history: groups.filter(group => group.view === 'history').length }
+  const counts = { 'needs-you': groups.filter(group => group.attention).length, waiting: groups.filter(group => group.view === 'waiting').length, history: groups.filter(group => group.view === 'history').length }
   const [selectedView, setSelectedView] = useState<DeskView | null>(null)
   const expandedGroup = groups.find(group => group.id === controls?.expanded)
   const previousExpanded = useRef<{ id: string; view: DeskView } | null>(null)
   // Follow an intentionally opened thread when a reply/read changes its view.
   // Resolve during render so its inline composer never unmounts between views.
-  const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && expandedGroup.view !== 'history')
-  const view = followExpanded ? expandedGroup.view : selectedView ?? (counts['needs-you'] || !counts.waiting ? 'needs-you' : 'waiting')
+  const followExpanded = expandedGroup && (expandedGroup.id !== previousExpanded.current?.id || expandedGroup.view !== previousExpanded.current.view && !expandedGroup.turns.every(turn => !!turn.dismissed_at))
+  const view = followExpanded ? expandedGroup.view : selectedView ?? (groups.some(group => group.view === 'needs-you') || !counts.waiting ? 'needs-you' : 'waiting')
   useEffect(() => {
     if (followExpanded) setSelectedView(expandedGroup.view)
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
   useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
-  const retainedNotes = messages.filter(message => message.kind === 'message' && !workers.some(worker => worker.home === message.home && worker.id === message.taskId))
-  const attention = decisions + groups.filter(group => group.failed && !group.unread && group.view !== 'history').length
-  return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention} onClose={onClose}>
-    <nav className="desk-tabs" aria-label="Desk views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
-    <div hidden={view !== 'needs-you' || !(decisions || queueError || state.queueItemId || state.queueCardId)}><QueuePanel scene={scene ?? undefined} messages={messages} submit={submit} workers={workers} state={state} send={send} queue={queue} error={queueError} now={now} /></div>
-    {retainedNotes.length > 0 && <details className="cockpit-worker-message"><summary>Retained worker notes · {retainedNotes.length}</summary><WorkerNotes messages={retainedNotes} submit={submit} /></details>}
-    <AskDesk now={now} view={view} showEmpty={view !== 'needs-you' || !decisions} />
+  const attention = groups.filter(group => group.attention && !group.unread).length
+  return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
+    <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
+    <AskDesk now={now} view={view} />
   </DeskRail>
 }

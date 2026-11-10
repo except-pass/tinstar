@@ -30,12 +30,13 @@ it('moves a read conversation with a pending follow-up to Waiting without hiding
   expect(deskConversations([followUp, first])[0]).toMatchObject({ view: 'waiting', unread: false, latest: followUp, turns: [first, followUp] })
 })
 
-it('keeps read answers quiet in the inbox and ranks genuine unread replies before newer read threads', () => {
+it('keeps read completed answers in the list without attention and ranks genuine unread replies before newer read threads', () => {
   const unread = request({ status: 'answered', reply })
   const read = request({ status: 'answered', reply, read_at: '2026-11-09T19:02:00Z', updated_at: '2026-11-09T20:00:00Z' })
   expect(deskConversations([read, unread]).map(group => [group.id, group.view, group.unread])).toEqual([
     [unread.conversation_id, 'needs-you', true], [read.conversation_id, 'needs-you', false],
   ])
+  expect(deskConversations([read])[0]).toMatchObject({ attention: false })
   expect(unread.read_at).toBeNull()
 })
 
@@ -52,4 +53,20 @@ it('classifies a saved question with a confirmed wake failure as actionable', ()
   const item = request({ status: 'delivered', error: 'First Mate saved the question but was not woken. Retry delivery.' })
   expect(answerStatus(item)).toBe('Delivery failed')
   expect(deskConversations([item])[0]).toMatchObject({ view: 'needs-you', failed: true })
+})
+
+it('keeps a read answer with a structured action in Needs you', () => {
+  const item = request({ reply: { ...reply, suggested_actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the work' }] }, read_at: '2026-11-09T19:02:00Z' })
+  expect(deskConversations([item])[0]).toMatchObject({ view: 'needs-you', unread: false })
+})
+
+it.each([true, false])('classifies out-of-order replies using the current answer, with choices=%s', currentHasActions => {
+  const choices = [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the work' }]
+  const first = request({ status: 'answered', answered_at: '2026-11-09T19:04:00Z', read_at: '2026-11-09T19:05:00Z', reply: { ...reply, suggested_actions: currentHasActions ? choices : [] } })
+  const second = request({ conversation_id: first.conversation_id, created_at: '2026-11-09T19:01:00Z', status: 'answered', answered_at: '2026-11-09T19:03:00Z', read_at: '2026-11-09T19:05:00Z', reply: { ...reply, suggested_actions: currentHasActions ? [] : choices } })
+  expect(deskConversations([second, first])[0]).toMatchObject({ view: 'needs-you', attention: currentHasActions, unread: false, latest: second })
+  const followUp = request({ conversation_id: first.conversation_id, created_at: '2026-11-09T19:06:00Z' })
+  expect(deskConversations([first, second, followUp])[0]).toMatchObject({ view: 'waiting', unread: false })
+  first.read_at = null
+  expect(deskConversations([first, second, followUp])[0]).toMatchObject({ view: 'needs-you', unread: true })
 })

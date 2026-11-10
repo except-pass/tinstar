@@ -243,7 +243,7 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
     for (const ack of body.acknowledgments ?? []) {
       expect(screen.queryByText('Source health')).toBeNull()
       if (type === 'focus') expect(screen.getByLabelText('Inspector')).toBeTruthy()
-      else expect(screen.getByLabelText('Desk queue')).toBeVisible()
+      else expect(screen.getByLabelText('Selected decision')).toBeVisible()
       acknowledgments.push(ack)
     }
     const commands = command ? [command] : []
@@ -263,17 +263,17 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
   }
 })
 
-it('keeps operational requests before Ask inbox records in the shared Desk', () => {
+it('keeps operational requests out of Discuss while preserving its persistent conversation panel', () => {
   observed.scene = fixtureScene()
   render(<Overview messages={[]} submit={vi.fn()} workers={[]} />)
-  const desk = screen.getByLabelText('Your desk')
+  const desk = screen.getByLabelText('Discuss')
   const questions = within(desk).getByLabelText('Questions for First Mate')
-  const operational = within(desk).getByRole('region', { name: 'Desk queue', hidden: true })
-  expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: /Open Your desk/ }))
+  expect(within(desk).queryByRole('region', { name: 'Decision queue', hidden: true })).toBeNull()
+  expect(questions).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   expect(desk).toBeVisible()
-  expect(screen.getByRole('button', { name: /Open Your desk/, hidden: true })).toHaveAttribute('aria-expanded', 'true')
-  expect(operational.compareDocumentPosition(questions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(screen.getByRole('button', { name: /Open Discuss/, hidden: true })).toHaveAttribute('aria-expanded', 'true')
+  expect(within(desk).queryByRole('region', { name: 'Decision queue', hidden: true })).toBeNull()
 })
 
 it.each(['done', 'landed'])('shows a worker resumed after a recorded %s outcome', (report) => {

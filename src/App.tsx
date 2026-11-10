@@ -311,7 +311,7 @@ export default function App() {
       applyOverviewLocation(worker
         ? { worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q, origin: { ...origin } }
         : { worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')
-    }} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} workers={workers} messages={messages} submit={submit}>
+    }} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
       {overviewLocation.page === 'decisions' ? <Decisions /> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">

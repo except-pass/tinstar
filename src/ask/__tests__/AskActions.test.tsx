@@ -63,7 +63,6 @@ describe('Ask recommendation buttons', () => {
     expect(onSelect).toHaveBeenCalledTimes(1)
     expect(onSelect.mock.calls[0]).toEqual([{ answer_id: answerId, action_id: close.id, client_key: expect.stringMatching(/^[a-f0-9-]{36}$/) }])
     expect(screen.getByRole('status')).toHaveTextContent('Sending selection')
-    expect(screen.getByText(`Selected: ${close.instruction}`)).toBeVisible()
     expect(screen.getAllByRole('button').every(button => button.hasAttribute('disabled'))).toBe(true)
     pending.resolve({ status: 'sent' })
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Requested'))
@@ -88,18 +87,18 @@ describe('Ask recommendation buttons', () => {
   it('shows definitive stale/conflict rejections without claiming a request or retrying it', async () => {
     render(<AskActions {...props({ onSelect: vi.fn().mockRejectedValue(new AskSelectionRejected('Answer has been superseded')) })} />)
     fireEvent.click(screen.getByRole('button', { name: closeName }))
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Selection not requested: Answer has been superseded'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Blocked · Request unavailable'))
     expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
     expect(screen.getByRole('button', { name: closeName })).toBeDisabled()
   })
 
   it.each(['sent', 'delivered', 'answered', 'failed'] as const)('maps persisted %s evidence truthfully after reload', status => {
     render(<AskActions {...props({ selection: { action_id: close.id, status, error: status === 'failed' ? 'First Mate could not receive this selection.' : null } })} />)
-    expect(screen.getByRole('status')).toHaveTextContent({ sent: 'Requested', delivered: 'Delivered', answered: 'Answered', failed: 'Failed' }[status])
+    expect(screen.getByRole('status')).toHaveTextContent({ sent: 'Requested', delivered: 'Delivered', answered: 'Result received', failed: 'Failed' }[status])
     expect(screen.getAllByRole('button').every(button => button.hasAttribute('disabled'))).toBe(true)
     expect(screen.queryByText(/Completed|Acting|Done confirmed/)).toBeNull()
     if (status === 'answered') expect(screen.getByText(/Read the reply for the outcome/)).toBeVisible()
-    if (status === 'failed') expect(screen.getByRole('status')).toHaveTextContent('could not receive')
+    if (status === 'failed') expect(screen.getByText('First Mate could not receive this selection.').closest('details')).not.toHaveAttribute('open')
   })
 
   it('leaves superseded choices visible and disabled with an explanation, including overflow', () => {
@@ -121,8 +120,7 @@ describe('Ask recommendation buttons', () => {
     view.rerender(<AskActions {...options} superseded />)
     expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
     view.rerender(<AskActions {...options} superseded selection={{ action_id: close.id, status: 'answered' }} />)
-    expect(screen.getByRole('status')).toHaveTextContent('Answered')
-    expect(screen.getByText(`Selected: ${close.instruction}`)).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('Result received')
   })
 
   it('resets local selection when displaying another immutable answer', async () => {
@@ -172,7 +170,8 @@ describe('Ask recommendation buttons', () => {
     vi.stubGlobal('fetch', read)
     render(<AskActions {...props({ suggestions: [merge, keep], onSelect: vi.fn() })} />)
     fireEvent.click(screen.getByRole('button', { name: `${merge.label}: ${merge.instruction}` }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(refusal)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Merge request unconfirmed. Retry this choice.')
+    expect(screen.getByText(refusal).closest('details')).not.toHaveAttribute('open')
     expect(screen.queryByRole('link', { name: 'Open Clawson card ↗' })).toBeNull()
     expect(screen.getByRole('button', { name: `${keep.label}: ${keep.instruction}` })).toBeEnabled()
     head = 'e'.repeat(40)

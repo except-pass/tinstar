@@ -111,10 +111,10 @@ it('returns a retained PR Ask from Releases to its exact authorized row, with ca
 it('reveals and highlights exact receipt evidence in Releases without replacing the global Desk', async () => {
   records = [item({ kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, 'releases')]
   render(<App />)
-  const desk = screen.getByLabelText('Your desk')
+  const desk = screen.getByLabelText('Discuss')
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   await waitFor(() => expect(document.querySelector('[data-receipt-id="receipt-17"].ask-origin')).toBeTruthy())
-  expect(screen.getByLabelText('Your desk')).toBe(desk)
+  expect(screen.getByLabelText('Discuss')).toBe(desk)
   expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Real-shaped test answer')
 })

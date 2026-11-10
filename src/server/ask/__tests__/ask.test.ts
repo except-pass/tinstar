@@ -13,6 +13,7 @@ import type { PullsRead } from '../../../shared/pulls'
 import { AskApi } from '../routes'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
+import { deskConversations } from '../../../ask/deskInbox'
 import type { AskAction } from '../../../shared/ask-actions'
 import { fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
@@ -363,6 +364,36 @@ describe('authenticated recommendation selections over the existing Ask bridge',
     reload()
     expect((await call('requests')).data.data[0].reply).toMatchObject({ degraded: true, suggested_actions: [] })
     expect((await call('selections', { answer_id: first.request_id, action_id: close.id, client_key: randomUUID() })).status).toBe(404)
+  })
+
+  it('keeps GitHub references inert and dispatches one authenticated merge request only for a validated regenerated choice', async () => {
+    const { call, bridge } = await setup()
+    const first = (await call('requests', { ...input(), question: 'Give me one-click merge requests for these PRs.' })).data.data
+    const references = [3359, 3365].map(number => ({ label: `Open PR ${number}`, url: `https://github.com/fortresspower/cmsandbox/pull/${number}` }))
+    await answer(bridge, first.request_id, 'rejected-merges', { ...reply, references, suggested_actions: [
+      { id: 'merge-3359', label: 'Request merge', instruction: `Request merge of ${references[0]!.url}` },
+      { id: 'merge-3365', label: 'Request merge', instruction: `Request merge of ${references[1]!.url}` },
+    ] })
+    const rejected = (await call('requests')).data.data[0]
+    expect(rejected.reply).toMatchObject({ references, suggested_actions: [], rejected_actions: [{ id: 'merge-3359' }, { id: 'merge-3365' }] })
+    expect((await call('selections', { answer_id: first.request_id, action_id: 'merge-3359', client_key: randomUUID() })).status).toBe(404)
+    expect((await bridge()).data.data.pending).toEqual([])
+    const next = (await call('requests', { ...input(), question: 'Please resend the one-click choices for your last answer.', follow_up_to: first.request_id })).data.data
+    const instruction = 'Request merging fortresspower/cmsandbox PR 3359 at its retained head through the existing authorized merge workflow.'
+    await answer(bridge, next.request_id, 'regenerated-merges', { ...reply, references, suggested_actions: [{ id: 'merge-3359', label: 'Request merge', instruction }] })
+    const click = { answer_id: next.request_id, action_id: 'merge-3359', client_key: randomUUID() }
+    expect((await call('selections', click, {})).status).toBe(403)
+    const results = await Promise.all([call('selections', click), call('selections', click)])
+    const selected = results[0]!.data.data
+    expect(results[1]!.data.data.request_id).toBe(selected.request_id)
+    expect(selected).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: next.request_id, status: 'sent', reply: null, action_selection: { answer_id: next.request_id, action_id: 'merge-3359', instruction, actor: owner } })
+    const pending = (await bridge()).data.data.pending
+    expect(pending).toHaveLength(1)
+    expect(payload(pending[0].body)).toMatchObject({ request_id: selected.request_id, question: instruction, context: first.context })
+    await bridge({ request_id: selected.request_id, note: note(selected.request_id, 'merge-request-delivered') })
+    expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === selected.request_id)).toMatchObject({ status: 'delivered', reply: null })
+    await answer(bridge, selected.request_id, 'merge-request-delivered', { ...reply, summary: 'Awaiting approval', detail: 'The required approving review is still missing. No merge was performed.', suggested_actions: [] })
+    expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === selected.request_id)).toMatchObject({ status: 'answered', reply: { summary: 'Awaiting approval' } })
   })
 
   it('preserves legacy string suggestions as inert history', async () => {
@@ -950,4 +981,20 @@ it('retains authenticated worker terminal view identity and rejects a different 
   expect(wrongHome.status).toBe(409)
   const wrongTask = await call('requests', { ...body, client_key: randomUUID(), view: { ...body.view, worker: { ...body.view.worker, task_id: 'different-worker' } } })
   expect(wrongTask.status).toBe(409)
+})
+
+it.each([false, true])('preserves a completed answers read state on restore after archive=%s', async archived => {
+  const { call, bridge, reload } = await setup()
+  const id = (await call('requests', input())).data.data.request_id
+  await bridge({ request_id: id, note: note(id) })
+  await bridge({ request_id: id, reply: { id: 'note-1', at: new Date().toISOString(), body: 'Completed answer', cursor: '1' } })
+  await call(`requests/${id}/read`, {})
+  expect(deskConversations((await call('requests')).data.data)[0]).toMatchObject({ view: 'needs-you', unread: false, attention: false })
+  const readAt = (await call('requests')).data.data[0].read_at
+  if (archived) await call(`requests/${id}/dismiss`, {})
+  await call(`requests/${id}/restore`, {})
+  reload()
+  const rows = (await call('requests')).data.data
+  expect(rows[0]).toMatchObject({ dismissed_at: null, read_at: readAt })
+  expect(deskConversations(rows)[0]).toMatchObject({ view: 'needs-you', unread: false, attention: false })
 })
