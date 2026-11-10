@@ -57,7 +57,7 @@ export function Decisions() {
     ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
     : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
   const contextCardId = queueCardId && !selected ? queueCardId : null
-  const closeDetail = () => { setOpenedId(null); send({ type: 'close-queue' }); send({ type: 'clear-selection' })
+  const closeDetail = () => { setOpenedId(null); send({ type: 'close-queue' }); send({ type: 'clear-selection' }) }
   const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
   const visible = entries.filter(entry => matches(entry) || state.queueOpen && entry.key === selected?.key || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
   const unavailable = !!queueError || !!error
