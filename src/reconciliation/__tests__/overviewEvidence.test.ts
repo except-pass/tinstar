@@ -203,20 +203,33 @@ describe('card worker facts', () => {
     worker.source.current_state.state = state
     expect(fact()).toBeNull()
   })
-  it.each(['run-step', 'session-log', 'none', 'pane'])('counts an old done worker only with newer recorded execution evidence: %s', evidence => {
+  it.each([
+    { source: 'run-step', state: 'working', turn: null, resumed: true },
+    { source: 'run-step', state: 'running', turn: null, resumed: true },
+    { source: 'none', state: 'unknown', turn: true, resumed: true },
+    { source: 'none', state: 'unknown', turn: false, resumed: false },
+    { source: 'none', state: 'unknown', turn: null, resumed: false },
+    { source: 'pane', state: 'working', turn: null, resumed: false },
+    { source: 'run-step', state: 'paused', turn: null, resumed: false },
+    { source: 'run-step', state: 'parked', turn: null, resumed: false },
+    { source: 'run-step', state: 'blocked', turn: null, resumed: false },
+  ])('counts an old done worker only with newer execution: $source/$state/$turn', ({ source, state, turn, resumed }) => {
     const { scene, worker, fact } = singleWorker()
     worker.source.last_event = { state: 'done', raw: 'done: old completion', note: null, age_seconds: 86400 }
     worker.liveness = 'finished'
-    worker.source.current_state = { ...worker.source.current_state, state: evidence === 'session-log' ? 'unknown' : 'working', source: evidence === 'session-log' ? 'none' : evidence }
-    worker.source.codex = evidence === 'session-log' ? { turn_open: true, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - 1000).toISOString(), session_file: 'resumed.jsonl' } : null
-    const resumed = evidence === 'run-step' || evidence === 'session-log'
+    worker.source.current_state = { ...worker.source.current_state, state, source }
+    worker.source.codex = turn === null ? null : { turn_open: turn, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - (turn ? 1000 : 2 * 86400_000)).toISOString(), session_file: 'resumed.jsonl' }
     expect(fact()).toBe(resumed ? '1 worker running' : null)
     expect(workHealth(scene, fixtureId(1), now)).toMatchObject({ workerCount: resumed ? 1 : 0, running: resumed ? 1 : 0 })
     const shown = organizedGroups(scene, initialPresentation(), now).flatMap(group => group.workers)
     expect(shown.some(value => value.id === worker.id)).toBe(resumed)
+    expect(workerFact(worker, now, worker.observation)).toBe(resumed ? 'running' : 'finished')
+    if (turn === false) {
+      worker.source.codex!.last_activity_at = new Date(now).toISOString()
+      expect(fact()).toBeNull()
+    }
     if (resumed) {
-      expect(workerFact(worker, now, worker.observation)).toBe('running')
-      if (worker.source.codex) worker.source.codex.observed_at = new Date(now - 2 * 86400_000).toISOString()
+      if (worker.source.codex) worker.source.codex.last_activity_at = new Date(now - 2 * 86400_000).toISOString()
       else worker.source.current_state.observed_at = new Date(now - 2 * 86400_000).toISOString()
       expect(fact()).toBeNull()
     }

@@ -10,8 +10,8 @@ const terminal = new Set(['done', 'landed', 'failed'])
 function recordedOutcome(worker: Execution, now: number): string | null {
   const activity = recordedActivity(worker, now)
   const state = recordedState(worker, now)
-  const evidenceAt = Date.parse(String(['working', 'parked', 'paused', 'blocked'].includes(String(state)) ? worker.source.current_state.observed_at ?? '' : worker.source.codex?.observed_at ?? ''))
-  if (activity !== 'unknown' && evidenceAt > reportTimestamp(worker)) return null
+  const evidenceAt = Date.parse(String(['working', 'running'].includes(String(state)) ? worker.source.current_state.observed_at ?? '' : worker.source.codex?.last_activity_at ?? ''))
+  if (activity === 'working' && evidenceAt > reportTimestamp(worker)) return null
   const event = String(worker.source.lastEventText ?? worker.source.last_event.raw ?? '')
   const verb = event.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase() ?? String(worker.source.last_event.state)
   const current = worker.source.current_state
@@ -35,7 +35,7 @@ function recordedActivity(worker: Execution, now: number): 'working' | 'waiting'
   const turn = codexTurn(state.source === 'pane' ? { ...worker.source, current_state: { state: 'unknown' } } : worker.source, now)
   if (turn !== null) return turn ? 'working' : 'waiting'
   const recorded = recordedState(worker, now)
-  if (recorded === 'working') return 'working'
+  if (recorded === 'working' || recorded === 'running') return 'working'
   if (['parked', 'paused', 'blocked'].includes(String(recorded))) return 'waiting'
   return 'unknown'
 }

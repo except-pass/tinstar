@@ -283,6 +283,7 @@ it.each(['done', 'landed'])('shows a worker resumed after a recorded %s outcome'
   task.harness = 'codex'; task.current_state.state = 'unknown'
   task.lastEventText = `${report}: historical report`
   task.last_event.state = report
+  task.last_event.age_seconds = 86400
   task.codex = { turn_open: true, observed_at: new Date(now).toISOString(), last_activity_at: new Date(now - 12 * 60_000).toISOString(), session_file: 'rollout-test.jsonl' }
   const scene = new SceneReconciler().reconcile(sources)
   observed.scene = scene
