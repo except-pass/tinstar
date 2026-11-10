@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
+import { entityTone, gapTargets } from '../overviewModel'
 import { cardWorkerFact, patternCheckSummary, workerLinkSourceHealth } from '../overviewEvidence'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import { workHealth, combinedPatternResult, sceneWorkHealth, type PatternResult } from '../../shared/workHealth'
@@ -125,6 +126,26 @@ describe('card worker facts', () => {
     expect(scene.claims.filter(link => link.cardId === fixtureId(2))).toEqual([])
     expect(cardWorkerFact(scene, fixtureId(2), now)).toBeNull()
     expect(cardWorkerFact(scene, fixtureId(1), now)).toBe('2 workers running')
+  })
+  it.each(['current', 'stale', 'different-card'] as const)('keeps %s external reports consistent across gaps, header, styling and patterns', report => {
+    const sources = fixtureSources({ now })
+    const card = sources.intentions.data!.cards.find(card => card.id === fixtureId(2))!
+    card.properties['Delegated To'] = { id: 'external', type: 'rich_text', hasMore: false, value: JSON.stringify({
+      schema: 'tinstar.external-worker.v1', kind: 'external', system: 'Build runner', run_id: 'one',
+      reference: 'https://runner.example/one', card_id: report === 'different-card' ? fixtureId(1) : card.id,
+      observed_at: new Date(now - (report === 'stale' ? 600_000 : 0)).toISOString(), state: 'running',
+      evidence: 'Actively compiling the assigned card', reported_by: 'Clawson',
+    }) }
+    const scene = new SceneReconciler().reconcile(sources, now)
+    const gap = report === 'different-card'
+    expect(scene.findings.some(finding => finding.kind === 'task-execution-gap' && finding.cardIds.includes(card.id))).toBe(gap)
+    expect(cardWorkerFact(scene, card.id, now)).toBe(gap ? 'No worker' : null)
+    expect(entityTone(scene, 'card', card.id, now)).toBe(gap ? 'gap' : 'uncertain')
+    expect(gapTargets(scene, now).some(target => target.kind === 'card' && target.id === card.id)).toBe(gap)
+    const health = sceneWorkHealth(scene, now).find(health => health.cardId === card.id)!
+    for (const pattern of ['unstaffed', 'stalled'] as const) {
+      expect(health.patterns[pattern].outcome).toBe(report === 'current' ? 'no-match' : report === 'stale' ? 'unavailable' : 'match')
+    }
   })
   it('uses fresh current state for running and counts multiple workers', () => {
     const { worker, fact } = singleWorker()
