@@ -105,4 +105,4 @@ GitHub preflight, even if a selected PR has since merged or changed or GitHub is
 unavailable. Recovery searches all pages matching the selection-derived title for
 the exact owner and operation receipt; an unconfirmed creation is never repeated.
 Fresh preflight is required before a new creation. Tin Star
-does not execute these commands; its Admin Merge capability remains disabled.
+does not execute these commands; the installed-action Merge restrictions above still apply.

@@ -6,8 +6,8 @@ The broker operator owns service deployment and activation. Firstmate must first
 review the safety tests and the final validated commit. The next trigger is firstmate's
 handoff of that evidence; this document alone is not an activation instruction.
 
-Admin Merge is globally disabled. The incomplete cmsandbox check-policy inventory
-remains a separate Merge hold; completing it does not enable Merge in this build.
+See the [PR actions guide](../../docs/pr-actions.md) for installed-action Merge
+holds and the separate Clawson card handoff.
 **Merge App: not requested.** Do not create/install it, generate its key, change any
 ruleset/bypass actor, or provision a merge endpoint.
 
