@@ -194,7 +194,8 @@ export class WorkflowOperations {
     }
     const wait = (value: { dependency: string; unblocks_when: string; follow_up_by: string }) => {
       const old = String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
-      const line = `Dependency: ${value.dependency} | Unblocks when: ${value.unblocks_when} | Follow-up: ${value.follow_up_by}`
+      const entryText = (text: string) => /[\r\n]/.test(text) ? JSON.stringify(text) : text
+      const line = `Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)}`
       set('Waiting For', old.split('\n').includes(line) ? old : [old, line].filter(Boolean).join('\n'))
       note += `\n${line}`
     }

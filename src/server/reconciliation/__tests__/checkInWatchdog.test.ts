@@ -13,6 +13,7 @@ import { AskApi } from '../../ask/routes'
 import { checkInDecisions, checkInReport, checkInSettings, CheckInWatchdog, CHECK_IN_GRACE_MS } from '../checkInWatchdog'
 import { reconcileScene, SceneReconciler } from '../scene'
 import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
+import type { CheckInSnapshot } from '../index'
 import type { CardContextRead } from '../cardContext'
 import { readNotionCard } from '../notion'
 
@@ -621,4 +622,18 @@ print(json.dumps(m.pull_once(sys.argv[2],sys.argv[3],pathlib.Path(sys.argv[4])))
 
 it('rejects placeholders and empty evidence as a substantive acknowledgement', () => {
   expect(checkInReport('still working', randomUUID())).toBeNull()
+})
+
+it('retains competing Queued other-owner declarations and unknown coverage in scoped check-ins', async () => {
+  const h = await harness()
+  const snapshot: CheckInSnapshot = structuredClone(h.snapshot)
+  snapshot.checkIns = structuredClone(snapshot.intentions)
+  snapshot.checkIns.data!.cards = [structuredClone(h.card)]
+  const competing = structuredClone(h.card)
+  competing.id = 'f'.repeat(32); competing.properties.Owner!.value = 'Other'; competing.properties.Status!.value = 'Queued'
+  snapshot.intentions.data!.cards.push(competing)
+  const decision = () => checkInDecisions(snapshot, baseline).find(d => d.cardId === h.card.id)!
+  expect(decision()).toMatchObject({ due: true, route: { worker: null } })
+  snapshot.intentions.data = null; snapshot.intentions.status = 'unknown'; snapshot.intentions.coverage = 'unknown'
+  expect(decision()).toMatchObject({ due: true, route: { worker: null } })
 })
