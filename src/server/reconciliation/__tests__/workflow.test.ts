@@ -1044,3 +1044,19 @@ it('creates a bounded Clawson card for green PRs across all ten Reader repositor
     expect(brief).toContain(`Command: gh pr merge ${target.url} --squash --admin --match-head-commit ${target.head}`)
   }
 })
+
+
+it.each(['already merged', 'head changed', 'GitHub unavailable'])('recovers an uncertain Clawson creation before preflight reports %s', async reason => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-lost-create-')); roots.push(root)
+  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: 'https://github.com/owner/repo/pull/1', head: 'a'.repeat(40) }] }
+  const prepare = vi.fn(async () => ({ at: '2026-11-10T12:00:00.000Z', name: 'Admin merge 1 PR: owner/repo', brief: 'Exact authorized selection' }))
+  f.controls.lostCreate()
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  expect(await workflow.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'partially-saved', code: 'create-unconfirmed' })
+  prepare.mockRejectedValue(new Error(reason))
+  const restarted = new WorkflowOperations(f.reader, async () => [], root)
+  expect(await restarted.createClawsonMerge({ ...input, targets: [{ ...input.targets[0]!, head: 'b'.repeat(40) }] }, 'owner@example.test', prepare)).toMatchObject({ code: 'operation-conflict' })
+  expect(await restarted.createClawsonMerge(input, 'owner@example.test', prepare)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { id: 'c'.repeat(32), url: `https://www.notion.so/${'c'.repeat(32)}` } })
+  expect(prepare).toHaveBeenCalledTimes(1)
+  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(1)
+})

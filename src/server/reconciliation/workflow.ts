@@ -153,6 +153,19 @@ export class WorkflowOperations {
         const card = await this.reader.card(previous.cardId, true)
         return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card }
       }
+      if (previous) {
+        try {
+          const card = await this.findCreation(actor, input.operation_id)
+          if (!card) return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation remains unconfirmed; this retry will not create a duplicate.', operation_id: input.operation_id, saved_fields: [] }
+          await this.creations.put(JSON.stringify([actor, input.operation_id]), signature, card.id)
+          const current = await this.reader.card(card.id, true)
+          this.reader.confirm(current)
+          await this.changed({ card: current, actor, operationId: input.operation_id, properties: {} })
+          return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card: current }
+        } catch {
+          return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation could not be reconciled; retry to retrieve its receipt.', operation_id: input.operation_id, saved_fields: [] }
+        }
+      }
       const prepared = await prepare()
       const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })
       return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] } })
@@ -385,6 +398,17 @@ export class WorkflowOperations {
       return partial
     }
   }
+  private async findCreation(actor: string, operationId: string, name?: string): Promise<WorkCard | undefined> {
+    const config = this.reader.config
+    if (!config) throw new Error('Not configured')
+    const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, ...(name === undefined ? {} : { filter: { property: 'Name', title: { equals: name } } }) })
+    if (!Array.isArray(candidates.results) || candidates.has_more !== false) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+    const marker = receiptMarker(actor, operationId)
+    for (const raw of candidates.results) {
+      const candidate = notionCard(raw)
+      if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
+    }
+  }
   private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown> }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
@@ -396,19 +420,13 @@ export class WorkflowOperations {
       const previous = await this.creations.get(key)
       if (previous && previous.input !== signature) throw new WorkflowError('operation-conflict', 'operation_id was used with different creation input')
       if (previous?.cardId) { saved.push('card'); card = await this.reader.card(previous.cardId, true); this.reader.confirm(card); return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card']) }
-      // A creation receipt is in the initial page children, so lost responses and
-      // restarts can recover it without an authoritative offline queue or schema.
-      const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, filter: { property: 'Name', title: { equals: input.name } } })
-      if (!Array.isArray(candidates.results) || candidates.has_more !== false) throw new WorkflowError('create-scope-incomplete', 'Matching-name search is incomplete; cannot safely deduplicate creation')
-      for (const raw of candidates.results) {
-        const candidate = notionCard(raw)
-        if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) {
-          card = candidate; saved.push('card')
-          await this.creations.put(key, signature, card.id)
-          card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
-          await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
-          return result('saved', 'already-saved', 'Card creation already saved', ['card'])
-        }
+      const candidate = await this.findCreation(actor, input.operation_id, input.name)
+      if (candidate) {
+        card = candidate; saved.push('card')
+        await this.creations.put(key, signature, card.id)
+        card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
+        await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
+        return result('saved', 'already-saved', 'Card creation already saved', ['card'])
       }
       if (previous) return result('partially-saved', 'create-unconfirmed', 'An earlier creation is unconfirmed and its receipt is not visible in the current name search. Reconcile that card before using a new operation_id; this retry will not create a duplicate.')
       const schema = await this.content.request(`data_sources/${config.dataSourceId}`)
