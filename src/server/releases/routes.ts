@@ -14,6 +14,7 @@ import { ReleaseEvidenceReader } from './evidence'
 import { ReleaseReconciler } from './reconcile'
 import { readReleaseWriteRecords } from './writer'
 import { planReleaseAutomation, readAutomationSettings } from './automation'
+import { ReleaseObjectReader } from './objects'
 
 async function ownerLogins(root: string): Promise<string[]> {
   try {
@@ -24,6 +25,7 @@ async function ownerLogins(root: string): Promise<string[]> {
 /** GET produces observations/proposals only, never executes the scheduled writer. */
 export class ReleasesApi {
   readonly store: AssociationStore
+  private releaseObjects = new ReleaseObjectReader()
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private evidence = new ReleaseEvidenceReader(root), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
   }
@@ -44,8 +46,10 @@ export class ReleasesApi {
     }
     const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
     data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
-    const reconciled = await this.reconciler.get(data, scene, await this.evidence.get(), await readReleaseWriteRecords(this.root))
+    const evidence = await this.evidence.get()
+    const reconciled = await this.reconciler.get(data, scene, evidence, await readReleaseWriteRecords(this.root))
     reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+    reconciled.releases = await this.releaseObjects.get(evidence, reconciled, scene)
     return reconciled
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {

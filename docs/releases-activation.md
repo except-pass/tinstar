@@ -1,3 +1,8 @@
+> Historical proposal: the November 10 controlling release-first handoff supersedes
+> this opt-in activation recommendation. Do not activate it. The existing writer
+> remains default OFF; new mandatory acceptance and any activation belong to a
+> separately approved later rollout. See [Releases D.2](features/releases.md).
+
 # Releases activation packet
 
 The implementation is default OFF. The production verification decision is

@@ -5,7 +5,7 @@ import { cmsandboxReceipts, receiptHash } from './cmsandbox'
 /** Read an exported coordinator directory, never AWS or the deployment control
  * plane. Exporters preserve S3 LastModified as file mtime. Only committed journal
  * and referenced frozen objects are loaded; unrelated exports are ignored. */
-export async function readCoordinatorStore(directory: string) {
+export async function readCoordinatorBundle(directory: string) {
   let bytes = 0
   const read = async (path: string) => {
     const metadata = await stat(path)
@@ -46,5 +46,9 @@ export async function readCoordinatorStore(directory: string) {
     }
   }
   const bundle = { schema: 'tinstar.cmsandbox-production-export.v1', repository: 'fortresspower/cmsandbox', bucket: 'fortresspower-cmsandbox-release-prod-298117917676', control, journal, journalMetadata, objects }
-  return cmsandboxReceipts(bundle)
+  return bundle
+}
+
+export async function readCoordinatorStore(directory: string) {
+  return cmsandboxReceipts(await readCoordinatorBundle(directory))
 }

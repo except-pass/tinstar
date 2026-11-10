@@ -56,7 +56,8 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   const suffix = match[2]!, permissions: Permissions = { metadata: 'read' }
   if (!suffix) { /* Repository numeric ID/owner verification. */ }
   else if (/^\/pulls(?:\/[1-9]\d*(?:\/(?:files|reviews|commits))?)?$/.test(suffix)) permissions.pull_requests = 'read'
-  else if (/^\/compare\/[a-f0-9]{40,64}\.\.\.[a-f0-9]{40,64}$/.test(suffix) || /^\/commits\/[a-f0-9]{40,64}$/.test(suffix)) permissions.contents = 'read'
+  else if (/^\/commits\/[a-f0-9]{40,64}\/pulls$/.test(suffix)) permissions.pull_requests = 'read'
+  else if (suffix === '/tags' || /^\/compare\/[a-f0-9]{40,64}\.\.\.[a-f0-9]{40,64}$/.test(suffix) || /^\/commits\/[a-f0-9]{40,64}$/.test(suffix)) permissions.contents = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/check-runs$/.test(suffix)) permissions.checks = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/(?:status|statuses)$/.test(suffix)) permissions.statuses = 'read'
   else if (/^\/actions\/(?:runs(?:\/[1-9]\d*(?:\/jobs)?)?|jobs\/[1-9]\d*|workflows\/[1-9]\d*)$/.test(suffix)) permissions.actions = 'read'
