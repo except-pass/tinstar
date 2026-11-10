@@ -841,3 +841,31 @@ it('observes comment-only edits through rotating and explicit refreshes without 
   expect(explicit).toHaveLength(1)
   expect(JSON.parse(explicit[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'explicit-comment', text: 'Immediate human input', author: 'human-author' }] })
 })
+
+it('does not wake for successful Firstmate notes when unsupported body blocks leave context partial', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  f.blocks.push({ id: 'unsupported-image', type: 'image', image: { type: 'external', external: { url: 'https://fixture.example/image.png' } } })
+  const root = await mkdtemp(join(tmpdir(), 'workflow-self-comment-partial-body-')); roots.push(root)
+  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  sources.workflow.onChange = change => feed.confirmed(change)
+  await feed.sweep(true)
+  expect(await sources.updateContext(id)).toMatchObject({ outcome: 'partial', commentsOutcome: 'available' })
+  for (let round = 0; round < 2; round++) {
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    expect(await sources.updateWork({ card_id: id, operation_id: `self-note-${round}`, kind: 'edit', note: `Confirmed Firstmate note ${round}` }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    const note = f.comments.at(-1).rich_text.map((part: any) => part.text.content).join('')
+    expect(note).toContain(receiptMarker('Firstmate', `self-note-${round}`))
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    await feed.sweep()
+    vi.setSystemTime(new Date(Date.now() + 10_001))
+    expect((await feed.bridgeWork()).pending).toEqual([])
+  }
+  f.comments.push({ id: 'human-after-self', created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: 'Human comment remains actionable' }] })
+  vi.setSystemTime(new Date(Date.now() + 60_001))
+  await feed.sweep()
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const notices = (await feed.bridgeWork()).pending
+  expect(notices).toHaveLength(1)
+  expect(JSON.parse(notices[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'human-after-self', text: 'Human comment remains actionable', author: 'human-author' }] })
+})

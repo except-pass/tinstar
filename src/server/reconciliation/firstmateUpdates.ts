@@ -102,7 +102,7 @@ export class FirstmateUpdates {
     const old = (await this.load()).cards[card.id], baseline = this.baselines.get(card.id)
     const changed = !!old && (old.edited !== card.last_edited_time || !!baseline && JSON.stringify(baseline.properties) !== JSON.stringify(values(card)))
     const context = await (changed ? this.sources.updateContext(card.id) : this.sources.updateComments(card.id, force)).catch(() => undefined)
-    if (context?.outcome === 'available' && (this.mutations.get(card.id) ?? 0) <= version) await this.observe(card, 'Notion actor unknown', context, undefined, !changed)
+    if (context && (context.commentsOutcome ?? context.outcome) === 'available' && (this.mutations.get(card.id) ?? 0) <= version) await this.observe(card, 'Notion actor unknown', context, undefined, !changed)
   }
   private async observe(card: WorkCard, actor: string, context?: CardContextRead, own?: WorkflowChange, commentsOnly = false) {
     return this.change(state => {
@@ -162,7 +162,7 @@ export class FirstmateUpdates {
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
       this.baselines.set(card.id, { properties: after,
         ...(context?.outcome === 'available' && !commentsOnly ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}),
-        ...(context?.outcome === 'available' ? { comments: context.blocks.filter(block => block.type === 'comment') } : baseline?.comments ? { comments: baseline.comments } : {}) })
+        ...(context && (context.commentsOutcome ?? context.outcome) === 'available' ? { comments: context.blocks.filter(block => block.type === 'comment') } : baseline?.comments ? { comments: baseline.comments } : {}) })
     })
   }
   /** Called from the existing refresh callback, never a second scheduler. */

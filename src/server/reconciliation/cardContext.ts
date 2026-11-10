@@ -3,6 +3,7 @@ import { record } from './values'
 
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
+  commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
   blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
@@ -22,7 +23,7 @@ export class CardContextReader {
   details(id: string, force = false): Promise<CardContextRead> {
     if (force) this.invalidate(id)
     return Promise.all([this.get(id), this.commentDetails(id, force)]).then(([body, comments]): CardContextRead => ({
-      ...body, blocks: [...body.blocks, ...comments.blocks],
+      ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
       outcome: body.outcome === 'unavailable' ? 'unavailable' : body.outcome === 'partial' || comments.outcome !== 'available' ? 'partial' : 'available',
       omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
     }))
