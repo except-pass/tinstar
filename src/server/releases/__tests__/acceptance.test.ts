@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm, readdir, chmod } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { CreationReceipts } from '../../reconciliation/workflowReceipts'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { acceptanceFixture } from '../../../../test-fixtures/releases/acceptance'
 import { acceptanceKey, readAcceptanceContract } from '../../../shared/releaseAcceptance'
 import { releaseChanges } from '../../../shared/releaseChanges'
-import { ReleaseAcceptanceRunner, acceptanceGithub, readAcceptanceRecords, type AcceptanceSettings } from '../acceptance'
+import { ReleaseAcceptanceRunner, acceptanceGithub, readAcceptanceRecords, readAcceptanceSettings, type AcceptanceSettings } from '../acceptance'
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); vi.unstubAllEnvs() })
@@ -20,14 +23,61 @@ async function setup(method: Parameters<typeof acceptanceFixture>[0] = 'workflow
   // One explicit card for dispatch count; many-to-many grouping is tested below.
   fixture.pull.links = fixture.pull.links.slice(0, 1)
   const github = vi.fn().mockResolvedValue({ workflow_run_id: 42, html_url: 'https://github.com/fortresspower/cmsandbox/actions/runs/42' })
-  const read = vi.fn(async () => { fixture.data.acceptanceRecords = await readAcceptanceRecords(root); return { data: fixture.data, scene: fixture.scene } })
+  const read = vi.fn(async () => { fixture.data.acceptanceRecords = await readAcceptanceRecords(root); fixture.data.acceptanceWorkflows = (await readAcceptanceSettings(root)).checks; return { data: fixture.data, scene: fixture.scene } })
   const runner = new ReleaseAcceptanceRunner(root, read, github, () => now)
-  const change = releaseChanges(fixture.release, fixture.data, fixture.scene)[0]!, key = change.checks![0]!.key
-  const configure = async (value = settings) => { await mkdir(join(root, 'releases'), { recursive: true }); await writeFile(join(root, 'releases', 'acceptance.json'), JSON.stringify(value)) }
-  return { ...fixture, root, runner, github, read, key, configure }
+  let key = releaseChanges(fixture.release, fixture.data, fixture.scene)[0]!.checks![0]!.key
+  const configure = async (value = settings) => { await mkdir(join(root, 'releases'), { recursive: true }); await writeFile(join(root, 'releases', 'acceptance.json'), JSON.stringify(value)); fixture.data.acceptanceWorkflows = value.checks; key = releaseChanges(fixture.release, fixture.data, fixture.scene)[0]!.checks![0]!.key }
+  return { ...fixture, root, runner, github, read, get key() { return key }, configure }
 }
 
 describe('release acceptance safe checks', () => {
+  it('serializes receipt mutations across processes without losing sibling latches', async () => {
+    const f = await setup()
+    const run = promisify(execFile)
+    await Promise.all(['acceptance', 'handoff', 'creation'].map(prefix => run(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+      import { CreationReceipts } from './src/server/reconciliation/workflowReceipts.ts';
+      const store = new CreationReceipts(${JSON.stringify(f.root)});
+      for (let i = 0; i < 25; i++) await store.put(${JSON.stringify(prefix)} + i, 'intent');
+    `])))
+    expect(await new CreationReceipts(f.root).entries('')).toHaveLength(75)
+  })
+  it('keeps unrelated attachment inconclusive and permits audited manual recovery', async () => {
+    const f = await setup(); await f.configure()
+    f.github.mockResolvedValue({ id: 42, html_url: 'https://github.com/fortresspower/cmsandbox/actions/runs/42', event: 'workflow_dispatch', path: '.github/workflows/existing-smoke.yml', head_branch: 'main', created_at: now, status: 'completed', conclusion: 'success' })
+    await f.runner.perform({ actor: 'owner', key: f.key, action: 'attach', reason: 'Found another check run', runId: 42 })
+    await f.runner.perform({ actor: 'owner' })
+    expect(f.github).not.toHaveBeenCalled()
+    expect((await readAcceptanceRecords(f.root))[0]!.events.at(-1)?.outcome).toBe('inconclusive')
+    await f.runner.perform({ actor: 'owner', key: f.key, action: 'manual', reason: 'Reviewed exact assertion', evidence: 'https://example.com/proof', outcome: 'passed' })
+    expect((await readAcceptanceRecords(f.root))[0]!.events.at(-1)?.outcome).toBe('passed')
+  })
+  it.each(['workflow', 'ref', 'inputs'].flatMap(field => ['running', 'passed'].map(outcome => [field, outcome])))('invalidates %s configuration evidence from %s and preserves history', async (field, outcome) => {
+    const f = await setup(); await f.configure(); await f.runner.perform({ actor: 'owner' })
+    if (outcome === 'passed') {
+      f.github.mockResolvedValueOnce({ id: 42, html_url: 'https://github.com/fortresspower/cmsandbox/actions/runs/42', event: 'workflow_dispatch', path: '.github/workflows/existing-smoke.yml', head_branch: 'main', created_at: now, status: 'completed', conclusion: 'success' })
+      await f.runner.perform({ actor: 'owner' })
+    }
+    const originalKey = f.key
+    const revised = structuredClone(settings)
+    if (field === 'inputs') revised.checks['siteconfig.avalon-enum.prod']!.inputs.fixture = 'different'
+    else if (field === 'workflow' || field === 'ref') revised.checks['siteconfig.avalon-enum.prod']![field] = field === 'ref' ? 'other' : 'other.yml'
+    await f.configure(revised)
+    const plan = await f.runner.plan()
+    expect(plan.checks[0]!.key).not.toBe(originalKey)
+    expect(plan.checks[0]!.outcome).toBe('missing')
+    await f.runner.perform({ actor: 'owner' })
+    expect(f.github.mock.calls.filter(call => call[0] === 'POST')).toHaveLength(2)
+    expect(await readAcceptanceRecords(f.root)).toHaveLength(2)
+  })
+  it('ignores configuration metadata and resolved input ordering', async () => {
+    const f = await setup(); await f.configure(); await f.runner.perform({ actor: 'owner' })
+    const originalKey = f.key, revised = structuredClone(settings)
+    revised.enabled = false
+    revised.checks['siteconfig.avalon-enum.prod']!.inputs = { receipts: '{receiptIds}', targets: '{targets}', fixture: 'approved-read-only-fixture' }
+    await f.configure(revised)
+    expect((await f.runner.plan()).checks[0]!.key).toBe(originalKey)
+    expect((await f.runner.plan()).checks[0]!.outcome).toBe('running')
+  })
   it('defaults OFF, and dry-run creates no receipt and makes zero GitHub requests even when enabled', async () => {
     const f = await setup()
     expect(await f.runner.perform({ actor: 'owner' })).toEqual({ enabled: false, records: [] })

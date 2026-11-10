@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { acquireLock } from '../infra/lock'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
@@ -35,11 +36,14 @@ export class CreationReceipts {
   private change(edit: (values: Record<string, Receipt>) => void) {
     const key = this.root ? join(this.root, 'workflow-create-receipts.json') : undefined
     const result = (key ? writers.get(key) ?? Promise.resolve() : this.tail).catch(() => {}).then(async () => {
-      const values = await this.read(); edit(values)
-      if (!this.root) { this.memory = values; return }
-      await mkdir(this.root, { recursive: true, mode: 0o700 })
-      const path = join(this.root, 'workflow-create-receipts.json'), temp = `${path}.${randomUUID()}.tmp`
-      await writeFile(temp, JSON.stringify(values), { mode: 0o600 }); await rename(temp, path)
+      const unlock = this.root ? await acquireLock(join(this.root, 'workflow-create-receipts.lock')) : null
+      try {
+        const values = await this.read(); edit(values)
+        if (!this.root) { this.memory = values; return }
+        await mkdir(this.root, { recursive: true, mode: 0o700 })
+        const path = join(this.root, 'workflow-create-receipts.json'), temp = `${path}.${randomUUID()}.tmp`
+        await writeFile(temp, JSON.stringify(values), { mode: 0o600 }); await rename(temp, path)
+      } finally { await unlock?.() }
     })
     if (key) writers.set(key, result); else this.tail = result
     void result.finally(() => { if (key && writers.get(key) === result) writers.delete(key) }).catch(() => {})

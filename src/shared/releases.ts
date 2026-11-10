@@ -42,6 +42,7 @@ export interface ReleasePull extends PullIdentity {
   deployment?: PullDeployment
 }
 export interface ReleasesRead {
+  acceptanceWorkflows?: Record<string, import('./releaseAcceptance').AcceptanceWorkflow>
   acceptanceRecords?: AcceptanceRecord[]
   releases?: ReleaseObject[]
   generatedAt: string; pulls: ReleasePull[]

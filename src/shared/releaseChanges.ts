@@ -37,7 +37,7 @@ export function releaseChanges(release: ReleaseObject, data: ReleasesRead, scene
     const { contract, gap } = cardAcceptanceContract(card?.source.properties.Evidence?.value)
     change.acceptanceGap = gap
     change.checks = (contract?.checks ?? []).map(check => {
-      const key = acceptanceKey(release, change, check)
+      const key = acceptanceKey(release, change, check, data.acceptanceWorkflows)
       const record = data.acceptanceRecords?.find(record => record.key === key) ?? null
       return { ...check, key, record, outcome: record?.events.at(-1)?.outcome ?? 'missing' }
     })

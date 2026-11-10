@@ -15,6 +15,7 @@ export type AcceptanceContract = z.infer<typeof acceptanceContractSchema>
 export type AcceptanceCheck = AcceptanceContract['checks'][number]
 export type AcceptanceOutcome = 'missing' | 'running' | 'passed' | 'failed' | 'inconclusive' | 'skipped'
 export interface AcceptanceEvent {
+  dispatched?: boolean
   at: string; actor: string; outcome: AcceptanceOutcome; reason: string
   evidence: string | null; runId: number | null; runUrl: string | null
 }
@@ -40,9 +41,22 @@ export function cardAcceptanceContract(value: unknown) {
 }
 /** Compare meaning: exact attempt, required merge identities, target receipts and
  * assertion. Formatting, timestamps and source ordering do not invalidate proof. */
-export function acceptanceKey(release: ReleaseObject, change: ReleaseChange, check: AcceptanceCheck): string {
+export interface AcceptanceWorkflow {
+  repository: string; workflow: string; ref: string; inputs: Record<string, string>
+}
+export function acceptanceExecution(release: ReleaseObject, change: ReleaseChange, check: AcceptanceCheck, workflows: Record<string, AcceptanceWorkflow> = {}) {
+  const approved = workflows[check.ref]
+  if (check.method !== 'workflow' || !approved || approved.repository.toLowerCase() !== release.repository.toLowerCase()) return null
+  const values: Record<string, string> = { releaseId: release.id, fixture: check.fixture ?? '', sourceSha: release.sourceSha ?? '',
+    receiptIds: change.targets.map(target => target.receipt?.id ?? '').sort().join(','),
+    targets: change.targets.map(target => `${target.component}:${target.target}`).sort().join(',') }
+  return { repository: approved.repository.toLowerCase(), workflow: approved.workflow, ref: approved.ref,
+    inputs: Object.fromEntries(Object.entries(approved.inputs).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => [key, value.replace(/\{(releaseId|fixture|sourceSha|receiptIds|targets)\}/g, (_, name: string) => values[name]!)])) }
+}
+export function acceptanceKey(release: ReleaseObject, change: ReleaseChange, check: AcceptanceCheck, workflows?: Record<string, AcceptanceWorkflow>): string {
   return 'release-acceptance:' + JSON.stringify({ release: release.id, change: change.id,
     check: [check.id, check.successCondition, check.method, check.ref, check.owner ?? null, check.fixture ?? null],
+    execution: acceptanceExecution(release, change, check, workflows),
     pulls: change.requiredPulls.slice().sort().map(url => [url, change.pulls.find(pull => pull.url === url)?.mergeSha ?? null]),
     targets: change.targets.map(target => [target.component, target.target, target.receipt?.id ?? null, target.receipt?.deployedSha ?? null, target.receipt?.artifactDigest ?? null]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) })
 }

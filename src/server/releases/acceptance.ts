@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import type { ReleasesRead } from '../../shared/releases'
+import { acceptanceExecution } from '../../shared/releaseAcceptance'
 import type { AcceptanceEvent, AcceptanceRecord, AcceptanceResult } from '../../shared/releaseAcceptance'
 import type { ReleaseChange, ReleaseObject } from '../../shared/releaseObjects'
 import { releaseChanges } from '../../shared/releaseChanges'
@@ -28,7 +29,7 @@ export async function readAcceptanceSettings(root: string): Promise<AcceptanceSe
 }
 const eventSchema = z.object({ at: z.string().datetime({ offset: true }), actor: text,
   outcome: z.enum(['missing', 'running', 'passed', 'failed', 'inconclusive', 'skipped']), reason: text,
-  evidence: text.nullable(), runId: z.number().int().positive().nullable(), runUrl: z.string().url().nullable() })
+  evidence: text.nullable(), runId: z.number().int().positive().nullable(), runUrl: z.string().url().nullable(), dispatched: z.boolean().optional() })
 const recordSchema = z.object({ key: text, releaseId: text, changeId: text, checkId: text, events: z.array(eventSchema).min(1) })
 export async function readAcceptanceRecords(root: string): Promise<AcceptanceRecord[]> {
   const entries = await new CreationReceipts(root).entries('release-acceptance:')
@@ -65,13 +66,10 @@ function deliveryGap({ release, change }: Selection, fresh: boolean) {
   return null
 }
 function request(selection: Selection, settings: AcceptanceSettings) {
-  const { release, change, check } = selection, approved = settings.checks[check.ref]
-  if (!approved || approved.repository.toLowerCase() !== release.repository.toLowerCase()) return null
-  const values: Record<string, string> = { releaseId: release.id, fixture: check.fixture ?? '',
-    sourceSha: release.sourceSha ?? '', receiptIds: change.targets.map(target => target.receipt!.id).sort().join(','),
-    targets: change.targets.map(target => `${target.component}:${target.target}`).sort().join(',') }
-  const inputs = Object.fromEntries(Object.entries(approved.inputs).map(([key, value]) => [key, value.replace(/\{(releaseId|fixture|sourceSha|receiptIds|targets)\}/g, (_, name: string) => values[name]!)]))
-  return { repository: approved.repository, workflow: approved.workflow, path: `/repos/${approved.repository}/actions/workflows/${encodeURIComponent(approved.workflow)}/dispatches`, body: { ref: approved.ref, inputs, return_run_details: true } }
+  const { release, change, check } = selection
+  const execution = acceptanceExecution(release, change, check, settings.checks)
+  if (!execution) return null
+  return { repository: execution.repository, workflow: execution.workflow, path: `/repos/${execution.repository}/actions/workflows/${encodeURIComponent(execution.workflow)}/dispatches`, body: { ref: execution.ref, inputs: execution.inputs, return_run_details: true } }
 }
 /** Explicit operator invocation, no web GET/timer dispatch. Checks and settings
  * are read before the short receipt lock. All mutations reuse workflow receipts. */
@@ -80,6 +78,7 @@ export class ReleaseAcceptanceRunner {
   constructor(private root: string, private read: () => Promise<{ data: ReleasesRead; scene: FloorScene }>, private github: AcceptanceGithub = acceptanceGithub, private now = () => new Date().toISOString()) { this.receipts = new CreationReceipts(root) }
   async plan() {
     const [{ data, scene }, settings] = await Promise.all([this.read(), readAcceptanceSettings(this.root)])
+    data.acceptanceWorkflows = settings.checks
     return { enabled: settings.enabled, zeroWrites: true, checks: acceptanceSelections(data, scene).map(selection => ({
       releaseId: selection.release.id, changeId: selection.change.id, checkId: selection.check.id, key: selection.check.key,
       title: selection.change.title, ref: selection.check.ref, outcome: selection.check.outcome, request: selection.check.method === 'workflow' && selection.change.delivery === 'Deployed' ? request(selection, settings) : null,
@@ -101,6 +100,7 @@ export class ReleaseAcceptanceRunner {
     if (!input.action && !settings.enabled) return { enabled: false, records: [] }
     if (input.action && !input.key) throw new Error('Select an exact check key from the dry-run output')
     if (input.action === 'manual' && (!['passed', 'failed', 'inconclusive', 'skipped'].includes(input.outcome ?? '') || !input.evidence?.trim())) throw new Error('Manual evidence and an explicit terminal result are required')
+    initial.data.acceptanceWorkflows = settings.checks
     const selected = acceptanceSelections(initial.data, initial.scene).filter(selection => !input.key || selection.check.key === input.key)
     if (input.key && !selected.length) throw new Error('Check identity changed or is unavailable; refresh the dry run')
     await mkdir(this.root, { recursive: true })
@@ -110,6 +110,8 @@ export class ReleaseAcceptanceRunner {
       for (const captured of selected) {
         // Re-read after waiting for the receipt lock; another process may have dispatched.
         const { data, scene } = await this.read()
+        const currentSettings = await readAcceptanceSettings(this.root)
+        data.acceptanceWorkflows = currentSettings.checks
         data.acceptanceRecords = await readAcceptanceRecords(this.root)
         const selection = acceptanceSelections(data, scene).find(row => row.check.key === captured.check.key)
         if (!selection) continue
@@ -122,7 +124,6 @@ export class ReleaseAcceptanceRunner {
           // Explicit human exception keeps prior failed/running evidence in history.
           records.push(await this.save(selection, event(input.outcome!, input.reason!, input.evidence!))); continue
         }
-        const currentSettings = await readAcceptanceSettings(this.root)
         const dispatch = check.method === 'workflow' ? request(selection, currentSettings) : null
         if (!dispatch) { if (input.key) throw new Error('An approved production-safe workflow is required'); continue }
         let runId = previous?.runId ?? null
@@ -132,6 +133,11 @@ export class ReleaseAcceptanceRunner {
         }
         if (previous && ['passed', 'failed', 'skipped'].includes(previous.outcome) && !input.action) continue
         if (runId && input.action !== 'retry') {
+          const bound = check.record?.events.some(item => item.runId === runId && item.dispatched === true)
+          if (!bound) {
+            records.push(await this.save(selection, event('inconclusive', 'Exact check-specific execution evidence unavailable; record an explicit manual result with evidence.', null, runId)))
+            continue
+          }
           try {
             const run = await this.github('GET', `/repos/${dispatch.repository}/actions/runs/${runId}`)
             const url = `https://github.com/${dispatch.repository}/actions/runs/${runId}`
@@ -150,7 +156,7 @@ export class ReleaseAcceptanceRunner {
           const result = await this.github('POST', dispatch.path, dispatch.body)
           const id = result.workflow_run_id
           if (!Number.isSafeInteger(id) || Number(id) < 1 || result.html_url !== `https://github.com/${dispatch.repository}/actions/runs/${id}`) throw new Error('Dispatch response lacks exact run identity')
-          records.push(await this.save(selection, event('running', input.reason ?? 'Approved safe acceptance workflow dispatched.', String(result.html_url), Number(id), String(result.html_url))))
+          records.push(await this.save(selection, { ...event('running', input.reason ?? 'Approved safe acceptance workflow dispatched.', String(result.html_url), Number(id), String(result.html_url)), dispatched: true }))
         } catch { records.push(await this.save(selection, event('inconclusive', 'Dispatch outcome unknown. Inspect GitHub, then attach the exact run or retry with an audited reason. No automatic repeat.'))) }
       }
       return { enabled: settings.enabled, records }

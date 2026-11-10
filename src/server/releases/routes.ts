@@ -14,7 +14,7 @@ import { ReleaseEvidenceReader } from './evidence'
 import { ReleaseReconciler } from './reconcile'
 import { readReleaseWriteRecords } from './writer'
 import { planReleaseAutomation, readAutomationSettings } from './automation'
-import { readAcceptanceRecords } from './acceptance'
+import { readAcceptanceRecords, readAcceptanceSettings } from './acceptance'
 import { ReleaseObjectReader } from './objects'
 
 async function ownerLogins(root: string): Promise<string[]> {
@@ -50,6 +50,8 @@ export class ReleasesApi {
     const evidence = await this.evidence.get()
     const reconciled = await this.reconciler.get(data, scene, evidence, await readReleaseWriteRecords(this.root))
     reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+    try { reconciled.acceptanceWorkflows = (await readAcceptanceSettings(this.root)).checks }
+    catch { reconciled.acceptanceWorkflows = {} }
     try { reconciled.acceptanceRecords = await readAcceptanceRecords(this.root) }
     catch { reconciled.acceptanceRecords = []; reconciled.warnings.push('Acceptance receipt store is unreadable; no passing results can be established.') }
     reconciled.releases = await this.releaseObjects.get(evidence, reconciled, scene)
