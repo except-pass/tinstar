@@ -708,7 +708,7 @@ it.each(['merged', 'closed'] as const)('suppresses only the merge ask when a lin
     const contexts = new Map([[a, { outcome: 'available' as const, blocks: ['Merge', 'Decision', 'Elevated command'].map(action => ({
       id: action, type: 'comment', text: `Requested from: Will\nQuestion: ${action} question\nTin Star request: ${JSON.stringify({ id: action, action, preserve_action: false })}`,
     })) }]])
-    const view = needsWill(queue, reconcileScene(s, now), contexts, inventory, readiness, true)
+    const view = needsWill(queue, { ...reconcileScene(s, now), claimHistory: [], historyScope: 'fixture: no prior claims' }, contexts, inventory, readiness, true)
     expect(view).toHaveLength(1)
     expect(view[0]!.requests.map(request => request.action)).toEqual(remaining === 'wait' ? [] : [remaining])
     expect(view[0]!.cardIds).toEqual([a])

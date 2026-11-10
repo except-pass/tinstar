@@ -1,3 +1,5 @@
+import { IncomingMessage } from 'node:http'
+import { Socket } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import { fixtureHomes, fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { executionWarnings } from '../workflowViews'
@@ -139,16 +141,21 @@ it('keeps asks with authorization placeholders until the PR Operations owner che
     const read = vi.fn(async () => inventory), readiness = vi.fn(async () => new Map())
     sources.readPulls = read
     sources.readPullReadiness = readiness
-    const request = (headers: Record<string, string>, peer = '127.0.0.1') => ({ headers, socket: { remoteAddress: peer } }) as import('node:http').IncomingMessage
+    const request = (headers: Record<string, string>, peer = '127.0.0.1') => {
+      const req = new IncomingMessage(new Socket())
+      req.headers = headers
+      Object.defineProperty(req.socket, 'remoteAddress', { value: peer })
+      return req
+    }
     for (const req of [undefined, request({ 'x-tinstar-ui': '1' }), request({ 'tailscale-user-login': 'stranger@example.test' }), request({ 'tailscale-user-login': 'owner@example.test' }, '100.64.0.1')]) {
       const result = await sources.queue(req)
-      expect(result.needsWill.find(item => item.cardIds.includes(card.id))).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+      expect(result.needsWill?.find(item => item.cardIds.includes(card.id))).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
       expect(JSON.stringify(result)).not.toContain('Private title')
     }
     expect(read).not.toHaveBeenCalled()
     expect(readiness).not.toHaveBeenCalled()
     const result = await sources.queue(request({ 'tailscale-user-login': 'owner@example.test' }))
-    expect(result.needsWill.find(item => item.cardIds.includes(card.id))?.pulls[0]).toMatchObject({ title: 'Private title', author: 'private-author', base: 'private-branch' })
+    expect(result.needsWill?.find(item => item.cardIds.includes(card.id))?.pulls[0]).toMatchObject({ title: 'Private title', author: 'private-author', base: 'private-branch' })
     expect(read).toHaveBeenCalledTimes(1)
     expect(readiness).toHaveBeenCalledTimes(1)
     const scene = fixtureScene({ now }); scene.cards.find(row => row.id === card.id)!.source = card

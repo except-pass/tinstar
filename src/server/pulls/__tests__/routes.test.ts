@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { createServer } from 'node:http'
+import { createServer, IncomingMessage } from 'node:http'
+import { Socket } from 'node:net'
 import { once } from 'node:events'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -130,10 +131,12 @@ it.each(['complete', 'partial', 'stale', 'unavailable'] as const)('uses producti
     const inventory = vi.fn(() => api.read())
     sources.readPulls = inventory
     sources.readPullReadiness = vi.fn(async () => new Map())
-    const owner = { headers: { 'tailscale-user-login': 'owner@example.test' }, socket: { remoteAddress: '127.0.0.1' } } as import('node:http').IncomingMessage
+    const owner = new IncomingMessage(new Socket())
+    owner.headers = { 'tailscale-user-login': 'owner@example.test' }
+    Object.defineProperty(owner.socket, 'remoteAddress', { value: '127.0.0.1' })
     if (coverage !== 'unavailable') {
       const open = await sources.queue(owner)
-      expect(open.needsWill[0]?.pulls[0]?.url).toBe(url)
+      expect(open.needsWill?.[0]?.pulls[0]?.url).toBe(url)
       clock += 61_000
     }
     phase = 'absent'
@@ -143,16 +146,16 @@ it.each(['complete', 'partial', 'stale', 'unavailable'] as const)('uses producti
     if (coverage === 'complete' || coverage === 'unavailable') expect(listed.pulls).toEqual([])
     const result = await sources.queue(owner)
     if (coverage === 'complete') expect(result.needsWill).toEqual([])
-    else expect(result.needsWill[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
+    else expect(result.needsWill?.[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
     card.properties['Will action']!.value = ['Merge', 'Decision']
     const mixed = await sources.queue(owner)
     expect(mixed.needsWill).toHaveLength(1)
-    expect(mixed.needsWill[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(coverage === 'complete' ? ['Decision'] : ['Merge', 'Decision'])
+    expect(mixed.needsWill?.[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(coverage === 'complete' ? ['Decision'] : ['Merge', 'Decision'])
     expect(sources.readPullReadiness).toHaveBeenLastCalledWith([])
     const reads = inventory.mock.calls.length
     const restricted = await sources.queue()
     expect(inventory).toHaveBeenCalledTimes(reads)
-    expect(restricted.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+    expect(restricted.needsWill?.[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
     expect(read.mock.calls.every(([path]) => path === '/user' || path.startsWith('/user/orgs?') || path.startsWith('/repos/owner/repo/pulls?state=open&'))).toBe(true)
   } finally { context.mockRestore() }
 })
@@ -200,18 +203,20 @@ it('retains an Evidence-only merge ask outside complete authored-or-associated i
     sources.readPulls = () => api.read()
     const readiness = vi.fn(async () => new Map())
     sources.readPullReadiness = readiness
-    const owner = { headers: { 'tailscale-user-login': 'owner@example.test' }, socket: { remoteAddress: '127.0.0.1' } } as import('node:http').IncomingMessage
+    const owner = new IncomingMessage(new Socket())
+    owner.headers = { 'tailscale-user-login': 'owner@example.test' }
+    Object.defineProperty(owner.socket, 'remoteAddress', { value: '127.0.0.1' })
     const view = await sources.queue(owner)
     expect(view.needsWill).toHaveLength(1)
-    expect(view.needsWill[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
-    expect(view.needsWill[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(['Merge', 'Decision'])
-    expect(view.needsWill[0]!.sources.find(source => source.kind === 'github')).toMatchObject({ id: url, status: 'unknown', observedAt: null })
+    expect(view.needsWill?.[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
+    expect(view.needsWill?.[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(['Merge', 'Decision'])
+    expect(view.needsWill?.[0]!.sources.find(source => source.kind === 'github')).toMatchObject({ id: url, status: 'unknown', observedAt: null })
     expect(readiness).toHaveBeenCalledWith([])
     expect(read).toHaveBeenCalledTimes(3)
     card.properties['Will action']!.value = ['Merge']
     expect((await sources.queue(owner)).needsWill).toHaveLength(1)
     expect(read).toHaveBeenCalledTimes(3)
     const restricted = await sources.queue()
-    expect(restricted.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+    expect(restricted.needsWill?.[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
   } finally { context.mockRestore() }
 })
