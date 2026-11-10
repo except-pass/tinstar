@@ -41,8 +41,8 @@ describe('Waiting For in the native Overview', () => {
     expect(screen.queryByRole('region', { name: 'Waiting For work' })).toBeNull()
     if (entry === 'dropdown') {
       fireEvent.click(screen.getByRole('button', { name: 'Choose pattern' }))
-      fireEvent.click(screen.getByRole('option', { name: 'Waiting For', exact: true }))
-    } else fireEvent.click(screen.getByRole('button', { name: 'Waiting For', exact: true }))
+      fireEvent.click(screen.getByRole('option', { name: 'Waiting For' }))
+    } else fireEvent.click(screen.getByRole('button', { name: 'Waiting For' }))
     expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
     expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
     expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
@@ -50,7 +50,7 @@ describe('Waiting For in the native Overview', () => {
   it('keeps the chip entry-only with a sole Custom Waiting For status', () => {
     localStorage.setItem(preferencesKey, JSON.stringify({ statusFilter: { preset: 'custom', statuses: ['Waiting For'] } }))
     mount()
-    const chip = screen.getByRole('button', { name: 'Waiting For', exact: true })
+    const chip = screen.getByRole('button', { name: 'Waiting For' })
     fireEvent.click(chip)
     fireEvent.click(chip)
     expect(chip).toHaveAttribute('aria-pressed', 'true')
