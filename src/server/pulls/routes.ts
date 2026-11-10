@@ -103,7 +103,7 @@ export class PullsApi {
           for (const target of input.targets) await this.origin(target.url)
           return this.prepareMerge(input, actor)
         })
-        if (!result.card) return fail(res, 'CONFLICT', result.message, { headers })
+        if (!result.card) return fail(res, 'CONFLICT', result.message, { headers, details: { code: result.code } })
         return ok(res, { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }, { headers })
       }
       if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Use GET for PR reads.', { headers })

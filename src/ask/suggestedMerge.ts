@@ -22,13 +22,13 @@ export async function sendSuggestedMerge(prUrl: string, attempt: SuggestedMergeA
   })
   const body = await readBody(response)
   if (body?.ok === false) {
-    attempt.input = undefined
+    if (body.error?.details?.code !== 'create-unconfirmed') attempt.input = undefined
     throw new Error(body.error?.message ?? 'Could not send to Clawson. Retry this click.')
   }
   if (!response.ok || !body?.ok || !body.data?.url || !body.data.message) throw new Error('Could not send to Clawson. Retry this click.')
   return { url: body.data.url, message: body.data.message }
 }
 
-async function readBody(response: Response): Promise<{ ok?: boolean; data?: { head?: unknown; url?: string; message?: string }; error?: { message?: string } }> {
+async function readBody(response: Response): Promise<{ ok?: boolean; data?: { head?: unknown; url?: string; message?: string }; error?: { message?: string; details?: { code?: string } } }> {
   try { return await response.json() } catch { throw new Error('Could not send to Clawson. Retry this click.') }
 }
