@@ -2,8 +2,9 @@
 
 Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
 **Update work** and **Start work** forms call the same backend operations as the
-authenticated MCP. `create_work` remains that authenticated operation, with no
-Overview control. Work tools require no open browser or `scene_id`. Explicit
+authenticated MCP. `create_work` remains available through authenticated MCP;
+the UI workflow endpoint does not accept creation, and Overview has no creation
+control. Work tools require no open browser or `scene_id`. Explicit
 window selection and acknowledgment still govern presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
