@@ -58,6 +58,14 @@ describe('authoritative coordinator release objects', () => {
     const { bundle, event, release, evidence } = source()
     Object.assign(release, { status: 'claimed', steps: {} }); event.command.type = 'open'
     const digest = receiptHash(event); bundle.journal[digest] = event; bundle.control.head = digest
+    bundle.journalMetadata[digest] = { lastModified: '2026-11-06T18:10:00Z' }
+    evidence.receipts = cmsandboxReceipts(bundle)
+    expect(evidence.receipts).toHaveLength(1)
+    expect(coordinatorReleaseObjects(evidence).map(row => row.kind)).toEqual(['candidate'])
+  })
+  it('keeps verified artifact staging out of production releases', () => {
+    const { bundle, evidence } = source({ stageOnly: true })
+    evidence.receipts = cmsandboxReceipts(bundle)
     expect(coordinatorReleaseObjects(evidence).map(row => row.kind)).toEqual(['candidate'])
   })
   it('preserves legacy component receipts without fusing matching version labels into one monorepo release', () => {

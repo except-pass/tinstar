@@ -9,8 +9,10 @@ import { ReleaseReconciler } from './reconcile'
 /** Frozen coordinator objects and committed observations only. No tag creates a release. */
 export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject[] {
   const releases = new Map<string, ReleaseObject>()
+  const coordinatorReceiptIds = new Set<string>()
   for (const source of evidence.coordinatorSources ?? []) {
     const bundle = source.bundle
+    for (const receipt of cmsandboxReceipts(bundle)) coordinatorReceiptIds.add(receipt.id)
     const chain: Array<{ digest: string; event: any }> = []
     let next = bundle.control.head
     while (next) { const event = bundle.journal[next]; chain.push({ digest: next, event }); next = event.previous }
@@ -20,7 +22,8 @@ export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject
       const record = event.state?.releases?.[binding.release_id]
       // A mere claim/open/tag is never an observed production release. Retain
       // attempts that actually reached target readback, including later supersedes.
-      const observed = previous?.observed || Object.values(record?.steps ?? {}).some((step: any) => !!step.verified)
+      const observed = previous?.observed || Object.entries(record?.steps ?? {}).some(([id, step]: [string, any]) =>
+        ['service', 'static'].includes(bundle.objects[binding.plan]?.execution?.steps?.[id]?.kind) && !!step.verified)
       bindings.set(key, { digest, event, observed: !!observed })
     }
     const entries = [...bindings.values()].reverse()
@@ -71,7 +74,7 @@ export function coordinatorReleaseObjects(evidence: EvidenceRead): ReleaseObject
   // identity until an authoritative release/attempt association is supplied.
   const covered = new Set([...releases.values()].flatMap(release => release.targets.flatMap(target => target.receipt ? [target.receipt.id] : [])))
   for (const receipt of evidence.receipts) {
-    if (receipt.environment !== 'production' || covered.has(receipt.id)) continue
+    if (receipt.environment !== 'production' || coordinatorReceiptIds.has(receipt.id) || covered.has(receipt.id)) continue
     const identityKnown = !!(receipt.deployedSha || receipt.artifactDigest)
     const id = `${receipt.repository}:component-receipt:${receipt.id}:${receipt.target}:${receipt.component}`
     releases.set(id, { id, repository: receipt.repository, kind: 'production', version: receipt.version ?? receipt.id,
