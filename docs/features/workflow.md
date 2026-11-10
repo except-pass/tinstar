@@ -1,9 +1,10 @@
 # Shared workflow operations
 
-Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
-**Start work** form and the authenticated MCP’s `start_work` tool call the same
-backend operation. Work tools require no open browser or `scene_id`. Explicit
-window selection and acknowledgment still govern presentation focus/flash.
+Tin Star owns workflow recording; Notion remains authoritative. Overview’s
+**Create work** and the Inspector’s **Update work** and **Start work** forms call
+the same backend operations as the authenticated MCP. Work tools require no open
+browser or `scene_id`. Explicit window selection and acknowledgment still govern
+presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
 the existing Notion reader, scene/link projection and Smart Search predicates.
@@ -103,16 +104,12 @@ access.
 ## Slice 1 delivery history
 
 At slice 1 delivery, remaining operations and pickup/update integration were
-reserved for slice 2 (now described below). Computed decision views and staged
-writer/poller retirement remain slice 3. Existing
-writers, the Mac Notion poller and PM Bot monitors/listeners remain until their
-replacements work. This slice retires none of them and restarts no paused routine.
-The watchdog keeps its independent Firstmate active eligibility census and current
-card checks; it no longer needs a historical board scan through the shared scene.
+reserved for slice 2 (now described below). See that section for current retained
+dependencies and the [watchdog reference](check-in-watchdog.md) for its scoped
+eligibility census and current-card verification.
 
 Catalog additions: `search_work`, `get_work`, `get_workflow_rules`, `start_work`.
-No existing MCP signature changes. After deploy, Firstmate must tell the owner to
-refresh the ChatGPT connector’s tool catalog. Deployment and one disposable-card
+No existing MCP signatures changed in slice 1. Deployment and one disposable-card
 live UI/MCP/Notion/First Mate acceptance run remain Firstmate-owned; local tests
 and screenshots use fixtures and do not establish live acceptance.
 
@@ -191,9 +188,12 @@ from being repeated if the card was renamed or its query receipt is not visible.
 That latch is not an offline queue or authoritative card. Reconcile an uncertain
 creation through current reads before intentionally creating with a new ID.
 
-Checkpoint timestamps use the existing America/New_York, 9 AM date-only, DST
-and board ceiling helpers. Assessment/evidence must be substantive rather than
-placeholder acknowledgments. In Progress appointments must be in the future and
+Checkpoint prose normalizes line breaks to spaces in history, then validates the
+serialized report against the existing [watchdog report requirements](check-in-watchdog.md#notion-closure-and-repair)
+before any write. This applies to assessment, evidence, blocker and next action;
+invalid reports return `invalid-checkpoint` without saving. Checkpoint timestamps
+use the existing America/New_York, 9 AM date-only, DST and board ceiling helpers.
+In Progress appointments must be in the future and
 under the existing ceiling; Due Date remains a separate delivery deadline. Only
 an explicit checkpoint moves Next check-in. Provisional/owner-confirmed status
 is recorded in the checkpoint comment; neither ordinary edits nor a webhook
@@ -202,8 +202,10 @@ upgrade it. Worker and request history survives completion/parking.
 `FirstmateUpdates` joins the existing source-refresh callback, shared targeted
 Notion reader, and **existing Ask bearer bridge**. It does not invoke First Mate
 source/scripts, dispatch workers, add a scheduler, or create another inbox.
-Authenticated operation actors drive self-edit suppression for confirmed writes;
-matching edit times and property readbacks prevent duplicate scan notices. Direct
+Authenticated operation actors drive self-edit suppression for confirmed writes.
+The observer excludes only confirmed property, section and note effects; other
+unobserved changes are delivered with unknown attribution before advancing its
+baseline. Matching edit times and property readbacks deduplicate scan notices. Direct
 Notion edits carry unknown attribution. Last touched by never suppresses them. A Firstmate-owned Queued card
 gets one pickup per observed outstanding assignment. Leaving that assignment
 clears its latch, so a later requeue is actionable. Active In Progress/Waiting For
