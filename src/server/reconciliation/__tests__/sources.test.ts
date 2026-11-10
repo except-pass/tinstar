@@ -6,6 +6,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { reconcileScene } from '../scene'
 import { CachedObservation } from '../observation'
+import { NotionApi } from '../notionApi'
 import { loadReconciliationConfig } from '../config'
 import { fleetObservation } from '../fleet'
 import { executionStatus, retainedExecutionLiveness } from '../../../shared/executionLiveness'
@@ -667,4 +668,46 @@ it('routes a manual refresh through the existing scene endpoint', async () => {
     await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene?history=1`)
     expect(read.mock.calls).toEqual([[false, {}], [true, {}], [false, { history: true }]])
   } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+})
+
+
+it.each([false, true])('keeps a large-board refresh on the coalesced source path when comments are slow (source failure: %s)', async failed => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const pages = Array.from({ length: 160 }, (_, index) => ({ ...page,
+    id: index.toString(16).padStart(32, '0'), last_edited_time: new Date().toISOString() }))
+  let slow = false
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+    const path = new URL(String(url)).pathname
+    if (path.endsWith('/query')) {
+      if (slow) await new Promise(resolve => setTimeout(resolve, 1_000))
+      if (slow && failed) return new Response(null, { status: 503 })
+      const cursor = JSON.parse(String(init?.body)).start_cursor
+      return response({ results: cursor ? pages.slice(100) : pages.slice(0, 100),
+        has_more: !cursor, next_cursor: cursor ? null : 'second-page' })
+    }
+    if (path.startsWith('/v1/data_sources/')) return response(schema)
+    return response({ results: [], has_more: false })
+  })
+  const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { token: 'fixture', dataSourceId: id } }, fetcher, new NotionApi(fetcher, 0), await temp())
+  const initial = await sources.scene()
+  expect(initial.cards).toHaveLength(160)
+  let release!: () => void
+  const comments = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+  sources.onWorkRefresh = comments
+  slow = true
+  let complete = false
+  const manual = sources.scene(true).then(scene => { complete = true; return scene })
+  const poll = sources.scene()
+  try {
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(complete).toBe(true)
+    const [refreshed, polled] = await Promise.all([manual, poll])
+    expect(refreshed.cards).toHaveLength(160)
+    expect(refreshed.coverage.intentions).toMatchObject(failed
+      ? { status: 'stale', coverage: 'unknown', observedAt: initial.coverage.intentions.observedAt, error: expect.any(String) }
+      : { status: 'fresh', coverage: 'complete', error: null })
+    expect(polled.coverage.intentions).toEqual(refreshed.coverage.intentions)
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/query'))).toHaveLength(failed ? 3 : 4)
+    expect(comments).not.toHaveBeenCalled()
+  } finally { release?.(); await manual; await poll }
 })

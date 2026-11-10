@@ -232,8 +232,10 @@ Delivered notice payloads are discarded. After restart, unavailable prior diffs
 are disclosed with current context; no perfect historical replay is promised.
 Comment-only edits are checked without body reads on a rotating batch of four
 active Firstmate cards per minute, covering a stable set of N cards within
-ceil(N/4) sweeps. Explicit refresh checks comments immediately for the requested
-active cards; a forced feed sweep checks all active cards. These reads share the
+ceil(N/4) sweeps. Targeted `search_work`/`get_work` reads with `refresh: true`
+check comments immediately for the requested active cards; a forced feed sweep
+checks all active cards. Scene refreshes, including the toolbar refresh, read
+source properties without waiting for per-card comment checks. These reads share the
 comment cache and API limiter. New comment IDs, including author, enter the
 existing coalesced update and retry path even when page revisions are unchanged. Failed or
 partial source reads retain prior assignment state and never imply deletion.
