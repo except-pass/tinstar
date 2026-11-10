@@ -66,6 +66,13 @@ credentials for `gh-axi` with Actions read/write access to that repository.
 Historical snapshots support review but cannot authorize dispatch or a new human
 pass. A partial release may check its fully proven subset. Tag-only, skipped,
 rolled-back, flagged, unknown or mismatched required targets hold the check.
+The selected targets must still match current production repository/component/target,
+source SHA and artifact identity. Every required PR must also have successful,
+exception-free current target reconciliation and proven source ancestry; a newer
+unsafe attempt holds the check even if its source and artifact are unchanged.
+These gates apply to preview, dispatch/retry, collection/attachment and new manual
+results. Historical release viewing and prior evidence remain available; an
+audited skip can acknowledge a hold without claiming acceptance.
 
 1. Keep `releases/automation.json` disabled. Do not activate the D.1 writer.
 2. Configure the real safe-check mappings with `enabled: false`.
@@ -99,18 +106,24 @@ Execution records use `workflow-create-receipts.json`, the existing Tin Star
 workflow receipt store, under `release-acceptance:` keys. Contracts remain card
 owned; deployments remain coordinator owned. There is no new release ledger.
 Each record binds the exact release attempt, required merge identities, exact
-target receipts and the check's assertion/reference/fixture. Source ordering,
-JSON formatting and observation timestamps do not affect that binding. Changes
-to deployment identity or assertions require fresh evidence. GETs only read.
+target receipts, the check's assertion/reference/fixture and the approved resolved
+workflow repository, workflow, ref and input values. Source ordering, JSON
+formatting and observation timestamps do not affect that binding. Changes to
+deployment identity, assertions or resolved execution values require fresh
+evidence. GETs only read and expose records matching checks in the current
+projected release scope; records outside that scope remain persisted unchanged.
 
 Intent is saved before dispatch. A timeout/lost response stays inconclusive and
 never automatically retries. Repeated runs collect the saved exact run rather
 than guessing the newest run. History preserves failed results when an explicit
-human exception or retry follows. The owner can resolve a stuck check with one
-command and a reason; copy its exact `key` from the dry-run output:
+human exception or retry follows. Attachment can collect a result only when the
+store already binds that exact run to this check's dispatch. A run without that
+check-specific evidence remains inconclusive, even if its workflow/ref and timing
+match; use an explicit manual result with evidence after inspection. The owner
+can resolve a stuck check with one command and a reason; copy its exact `key` from the dry-run output:
 
 ```sh
-# Attach a run after inspecting the provider following a lost response.
+# Attach a run; without a saved check-specific dispatch binding it stays inconclusive.
 npx tsx scripts/releases-acceptance.ts --execute --actor OWNER_LOGIN --key 'CHECK_KEY' --action attach --run-id 12345 --reason 'Inspected the exact dispatch in GitHub'
 # Explicit safe retry after checking that repeating the check is appropriate.
 npx tsx scripts/releases-acceptance.ts --execute --actor OWNER_LOGIN --key 'CHECK_KEY' --action retry --reason 'Inspected prior run; approved another safe attempt'
