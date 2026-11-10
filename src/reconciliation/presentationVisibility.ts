@@ -17,13 +17,15 @@ export function observeTargets(targets: string[], surface: 'overview' | 'decisio
     const hit = document.elementFromPoint(x, y)
     return !!hit && (node === hit || node.contains(hit))
   }))
-  const supported = targets.every(id => id.startsWith('card:') || id.startsWith('execution:'))
+  const supported = targets.filter(id => id.startsWith('card:') || id.startsWith('execution:'))
+  const pending = supported.some(id => !foreground || !visible.includes(id))
+  const unsupportedMissing = targets.some(id => !supported.includes(id) && !visible.includes(id))
   const allVisible = visible.length === targets.length
   return {
-    stage: !supported && !rendered.length ? 'not-supported' : !foreground ? 'not-visible' : allVisible ? 'foreground-visible' : rendered.length === targets.length ? 'rendered' : 'not-visible',
-    reason: !supported && !rendered.length ? 'This surface has no rendered target for this action. Use card or execution targeting.' : !foreground ? 'Switch to this tab to see the pending focus.' : allVisible ? undefined : 'Target is missing, clipped, or covered; visual delivery is unconfirmed.',
+    stage: !supported.length && !rendered.length ? 'not-supported' : !foreground ? 'not-visible' : allVisible ? 'foreground-visible' : unsupportedMissing && !pending ? 'not-supported' : rendered.length === targets.length ? 'rendered' : 'not-visible',
+    reason: unsupportedMissing && !pending ? 'Some requested semantic targets are not visible on this surface. Use card or execution targeting.' : !foreground ? 'Switch to this tab to see the pending focus.' : allVisible ? undefined : 'Target is missing, clipped, or covered; visual delivery is unconfirmed.',
     observed_at: new Date().toISOString(), surface, route: (location.pathname + location.search).slice(0, 2048),
-    targets, rendered_targets: rendered, visible_targets: foreground ? visible : [], pending: supported && (!foreground || !allVisible),
+    targets, rendered_targets: rendered, visible_targets: foreground ? visible : [], pending,
   }
 }
 export function revealTargets(targets: string[], surface: 'overview' | 'decisions' | 'other') {

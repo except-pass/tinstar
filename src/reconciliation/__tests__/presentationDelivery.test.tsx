@@ -99,6 +99,26 @@ describe('browser delivery and replay', () => {
     expect(renderedObservationSchema.parse(broker.read(tab.scene_id).rendered_scene).selection).toBe(ids[0])
     expect(broker.read(tab.scene_id).state?.flash?.ids).toEqual(ids)
   })
+  it.each(['reveal-search', 'flash'] as const)('keeps card delivery pending for a mixed card and claim %s through background replay', async type => {
+    hidden = true; focused = false
+    render(<Browser />); await tick()
+    const tab = broker.list()[0]!, card = { kind: 'card' as const, id: cardId }, claim = { kind: 'claim' as const, id: scene.claims[0]!.id }
+    const action = type === 'reveal-search' ? { type, target: card, targets: [claim] } : { type, targets: [card, claim] }
+    expect(broker.enqueue({ scene_id: tab.scene_id, command_id: 'mixed', expected_revision: tab.revision, ttl_ms: 8000, action }, scene).outcome).toBe('queued')
+    await tick(); await tick(5500)
+    expect(broker.result(tab.scene_id, 'mixed').delivery).toMatchObject({ stage: 'not-visible', pending: true })
+    expect(latest.pendingFocus).toBe(true)
+    expect(latest.state.flash!.until).toBeLessThan(Date.now())
+    const revision = latest.state.revision
+    hidden = false; focused = true
+    act(() => window.dispatchEvent(new Event('focus')))
+    await tick(); await tick()
+    expect(latest.state.revision).toBe(revision)
+    expect(latest.state.flash!.until).toBeGreaterThan(Date.now())
+    expect(latest.state.flash!.ids).toEqual([`card:${cardId}`, `claim:${claim.id}`])
+    expect(broker.result(tab.scene_id, 'mixed').delivery).toMatchObject({ stage: 'not-supported', targets: [`card:${cardId}`, `claim:${claim.id}`], visible_targets: [`card:${cardId}`], pending: false })
+    expect(latest.pendingFocus).toBe(false)
+  })
   it('lets manual interaction cancel background replay', async () => {
     hidden = true; focused = false
     render(<Browser />); await tick()

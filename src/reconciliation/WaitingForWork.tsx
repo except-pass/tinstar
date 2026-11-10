@@ -23,7 +23,7 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
     onClick={() => onSelect(card.id)} onMouseEnter={() => onHover(card)} onMouseLeave={() => onHover(null)} onFocus={() => onHover(card)} onBlur={() => onHover(null)}>
     <span>{cardTitle(card)}</span>
   </button>
-  const categories = projection.categories.filter(category => type === 'All' || category.type === type)
+  const categories = projection.categories.filter(category => type === 'All' || category.type === type || category.groups.some(group => group.cards.some(card => flashed(card.id))))
   const shown = categories.reduce((sum, category) => sum + category.groups.reduce((sum, group) => sum + group.cards.length, 0), 0)
   return <section className="ov-waiting-work" aria-label="Waiting For work">
     <header ref={heading} className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>
@@ -31,7 +31,7 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
     {categories.map(category => category.groups.length > 0 && <section key={category.type} className="ov-waiting-category" aria-label={`${category.type} dependencies`}>
       <h3><span>{category.type}</span><span>{category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>
       {category.groups.map(group => {
-        const expanded = searchKey ? !searchClosed.has(group.key) : open.has(group.key)
+        const expanded = (searchKey ? !searchClosed.has(group.key) : open.has(group.key)) || group.cards.some(card => flashed(card.id))
         const destination = group.target
         return <section key={group.key} className="ov-waiting-dependency" data-dependency-key={group.key}>
           <div className="ov-waiting-dependency-head"><button type="button" aria-expanded={expanded} aria-label={`${group.label}, ${group.cards.length} ${group.cards.length === 1 ? 'card' : 'cards'}`} title={group.label === group.id ? group.id : `${group.label} · ${group.id}`} onClick={() => toggle(group.key)}><span className="ov-waiting-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span><strong>{group.label}</strong><small>{group.cards.length} {group.cards.length === 1 ? 'card' : 'cards'}</small></button>

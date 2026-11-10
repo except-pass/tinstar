@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../../server/reconciliation/scene'
 import { expandedRelationships, gapTargets, overviewGroups, managerName, relevantWorkerHomes, rootHome, workerAbsenceLabel, workerSourceCoverage, workerState, workerSummary } from '../overviewModel'
-import { initialPresentation } from '../presentation'
+import { applyPresentationAction, initialPresentation } from '../presentation'
 
 describe('independent Overview stacks', () => {
   it('keeps published final reports in history when the source expires', () => {
@@ -222,4 +222,20 @@ it('does not revive an expired unrelated Backlog flash when opening a relationsh
   expect(overviewGroups(scene, state, now + 2000).flatMap(g => g.cardIds)).not.toContain(linkedCard)
   expect(state.flash).toEqual({ ids: [`card:${backlog.id}`], until: now + 1000 })
   expect(state.statusFilter?.preset ?? 'operational').toBe('operational')
+})
+
+
+it('preserves an assistant flash through compact relationship expansion and a donut filter', () => {
+  const now = Date.now(), scene = fixtureScene({ now })
+  const a = scene.cards.find(card => card.source.properties.Status?.value === 'In Progress')!
+  const b = scene.cards.find(card => card.source.properties.Status?.value === 'Backlog')!
+  const state = { ...initialPresentation(), donutFilter: { cards: ['In Progress'], workers: [] } }
+  const expanded = expandedRelationships(scene, [{ kind: 'card', id: a.id }])
+  expect(overviewGroups(scene, state, now, false, expanded).flatMap(group => group.cardIds)).not.toContain(b.id)
+  const flashed = applyPresentationAction(state, { type: 'flash', targets: [{ kind: 'card', id: b.id }], origin: 'assistant' }, scene, now)
+  expect(flashed.outcome).toBe('applied')
+  expect(overviewGroups(scene, flashed.state, now, false, expanded).flatMap(group => group.cardIds)).toContain(b.id)
+  expect(overviewGroups(scene, flashed.state, now + 5000, false, expanded).flatMap(group => group.cardIds)).not.toContain(b.id)
+  expect(flashed.state.donutFilter).toEqual(state.donutFilter)
+  expect(expanded).toEqual(expandedRelationships(scene, [{ kind: 'card', id: a.id }]))
 })

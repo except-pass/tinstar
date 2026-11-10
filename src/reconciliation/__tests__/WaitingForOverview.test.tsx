@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { DeskWorkspace, useDeskWorkspace } from '../../ask/DeskWorkspace'
+import { Overview as NativeOverview } from '../Overview'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import type { FloorScene } from '../presentation'
 import { overviewDensityKey } from '../overviewDensity'
@@ -24,7 +26,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
 })
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); sessionStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 function mount() { return render(<Overview workers={[]} messages={[]} submit={vi.fn()} />) }
 const select = () => fireEvent.click(screen.getByRole('button', { name: 'Cards: Waiting For, 3' }))
 const group = (name: string) => within(screen.getByRole('region', { name: 'Waiting For work' })).getByRole('button', { name })
@@ -133,4 +135,42 @@ describe('Waiting For in the native Overview', () => {
     expect(screen.getByText(/Could not refresh Waiting For. Showing the last known cards./)).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
   })
+})
+
+
+it.each(['outside scope', 'collapsed category'] as const)('temporarily reveals a flash in Waiting For with %s while preserving saved choices', async mode => {
+  vi.useFakeTimers()
+  localStorage.setItem(preferencesKey, JSON.stringify({ donutFilter: { cards: ['Waiting For'], workers: [] } }))
+  vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    const body = JSON.parse(init.body)
+    return new Response(JSON.stringify({ ok: true, data: body.type === 'register' ? { scene_id: 'test', key: 'secret' } : { commands: [] } }))
+  }))
+  let current!: ReturnType<typeof useDeskWorkspace>
+  function Probe() { current = useDeskWorkspace(); return null }
+  function Browser() { return <DeskWorkspace overviewActive onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}><Probe /><NativeOverview workers={[]} /></DeskWorkspace> }
+  const view = render(<Browser />), { container } = view
+  await act(async () => {})
+  const targetId = mode === 'outside scope' ? fixtureId(5) : fixtureId(1)
+  if (mode === 'collapsed category') {
+    fireEvent.click(group('Will, 2 cards'))
+    fireEvent.click(within(screen.getByRole('group', { name: 'Waiting For Type' })).getByRole('button', { name: 'Event' }))
+  }
+  const expansion = sessionStorage.getItem('tinstar.overview.waitingFor.expansion.v1')
+  const filters = structuredClone(current.state.donutFilter)
+  expect(container.querySelector(`.ov-card[data-entity-id="${targetId}"]`)).toBeNull()
+  act(() => { expect(current.send({ type: 'flash', targets: [{ kind: 'card', id: targetId }], origin: 'assistant' })?.outcome).toBe('applied') })
+  expect(container.querySelector(`.ov-card[data-entity-id="${targetId}"]`)).toHaveClass('flashed')
+  expect(current.state.donutFilter).toEqual(filters)
+  expect(sessionStorage.getItem('tinstar.overview.waitingFor.expansion.v1')).toBe(expansion)
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  view.rerender(<Browser />)
+  expect(container.querySelector(`.ov-card[data-entity-id="${targetId}"]`)).toBeNull()
+  expect(screen.getByRole('region', { name: 'Waiting For work' })).toBeTruthy()
+  expect(current.state.donutFilter).toEqual(filters)
+  expect(sessionStorage.getItem('tinstar.overview.waitingFor.expansion.v1')).toBe(expansion)
+  if (mode === 'collapsed category') {
+    expect(within(screen.getByRole('group', { name: 'Waiting For Type' })).getByRole('button', { name: 'Event' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(screen.getByRole('group', { name: 'Waiting For Type' })).getByRole('button', { name: 'All' }))
+    expect(group('Will, 2 cards')).toHaveAttribute('aria-expanded', 'false')
+  }
 })

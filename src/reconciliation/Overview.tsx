@@ -346,14 +346,19 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   // The existing search can explicitly reveal a card outside its status scope.
   // Preserve that temporary native result, then restore Waiting For on search exit.
   const focusedContext = scene && state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
-  const outsideWaitingFor = scene?.cards.some(card => focusedContext?.has(`card:${card.id}`) && cardStatus(card) !== 'Waiting For')
-  const waiting = waitingForActive(state) && !outsideWaitingFor
+  const flashContext = scene && state.flash?.revealTargets && state.flash.until > now ? directNeighbors(scene, state.flash.ids.map(id => {
+    const separator = id.indexOf(':')
+    return { kind: id.slice(0, separator) as Target['kind'], id: id.slice(separator + 1) }
+  })) : null
+  const outsideWaitingFor = scene?.cards.some(card => (focusedContext?.has(`card:${card.id}`) || flashContext?.has(`card:${card.id}`)) && cardStatus(card) !== 'Waiting For')
+  const waitingScope = waitingForActive(state)
+  const waiting = waitingScope && !outsideWaitingFor
   const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
   const [waitingOpen, setWaitingOpen] = useState<ReadonlySet<string> | null>(readWaitingForExpansion)
   const waitingReveal = useRef('')
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, !waiting && density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded, waiting])
   const waitingProjection = useMemo(() => waitingForGroups(groups.flatMap(group => group.cards), scene?.cards ?? []), [groups, scene])
-  useEffect(() => { if (waiting) setWaitingType('All') }, [waiting])
+  useEffect(() => { if (waitingScope) setWaitingType('All') }, [waitingScope])
   useEffect(() => { if (waitingOpen) saveWaitingForExpansion(waitingOpen) }, [waitingOpen])
   useEffect(() => { if (waiting && scene && waitingOpen === null) setWaitingOpen(new Set(waitingProjection.initial)) }, [waiting, scene, waitingOpen, waitingProjection])
   // Waiting For changes the Work presentation only. Keep the worker organizer,

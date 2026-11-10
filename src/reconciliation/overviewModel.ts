@@ -94,7 +94,7 @@ export function gapTargets(scene: FloorScene, now: number, readFailed = false): 
 /** Visibility never rewrites source links or absence findings. */
 export function overviewGroups(scene: FloorScene, state: PresentationState, now: number, readFailed = false, revealed: ReadonlySet<string> = new Set()): FloorGroup[] {
   // Inline expansion reveals immediate counterparts even through a status filter.
-  const display = revealed.size ? { ...state, flash: { ids: [...(state.flash && state.flash.until > now ? state.flash.ids : []), ...revealed], until: Math.max(state.flash?.until ?? 0, now + 1) } } : state
+  const display = revealed.size ? { ...state, flash: { ...(state.flash && state.flash.until > now ? state.flash : {}), ids: [...(state.flash && state.flash.until > now ? state.flash.ids : []), ...revealed], until: Math.max(state.flash?.until ?? 0, now + 1) } } : state
   return organizedGroups(scene, display, now).map(group => {
     const workers = group.workers.filter(e => !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || revealed.has(`execution:${e.id}`) || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
     const cards = group.cards.filter(c => !state.exceptionsOnly || revealed.has(`card:${c.id}`) || entityTone(scene, 'card', c.id, now, readFailed) === 'gap')
