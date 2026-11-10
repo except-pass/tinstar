@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fixtureId, fixtureReadinessScene, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixturePatternCoverageScene, fixtureReadinessScene, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { PatternDial, patternPreviews } from '../PatternDial'
 import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
 import { emptySearch } from '../../shared/smartSearch'
-import { dialNames, dialPatterns, patternReminders, stalledOutcome, workHealth } from '../../shared/workHealth'
+import { dialNames, dialPatterns, stalledOutcome, workHealth } from '../../shared/workHealth'
 const now = Date.parse('2026-11-06T18:00:00Z')
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks() })
 function mount(saved = initialPresentation()) {
@@ -133,10 +133,10 @@ describe('Pattern Dial', () => {
     vi.useFakeTimers(); mount({ ...initialPresentation(), search: { ...emptySearch(), patterns: ['blocked'] } })
     fireEvent.mouseEnter(selected())
     act(() => vi.advanceTimersByTime(399)); expect(screen.queryByRole('tooltip')).toBeNull()
-    act(() => vi.advanceTimersByTime(1)); expect(screen.getByRole('tooltip')).toHaveTextContent('blocked can be healthy')
+    act(() => vi.advanceTimersByTime(1)); expect(screen.getByRole('tooltip')).toHaveTextContent('Blocked: Work waiting for a named dependency.')
     expect(selected()).toHaveAttribute('aria-describedby', 'ov-pattern-description')
     fireEvent.click(selected()); fireEvent.mouseLeave(selected())
-    expect(screen.getByRole('tooltip')).toBeTruthy()
+    expect(screen.getByRole('dialog')).toBeTruthy()
     fireEvent.keyDown(selected(), { key: 'Escape' })
     expect(screen.queryByRole('tooltip')).toBeNull()
     expect(state().search?.patterns).toEqual(['blocked'])
@@ -192,15 +192,13 @@ describe('Pattern Dial', () => {
     const previews = patternPreviews(fixtureScene({ now }), state(), now)
     const texts = dialPatterns.map(pattern => {
       const option = screen.getByRole('option', { name: new RegExp(`^${dialNames[pattern]},`) })
-      const text = previews[pattern].unknown ? previews[pattern].count ? `${previews[pattern].count}+` : '?' : String(previews[pattern].count)
+      const text = `${previews[pattern].count}${pattern !== 'all' && previews[pattern].coverage ? ' confirmed' : ''}`
       expect(option.querySelector('small')?.textContent).toBe(text)
-      expect(option).toHaveAttribute('title', expect.stringContaining(patternReminders[pattern]))
-      if (previews[pattern].unknown) expect(option).toHaveAttribute('title', expect.stringContaining('? means unknown'))
+      expect(option.getAttribute('title')).toMatch(/^[^:]+: [^.]+\.$/)
+      expect(option.textContent).not.toMatch(/\?|\d\+|Pattern unknown/)
       return text
     })
-    expect(texts).toEqual(expect.arrayContaining(['1']))
-    expect(texts.some(text => text.endsWith('+'))).toBe(true)
-    expect(texts).toContain('?')
+    expect(texts).toContain('0 confirmed')
     expect(screen.getByRole('option', { name: /^Blocked,/ })).toHaveAttribute('aria-selected', 'true')
     fireEvent.click(screen.getByRole('option', { name: /^Needs me,/ }))
     expect(selected()).toHaveTextContent('Needs me')
@@ -243,7 +241,7 @@ describe('source-truthful aggregate previews', () => {
     expect(patternPreviews(scene, { ...view, donutFilter: { cards: [], workers: ['Running'] } }, now).blocked.count).toBe(0)
     expect(patternPreviews(scene, { ...view, search: { ...view.search, facets: [{ field: 'machine', value: 'Bandit' }] } }, now).all.count).toBe(1)
   })
-  it('renders complete counts and names the unavailable evidence class/home in partial tooltips', () => {
+  it('renders complete counts and keeps machine evidence out of partial details', () => {
     const scene = fixtureReadinessScene({ now }), view = initialPresentation()
     expect(patternPreviews(scene, view, now).active).toMatchObject({ count: 1, unknown: false })
     expect(patternPreviews(scene, view, now).stalled).toMatchObject({ count: 1, unknown: false })
@@ -251,17 +249,17 @@ describe('source-truthful aggregate previews', () => {
     expect(patternPreviews(partial, view, now).active).toMatchObject({ count: 1, unknown: true })
     expect(patternPreviews(partial, view, now).stalled).toMatchObject({ count: 0, unknown: true })
     render(<PatternDial scene={partial} state={{ ...view, search: { ...emptySearch(), patterns: ['stalled'] } }} now={now} send={() => {}} />)
-    expect(selected()).toHaveAccessibleName(/Stalled, \? matching tasks/)
+    expect(selected()).toHaveAccessibleName(/Stalled, 0 confirmed, 1 not evaluated/)
     fireEvent.click(selected())
-    expect(screen.getByRole('tooltip')).toHaveTextContent('Home snapshot stale or unreadable: /fixture/hulk')
-    expect(screen.getByRole('tooltip')).toHaveTextContent('Runnable coverage incomplete for /fixture/hulk')
+    expect(screen.getByRole('dialog')).toHaveTextContent('Worker or assignment evidence is missing')
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('/fixture/hulk')
   })
   it('keeps conclusive visible counts complete despite an unrelated stale home', () => {
     const scene = fixtureReadinessScene({ now, stale: true })
     for (const card of scene.cards) card.source.properties.Status!.value = 'Done'
     const view = initialPresentation(), previews = patternPreviews(scene, view, now)
     for (const pattern of ['active', 'stalled'] as const) {
-      expect(previews[pattern]).toEqual({ count: 0, unknown: false, reasons: [] })
+      expect(previews[pattern]).toEqual({ count: 0, unknown: false, reasons: [], coverage: null })
       const filtered = patternPreviews(scene, { ...view, donutFilter: { cards: [], workers: ['Running'] } }, now)
       expect(filtered[pattern].unknown).toBe(true)
       expect(filtered[pattern].reasons.join(' ')).toContain('Home snapshot stale or unreadable: /fixture/hulk')
@@ -288,5 +286,46 @@ describe('source-truthful aggregate previews', () => {
     expect(stalledOutcome({ ...input, activeResolverCount: null })).toBe('unavailable')
     expect(stalledOutcome({ ...input, runnable: null })).toBe('unavailable')
     expect(stalledOutcome({ ...input, workerCount: 0 })).toBe('no-match')
+  })
+})
+
+
+describe('compact coverage presentation', () => {
+  it.each([
+    { pattern: 'stalled' as const, confirmed: 0, unavailable: 12, expected: 'Stalled 0 confirmed' },
+    { pattern: 'active' as const, confirmed: 8, unavailable: 11, expected: 'Active 8 confirmed' },
+  ])('shows $expected and exact unavailable cards on click', ({ pattern, confirmed, unavailable, expected }) => {
+    vi.useFakeTimers()
+    const scene = fixturePatternCoverageScene({ now, confirmed, unavailable })
+    const inspect = vi.fn()
+    render(<PatternDial scene={scene} state={{ ...initialPresentation(), search: { ...emptySearch(), patterns: [pattern] } }} now={now} send={() => {}} onInspectCoverage={inspect} />)
+    expect(selected()).toHaveTextContent(expected)
+    expect(selected()).toHaveTextContent(`${unavailable} not evaluated`)
+    expect(document.querySelector('.ov-pattern-dial')).not.toHaveTextContent(/\?|\d\+|Pattern unknown|Can't tell/)
+    fireEvent.mouseEnter(selected()); act(() => vi.advanceTimersByTime(400))
+    expect(screen.getByRole('tooltip').textContent).toBe(`${pattern === 'stalled' ? 'Stalled: In Progress work with no confirmed way to advance.' : 'Active: In Progress work with a confirmed way to advance.'}`)
+    fireEvent.click(selected())
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent(`${confirmed} confirmed ${pattern} · ${unavailable} not evaluated`)
+    expect(dialog).toHaveTextContent('Worker or assignment evidence is missing')
+    const show = screen.getByRole('button', { name: `Show ${unavailable} cards` })
+    expect(show).toHaveFocus(); fireEvent.click(show)
+    expect(inspect).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+  it('restores exact complete counts when coverage returns, including true zero and neighbors', () => {
+    const state = { ...initialPresentation(), search: { ...emptySearch(), patterns: ['stalled' as const] } }
+    const { rerender } = render(<PatternDial scene={fixturePatternCoverageScene({ now, confirmed: 0, unavailable: 12 })} state={state} now={now} send={() => {}} />)
+    expect(selected()).toHaveTextContent('0 confirmed')
+    const complete = fixtureReadinessScene({ now })
+    complete.cards.forEach(card => { card.source.properties.Status!.value = 'Done' })
+    rerender(<PatternDial scene={complete} state={state} now={now} send={() => {}} />)
+    expect(selected().textContent).toBe('Stalled 0')
+    expect(document.querySelectorAll('.ov-pattern-coverage')).toHaveLength(0)
+    rerender(<PatternDial scene={fixturePatternCoverageScene({ now })} state={{ ...state, search: { ...emptySearch(), patterns: [] } }} now={now} send={() => {}} />)
+    expect(selected().textContent).toBe('All 19')
+    expect(screen.getByRole('button', { name: /^Select Active/ })).toHaveTextContent('Active 8 confirmed11 not evaluated')
+    expect(screen.getByRole('button', { name: /^Select Stalled/ })).toHaveTextContent('Stalled 0 confirmed11 not evaluated')
   })
 })

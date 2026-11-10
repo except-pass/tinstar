@@ -299,7 +299,7 @@ Hold the dial for about half a second, or press Enter or Alt+Down, to open every
 pattern in that order with the same counts and reminders. Arrows move in the list,
 Enter selects one, and Escape closes it and returns focus to the dial. Moving more
 than a few pixels cancels the hold, so a swipe still turns one detent and a short
-click still selects a neighbor or pins the center reminder.
+click still selects a neighbor or opens the center details.
 Picking any detent, including All, clears temporary search focus and its restore
 session. All also clears the pattern; other search/facet, donut and base-scope
 conditions remain. Pattern selection uses the existing search-filter reducer and persists
@@ -321,21 +321,25 @@ evidence requirements.
 
 Center and neighbor counts preview unique matching work under the other filters,
 ignoring the dial's current pattern. They are overlapping predicates, not pie
-slices. `?` means insufficient evidence; `N+` means N confirmed matches with
-incomplete coverage. No unpublished signal is treated as zero. Hover/focus the
-center for a delayed reminder; tap to pin/unpin it. Outside/Escape dismisses the
-reminder without clearing the pattern. The tooltip takes precedence over graph
-focus dismissal, while an open search palette closes first. At narrow widths the
+slices. With incomplete evidence, the primary line reads, for example,
+**Stalled 0 confirmed** or **Active 8 confirmed**; a quiet second line shows
+**N not evaluated** when visible cards have unavailable verdicts. Complete coverage
+shows the name and exact count without that second line. Neighbors use the same
+count convention. No unpublished signal is treated as zero. Hover/focus the
+center for a delayed, one-sentence definition; click, tap or Space opens compact
+details. Outside/Escape dismisses the popup without clearing the pattern.
+The popup takes precedence over graph focus dismissal, while an open search
+palette closes first. At narrow widths the
 single toolbar scrolls horizontally; the centered pattern stays legible and its
 neighbors retain touch targets.
 
 An unrelated stale home does not make conclusive visible predicates unknown.
 Home coverage still matters when worker filters, text search or machine/manager/entity
-facets can hide cards. The reminder names unavailable evidence classes and home paths.
+facets can hide cards. Detailed provenance remains in each card's inspector.
 
 When the selected pattern cannot evaluate visible cards, its dial shows
-`Pattern unknown: N`. Click the dial for the exact evaluated/unevaluated visible
-card counts and evidence reasons. **Inspect N cards with unknown pattern** focuses
+**N not evaluated**. Click the dial for the confirmed count, unavailable count
+and one plain-English evidence reason. **Show N cards** focuses
 those unique cards on the existing floor. Both counts and inspection exclude
 planned cards while the roadmap is collapsed. Combined-pattern searches name all
 selected patterns with `+`; their rules apply together (AND), and coverage describes
@@ -435,8 +439,8 @@ govern execution-gap conclusions used by No worker and gap styling. External rep
 [consumer-reported provenance](workflow.md#start-contract-and-enforced-rules)
 and do not establish independently verified runtime evidence for Active.
 
-The dial exposes missing evidence through unknown counts and the reminder,
-without disabled buttons or an additional patterns menu. Multiple blocked workers
+For the dial's coverage presentation, see [Smart Search](#smart-search-core).
+Multiple blocked workers
 retain one Work cluster and deduplicated blocker identifiers. Detailed evidence
 remains in the shared health projection for tests and consumers; it is not a
 second results inventory. Readiness is projected read-only from each configured home's existing snapshot:

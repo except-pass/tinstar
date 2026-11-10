@@ -99,3 +99,20 @@ export function fixtureReadinessScene({ now = Date.now(), stale = false }: { now
   if (stale) sources.fleet[1]!.observation = { ...sources.fleet[1]!.observation, status: 'stale', coverage: 'unknown', error: 'Fixture: readiness publication unavailable' }
   return new SceneReconciler().reconcile(sources, now)
 }
+
+/** Owner's rejected dial cases, with real tri-state results from shared work health. */
+export function fixturePatternCoverageScene({ now = Date.now(), confirmed = 8, unavailable = 11 }: { now?: number; confirmed?: number; unavailable?: number } = {}) {
+  const scene = fixtureReadinessScene({ now, stale: true })
+  const cards = scene.cards, claims = scene.claims
+  scene.cards = []; scene.claims = []
+  for (let i = 0; i < confirmed + unavailable; i++) {
+    const template = cards.find(card => card.id === fixtureId(i < confirmed ? 1 : 4))!
+    const id = fixtureId(2000 + i)
+    const card = structuredClone(template)
+    card.id = id; card.source.id = id
+    card.source.properties.Name!.value = `${i < confirmed ? 'Confirmed active' : 'Not evaluated'} card ${i + 1}`
+    scene.cards.push(card)
+    scene.claims.push(...claims.filter(claim => claim.cardId === template.id).map(claim => ({ ...claim, id: `${claim.id}-${i}`, cardId: id })))
+  }
+  return scene
+}
