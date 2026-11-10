@@ -39,7 +39,8 @@ export function WorkActions({ card, onSaved, sources = [] }: { card: SceneCard; 
   const [property, setProperty] = useState<typeof ordinary[number]>('Name'), [value, setValue] = useState(''), [changeProperty, setChangeProperty] = useState(false)
   const [brief, setBrief] = useState(''), [acceptance, setAcceptance] = useState('')
   const [evidence, setEvidence] = useState(''), [nextAction, setNextAction] = useState(''), [appointment, setAppointment] = useState(''), [confirmation, setConfirmation] = useState('provisional')
-  const [checkpointRequest, setCheckpointRequest] = useState(card.checkInRequest?.requestId ?? ''), [blocker, setBlocker] = useState('')
+  const [checkpointRequestOverride, setCheckpointRequest] = useState<string>(), [blocker, setBlocker] = useState('')
+  const checkpointRequest = checkpointRequestOverride ?? card.checkInRequest?.requestId ?? ''
   const [dependency, setDependency] = useState(''), [unblocks, setUnblocks] = useState(''), [followUp, setFollowUp] = useState('')
   const [requestId, setRequestId] = useState(''), [requestedFrom, setRequestedFrom] = useState('Will'), [action, setAction] = useState('Decision'), [resolvedWait, setResolvedWait] = useState(''), [legacyAction, setLegacyAction] = useState('')
   const [disposition, setDisposition] = useState(''), [workerKind, setWorkerKind] = useState('firstmate')
