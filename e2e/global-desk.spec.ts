@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { createServer } from 'node:http'
+import { execFile } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { AskApi } from '../src/server/ask/routes'
 import { askItemSchema } from '../src/shared/ask'
 import { seedOriginAllowlist } from '../src/server/api/originAllowlist'
@@ -502,4 +503,95 @@ test('answer arriving while an expanded waiting thread is collapsed stays unread
   await page.locator('.ask-preview').click()
   await expect(page.locator('.ask-desk article')).toHaveAttribute('data-unread', 'false')
   expect(reads).toBe(1)
+})
+
+test('live Desk quietly drops invalid recommendations and returns sender receipts', async ({ page, request }, testInfo) => {
+  const root = mkdtempSync(resolve('.ask-live-'))
+  const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
+  const token = 'disposable-rejection-token-000000000000'
+  const createApi = () => new AskApi({ scene: async () => scene }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
+  liveAsk = createApi(); seedOriginAllowlist(Number(new URL(base).port))
+  const headers = { 'Tailscale-User-Login': 'owner@example.test', 'X-Tinstar-UI': '1' }
+  const transcript: unknown[] = []
+  const call = async (path: string, data?: unknown, auth: Record<string, string> = headers) => {
+    const response = data === undefined ? await request.get(base + '/api/ask/' + path, { headers: auth }) : await request.post(base + '/api/ask/' + path, { headers: auth, data })
+    const body = await response.json()
+    transcript.push({ path, status: response.status(), body })
+    expect(response.ok()).toBe(true)
+    return body.data
+  }
+  const sender = { Authorization: `Bearer ${token}` }
+  const valid = { id: 'keep-open', label: 'Keep open', instruction: 'Retain the card until the review lands' }
+  const invalid = { id: 'merge-3359', label: 'Merge now', instruction: 'Open https://example.test/pull/3359' }
+  try {
+    await page.setViewportSize({ width: 1440, height: 1400 })
+    await page.setExtraHTTPHeaders(headers)
+    await page.route('**/api/ask/**', route => route.continue())
+    for (const [kind, actions] of [
+      ['mixed', [invalid, { ...invalid, id: 'merge-3360' }, valid]],
+      ['all-invalid', [invalid]],
+      ['duplicate', [valid, valid]],
+      ['oversized', Array.from({ length: 11 }, (_, i) => ({ ...valid, id: `choice-${i}` }))],
+    ] as const) {
+      const first = await call('requests', { client_key: crypto.randomUUID(), card_id: fixtureId(1), question: `Review recommendations: ${kind}`, view: { scene: 'overview' } })
+      await call('bridge', { request_id: first.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: `note-${kind}`, request_id: `tinstar-ask-${first.request_id}`, saved: true, announced: true, acknowledged: false } }, sender)
+      const update = { request_id: first.request_id, reply: { id: `note-${kind}`, at: new Date().toISOString(), cursor: '1', body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: first.request_id, summary: `Review can proceed: ${kind}`, detail: 'The evidence is retained and the review remains available.', references: [], suggested_actions: actions }) } }
+      const receipt = await call('bridge', update, sender)
+      liveAsk = createApi()
+      await page.goto(base)
+      await page.getByRole('button', { name: new RegExp(`New answer.*Review recommendations: ${kind}`) }).click()
+      const thread = page.getByRole('region', { name: `Answer thread: Review recommendations: ${kind}`, exact: true })
+      await expect(thread).toContainText('The evidence is retained and the review remains available.')
+      const screenshot = process.env.REJECTION_EVIDENCE_DIR ? resolve(process.env.REJECTION_EVIDENCE_DIR, `${process.env.REJECTION_CAPTURE_PREFIX ?? 'after'}-${kind}.png`) : testInfo.outputPath(`${kind}.png`)
+      await page.screenshot({ path: screenshot, fullPage: true })
+      await expect(page.locator('body')).not.toContainText('suggested actions were rejected')
+      await expect(page.locator('body')).not.toContainText('URLs and link syntax')
+      expect(receipt.reply_warnings).toHaveLength(kind === 'mixed' ? 2 : actions.length)
+      expect((await call('bridge', update, sender)).reply_warnings).toEqual(receipt.reply_warnings)
+      const saved = (await call('requests')).find((row: { request_id: string }) => row.request_id === first.request_id)
+      expect(saved.reply.suggested_actions).toEqual(kind === 'mixed' ? [valid] : [])
+      if (kind === 'mixed') {
+        // Drain a persisted reply journal through the real installed adapter,
+        // using an isolated executable inbox as the external First Mate sink.
+        const home = resolve(root, 'firstmate'), journal = resolve(home, 'state/tinstar-ask-reply-receipts')
+        mkdirSync(journal, { recursive: true }); mkdirSync(resolve(home, 'bin'))
+        writeFileSync(resolve(journal, 'reply.json'), JSON.stringify({ origin: base, payload: update }))
+        writeFileSync(resolve(home, 'bin/fm-inbox.sh'), `#!/usr/bin/env python3
+import json,os,pathlib,sys
+home=pathlib.Path(os.environ['FM_HOME'])
+if sys.argv[1]=='receipts':
+ print(json.dumps({'schema':'fm-inbox-receipts.v1','pending':[],'handled':[],'omitted':[]}))
+else:
+ assert sys.argv[1:3]==['note','--request-id']
+ (home/'warning-note.txt').write_text(sys.stdin.read())
+ print(json.dumps({'saved':True,'request_id':sys.argv[3],'id':'warning-note'}))
+`, { mode: 0o700 })
+        await new Promise<void>((resolveRun, reject) => execFile('python3', ['-B', '-c', "import runpy,sys,pathlib; p=runpy.run_path('scripts/ask-puller.py'); print(p['pull_once'](sys.argv[1],sys.argv[2],pathlib.Path(sys.argv[3])))", base, token, home], { cwd: resolve('.') }, error => error ? reject(error) : resolveRun()))
+        const warningNote = readFileSync(resolve(home, 'warning-note.txt'), 'utf8')
+        const warningPayload = warningNote.split('\n')[1]
+        if (warningPayload === undefined) throw new Error('Missing warning note payload')
+        expect(JSON.parse(warningPayload).reply_warnings).toEqual(receipt.reply_warnings)
+        expect(existsSync(resolve(journal, 'reply.json'))).toBe(false)
+        transcript.push({ firstmateInboxNote: warningNote })
+        if (process.env.REJECTION_EVIDENCE_DIR) writeFileSync(resolve(process.env.REJECTION_EVIDENCE_DIR, 'firstmate-warning-note.txt'), warningNote)
+        await thread.getByRole('button', { name: 'Keep open: Retain the card until the review lands' }).click()
+        const pending = (await call('bridge', undefined, sender)).pending
+        const selected = pending.find((row: { body: string }) => {
+          const payload = row.body.split('\n')[1]
+          if (payload === undefined) throw new Error('Missing pending action payload')
+          return JSON.parse(payload).action_selection?.action_id === valid.id
+        })
+        expect(selected).toBeTruthy()
+        const envelope = JSON.parse(selected.body.split('\n')[1])
+        expect(envelope.question).toBe(valid.instruction)
+        expect(envelope.conversation.turns[1].reply.rejected_actions).toEqual(receipt.reply_warnings)
+        const rejected = await request.post(base + '/api/ask/selections', { headers, data: { answer_id: first.request_id, action_id: invalid.id, client_key: crypto.randomUUID() } })
+        expect(rejected.ok()).toBe(false)
+        transcript.push({ rejectedSelectionStatus: rejected.status() })
+      }
+    }
+  } finally {
+    if (process.env.REJECTION_EVIDENCE_DIR) writeFileSync(resolve(process.env.REJECTION_EVIDENCE_DIR, `${process.env.REJECTION_CAPTURE_PREFIX ?? 'after'}-http.json`), JSON.stringify(transcript, null, 2))
+    liveAsk = undefined; rmSync(root, { recursive: true, force: true })
+  }
 })

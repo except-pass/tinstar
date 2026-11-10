@@ -148,7 +148,7 @@ describe('6.0.0 bridge content compatibility', () => {
 })
 
 describe('suggested action rejection receipts', () => {
-  it('persists every omitted action with a reason, returns warnings on retries and sends them in the next turn', async () => {
+  it('keeps the valid action, returns each omitted action on retries, and sends those warnings in the next turn', async () => {
     const { call, bridge, reload } = await setup()
     const first = (await call('requests', input())).data.data
     await bridge({ request_id: first.request_id, note: note(first.request_id) })
@@ -166,11 +166,14 @@ describe('suggested action rejection receipts', () => {
     expect(warnings).toEqual([
       { index: 0, id: 'link', reason: expect.stringContaining('instruction: URLs and link syntax are not allowed') },
       { index: 1, reason: expect.stringContaining('id: Required') },
-      { index: 2, id: 'valid', reason: expect.stringContaining('another entry is invalid') },
     ])
     reload()
     const saved = (await call('requests')).data.data[0]
-    expect(saved.reply).toMatchObject({ summary: 'Retained answer', detail: 'Retained evidence', degraded: true, suggested_actions: [], rejected_actions: warnings })
+    expect(saved.reply).toMatchObject({
+      summary: 'Retained answer', detail: 'Retained evidence', degraded: true,
+      suggested_actions: [{ id: 'valid', label: 'Recheck', instruction: 'Recheck (CI); keep v1.24.0' }],
+      rejected_actions: warnings,
+    })
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))[0].reply.rejected_actions).toEqual(warnings)
     expect((await bridge(update)).data.data.reply_warnings).toEqual(warnings)
     const conversation = (await call(`conversations/${first.conversation_id}`)).data.data
