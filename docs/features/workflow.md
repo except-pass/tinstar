@@ -520,6 +520,10 @@ queue `request_key`, optional canonical `card_id`, `question`, `rationale`,
 `source_request` binding; the source ID identifies that request. Actions use the
 existing Ask action validation. A revision is a new publication with a new
 `request_id` and proposal ID; it supersedes the prior proposal for that exact ask.
+For the same open request, typed Ask and work publications are resolved together.
+Any proposal named by another publication’s `supersedes` is history; the newest
+remaining publication wins, even when intermediate revisions are absent or
+publications are unrelated. Legacy rows without typed proposals are metadata.
 Legacy options and freeform text retain their existing behavior.
 
 Ask replies may carry the same `decision_proposal` object with

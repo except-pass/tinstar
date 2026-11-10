@@ -79,17 +79,23 @@ describe('source-scoped First Mate decision reconciliation', () => {
     expect(vi.mocked(f.delivery.submit).mock.calls[1]![0]).toEqual(first)
     expect(f.messages).toHaveLength(1)
   })
-  it.each(['stale', 'missing-link', 'conflicting-link', 'changed-question', 'conflicting-answer', 'two-proposals', 'no-binding'] as const)('requires verification for %s and never delivers', async mode => {
+  it.each(['stale', 'missing-link', 'conflicting-link', 'changed-question', 'conflicting-answer', 'no-binding'] as const)('requires verification for %s and never delivers', async mode => {
     const f = fixture(), hold = f.home.observation.data!.backlog![0]!
     if (mode === 'stale') f.home.observation.status = 'stale'
     if (mode === 'missing-link') hold.cardReferences = []
     if (mode === 'conflicting-link') hold.cardReferences.push({ pageId: 'a'.repeat(32), basis: 'explicit', source: 'work_item' })
     if (mode === 'changed-question') hold.hold_reason = 'Approve a different mailbox operation?'
     if (mode === 'conflicting-answer') f.notes.push({ id: 'contradiction', text: 'Tin Star answer: "mailbox-proposal"\nAnswer: R1\nNext owner: Firstmate\nNext status: Queued' })
-    if (mode === 'two-proposals') f.notes.push({ ...f.notes[0]!, id: 'other-proposal', text: f.notes[0]!.text.replace('mailbox-proposal', 'other') })
     if (mode === 'no-binding') f.notes[0]!.text = 'Tin Star request: {"id":"mailbox-proposal","action":"Decision"}'
     expect(await f.reconcile()).toMatchObject({ state: 'verification-needed' })
     expect(f.delivery.submit).not.toHaveBeenCalled()
+  })
+  it('retains legacy request metadata without treating another bound row as a competitor', async () => {
+    const f = fixture()
+    f.notes.push({ ...f.notes[0]!, id: 'other-proposal', text: f.notes[0]!.text.replace('mailbox-proposal', 'other') })
+    expect(await f.reconcile()).toMatchObject({ state: 'pending' })
+    expect(f.messages).toHaveLength(1)
+    expect(f.messages[0]!.decisionResolution?.requestId).toBe('mailbox-proposal')
   })
   it('does not infer an answer from status, unrelated edits or navigation', async () => {
     const f = fixture()

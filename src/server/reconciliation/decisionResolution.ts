@@ -79,12 +79,9 @@ export function decisionProposals(notes: WorkflowNote[]) {
     bound.set(key, [...(bound.get(key) ?? []), row])
   }
   const current = [...bound.values()].map(group => {
-    if (group.length === 1 && !group[0]!.proposal) return group[0]
-    const resolved = currentDecisionProposal(group.map(row => ({ row, value: row.proposal, source_request: row.source_request })))
-    if (!resolved || group.some(row => !decisionProposalSchema.safeParse(row.proposal).success)) throw new DecisionSourceError('multiple proposals bind the same source request without one valid revision chain')
-    return resolved.row
+    return currentDecisionProposal(group.map(row => ({ row, value: row.proposal })))?.row
   })
-  return history.filter(row => !row.source_request || current.includes(row))
+  return history.filter(row => !row.source_request || !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
 }
 export function decisionAnswer(note: WorkflowNote) {
   const data = rows([note], 'Tin Star answer data: ')[0]

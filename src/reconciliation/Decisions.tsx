@@ -201,7 +201,7 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
     const value = turn.reply?.decision_proposal
     return value && value.request_key === item.id && value.source.kind === 'ask-reply' && value.source.id === turn.request_id && (!value.card_id || item.cardIds.includes(value.card_id)) ? [{ answer_id: turn.request_id, value }] : []
   })
-  const proposal = currentDecisionProposal([...replyProposals, ...(item.proposal ? [item.proposal] : [])])
+  const proposal = currentDecisionProposal([...replyProposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))])
   const proposalReply = turns.find(turn => turn.request_id === proposal?.answer_id && !turn.published_proposal)
   const proposalReady = !unavailable && !controls?.error && decisionProposalReady(item, proposal, proposalReply, now)
   const recommended = proposal?.value.actions.find(action => action.id === proposal.value.recommended_action_id)

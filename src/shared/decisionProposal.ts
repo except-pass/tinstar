@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { firstMateRequestSchema, requestAnchor } from './deskSource'
 import { askActionSchema } from './ask-actions'
 
 export const decisionReferenceSchema = z.object({ label: z.string().min(1).max(512), url: z.string().url().refine(value => {
@@ -31,31 +30,15 @@ export const decisionRequestRevision = (item: Pick<import('../server/reconciliat
   item.sources.filter(source => source.kind !== 'github').map(source => JSON.stringify([source.id, source.request, source.question ?? source.action, source.generation])).sort(),
 ])
 
-export function currentDecisionProposal<T extends { value: unknown; source_request?: unknown }>(candidates: T[]): T | undefined {
+export function currentDecisionProposal<T extends { value: unknown }>(candidates: T[]): T | undefined {
   const parsed = candidates.flatMap(candidate => {
     const value = decisionProposalSchema.safeParse(candidate.value)
     return value.success ? [{ candidate, value: value.data }] : []
   })
   if (!parsed.length || new Set(parsed.map(entry => entry.value.request_key)).size !== 1) return undefined
-  const bindings = parsed.filter(entry => entry.candidate.source_request !== undefined).map(entry => firstMateRequestSchema.safeParse(entry.candidate.source_request))
-  if (bindings.some(binding => !binding.success) || new Set(bindings.flatMap(binding => binding.success ? [requestAnchor(binding.data)] : [])).size > 1) return undefined
-  const publications = new Map<string, typeof parsed[number]>()
-  for (const entry of parsed) {
-    const prior = publications.get(entry.value.proposal_id)
-    if (prior && JSON.stringify(prior.value) !== JSON.stringify(entry.value)) return undefined
-    publications.set(entry.value.proposal_id, entry)
-  }
   const replaced = new Set(parsed.map(entry => entry.value.supersedes))
-  const heads = [...publications.values()].filter(entry => !replaced.has(entry.value.proposal_id))
-  if (heads.length !== 1) return undefined
-  const visited = new Set<string>()
-  let entry: typeof parsed[number] | undefined = heads[0]
-  while (entry) {
-    if (visited.has(entry.value.proposal_id)) return undefined
-    visited.add(entry.value.proposal_id)
-    entry = entry.value.supersedes ? publications.get(entry.value.supersedes) : undefined
-  }
-  return visited.size === publications.size ? heads[0]!.candidate : undefined
+  return parsed.filter(entry => !replaced.has(entry.value.proposal_id))
+    .sort((a, b) => Date.parse(a.value.published_at) - Date.parse(b.value.published_at)).at(-1)?.candidate
 }
 
 export function decisionFresh(item: import('../server/reconciliation/queue').QueueItem, now = Date.now()) {
@@ -67,5 +50,5 @@ export function decisionFresh(item: import('../server/reconciliation/queue').Que
 export function decisionProposalReady(item: import('../server/reconciliation/queue').QueueItem | undefined, proposal: { answer_id: string; value: DecisionProposal } | undefined, answer: Pick<import('./ask').AskItem, 'context'> | undefined, now: number) {
   if (!item || !proposal || !decisionFresh(item, now) || proposal.value.request_key !== item.id || proposal.value.card_id && !item.cardIds.includes(proposal.value.card_id)) return false
   if (proposal.value.source.kind === 'ask-reply') return proposal.value.source.id === proposal.answer_id && answer?.context.target?.kind === 'decision' && answer.context.target.id === item.id && answer.context.decision?.revision === decisionRequestRevision(item)
-  return item.proposal?.answer_id === proposal.answer_id && JSON.stringify(item.proposal.value) === JSON.stringify(proposal.value)
+  return (item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === proposal.answer_id && JSON.stringify(published.value) === JSON.stringify(proposal.value))
 }

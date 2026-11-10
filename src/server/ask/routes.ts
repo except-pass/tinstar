@@ -138,18 +138,19 @@ export class AskApi {
             const item = await current(answer.context.target.id)
             if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
             if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
-            if (answer.published_proposal && (item.proposal?.answer_id !== answer.request_id || JSON.stringify(item.proposal.value) !== JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
-            if (currentDecisionProposal([...proposals, ...(item.proposal ? [item.proposal] : [])])?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded or has conflicting publications')
+            if (answer.published_proposal && !(item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === answer.request_id && JSON.stringify(published.value) === JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
+            if (currentDecisionProposal([...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))])?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded')
             if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
             return findSuggestedAction(proposal.actions, actionId)
           }
           return findSuggestedAction(answer.reply!.suggested_actions, actionId)
         }, async answerId => {
           const queue = await this.sources.queue?.(req)
-          const item = (queue?.needsWill ?? []).find(item => item.proposal?.answer_id === answerId)
-          if (!item?.proposal) return undefined
+          const item = (queue?.needsWill ?? []).find(item => (item.proposals ?? (item.proposal ? [item.proposal] : [])).some(proposal => proposal.answer_id === answerId))
+          const proposal = (item?.proposals ?? (item?.proposal ? [item.proposal] : [])).find(proposal => proposal.answer_id === answerId)
+          if (!item || !proposal) return undefined
           if (!decisionFresh(item)) throw new AskConflict('Published request needs refresh')
-          return { context: decisionContext(item, { scene: 'decisions' }), proposal: item.proposal.value }
+          return { context: decisionContext(item, { scene: 'decisions' }), proposal: proposal.value }
         }, async (action, operationId) => {
           if (!this.artifacts?.pullOrigin || !this.artifacts.sendMerge) throw new AskConflict('Merge handoff unavailable')
           const pull = await this.artifacts.pullOrigin(action.merge!.pr_url)

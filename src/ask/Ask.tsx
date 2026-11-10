@@ -308,8 +308,8 @@ function AskThread({ turns, controls, now }: { turns: AskItem[]; controls: AskCo
         const selected = turns.filter(item => item.action_selection?.answer_id === turn.request_id).at(-1)
         const decision = turn.context.target?.kind === 'decision'
         const decisionItem = controls.decisionItems?.find(item => item.id === turn.context.target?.id)
-        const workProposal = decisionItem?.proposal
-        const currentProposal = decision ? currentDecisionProposal([...controls.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === turn.context.target!.id && item.reply?.decision_proposal?.request_key === turn.context.target!.id).map(item => ({ answer_id: item.request_id, value: item.reply!.decision_proposal! })), ...(workProposal ? [workProposal] : [])]) : undefined
+        const workProposals = decisionItem?.proposals ?? (decisionItem?.proposal ? [decisionItem.proposal] : [])
+        const currentProposal = decision ? currentDecisionProposal([...controls.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === turn.context.target!.id && item.reply?.decision_proposal?.request_key === turn.context.target!.id).map(item => ({ answer_id: item.request_id, value: item.reply!.decision_proposal! })), ...workProposals]) : undefined
         const superseded = decision ? currentProposal?.answer_id !== turn.request_id : latestAnswer?.request_id !== turn.request_id
         const unavailable = !!reply?.rejected_actions?.length && !reply.suggested_actions.some(action => typeof action !== 'string')
         const summary = reply?.summary.trim() ?? '', detail = reply?.detail.trim() ?? ''

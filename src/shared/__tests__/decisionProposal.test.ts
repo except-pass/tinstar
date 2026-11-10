@@ -26,15 +26,18 @@ describe('published decision proposals', () => {
   })
 })
 
-it('resolves one explicit typed revision chain and rejects unrelated, cyclic and cross-source publications', () => {
-  const p = fixtureProposal('request'), q = { ...p, proposal_id: 'q', supersedes: p.proposal_id }, r = { ...p, proposal_id: 'r', supersedes: 'q' }
-  const source = { home: '/fixture', taskId: null, kind: 'hold' as const, id: 'source' }
-  const candidate = (value: unknown) => ({ value, source_request: source })
+it('resolves the newest remaining typed publication with incomplete or unrelated history', () => {
+  const p = { ...fixtureProposal('request'), published_at: '2026-11-10T00:00:00Z' }
+  const q = { ...p, proposal_id: 'q', published_at: '2026-11-11T00:00:00Z', supersedes: p.proposal_id }
+  const r = { ...q, proposal_id: 'r', published_at: '2026-11-12T00:00:00Z', supersedes: 'q' }
+  const candidate = (value: unknown) => ({ value })
   expect(currentDecisionProposal([candidate(r), candidate(p), candidate(q)])?.value).toEqual(r)
+  expect(currentDecisionProposal([candidate(p), candidate(r)])?.value).toEqual(r)
   expect(currentDecisionProposal([candidate(p), candidate('An explanatory answer')])?.value).toEqual(p)
-  expect(currentDecisionProposal([candidate(p), candidate({ ...q, supersedes: null })])).toBeUndefined()
+  expect(currentDecisionProposal([candidate(p), candidate(undefined), candidate(q)])?.value).toEqual(q)
+  const unrelated = { ...q, supersedes: null }
+  expect(currentDecisionProposal([candidate(unrelated), candidate(p)])?.value).toEqual(unrelated)
+  expect(currentDecisionProposal([candidate(q), candidate({ ...r, published_at: q.published_at })])?.value).toEqual({ ...r, published_at: q.published_at })
   expect(currentDecisionProposal([candidate({ ...p, supersedes: 'q' }), candidate(q)])).toBeUndefined()
-  expect(currentDecisionProposal([candidate(p), { value: q, source_request: { ...source, id: 'another' } }])).toBeUndefined()
   expect(currentDecisionProposal([candidate(p), candidate({ ...q, request_key: 'another' })])).toBeUndefined()
-  expect(currentDecisionProposal([candidate(p), candidate({ ...p, rationale: 'Conflicting content' })])).toBeUndefined()
 })

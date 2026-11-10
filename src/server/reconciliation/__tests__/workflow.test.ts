@@ -1900,7 +1900,7 @@ it('never delivers a conflicting direct Notion answer over an incomplete intent'
   expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
 })
 
-it.each([true, false])('reconciles a typed work revision chain=%s through queue projection and authenticated selection', async revision => {
+it.each(['revision', 'unrelated', 'missing intermediate', 'legacy'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
   const { AskApi } = await import('../../ask/routes')
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -1910,32 +1910,34 @@ it.each([true, false])('reconciles a typed work revision chain=%s through queue 
   const before = await sources.queue()
   const item = before.items.find(item => item.sources.some(source => source.request?.id === f.source.id))!
   expect(item.readiness).toBe('ready-now')
-  const p = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
-  const q = { ...p, proposal_id: 'revision-q', source: { ...p.source, revision: '2' }, supersedes: revision ? p.proposal_id : null }
-  expect(await sources.updateWork({ ...f.request, proposal: p } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
-  expect(await sources.updateWork({ ...f.request, request_id: 'publication-q', operation_id: 'publish-q', proposal: q } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
-  f.home.observation.observedAt = new Date(Date.now() + 1).toISOString()
-  const queue = await sources.queue()
-  const projected = queue.needsWill!.find(row => row.id === item.id)!
-  if (revision) {
-    expect(projected.readiness).toBe('ready-now')
-    expect(projected.decisionResolution).toBeUndefined()
-    expect(projected.proposal?.value.proposal_id).toBe(q.proposal_id)
-    expect(await sources.updateWork({ ...f.answer, operation_id: 'reject-old-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
-  } else {
-    expect(projected.readiness).toBe('needs-readiness-verification')
-    expect(projected.decisionResolution?.state).toBe('verification-needed')
-    expect(projected.proposal).toBeUndefined()
-  }
+  const p = { ...fixtureProposal(item.id, id), published_at: '2026-11-10T00:00:00Z', source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
+  const q = { ...p, proposal_id: 'revision-q', published_at: '2026-11-11T00:00:00Z', source: { ...p.source, revision: '2' }, supersedes: scenario === 'unrelated' || scenario === 'legacy' ? null : p.proposal_id }
+  const r = { ...q, proposal_id: 'revision-r', published_at: '2026-11-12T00:00:00Z', source: { ...p.source, revision: '3' }, supersedes: q.proposal_id }
+  expect(await sources.updateWork({ ...f.request, ...(scenario === 'legacy' ? {} : { proposal: p }) } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
   const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
   const server = createServer(async (req, res) => { if (!await asks.handle(req, res)) { res.writeHead(404); res.end() } }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as { port: number }).port
   seedOriginAllowlist(port)
   const select = (proposal: typeof p) => fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
-  expect((await select(p)).status).toBe(404)
-  const response = await select(q)
-  expect(response.status).toBe(revision ? 200 : 404)
-  if (revision) expect((await response.json()).data.action_selection.answer_id).toBe(proposalAnswerId(q))
-  expect((await asks.store.list('owner@example.test')).filter(row => row.action_selection)).toHaveLength(revision ? 1 : 0)
+  if (scenario === 'missing intermediate') expect((await select(p)).status).toBe(200)
+  expect(await sources.updateWork({ ...f.request, request_id: 'publication-q', operation_id: 'publish-q', proposal: q } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  if (scenario === 'missing intermediate') {
+    expect(await sources.updateWork({ ...f.request, request_id: 'publication-r', operation_id: 'publish-r', proposal: r } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+    expect((await asks.store.list('owner@example.test')).some(row => row.request_id === proposalAnswerId(q))).toBe(false)
+  }
+  f.home.observation.observedAt = new Date(Date.now() + 1).toISOString()
+  const queue = await sources.queue()
+  const projected = queue.needsWill!.find(row => row.id === item.id)!
+  const latest = scenario === 'missing intermediate' ? r : q
+  expect(projected.readiness).toBe('ready-now')
+  expect(projected.decisionResolution).toBeUndefined()
+  expect(projected.proposal?.value.proposal_id).toBe(latest.proposal_id)
+  expect(projected.proposals?.map(publication => publication.value.proposal_id)).toContain(q.proposal_id)
+  if (scenario !== 'legacy') expect(await sources.updateWork({ ...f.answer, operation_id: 'reject-old-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+  if (scenario !== 'missing intermediate') expect((await select(p)).status).toBe(scenario === 'legacy' ? 404 : 409)
+  const response = await select(latest)
+  expect(response.status).toBe(200)
+  expect((await response.json()).data.action_selection.answer_id).toBe(proposalAnswerId(latest))
+  expect((await asks.store.list('owner@example.test')).filter(row => row.action_selection)).toHaveLength(scenario === 'missing intermediate' ? 2 : 1)
 })
