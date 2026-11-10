@@ -300,9 +300,12 @@ const read = async (name, args) => {
   const result = await client.callTool({ name, arguments: args })
   return JSON.parse(result.content[0].text)
 }
+// Replace this with the code confirmed by the user in the intended tab.
+const session_code = 'A1B2C3'
 const sessions = await read('list_ui_sessions', {})
-// Explicitly choose the scene_id shown in the intended browser window.
-const scene_id = sessions.sessions[0].scene_id
+const selected = sessions.sessions.find(session => session.session_code === session_code)
+if (!selected?.connected) throw new Error('The confirmed tab is not connected')
+const scene_id = selected.scene_id
 const scene = await read('get_scene', { scene_id })
 const receipt = await read('present_view', {
   scene_id, command_id: randomUUID(), expected_revision: scene.state.revision,
