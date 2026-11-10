@@ -1,3 +1,4 @@
+import { workflowMarkers } from '../../shared/workflowMarkers'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Decisions } from '../Decisions'
@@ -234,7 +235,7 @@ it('preserves recommendation verbs as questions and hides workflow protocol meta
   const queue = fixtureQueue()
   queue.items = [{ ...queue.items[0]!, cardIds: [fixtureId(5)], action: 'Should we recommend 3 replicas or keep 1?' }]
   workspace.value.queue = queue
-  const original = 'Question: Keep 1 replica or move to 3?\nTin Star request: {"id":"private-request","action":"Decision","preserve_action":true}\nTin Star decision: "private-decision"\nTin Star operation: ["actor","private-operation"]'
+  const original = ['Question: Keep 1 replica or move to 3?', ...Object.values(workflowMarkers).map(prefix => `${prefix} {"id":"private-request"}`)].join('\n')
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'note', text: original }] } }))))
   render(<Decisions />)
   fireEvent.click(document.querySelector('.decisions-row')!)
@@ -250,6 +251,10 @@ it('preserves recommendation verbs as questions and hides workflow protocol meta
   const technical = within(detail).getAllByText('Technical details')[0]!.closest('details')!
   expect(technical).not.toHaveAttribute('open')
   expect(technical).toHaveTextContent('private-request')
+  for (const prefix of Object.values(workflowMarkers)) {
+    expect(evidence).not.toHaveTextContent(prefix)
+    expect(technical).toHaveTextContent(prefix)
+  }
 })
 
 it('retains the explicitly opened request when its click focuses a shared card', () => {

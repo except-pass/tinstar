@@ -1,3 +1,5 @@
+import { workflowMarkers } from './workflowMarkers'
+
 /** Legacy First Mate envelopes contain UTF-8 prose. Keep identity/protocols
  * unchanged while sharing decoding between readiness and presentation. */
 export function requestText(value: string): string | null {
@@ -18,7 +20,7 @@ export function isCoordinationRequest(value: string): boolean {
 }
 
 export function displayRequestText(value: string, fallback = 'First Mate request'): string {
-  const decoded = requestText(value)?.split('\n').filter(line => !/^\s*Tin Star (?:request|answer|decision|operation):/.test(line)).join('\n').trim()
+  const decoded = requestText(value)?.split('\n').filter(line => !Object.values(workflowMarkers).some(prefix => line.trimStart().startsWith(prefix))).join('\n').trim()
   if (!decoded || /fm-hold-v\d:|ask-user\s+findings=|(?:^|\s)\/(?:home|Users|tmp|srv)\/|^\s*(?:\{\s*"|\[\s*(?:\{|"))/.test(decoded)) return fallback
   return decoded.replace(/^(?:working|needs-decision|blocked|paused|done|failed|resolved)\s+(?:\[(?:at|key)=[^\]]+\]\s*)+:?\s*/i, '').replace(/\s*\(card [a-f0-9]{32}\)\.?/gi, '').trim()
 }
