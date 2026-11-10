@@ -1,6 +1,6 @@
 # Conversational Overview
 
-Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware workflow operations](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
+Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers a selected Overview or Decisions tab. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware workflow operations](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
 
 ## Start and connect
 
@@ -103,8 +103,8 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `get_work_views()` | Shared [Needs Will and advisory execution warnings](workflow.md#slice-3-shared-operational-views-and-normal-use), without a browser; PR details retain the existing owner authorization boundary |
 | `start_work(...)`, `create_work(...)`, `update_work(...)` | [Shared workflow operations](workflow.md): contracts, enforced rules and partial-save handling |
 | `submit_handoff(...)` | [Approved implementation handoffs](workflow.md#one-call-approved-implementation-handoffs): recording, assignment outcomes, full-contract retrieval and rollout requirements. |
-| `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
-| `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
+| `list_ui_sessions` | Window IDs and six-character codes, owner designation, surface/route/title, visibility/focus, selection, commit timestamp, source timestamp, last heartbeat and revision; no browser session secrets |
+| `get_scene(scene_id? / session_code?)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors, or `queue-source-unavailable`; see [queue reconciliation effects](workflow.md#first-mate-decision-reconciliation) |
@@ -112,7 +112,7 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `list_prs(offset?, limit?)` | Shared PR Operations open inventory, captured heads, card links and coverage; requires a verified owner binding |
 | `get_pr(url, head, include_files?, offset?, limit?)` | Shared exact-head description, checks, reviews, optional file metadata and card/worker attribution; requires a verified owner binding |
 | `get_release_status(offset?, limit?)` | Shared Releases PR-first observations, links, production receipts/ancestry, dry-run eligibility and verification requirements; no owner/write authority |
-| `present_view(...)` | Enqueue a semantic action for one explicit window and wait up to two seconds for its acknowledgment |
+| `present_view(...)` | Enqueue a semantic action for one selected tab and wait up to two seconds for its acknowledgment |
 | `next_queue_item(...)` | Navigate the real S4 ordered verified-ready queue with the same acknowledgment protocol |
 | `get_command(scene_id, command_id)` | Query a prior command outcome without applying it again |
 
@@ -201,7 +201,7 @@ cache or persistent graph. After deployment, follow the
 
 Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `group`, `you` and `firstMate`. Use IDs returned by reads, never title matching. Executions retain First Mate home/task/attempt identity. Claims distinguish confirmed, textual, inferred and conflicting relationships.
 
-`present_view` requires `scene_id`, `command_id`, `expected_revision`, and `action`; optional `ttl_ms` is 500–15000 (default 8000). The authoritative action shapes and validation bounds, including Smart Search conditions, reveal, clear and view restoration, live in [`actionSchema` and `searchFilterSchema`](../../src/shared/reconciliationCommands.ts). The following lists the non-search actions:
+`present_view` requires `command_id`, `expected_revision`, and `action`; use the user-confirmed `scene_id` or `session_code`, or omit both to use the owner-designated tab (a sole connected tab is also unambiguous). Multiple connected tabs with no designation return `ambiguous-session`; never select by last heartbeat. An explicit ID remains backward compatible. Optional `ttl_ms` is 500–15000 (default 8000). The authoritative action shapes and validation bounds, including Smart Search conditions, reveal, clear and view restoration, live in [`actionSchema` and `searchFilterSchema`](../../src/shared/reconciliationCommands.ts). The following lists the non-search actions:
 
 ```text
 {type:"set-organizer", organizer:{outer:field|"none", inner:field|"none", order:field|"operational", direction:"asc"|"desc"}}
@@ -241,7 +241,7 @@ Legacy `set-arrangement` maps `secondMate` to Manager, `machine` to Machine and
 ascending. New clients should use `set-organizer`.
 
 An accepted `focus` supersedes previous `open-queue` item or card targeting.
-Focus and flash reveal relevant ancestors/roadmap and clear the exception filter. Saved filters remain unchanged; the [Overview scope rules](overview.md) govern temporary reveal. Focus reveal lasts while selected; flash reveal lasts until its flash expires. `navigate-card` uses the [Discuss navigation behavior](overview.md), with independent reveal/highlight state in `navigation: {cardId, revision}`; an ID missing from the current scene returns `unknown-id`. Arrangement preserves selection. Flash preserves selection, accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
+Focus and flash reveal relevant ancestors/roadmap and clear the exception filter. Saved filters remain unchanged for focus and flash. Assistant navigation/reveal clears masks and closes the Desk overlay so the requested target is accessible; the [Overview scope rules](overview.md) govern temporary reveal. Focus reveal lasts while selected. `navigate-card` uses the [Discuss navigation behavior](overview.md), with independent reveal/highlight state in `navigation: {cardId, revision}`; an ID missing from the current scene returns `unknown-id`. Arrangement preserves selection. Flash preserves selection, accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
 
 Card context reads only IDs already on the configured authorized board. Context is cached for 30 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
 
@@ -249,11 +249,31 @@ Card context reads only IDs already on the configured authorized board. Context 
 
 The browser registers a private window key through the existing local/desktop origin boundary, then sequentially syncs once per second with a five-second deadline. Browser keys stay in memory and are never returned through MCP. A custom header prevents cross-site form registration. Desktop uses `apiFetch` and the same allowed-origin policy as the rest of Tin Star.
 
+The small **ChatGPT · A1B2C3** connection menu in the existing Overview toolbar / Decisions header identifies this exact tab. **Use this tab with ChatGPT** designates it through its existing private browser key; choosing another tab replaces the designation. The menu copies the full UUID on request. Codes are unique among retained scenes; they identify a tab and grant no authority. Navigation stays inside that browser tab; no code activates another browser tab. Assistant card navigation opens Decisions only for the first, canonical card of a non-coordination row in its queue projection. Supporting secondary cards in merged rows, coordination records and other targets fall back to Overview. Focus, flash and reveal can stay in Decisions only when every requested target has such a canonical row; otherwise the full target set hands off to Overview in the same tab.
+
+`outcome: applied` remains a state acknowledgment for compatibility. Read the additive `delivery.stage` separately:
+
+- `accepted`: queued by the server; no browser application proven.
+- `applied-to-state`: browser committed the reducer state; no visual delivery proven.
+- `rendered`: React committed (for general view changes), or a target exists in DOM but is covered/clipped. Check `pending`, `reason`, `rendered_targets` and `visible_targets`.
+- `foreground-visible`: all requested targets passed DOM, viewport/occlusion, document visibility and browser focus observations. This proves observed visibility, not that a person noticed it.
+- `not-visible`: background/unfocused tab or missing target. A background target stays pending beyond flash expiry; foregrounding replays a restrained highlight before completing delivery. User input cancels replay and reports that cancellation.
+- `not-supported`: requested semantic targets lack a visible representation on this surface; state acknowledgment is not a visual success. In a mixed set, undelivered card/execution targets stay pending through background expiry and replay independently of unsupported targets. Once supported targets are delivered, unsupported targets can finish the receipt with this stage rather than `foreground-visible`.
+
+For `next_queue_item`, either direction of `navigate-queue`, and every `open-queue` form (card ID, item ID or default selection), assistant navigation closes the Discuss overlay before opening Decisions. Delivery observes the canonical card of the destination resolved from the applied queue state, using the same foreground replay and user-input cancellation rules above. A destination without an observable card in a non-coordination Decisions row reports `not-supported`; committing queue state alone does not prove visual delivery.
+
+`rendered_scene.scene_generated_at` continues to mean the loaded **source** snapshot generation time. `rendered_at` and `revision` identify the browser commit, while delivery `observed_at` identifies the DOM inspection. Fresh heartbeats never rewrite old source timestamps. `visibility`, `focused`, `surface`, `route` and `pending_command` explain hidden, stale or unresolved destinations.
+
+The tool names are unchanged, but `get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`; refresh the ChatGPT connector once after deployment to load the updated schemas/descriptions. `search_work` owner/status filtering and `coverage.intentions` are unchanged.
+
 The registry keeps at most 64 windows and 256 command receipts per window. Windows/receipts expire after ten minutes; a heartbeat older than ten seconds is disconnected. The MCP interface is stateless at the transport level: browser window IDs, rather than transport sessions, select the view. There is no event watcher or new fleet poller.
+
+For `present_view` and `next_queue_item`, an implicit command reserves its tab before source reads begin. Identical retries stay bound to that retained tab even if the owner designates another tab while the first request is in flight. Explicit window commands retain independent per-window command IDs and revisions.
 
 - `queued`: accepted for delivery, **not** applied. Query `get_command` or retry the identical `present_view` input.
 - `applied`: the UI dispatched the shared reducer, React committed the resulting view, and the browser returned its resulting revision/state. Server acceptance alone cannot yield this result.
 - `expired`: the bounded lifetime elapsed without an applied acknowledgment; no late delivery is scheduled. If a browser committed before expiry and its acknowledgment arrives late (within ten seconds), the receipt is corrected to applied with that commit timestamp.
+- `ambiguous-session`: multiple connected tabs have no owner designation and no explicit code/ID was supplied. Ask for the visible code or use the tab menu.
 - `disconnected`: the known window is offline/stale. Reconnect/open it and obtain its current ID/revision.
 - `unknown-id`: no recognized window, target or retained receipt. Reads never invent a missing item.
 - `unauthorized`: wrong/missing install token (HTTP 401), wrong browser key or foreign browser origin (HTTP 403). No secret is returned.
@@ -282,9 +302,12 @@ const read = async (name, args) => {
   const result = await client.callTool({ name, arguments: args })
   return JSON.parse(result.content[0].text)
 }
+// Replace this with the code confirmed by the user in the intended tab.
+const session_code = 'A1B2C3'
 const sessions = await read('list_ui_sessions', {})
-// Explicitly choose the scene_id shown in the intended browser window.
-const scene_id = sessions.sessions[0].scene_id
+const selected = sessions.sessions.find(session => session.session_code === session_code)
+if (!selected?.connected) throw new Error('The confirmed tab is not connected')
+const scene_id = selected.scene_id
 const scene = await read('get_scene', { scene_id })
 const receipt = await read('present_view', {
   scene_id, command_id: randomUUID(), expected_revision: scene.state.revision,
@@ -308,3 +331,5 @@ TINSTAR_MCP_PROOF=/absolute/proof-directory npx playwright test --config playwri
 The MCP Playwright test uses an official SDK client and actual browser pages; source records are explicitly controlled fixtures. The separate live development proof uses Hulk’s actual First Mate snapshot and authenticated Notion reads with the discovery helper retaining its credential. Neither is a production whole-farm deployment. Task evidence is saved outside the repository at `/home/farm/fm-home/data/tinstar-recon-s5/` (transcripts, screenshots, failed-start logs and final-head receipts).
 
 Decisions uses the [S4 queue API](reconciliation-queue.md), which owns readiness, deduplication, PR checks, source coverage and ordering. The [Overview reference](overview.md) owns card presentation and floor navigation. Next/previous navigation traverses verified-ready requests; verification candidates can also be opened explicitly by item ID. Navigation mutates only presentation. An answered item removed by a fresh source read stays explicitly unavailable if selected; it is never silently replaced or restored. Queue polling runs 20 seconds after each read completes, with a 60-second deadline. A confirmed or partial local workflow save triggers an immediate refresh, superseding any pending read; superseded responses cannot replace the current result. Read failure retains labeled last-known candidates and downgrades displayed readiness. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3. The live proof’s discovery bridge is development evidence, not a production credential deployment.
+
+MCP and workflow request bodies remain bounded at 256 KiB. UI registration and sync allow 16 MiB because a single accepted command expands into search focus, replay flash IDs, an acknowledgment state snapshot, and requested/rendered/visible delivery arrays. The browser sends one acknowledgment per poll to avoid multiplying those snapshots by a 32-item batch. Unsent updates coalesce per command in queue order, preserving the original commit timestamp and terminal delivery observations even when failed batches return to the queue. The large-reveal transport regression exercises a command below 256 KiB whose acknowledgment exceeds that limit, including 4097 targets and a maximum-length semantic ID.

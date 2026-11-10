@@ -1,3 +1,4 @@
+import { presentationTargets } from './presentationObservation'
 import { emptyDonutFilter, type DonutFilter } from './floorStatus'
 import { emptySearch, type SearchFilter } from './smartSearch'
 import type { Pattern } from './workHealth'
@@ -35,7 +36,7 @@ export interface PresentationState {
   collapsed: string[]
   exceptionsOnly: boolean
   roadmapExpanded: boolean
-  flash: { ids: string[]; until: number } | null
+  flash: { ids: string[]; until: number; revealTargets?: boolean } | null
   assistantChangedView: boolean
   queueOpen?: boolean
   queueCardId?: string | null
@@ -120,7 +121,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
   if (action.type === 'open-queue' && action.itemId && hasQueue(queue) && !queue.items.some(item => item.id === action.itemId)) return { state, outcome: 'unknown-id' }
   if (action.type === 'open-queue' && action.cardId && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
   if (action.type === 'navigate-card' && !scene.cards.some(c => c.id === action.cardId)) return { state, outcome: 'unknown-id' }
-  const targets = action.type === 'focus' || action.type === 'set-expanded' || action.type === 'reveal-search' ? [action.target, ...(action.type === 'reveal-search' ? action.targets ?? [] : [])] : action.type === 'flash' ? action.targets : []
+  const targets = action.type === 'set-expanded' ? [action.target] : presentationTargets(action)
   if (targets.some(target => !targetExists(scene, target, state, now))) return { state, outcome: 'unknown-id' }
   let next = { ...state, queueItemId: state.queueItemId ?? (hasQueue(queue) ? decisionItems(queue, now)[0]?.id : null) ?? null }
   switch (action.type) {
@@ -128,7 +129,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'set-search': next.search = action.search; next.searchReveal = null; next.searchFocus = undefined; break
     case 'clear-search': next.search = emptySearch(); next.searchReveal = null; next.searchFocus = undefined; break
     case 'restore-search-view': next = { ...next, searchReveal: null, searchFocus: undefined, ...action.view }; if (next.selection && !targetExists(scene, next.selection, next, now)) next.selection = null; break
-    case 'reveal-search': next.navigation = null; next.searchReveal = action.target; next.searchFocus = action.targets ?? [action.target]; next.selection = null; next.exceptionsOnly = false; next.roadmapExpanded = true; next.collapsed = []; break
+    case 'reveal-search': next.navigation = null; next.searchReveal = action.target; next.searchFocus = targets; next.selection = null; next.exceptionsOnly = false; next.roadmapExpanded = true; next.collapsed = []; break
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
     case 'set-donut-filter': next.donutFilter = { cards: [...new Set(action.filter.cards)], workers: [...new Set(action.filter.workers)] }; break
@@ -155,7 +156,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'focus': next.selection = action.target; next.queueOpen = false; next.queueCardId = null; next.exceptionsOnly = false; break
     case 'set-exceptions': next.exceptionsOnly = action.enabled; break
     case 'set-roadmap': next.roadmapExpanded = action.expanded; break
-    case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)) }; break
+    case 'flash': next.exceptionsOnly = false; next.flash = { ids: [...new Set(action.targets.map(semanticId))], until: now + Math.max(0, Math.min(action.durationMs ?? 2400, 4000)), ...(action.origin === 'assistant' ? { revealTargets: true } : {}) }; break
     case 'clear-transient': next.flash = null; next.assistantChangedView = false; break
     case 'close-queue': next.queueOpen = false; next.queueCardId = null; break
     case 'open-queue':
@@ -172,6 +173,15 @@ export function applyPresentationAction(state: PresentationState, action: Presen
       break
     }
     case 'clear-selection': next.selection = null; break
+  }
+  if (action.origin === 'assistant' && ['navigate-card', 'reveal-search', 'flash'].includes(action.type)) {
+    // A queued filter/overlay hid the owner's ECR decision despite state acks.
+    // Explicit assistant targeting must reveal its destination in this tab.
+    const target = action.type === 'navigate-card' ? { kind: 'card' as const, id: action.cardId } : targets[0]
+    next.queueOpen = false; next.queueCardId = null
+    if (action.type !== 'flash') { next.donutFilter = emptyDonutFilter(); next.search = emptySearch(); next.collapsed = [] }
+    if (action.type !== 'flash' && target && (target.kind === 'card' || target.kind === 'execution')) { next.searchReveal = target; next.searchFocus = action.type === 'reveal-search' ? targets : [target]; next.selection = target }
+    if (action.type !== 'flash' && target) next.flash = { ids: (action.type === 'reveal-search' ? targets : [target]).map(semanticId), until: now + 4000 }
   }
   // Regrouping/focus reveal the selected item without changing its identity.
   const revealTargets = action.type === 'navigate-card' ? [{ kind: 'card' as const, id: action.cardId }] : action.type === 'flash' ? action.targets : next.selection && (action.type === 'focus' || action.type === 'set-arrangement' || action.type === 'set-organizer') ? [next.selection] : []

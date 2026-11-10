@@ -1,3 +1,4 @@
+import { statusProjection } from '../../shared/floorOrganization'
 import { describe, expect, it } from 'vitest'
 import { fixtureHomes, fixtureId, fixtureScene, fixtureSources } from '../../../test-fixtures/reconciliation/scenes'
 import { defaultOrganizer, floorFields, organizedGroups } from '../../shared/floorOrganization'
@@ -62,7 +63,7 @@ describe('shared semantic presentation transitions', () => {
     const scene = fixtureScene()
     const card: Target = { kind: 'card', id: fixtureId(5) }
     let state = applyPresentationAction(initialPresentation(), { type: 'flash', targets: [card, card], durationMs: 90_000, origin: 'assistant' }, scene, 100).state
-    expect(state.flash).toEqual({ ids: [semanticId(card)], until: 4100 })
+    expect(state.flash).toEqual({ ids: [semanticId(card)], until: 4100, revealTargets: true })
     expect(state.assistantChangedView).toBe(true)
     state = applyPresentationAction(state, { type: 'set-exceptions', enabled: true }, scene).state
     state = applyPresentationAction(state, { type: 'focus', target: card }, scene).state
@@ -128,4 +129,20 @@ describe('shared semantic presentation transitions', () => {
       expect(groups.some(g => g.label === 'Unassigned / unknown')).toBe(true)
     }
   })
+})
+
+
+it.each(['navigate-card', 'reveal-search', 'flash'] as const)('assistant %s reveals a Queued card through donut masks and an unrelated queue overlay', type => {
+  const scene = fixtureScene(), cardId = scene.cards[0]!.id
+  const state = { ...initialPresentation(), queueOpen: true, queueCardId: 'unrelated', donutFilter: { cards: ['Ready for Review'], workers: [] }, search: { query: 'unrelated', patterns: [] as never[], facets: [] } }
+  const target = { kind: 'card' as const, id: cardId }
+  const action = type === 'navigate-card' ? { type, cardId } : type === 'reveal-search' ? { type, target } : { type, targets: [target] }
+  const applied = applyPresentationAction(state, { ...action, origin: 'assistant' }, scene)
+  expect(applied.outcome).toBe('applied')
+  expect(applied.state).toMatchObject({ queueOpen: false, queueCardId: null })
+  if (type === 'flash') {
+    expect(applied.state).toMatchObject({ selection: state.selection, search: state.search, donutFilter: state.donutFilter })
+    expect(statusProjection(scene, { ...applied.state, flash: null }, Date.now()).cards.some(card => card.id === cardId)).toBe(false)
+  } else expect(applied.state).toMatchObject({ donutFilter: { cards: [], workers: [] }, selection: target, searchReveal: target, search: { query: '', patterns: [], facets: [] } })
+  expect(statusProjection(scene, applied.state, Date.now()).cards.some(card => card.id === cardId)).toBe(true)
 })

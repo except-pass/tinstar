@@ -70,6 +70,30 @@ async function expectAdvanced(page: Page, label: string, value: string) {
   await closeCustomize(page)
 }
 // These regressions exercise the preserved rich presentation.
+test('session code remains accessible after reveal with Discuss open', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto(`${base}/?view=floor`)
+  await expect(page.getByRole('button', { name: 'Collapse Discuss', exact: true })).toBeVisible()
+  await present(page, { type: 'reveal-search', target: { kind: 'card', id: fixtureId(1) }, targets: [{ kind: 'card', id: fixtureId(4) }] }, 'toolbar-reveal')
+  const summary = page.locator('.ov-toolbar .session-connection summary')
+  await expect(summary).toHaveAttribute('aria-label', /^ChatGPT tab [A-Z0-9]+$/)
+  const geometry = await summary.evaluate(node => {
+    const rect = node.getBoundingClientRect()
+    const toolbar = node.closest('.ov-toolbar')!.getBoundingClientRect()
+    return {
+      contained: rect.left >= toolbar.left && rect.right <= toolbar.right,
+      accessible: [rect.left + 2, rect.left + rect.width / 2, rect.right - 2].every(x => {
+        const hit = document.elementFromPoint(x, rect.top + rect.height / 2)
+        return !!hit && (hit === node || node.contains(hit))
+      }),
+      height: toolbar.height,
+    }
+  })
+  expect(geometry).toEqual({ contained: true, accessible: true, height: 48 })
+  await summary.click()
+  await expect(page.getByRole('button', { name: 'Use this tab with ChatGPT', exact: true })).toBeVisible()
+})
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
 })
@@ -208,14 +232,17 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   await present(page, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }, 'hide-desk-task')
   await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`)).toHaveCount(0)
   const navigation = await present(page, { type: 'navigate-card', cardId: linkedCardId }, 'navigate-desk-task')
-  expect(navigation.ack.state.selection).toBeNull()
+  expect(navigation.ack.state.selection).toEqual({ kind: 'card', id: linkedCardId })
   expect(navigation.ack.state.navigation.cardId).toBe(linkedCardId)
   expect(navigation.ack.state.queueItemId).toBe(queue.items[1]!.id)
   expect(navigation.ack.state.statusFilter).toEqual({ preset: 'custom', statuses: ['Waiting For'] })
-  await expect(page.locator(`.ov-card[data-entity-id="${linkedCardId}"]`).first()).toBeFocused()
-  await expect(page.locator('.ov-line.desk-target')).toHaveCount(2)
-  await expect(page.getByLabel('Inspector', { exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('Selected decision')).toHaveCount(0)
+  await expect(page).toHaveURL(/view=decisions/)
+  await expect(page.locator(`.decisions-row[data-card-id="${linkedCardId}"]`).first()).toHaveClass(/selected/)
+  expect(await windowId(page)).toBe(first)
+  // Return manually before exercising the Overview organizer race.
+  await page.getByRole('button', { name: 'Overview', exact: true }).click()
+  await expect(page.locator('.ov')).toBeVisible()
+  await expect.poll(async () => (await call('get_scene', { scene_id: first })).state.revision).toBe(Number(await page.locator('.ov').getAttribute('data-revision')))
   const revision = (await call('get_scene', { scene_id: first })).state.revision
   expect((await call('present_view', { scene_id: first, command_id: 'unknown', expected_revision: revision, action: { type: 'focus', target: { kind: 'card', id: 'unknown' } } })).outcome).toBe('unknown-id')
   // Hold command delivery; a direct click occurs after enqueue and before receipt.

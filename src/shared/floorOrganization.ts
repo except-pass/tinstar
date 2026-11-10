@@ -117,6 +117,14 @@ export function statusProjection(scene: FloorScene, state: PresentationState, no
   const reveal = state.search?.patterns.length ? new Set<string>() : state.searchReveal?.kind === 'card' && state.searchReveal.id === state.navigation?.cardId
     ? new Set([`card:${state.searchReveal.id}`])
     : directNeighbors(scene, state.searchFocus ?? (state.searchReveal ? [state.searchReveal] : []))
+  // Flash reveals are temporary even under a saved search/donut mask. Keeping
+  // them out of searchReveal preserves the user's filters after expiry/clear.
+  if (state.flash?.revealTargets && state.flash.until > now) {
+    for (const id of state.flash.ids) reveal.add(id)
+    for (const claim of scene.claims) if (reveal.has(`claim:${claim.id}`)) {
+      reveal.add(`card:${claim.cardId}`); reveal.add(`execution:${claim.executionId}`)
+    }
+  }
   const explicit = hasDonutFilter(selection) || searching || reveal.size > 0
   const workers = [...new Map(scene.executions.filter(w => (activeWorker(w, now) || !!state.search?.patterns.length && seeds?.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`)) && (!seeds || seeds.has(`execution:${w.id}`) || reveal.has(`execution:${w.id}`))).map(w => [w.id, w])).values()]
   const cards = [...new Map(scene.cards.filter(c => !c.source.in_trash && (!c.source.archived || reveal.has(`card:${c.id}`)) && (!seeds || seeds.has(`card:${c.id}`) || reveal.has(`card:${c.id}`)) && (

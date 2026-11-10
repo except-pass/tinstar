@@ -1,3 +1,4 @@
+import { SessionConnection } from './SessionConnection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { useViewSnapshot } from '../ask/workspaceHistory'
@@ -103,8 +104,8 @@ export function Decisions() {
   const retainedNotes = (workspace.messages ?? []).filter(message => message.kind === 'message' && !(workspace.workers ?? []).some(worker => worker.home === message.home && worker.id === message.taskId))
   const needsVerification = unavailable || incomplete || bridgeError || !!queue?.warnings?.length || !!queue?.operationalExceptions?.length || !!coordination.length
   return <section className="decisions" aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
-    <header><h1>Decisions</h1></header>
-    <label className="decisions-search"><span className="ask-sr-only">Search decisions</span><input type="search" value={query} onChange={event => { interaction.current++; setQuery(event.target.value) }} placeholder="Need a decision? Search title, card or topic…" /></label>
+    <header><SessionConnection /><h1>Decisions</h1></header>
+    <label className="decisions-search"><span className="ask-sr-only">Search decisions</span><input type="search" value={query} onChange={event => { interaction.current++; setExpiredFlash(state.flash?.until ?? null); setQuery(event.target.value) }} placeholder="Need a decision? Search title, card or topic…" /></label>
     <div className="decisions-layout" data-selected={!!selected || !!contextCardId}>
       <div className="decisions-list" ref={list} aria-label="Decision requests">
         {!queue && !queueError && <p role="status">Reading decision sources…</p>}

@@ -1,3 +1,4 @@
+import { SessionConnection } from './SessionConnection'
 import { externalWorkers, type StartWorkResult } from '../shared/workflow'
 import { WorkActions } from './WorkActions'
 import { StartWork } from './StartWork'
@@ -323,8 +324,8 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   </>
   const composerSubject = claim && scene.claims.some(item => item.id === claim.id) ? { target: { kind: 'claim' as const, id: claim.id } } : card ? { cardId: card.id } : execution ? { target: { kind: 'execution' as const, id: execution.id } } : null
   const composerView = { scene: 'overview' as const, organizer: state.organizer, statusFilter: state.statusFilter }
-  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className="ov-inspector" aria-label="Inspector">{content}{composerSubject && <AskContextComposer subject={{ ...composerSubject, view: composerView }} />}</AskSurface>
-    : <section className="ov-inspector" aria-label="Inspector">{content}</section>
+  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className={`ov-inspector${flashRelated(view, selection) ? ' flashed' : ''}`} data-semantic-id={semanticId(selection)} tabIndex={-1} aria-label="Inspector">{content}{composerSubject && <AskContextComposer subject={{ ...composerSubject, view: composerView }} />}</AskSurface>
+    : <section className={`ov-inspector${flashRelated(view, selection) ? ' flashed' : ''}`} data-semantic-id={semanticId(selection)} tabIndex={-1} aria-label="Inspector">{content}</section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
   const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch, refresh, refreshing, lastSuccessfulSyncAt } = useDeskWorkspace()
@@ -345,14 +346,19 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   // The existing search can explicitly reveal a card outside its status scope.
   // Preserve that temporary native result, then restore Waiting For on search exit.
   const focusedContext = scene && state.searchFocus?.length ? directNeighbors(scene, state.searchFocus) : null
-  const outsideWaitingFor = scene?.cards.some(card => focusedContext?.has(`card:${card.id}`) && cardStatus(card) !== 'Waiting For')
-  const waiting = waitingForActive(state) && !outsideWaitingFor
+  const flashContext = scene && state.flash?.revealTargets && state.flash.until > now ? directNeighbors(scene, state.flash.ids.map(id => {
+    const separator = id.indexOf(':')
+    return { kind: id.slice(0, separator) as Target['kind'], id: id.slice(separator + 1) }
+  })) : null
+  const outsideWaitingFor = scene?.cards.some(card => (focusedContext?.has(`card:${card.id}`) || flashContext?.has(`card:${card.id}`)) && cardStatus(card) !== 'Waiting For')
+  const waitingScope = waitingForActive(state)
+  const waiting = waitingScope && !outsideWaitingFor
   const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
   const [waitingOpen, setWaitingOpen] = useState<ReadonlySet<string> | null>(readWaitingForExpansion)
   const waitingReveal = useRef('')
   const groups = useMemo(() => scene ? overviewGroups(scene, state, now, !!error, !waiting && density === 'compact' ? expanded : undefined) : [], [scene, state, now, error, density, expanded, waiting])
   const waitingProjection = useMemo(() => waitingForGroups(groups.flatMap(group => group.cards), scene?.cards ?? []), [groups, scene])
-  useEffect(() => { if (waiting) setWaitingType('All') }, [waiting])
+  useEffect(() => { if (waitingScope) setWaitingType('All') }, [waitingScope])
   useEffect(() => { if (waitingOpen) saveWaitingForExpansion(waitingOpen) }, [waitingOpen])
   useEffect(() => { if (waiting && scene && waitingOpen === null) setWaitingOpen(new Set(waitingProjection.initial)) }, [waiting, scene, waitingOpen, waitingProjection])
   // Waiting For changes the Work presentation only. Keep the worker organizer,
@@ -425,7 +431,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar workerScope={waitingWorkerScope} patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
+      <FloorToolbar workerScope={waitingWorkerScope} sessionControl={<SessionConnection />} patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
         const targets = patternCoverage?.unavailableCardIds.map(id => target('card', id)) ?? []
         if (targets.length) { search.choose(targets[0]!, targets); setOpenRelationships([]) }
       }} sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={!!state.searchFocus} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? 'Notion unavailable' : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {

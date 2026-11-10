@@ -5,9 +5,10 @@ import { Decisions } from '../Decisions'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueSource } from '../../server/reconciliation/queue'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
-import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
+import { applyPresentationAction, initialPresentation, type PresentationState, type PresentationAction } from '../presentation'
 import { loadPresentationPreferences, savePresentationPreferences } from '../presentationPreferences'
 import { renderHook } from '@testing-library/react'
+import { SceneSessions } from '../../server/reconciliation/sessions'
 import { usePresentation } from '../usePresentation'
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.value }))
@@ -378,4 +379,137 @@ it.each(['item', 'card'] as const)('focus supersedes a prior %s queue target in 
   expect(within(detail).getByRole('slider', { name: 'Slide to dismiss' })).toBeVisible()
   expect(view.container.querySelector('.decisions-row')).toHaveAttribute('data-decision-id', 'request-b')
   expect(scrolled.at(-1)).toHaveAttribute('data-decision-id', 'request-b')
+})
+
+describe('complete Decisions reveal delivery', () => {
+  it.each(['next', 'previous', 'card', 'secondary card', 'item', 'default', 'cardless', 'coordination', 'empty', 'cancelled'] as const)('observes the applied queue destination and replays %s navigation', async mode => {
+    vi.useFakeTimers()
+    const scene = fixtureScene(), queue = fixtureQueue(), broker = new SceneSessions()
+    const a = fixtureId(1), b = fixtureId(5)
+    queue.items = [a, b].map((id, index) => ({ ...queue.items[0]!, id: `queue-${index}`, title: `Request ${index}`, cardIds: [id], readiness: 'ready-now' as const }))
+    if (mode === 'secondary card') queue.items[0]!.cardIds.push(b)
+    if (mode === 'cardless') queue.items[0]!.cardIds = []
+    if (mode === 'coordination') queue.items[0]!.title = 'Owner calls via coordination bundle'
+    if (mode === 'empty') queue.items = []
+    let hidden = true
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+    vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
+    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ x: 10, y: 10, left: 10, top: 10, right: 310, bottom: 50, width: 300, height: 40, toJSON() {} }))
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.decisions-row.selected') })
+    vi.stubGlobal('fetch', vi.fn(async (_url, request) => {
+      const payload = JSON.parse(request.body)
+      const data = payload.type === 'register' ? broker.register(payload.state, payload.rendered_scene)
+        : payload.type === 'sync' ? { commands: broker.sync(payload.scene_id, payload.state, payload.acknowledgments, payload.rendered_scene), designated: false } : {}
+      return new Response(JSON.stringify({ ok: true, data }))
+    }))
+    let presentation!: ReturnType<typeof usePresentation>
+    function Browser() {
+      presentation = usePresentation(scene, queue, false, true, true)
+      workspace.value = { scene, queue, now: Date.now(), ...presentation }
+      return <Decisions />
+    }
+    const tick = async (ms = 1050) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+    const view = render(<Browser />)
+    await tick()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'hide all requests' } })
+    if (mode === 'previous') {
+      act(() => { presentation.send({ type: 'open-queue', itemId: 'queue-1' }) })
+      await tick()
+    }
+    const action: PresentationAction = mode === 'next' || mode === 'previous' ? { type: 'navigate-queue', direction: mode }
+      : mode === 'card' || mode === 'secondary card' ? { type: 'open-queue', cardId: b }
+      : mode === 'item' ? { type: 'open-queue', itemId: 'queue-1' } : { type: 'open-queue' }
+    const tab = broker.list()[0]!, input = { scene_id: tab.scene_id, command_id: 'queue-destination', expected_revision: tab.revision, ttl_ms: 8000, action }
+    expect(broker.enqueue(input, scene, queue).outcome).toBe('queued')
+    await tick(); await tick(5500)
+    const unsupported = ['cardless', 'coordination', 'empty'].includes(mode)
+    if (unsupported) {
+      expect(broker.result(tab.scene_id, input.command_id).delivery).toMatchObject({ stage: 'not-supported', pending: false })
+      expect(presentation.pendingFocus).toBe(false)
+      return
+    }
+    const id = ['next', 'card', 'item'].includes(mode) ? b : a
+    expect(broker.result(tab.scene_id, input.command_id).delivery).toMatchObject({ stage: 'not-visible', targets: [`card:${id}`], visible_targets: [], pending: true })
+    const revision = presentation.state.revision
+    if (mode === 'cancelled') fireEvent.keyDown(document.body, { key: 'Escape' })
+    hidden = false
+    act(() => window.dispatchEvent(new Event('focus')))
+    await tick(); await tick()
+    expect(presentation.state.revision).toBe(revision)
+    expect(screen.getByRole('searchbox')).toHaveValue('hide all requests')
+    if (mode === 'cancelled') {
+      expect(broker.result(tab.scene_id, input.command_id).delivery).toMatchObject({ stage: 'not-visible', pending: false, reason: 'Superseded by user interaction.' })
+      expect(presentation.state.flash).toBeNull()
+    } else {
+      expect(view.container.querySelector(`[data-card-id="${id}"]`)).toHaveClass('selected', 'flashed')
+      expect(broker.result(tab.scene_id, input.command_id).delivery).toMatchObject({ stage: 'foreground-visible', targets: [`card:${id}`], rendered_targets: [`card:${id}`], visible_targets: [`card:${id}`], pending: false })
+      expect(broker.enqueue(input, scene, queue)).toMatchObject({ outcome: 'applied', revision })
+    }
+  })
+  it.each(['foreground', 'background', 'cancelled background'] as const)('reveals primary A and secondary B outside the local query during %s delivery', async mode => {
+    vi.useFakeTimers()
+    const scene = fixtureScene(), queue = fixtureQueue(), broker = new SceneSessions()
+    const a = { kind: 'card' as const, id: fixtureId(1) }, b = { kind: 'card' as const, id: fixtureId(5) }
+    queue.items = [a, b].map((target, index) => ({ ...queue.items[0]!, id: `reveal-${index}`, title: index ? 'Secondary B' : 'Primary A', cardIds: [target.id] }))
+    let hidden = mode !== 'foreground'
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+    vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
+    vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const y = this.dataset.cardId === b.id ? 100 : 10
+      return { x: 10, y, left: 10, top: y, right: 310, bottom: y + 40, width: 300, height: 40, toJSON() {} }
+    })
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: (_x: number, y: number) => document.querySelector(`[data-card-id="${y > 90 ? b.id : a.id}"]`) })
+    vi.stubGlobal('fetch', vi.fn(async (_url, request) => {
+      const payload = JSON.parse(request.body)
+      const data = payload.type === 'register' ? broker.register(payload.state, payload.rendered_scene)
+        : payload.type === 'sync' ? { commands: broker.sync(payload.scene_id, payload.state, payload.acknowledgments, payload.rendered_scene), designated: false } : {}
+      return new Response(JSON.stringify({ ok: true, data }))
+    }))
+    let presentation!: ReturnType<typeof usePresentation>
+    function Browser() {
+      presentation = usePresentation(scene, queue, false, true, true)
+      workspace.value = { scene, queue, now: Date.now(), ...presentation }
+      return <Decisions />
+    }
+    const tick = async (ms = 1050) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+    const view = render(<Browser />)
+    await tick()
+    const query = screen.getByRole('searchbox')
+    fireEvent.change(query, { target: { value: 'Primary A' } })
+    expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
+    const tab = broker.list()[0]!, commandId = 'reveal-both'
+    expect(broker.enqueue({ scene_id: tab.scene_id, command_id: commandId, expected_revision: tab.revision, ttl_ms: 8000, action: { type: 'reveal-search', target: a, targets: [b] } }, scene).outcome).toBe('queued')
+    await tick()
+    expect(presentation.state.searchFocus).toEqual([a, b])
+    expect(presentation.state.flash?.ids).toEqual([`card:${a.id}`, `card:${b.id}`])
+    for (const target of [a, b]) expect(view.container.querySelector(`[data-card-id="${target.id}"]`)).toHaveClass('flashed')
+    expect(query).toHaveValue('Primary A')
+    const revision = presentation.state.revision
+    if (hidden) {
+      await tick(5500)
+      expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
+      expect(broker.result(tab.scene_id, commandId).delivery).toMatchObject({ stage: 'not-visible', pending: true })
+      if (mode === 'cancelled background') fireEvent.keyDown(query, { key: 'ArrowLeft' })
+      hidden = false
+      act(() => window.dispatchEvent(new Event('focus')))
+    }
+    await tick(); await tick()
+    expect(presentation.state.revision).toBe(revision)
+    expect(query).toHaveValue('Primary A')
+    if (mode === 'cancelled background') {
+      expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
+      expect(broker.result(tab.scene_id, commandId).delivery).toMatchObject({ stage: 'not-visible', pending: false, reason: 'Superseded by user interaction.' })
+    } else {
+      expect(broker.result(tab.scene_id, commandId).delivery).toMatchObject({ stage: 'foreground-visible', targets: [`card:${a.id}`, `card:${b.id}`], visible_targets: [`card:${a.id}`, `card:${b.id}`], pending: false })
+      fireEvent.wheel(screen.getByLabelText('Decision requests'))
+      fireEvent.change(query, { target: { value: 'Primary A ' } })
+      expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
+      expect(query).toHaveValue('Primary A ')
+      await tick(5000)
+      act(() => window.dispatchEvent(new Event('focus')))
+      expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
+    }
+  })
 })

@@ -1299,3 +1299,60 @@ for (const width of [1440, 1180, 390]) test(`filter shelf labelled Waiting For l
   await expect(waiting).toHaveAttribute('aria-pressed', 'false')
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
 })
+
+test('single-row toolbar keeps the session code accessible beside open Discuss', async ({ page }) => {
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: fixtureScene() } }))
+  const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
+  for (const width of [1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto(`${base}/?view=floor`)
+    if (width === 1440) await expect(page.getByRole('button', { name: 'Collapse Discuss', exact: true })).toBeVisible()
+    const summary = page.locator('.ov-toolbar .session-connection summary')
+    await expect(summary).toBeVisible()
+    const geometry = await summary.evaluate(node => {
+      const rect = node.getBoundingClientRect()
+      const toolbar = node.closest('.ov-toolbar')!.getBoundingClientRect()
+      return {
+        contained: rect.left >= toolbar.left && rect.right <= toolbar.right,
+        accessible: [rect.left + 2, rect.left + rect.width / 2, rect.right - 2].every(x => {
+          const hit = document.elementFromPoint(x, rect.top + rect.height / 2)
+          return !!hit && (hit === node || node.contains(hit))
+        }),
+        height: toolbar.height,
+      }
+    })
+    expect(geometry).toEqual({ contained: true, accessible: true, height: 48 })
+    await summary.click()
+    await expect(page.getByRole('button', { name: 'Use this tab with ChatGPT', exact: true })).toBeVisible()
+  }
+
+})
+
+for (const density of ['compact', 'detailed']) test(`single-row toolbar keeps the full session code visible on fresh phone ${density}`, async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(value => localStorage.setItem('tinstar.overview.density', value), density)
+  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: fixtureScene() } }))
+  const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
+  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
+  await page.goto(`${base}/?view=floor`)
+  const summary = page.locator('.ov-toolbar .session-connection summary')
+  await expect(summary).toHaveAttribute('aria-label', /^ChatGPT tab [A-Z0-9]+$/)
+  // Let registration and the dial's layout effects settle without scrolling any control into view.
+  await page.waitForTimeout(1500)
+  const geometry = await summary.evaluate(node => {
+    const rect = node.getBoundingClientRect()
+    const toolbar = node.closest('.ov-toolbar')!.getBoundingClientRect()
+    return {
+      contained: rect.left >= toolbar.left && rect.right <= toolbar.right,
+      accessible: [rect.left + 2, rect.left + rect.width / 2, rect.right - 2].every(x => {
+        const hit = document.elementFromPoint(x, rect.top + rect.height / 2)
+        return !!hit && (hit === node || node.contains(hit))
+      }),
+      height: toolbar.height,
+    }
+  })
+  expect(geometry).toEqual({ contained: true, accessible: true, height: 48 })
+  await summary.click()
+  await expect(page.getByRole('button', { name: 'Use this tab with ChatGPT', exact: true })).toBeVisible()
+})

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
+import { observeTargets } from '../../reconciliation/presentationVisibility'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
 import { AskCardAction } from '../Ask'
@@ -347,7 +348,8 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
 }, 30_000)
 
 
-it('routes each intentional decision navigation and keeps Discuss collapse independent of the decision pane', async () => {
+it.each([390, 1440])('routes manual decisions without closing Discuss at %spx', async width => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   source.queue = fixtureQueue()
   function QueueProbe() {
     const { send, state } = useDeskWorkspace()
@@ -359,13 +361,138 @@ it('routes each intentional decision navigation and keeps Discuss collapse indep
   }
   render(<Navigation />)
   await act(async () => {})
+  fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
+  expect(screen.getByLabelText('Discuss')).toBeVisible()
   expect(screen.getByTestId('page')).toHaveTextContent('decisions')
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
-  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
+  fireEvent.click(within(screen.getByLabelText('Discuss')).getByRole('button', { name: width === 390 ? 'Close Discuss' : 'Collapse Discuss' }))
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
   fireEvent.click(screen.getByRole('button', { name: 'Visit Overview' }))
   expect(screen.getByTestId('page')).toHaveTextContent('overview')
   fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
   expect(screen.getByTestId('page')).toHaveTextContent('decisions')
+})
+
+it.each(['navigate-card', 'next_queue_item', 'next', 'previous', 'card', 'item', 'default'].flatMap(mode => [false, true].map(background => ({ mode, background }))))('closes mobile Discuss for $mode with background=$background and observes delivery', async ({ mode, background }) => {
+  vi.useFakeTimers()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+  source.queue = fixtureQueue()
+  const rows = source.queue.needsWill ?? source.queue.items
+  const destination = rows[mode === 'next' || mode === 'next_queue_item' ? 1 : 0]!
+  const cardId = destination.cardIds[0]!
+  let hidden = background
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ left: 10, right: 310, top: 10, bottom: 50, width: 300, height: 40 } as DOMRect))
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.desk-backdrop') ?? document.querySelector(`.decisions-row[data-card-id="${cardId}"]`) })
+  const action = mode === 'navigate-card' ? { type: 'navigate-card', cardId }
+    : ['next_queue_item', 'next', 'previous'].includes(mode) ? { type: 'navigate-queue', direction: mode === 'previous' ? 'previous' : 'next' }
+    : mode === 'card' ? { type: 'open-queue', cardId }
+    : mode === 'item' ? { type: 'open-queue', itemId: destination.id } : { type: 'open-queue' }
+  const fallback = read.getMockImplementation()!
+  let sent = false
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    const data = body.type === 'register' ? { scene_id: 'test', session_code: 'A123BC', key: 'secret', designated: false }
+      : body.type === 'sync' && !sent ? { commands: [{ scene_id: 'test', command_id: 'navigate', expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { ...action, origin: 'assistant', expectedRevision: body.state.revision } }] } : { commands: [] }
+    if (body.type === 'sync') sent = true
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: /^Open Discuss/ }))
+  expect(screen.getByRole('dialog', { name: 'Discuss' })).toBeVisible()
+  const tick = async (ms = 1100) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+  await tick()
+  expect(location.search).toContain('view=decisions')
+  expect(document.querySelector(`.decisions-row[data-card-id="${cardId}"]`)).toHaveClass('selected')
+  expect(screen.getByLabelText('Discuss')).not.toBeVisible()
+  expect(document.querySelector('.desk-backdrop')).toBeNull()
+  expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-scene-id', 'test')
+  const acknowledgments = () => read.mock.calls.flatMap(([url, init]) => url === '/api/reconciliation/ui' ? JSON.parse(String(init?.body)).acknowledgments ?? [] : [])
+  const revision = document.querySelector('[data-scene-id]')!.getAttribute('data-revision')
+  if (background) {
+    await tick(5500)
+    expect(acknowledgments()).toEqual(expect.arrayContaining([expect.objectContaining({ delivery: expect.objectContaining({ stage: 'not-visible', pending: true }) })]))
+    hidden = false
+    act(() => window.dispatchEvent(new Event('focus')))
+  }
+  await tick(); await tick()
+  expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-revision', revision)
+  expect(acknowledgments()).toEqual(expect.arrayContaining([expect.objectContaining({ command_id: 'navigate', delivery: expect.objectContaining({ stage: 'foreground-visible', visible_targets: [`card:${cardId}`], pending: false }) })]))
+})
+
+
+it.each(['card', 'execution'] as const)('routes a mixed reveal with an additional %s from Decisions to Overview', async kind => {
+  vi.useFakeTimers()
+  window.history.replaceState(null, '', '/?view=decisions')
+  source.queue = fixtureQueue()
+  const scene = fixtureScene(), cardId = source.queue.items[0]!.cardIds[0]!
+  const extra = kind === 'execution' ? scene.executions[0]!.id : scene.cards.find(card => !source.queue!.items.some(item => item.cardIds.includes(card.id)))!.id
+  const fallback = read.getMockImplementation()!
+  let sent = false
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    const data = body.type === 'register' ? { scene_id: 'test', key: 'secret' }
+      : body.type === 'sync' && !sent ? { commands: [{ scene_id: 'test', command_id: 'mixed', expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { type: 'reveal-search', target: { kind: 'card', id: cardId }, targets: [{ kind, id: extra }], origin: 'assistant', expectedRevision: body.state.revision } }] } : { commands: [] }
+    if (body.type === 'sync') sent = true
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  expect(new URLSearchParams(location.search).get('view')).toBeNull()
+  expect(document.querySelector('.ov')).toBeTruthy()
+  expect([...document.querySelectorAll<HTMLElement>('[data-semantic-id]')].some(node => node.dataset.semanticId === `${kind}:${extra}`)).toBe(true)
+})
+
+
+it.each(['navigate-card', 'focus', 'flash', 'reveal-search'] as const)('delivers %s for secondary and coordination cards through Overview, including background replay', async type => {
+  vi.useFakeTimers()
+  window.history.replaceState(null, '', '/?view=decisions')
+  source.queue = fixtureQueue()
+  const rows = source.queue.needsWill ?? source.queue.items
+  const primary = rows[0]!.cardIds[0]!, secondary = fixtureId(4)
+  rows[0]!.cardIds = [primary, secondary]
+  rows[1]!.title = 'Owner calls via operational coordination'
+  const coordination = rows[1]!.cardIds[0]!
+  let hidden = true
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 100, height: 40 }] as unknown as DOMRectList)
+  const ids = [primary, secondary, coordination]
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const index = ids.indexOf((this.dataset.semanticId ?? '').replace('card:', ''))
+    const left = 10 + Math.max(0, index) * 110
+    return { left, right: left + 100, top: 10, bottom: 50, width: 100, height: 40 } as DOMRect
+  })
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: (x: number) => document.querySelector(`.ov [data-semantic-id="card:${ids[Math.floor((x - 10) / 110)]}"]`) })
+  const fallback = read.getMockImplementation()!
+  let command = 0
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    let data: unknown = body.type === 'register' ? { scene_id: 'test', key: 'secret' } : { commands: [] }
+    if (body.type === 'sync' && command < 2) {
+      const id = command++ === 0 ? secondary : coordination
+      const target = { kind: 'card', id }, targets = [{ kind: 'card', id: primary }, target]
+      const action = type === 'navigate-card' ? { type, cardId: id } : type === 'focus' ? { type, target } : type === 'flash' ? { type, targets } : { type, target: targets[0], targets: [target] }
+      data = { commands: [{ scene_id: 'test', command_id: String(command), expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { ...action, origin: 'assistant', expectedRevision: body.state.revision } }] }
+    }
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  expect(new URLSearchParams(location.search).get('view')).toBeNull()
+  expect(observeTargets([`card:${secondary}`], 'overview').rendered_targets).toEqual([`card:${secondary}`])
+  await act(async () => { await vi.advanceTimersByTimeAsync(6500) })
+  hidden = false
+  act(() => window.dispatchEvent(new Event('focus')))
+  await act(async () => { await vi.advanceTimersByTimeAsync(3100) })
+  const expected = (type === 'flash' || type === 'reveal-search' ? [primary, coordination] : [coordination]).map(id => `card:${id}`)
+  expect(observeTargets(expected, 'overview')).toMatchObject({ stage: 'foreground-visible', rendered_targets: expected, visible_targets: expected, pending: false })
+  const acknowledgments = read.mock.calls.flatMap(([url, init]) => url === '/api/reconciliation/ui' ? JSON.parse(String(init?.body)).acknowledgments ?? [] : [])
+  expect(acknowledgments).toEqual(expect.arrayContaining([expect.objectContaining({ command_id: '2', delivery: expect.objectContaining({ stage: 'foreground-visible', visible_targets: expected, pending: false }) })]))
 })
