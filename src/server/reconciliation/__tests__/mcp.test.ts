@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ReconciliationMcp, privatePeer } from '../mcp'
-import { fixtureScene, fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
+import { fixtureScene, fixtureSources, fixtureQueue } from '../../../../test-fixtures/reconciliation/scenes'
 import { buildQueue } from '../queue'
 import { buildWorkerLinkReport } from '../workerLinkReport'
 import { queueSignals } from '../queueInputs'
@@ -131,6 +131,59 @@ describe('authenticated real MCP transport', () => {
     expect(mcp.sessions.read(second.scene_id).state?.revision).toBe(0)
     expect(mcp.sessions.enqueue({ scene_id: second.scene_id, command_id: args.command_id, expected_revision: 0, ttl_ms: 8000, action: { type: 'navigate-queue', direction: 'next' } }, scene, queue).outcome).toBe('queued')
     expect(JSON.stringify(queue)).toBe(original)
+  })
+  it.each([
+    ['present_view', 'queue'], ['present_view', 'scene'],
+    ['next_queue_item', 'queue'], ['next_queue_item', 'scene'],
+  ])('binds overlapping implicit %s retries before deferred %s reads', async (name, heldSource) => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-inflight-mcp-'))
+    const scene = fixtureScene(), queue = fixtureQueue(), state = initialPresentation()
+    let release!: () => void, firstEntered!: () => void, secondEntered!: () => void, reads = 0
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const firstRead = new Promise<void>(resolve => { firstEntered = resolve })
+    const secondRead = new Promise<void>(resolve => { secondEntered = resolve })
+    const waitForRead = async () => {
+      reads++
+      if (reads === 1) firstEntered()
+      if (reads === 2) secondEntered()
+      await blocked
+    }
+    const mcp = new ReconciliationMcp({
+      scene: async () => { if (heldSource === 'scene') await waitForRead(); return scene },
+      queue: async () => { if (heldSource === 'queue') await waitForRead(); return queue },
+      card: async () => ({}), workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
+    }, root)
+    server = createServer((req, res) => { void mcp.handle(req, res) })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+    client = new Client({ name: 'inflight-retry-test', version: '1' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const a = mcp.sessions.register(state), b = mcp.sessions.register(state)
+    mcp.sessions.designate(a.scene_id)
+    const args = { command_id: 'overlapping', expected_revision: 0, ...(name === 'present_view' ? { action: { type: 'navigate-queue', direction: 'next' } } : {}) }
+    const original = client.callTool({ name, arguments: args })
+    await firstRead
+    mcp.sessions.designate(b.scene_id)
+    const retry = client.callTool({ name, arguments: args })
+    await secondRead
+    expect(mcp.sessions.sync(a.scene_id, state, [])).toEqual([])
+    expect(mcp.sessions.sync(b.scene_id, state, [])).toEqual([])
+    release()
+    let commands = mcp.sessions.sync(a.scene_id, state, [])
+    for (let i = 0; i < 100 && !commands.length; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      commands = mcp.sessions.sync(a.scene_id, state, [])
+    }
+    expect(commands).toHaveLength(1)
+    const applied = applyPresentationAction(state, commands[0]!.action, scene, Date.now(), queue)
+    expect(applied.outcome).toBe('applied')
+    mcp.sessions.sync(a.scene_id, applied.state, [{ scene_id: a.scene_id, command_id: args.command_id, outcome: 'applied', state: applied.state, revision: applied.state.revision, applied_at: Date.now() }])
+    for (const response of await Promise.all([original, retry])) expect(parse(response)).toMatchObject({ outcome: 'applied', scene_id: a.scene_id, revision: 1 })
+    expect(parse(await client.callTool({ name, arguments: { ...args, expected_revision: 1 } })).outcome).toBe('conflict')
+    expect(mcp.sessions.sync(b.scene_id, state, [])).toEqual([])
+    expect(mcp.sessions.result(b.scene_id, args.command_id).outcome).toBe('unknown-id')
+    expect(mcp.sessions.read(b.scene_id).state?.revision).toBe(0)
   })
   it('accepts a full reveal acknowledgment and replay state through the real UI route', async () => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-reveal-sync-'))

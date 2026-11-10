@@ -130,3 +130,27 @@ it('updates visual delivery after an applied background command without reapplyi
   expect(broker.result(tab.scene_id, command.command_id).delivery?.stage).toBe('foreground-visible')
   expect(broker.sync(tab.scene_id, applied, [])).toEqual([])
 })
+
+
+it('bounds implicit reservations and expires them without extending retention on retries', () => {
+  let now = 1000
+  const broker = new SceneSessions(() => now), state = initialPresentation()
+  const a = broker.register(state), b = broker.register(state)
+  broker.designate(a.scene_id)
+  const input = { command_id: 'reserved-0', expected_revision: 0, ttl_ms: 8000, action: { type: 'clear-transient' as const } }
+  expect(broker.enqueue({ ...input, scene_id: a.scene_id, command_id: 'explicit-only' }, scene).outcome).toBe('queued')
+  for (let i = 0; i < 256; i++) expect(broker.resolveCommand({ ...input, command_id: `reserved-${i}` })).toEqual({ scene_id: a.scene_id })
+  expect(broker.resolveCommand({ ...input, command_id: 'overflow' })).toMatchObject({ outcome: 'conflict' })
+  expect(broker.resolveCommand({ ...input, command_id: 'explicit-only' })).toMatchObject({ outcome: 'conflict' })
+  broker.designate(b.scene_id)
+  expect(broker.resolveCommand(input)).toEqual({ scene_id: a.scene_id })
+  expect(broker.resolveCommand({ ...input, expected_revision: 1 })).toMatchObject({ outcome: 'conflict' })
+  expect(broker.enqueue({ ...input, scene_id: b.scene_id }, scene).outcome).toBe('queued')
+  expect(broker.enqueue({ ...input, scene_id: a.scene_id, expected_revision: 1 }, scene).outcome).toBe('conflict')
+  now += 600_000
+  broker.sync(a.scene_id, state, [])
+  broker.sync(b.scene_id, state, [])
+  expect(broker.resolveCommand(input)).toEqual({ scene_id: a.scene_id })
+  now++
+  expect(broker.resolveCommand(input)).toEqual({ scene_id: b.scene_id })
+})

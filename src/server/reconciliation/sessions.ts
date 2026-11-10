@@ -7,7 +7,8 @@ export const CONNECTED_MS = 10_000
 const RETENTION_MS = 10 * 60_000
 import type { RenderedObservation } from '../../shared/presentationObservation'
 export type { RenderedObservation } from '../../shared/presentationObservation'
-interface Session { session_code: string; designated: boolean; rendered_scene?: RenderedObservation; scene_id: string; key: string; lastSeen: number; state: PresentationState; commands: Map<string, { command: ViewCommand; fingerprint: string; implicit: boolean; result: CommandResult; created: number }> }
+type CommandInput = { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }
+interface Session { session_code: string; designated: boolean; rendered_scene?: RenderedObservation; scene_id: string; key: string; lastSeen: number; state: PresentationState; implicitCommands: Map<string, { fingerprint: string; created: number }>; commands: Map<string, { command: ViewCommand; fingerprint: string; result: CommandResult; created: number }> }
 export const secretEquals = (a: string, b: string) => {
   const left = Buffer.from(a), right = Buffer.from(b)
   return left.length === right.length && timingSafeEqual(left, right)
@@ -21,6 +22,9 @@ export class SceneSessions {
     const now = this.clock()
     for (const [id, session] of this.sessions) {
       if (now - session.lastSeen > RETENTION_MS) { this.sessions.delete(id); continue }
+      for (const [key, row] of session.implicitCommands) {
+        if (now - row.created > RETENTION_MS) session.implicitCommands.delete(key)
+      }
       for (const [key, row] of session.commands) {
         if (now - row.created > RETENTION_MS) session.commands.delete(key)
         else if (row.result.outcome === 'queued' && now >= row.command.expires_at) row.result = { ...row.result, outcome: 'expired' }
@@ -32,7 +36,7 @@ export class SceneSessions {
     if (this.sessions.size >= 64) throw new Error('Window limit reached')
     let session_code: string
     do { session_code = randomBytes(3).toString('hex').toUpperCase() } while ([...this.sessions.values()].some(s => s.session_code === session_code))
-    const session: Session = { session_code, designated: false, rendered_scene, scene_id: randomUUID(), key: randomBytes(32).toString('hex'), lastSeen: this.clock(), state, commands: new Map() }
+    const session: Session = { session_code, designated: false, rendered_scene, scene_id: randomUUID(), key: randomBytes(32).toString('hex'), lastSeen: this.clock(), state, implicitCommands: new Map(), commands: new Map() }
     this.sessions.set(session.scene_id, session)
     return { scene_id: session.scene_id, session_code, designated: session.designated, key: session.key }
   }
@@ -60,14 +64,20 @@ export class SceneSessions {
     const chosen = connected.find(s => s.designated) ?? (connected.length === 1 ? connected[0] : undefined)
     return chosen ? { scene_id: chosen.scene_id } : { outcome: 'ambiguous-session', message: 'Choose the code shown in the intended tab or click Use this tab with ChatGPT.' }
   }
-  resolveCommand(id: string | undefined, code: string | undefined, commandId: string) {
+  resolveCommand(request: Omit<CommandInput, 'scene_id'> & { scene_id?: string; session_code?: string }) {
     this.sweep()
-    if (!id && !code) {
-      for (const session of this.sessions.values()) {
-        if (session.commands.get(commandId)?.implicit) return { scene_id: session.scene_id }
-      }
-    }
-    return this.resolve(id, code)
+    const { scene_id: id, session_code: code, ...rest } = request
+    if (id || code) return this.resolve(id, code)
+    const retained = [...this.sessions.values()].find(session => session.implicitCommands.has(request.command_id))
+    const selected = retained ? { scene_id: retained.scene_id } : this.resolve()
+    if (!('scene_id' in selected)) return selected
+    const session = this.sessions.get(selected.scene_id)!
+    const fingerprint = JSON.stringify([rest.expected_revision, rest.ttl_ms, rest.action])
+    const prior = session.implicitCommands.get(request.command_id) ?? session.commands.get(request.command_id)
+    if (prior && prior.fingerprint !== fingerprint) return { outcome: 'conflict' as const }
+    if (!session.implicitCommands.has(request.command_id) && (session.implicitCommands.size >= 256 || !prior && session.commands.size >= 256)) return { outcome: 'conflict' as const }
+    if (!session.implicitCommands.has(request.command_id)) session.implicitCommands.set(request.command_id, { fingerprint, created: prior?.created ?? this.clock() })
+    return selected
   }
   disconnect(id: string) { const s = this.sessions.get(id); if (s) s.lastSeen = this.clock() - CONNECTED_MS }
   sync(id: string, state: PresentationState, acknowledgments: CommandResult[], rendered_scene?: RenderedObservation) {
@@ -94,13 +104,15 @@ export class SceneSessions {
     }
     return [...session.commands.values()].filter(row => row.result.outcome === 'queued').map(row => row.command).slice(0, 1)
   }
-  enqueue(input: { scene_id: string; command_id: string; expected_revision: number; ttl_ms: number; action: PresentationAction }, scene: FloorScene, queue?: QueueRead, implicit = false): CommandResult {
+  enqueue(input: CommandInput, scene: FloorScene, queue?: QueueRead): CommandResult {
     this.sweep()
     const { scene_id, command_id } = input
     const base = { scene_id, command_id }
     const session = this.sessions.get(scene_id)
     if (!session) return { ...base, outcome: 'unknown-id' }
-    const fingerprint = JSON.stringify(input)
+    const fingerprint = JSON.stringify([input.expected_revision, input.ttl_ms, input.action])
+    const reservation = session.implicitCommands.get(command_id)
+    if (reservation && reservation.fingerprint !== fingerprint) return { ...base, outcome: 'conflict' }
     const prior = session.commands.get(command_id)
     if (prior) return prior.fingerprint === fingerprint ? prior.result : { ...base, outcome: 'conflict' }
     if (session.commands.size >= 256) return { ...base, outcome: 'conflict' }
@@ -114,7 +126,7 @@ export class SceneSessions {
     }
     const command: ViewCommand = { scene_id, command_id, expected_revision: input.expected_revision, action: { ...input.action, origin: 'assistant', expectedRevision: input.expected_revision }, expires_at: this.clock() + input.ttl_ms }
     const result: CommandResult = { ...base, outcome, revision: session.state.revision, ...(outcome === 'queued' ? { delivery: { stage: 'accepted' as const, pending: true } } : {}) }
-    session.commands.set(command_id, { command, fingerprint, implicit, result, created: this.clock() })
+    session.commands.set(command_id, { command, fingerprint, result, created: reservation?.created ?? this.clock() })
     return result
   }
   result(sceneId: string, commandId: string): CommandResult {
