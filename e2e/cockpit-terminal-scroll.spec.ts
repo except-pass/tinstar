@@ -103,6 +103,8 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     expect(await visibleLines(page)).not.toContain('SCROLL-EARLY')
     await input.pressSequentially('WHEEL_BACK')
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('WHEEL_BACK')
+    // Wait for ttyd to paint the input echo before a repaint can clear the selection.
+    await expect.poll(() => visibleLines(page)).toContain('WHEEL_BACK')
 
     // Mouse reporting is on. xterm selects with Shift, or with Option on macOS
     // once macOptionClickForcesSelection is set. A wide drag keeps the selection.
