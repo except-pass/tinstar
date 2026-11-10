@@ -12,6 +12,7 @@ import { AssociationConflict, AssociationStore, associationInput } from './assoc
 import { ReleasePullReader } from './pulls'
 import { ReleaseEvidenceReader } from './evidence'
 import { ReleaseReconciler } from './reconcile'
+import { readReleaseWriteRecords } from './writer'
 import { planReleaseAutomation, readAutomationSettings } from './automation'
 
 async function ownerLogins(root: string): Promise<string[]> {
@@ -43,7 +44,7 @@ export class ReleasesApi {
     }
     const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
     data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
-    const reconciled = await this.reconciler.get(data, scene, await this.evidence.get())
+    const reconciled = await this.reconciler.get(data, scene, await this.evidence.get(), await readReleaseWriteRecords(this.root))
     reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
     return reconciled
   }

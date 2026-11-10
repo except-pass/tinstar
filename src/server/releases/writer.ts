@@ -48,6 +48,21 @@ export interface ReleaseWriteRecord {
   history?: Array<{ action: 'skip' | 'resume'; actor: string; reason: string; at: string }>
 }
 interface Journal { version: 1; records: ReleaseWriteRecord[]; recovery?: { actor: string; reason: string; backup: string; at: string } }
+async function readReleaseJournal(root: string): Promise<Journal> {
+  try {
+    const value = JSON.parse(await readFile(join(root, 'releases', 'writer-receipts.json'), 'utf8')) as Journal
+    if (value.version !== 1 || !Array.isArray(value.records) || value.records.some(row => !row.proposal?.id || !row.proposal.cardId || !['pending', 'done', 'skipped'].includes(row.phase)) || new Set(value.records.map(row => row.proposal.id)).size !== value.records.length) throw new Error('Invalid release writer journal')
+    return value
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, records: [] }; throw error }
+}
+export async function readReleaseWriteRecords(root: string): Promise<ReleaseWriteRecord[]> {
+  return (await readReleaseJournal(root)).records
+}
+export function unresolvedVerificationRecords(records: ReleaseWriteRecord[]): ReleaseWriteRecord[] {
+  const latest = new Map<string, ReleaseWriteRecord>()
+  for (const row of records) if (row.phase === 'done' && row.proposal.desk) latest.set(row.proposal.cardId, row)
+  return [...latest.values()].filter(row => !row.verificationResolvedAt)
+}
 const marker = (proposal: ReleaseTransitionProposal) => `Tin Star release: ${proposal.id}`
 const property = (card: WorkCard, name: string) => card.properties[name]?.value
 const sameOwner = (card: WorkCard, proposal: ReleaseTransitionProposal) => String(property(card, 'Owner') ?? '').trim() === proposal.owner
@@ -72,13 +87,7 @@ export class ReleaseAutomationWriter {
   constructor(private root: string, private transport: ReleaseTransport, private read: () => Promise<ReleasesRead>, private now = () => new Date().toISOString()) {
     this.file = join(root, 'releases', 'writer-receipts.json')
   }
-  private async journal(): Promise<Journal> {
-    try {
-      const value = JSON.parse(await readFile(this.file, 'utf8')) as Journal
-      if (value.version !== 1 || !Array.isArray(value.records) || value.records.some(row => !row.proposal?.id || !row.proposal.cardId || !['pending', 'done', 'skipped'].includes(row.phase)) || new Set(value.records.map(row => row.proposal.id)).size !== value.records.length) throw new Error('Invalid release writer journal')
-      return value
-    } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, records: [] }; throw error }
-  }
+  private journal() { return readReleaseJournal(this.root) }
   private async save(journal: Journal) {
     await mkdir(join(this.root, 'releases'), { recursive: true })
     const temporary = `${this.file}.tmp`
@@ -108,10 +117,11 @@ export class ReleaseAutomationWriter {
     if (!await this.enabled()) return { enabled: false, completed: [] }
     const journal = await this.journal(), data = await this.read()
     if (data.reconciliation?.sourceStatus !== 'fresh') return { enabled: true, held: 'Current production evidence is required; historical snapshots never authorize writes', completed: [] }
+    const unresolved = new Set(unresolvedVerificationRecords(journal.records))
     for (const row of journal.records) {
       if (row.phase !== 'done' || !row.proposal.desk || row.verificationResolvedAt) continue
       const card = data.reconciliation.cards.find(card => card.cardId === row.proposal.cardId)
-      if (data.associationsComplete && (!card || card.status !== 'In Progress' || !card.requiresProductionVerification)) row.verificationResolvedAt = this.now()
+      if (data.associationsComplete && (!unresolved.has(row) || !card || card.status !== 'In Progress' || !card.requiresProductionVerification)) row.verificationResolvedAt = this.now()
     }
     const proposals = data.automation?.proposals ?? [], completed: string[] = []
     for (const proposal of proposals) {
@@ -173,12 +183,11 @@ export class ReleaseAutomationWriter {
     const result: QueueItem[] = []
     const journal = await this.journal()
     let changed = false
-    const latest = new Map<string, ReleaseWriteRecord>()
-    for (const row of journal.records) if (row.phase === 'done' && row.proposal.desk) latest.set(row.proposal.cardId, row)
+    const unresolved = new Set(unresolvedVerificationRecords(journal.records))
     for (const row of journal.records) {
       const { proposal } = row, card = cards.find(card => card.id === proposal.cardId)
       if (row.phase !== 'done' || !proposal.desk || row.verificationResolvedAt) continue
-      if (latest.get(proposal.cardId) !== row || !card || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) {
+      if (!unresolved.has(row) || !card || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) {
         row.verificationResolvedAt = this.now(); changed = true; continue
       }
       const owner = String(property(card, 'Owner') ?? '').trim()

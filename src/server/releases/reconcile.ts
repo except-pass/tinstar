@@ -4,6 +4,7 @@ import type { CardReleaseEligibility, DeploymentReceipt, ReleaseDryRun, TargetRe
 import type { EvidenceRead } from './evidence'
 import { checkReleaseAncestry, type AncestryCheck } from './ancestry'
 import { receiptHash } from './cmsandbox'
+import { unresolvedVerificationRecords, type ReleaseWriteRecord } from './writer'
 
 function latestReceipt(rows: DeploymentReceipt[]) {
   const sorted = [...rows].sort((a, b) => Date.parse(b.deployedAt) - Date.parse(a.deployedAt) || a.id.localeCompare(b.id))
@@ -13,7 +14,7 @@ function latestReceipt(rows: DeploymentReceipt[]) {
   return { receipt: latest ?? null, conflicting: !!conflicting }
 }
 /** Deterministic dry run only: immutable observations in, eligibility out. No domain writes. */
-export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, ancestry: AncestryCheck = checkReleaseAncestry): Promise<ReleasesRead> {
+export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, ancestry: AncestryCheck = checkReleaseAncestry, records: ReleaseWriteRecord[] = []): Promise<ReleasesRead> {
   const pulls: ReleasePull[] = []
   const ancestryCache = new Map<string, Awaited<ReturnType<AncestryCheck>>>()
   for (const original of data.pulls) {
@@ -73,7 +74,8 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
         eligible: decision === 'would-complete', decision, reasons,
         receiptIds: [...new Set(linked.flatMap(pull => pull.deployment?.targets.flatMap(target => target.receipt ? [target.receipt.id] : []) ?? []))].sort() }
     }).sort((a, b) => a.cardId.localeCompare(b.cardId))
-  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.requiresProductionVerification && (card.decision === 'would-verify' || card.status === 'In Progress')))
+  const unresolvedCards = new Set(unresolvedVerificationRecords(records).map(row => row.proposal.cardId))
+  for (const pull of pulls) if (pull.deployment) pull.deployment.verificationRequired = activeReleaseLinks(pull).some(link => cards.some(card => card.cardId === link.cardId && card.requiresProductionVerification && (card.decision === 'would-verify' || card.status === 'In Progress' && unresolvedCards.has(card.cardId))))
   const report: ReleaseDryRun = {
     mode: 'dry-run', id: receiptHash({ pulls: pulls.map(pull => ({ id: pull.id, mergeSha: pull.mergeSha, exceptions: pull.exceptions, deployment: pull.deployment })), cards, sourceStatus: evidence.status }),
     sourceStatus: evidence.status, collectedAt: evidence.collectedAt,
@@ -90,7 +92,7 @@ export async function reconcileReleases(data: ReleasesRead, scene: FloorScene, e
 export class ReleaseReconciler {
   private cache = new Map<string, { until: number; value: Awaited<ReturnType<AncestryCheck>> }>()
   constructor(private check: AncestryCheck = checkReleaseAncestry, private now = Date.now) {}
-  async get(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead) {
+  async get(data: ReleasesRead, scene: FloorScene, evidence: EvidenceRead, records: ReleaseWriteRecord[] = []) {
     let budget = 8
     const deadline = this.now() + 10_000
     return reconcileReleases(data, scene, evidence, async (repository, checkout, mergeSha, deployedSha) => {
@@ -104,6 +106,6 @@ export class ReleaseReconciler {
       if (this.cache.size >= 1000) this.cache.delete(this.cache.keys().next().value!)
       this.cache.set(key, { until: this.now() + (value.state === 'unknown' ? 60_000 : 600_000), value })
       return value
-    })
+    }, records)
   }
 }

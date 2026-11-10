@@ -8,6 +8,7 @@ import { needsWill } from '../../reconciliation/needsWill'
 import { decisionItems } from '../../../shared/reconciliationQueue'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { releaseAssociations } from '../../../shared/releases'
+import { filterReleases, releaseState } from '../../../releases/model'
 import { planReleaseAutomation } from '../automation'
 import { reconcileReleases } from '../reconcile'
 import type { EvidenceRead } from '../evidence'
@@ -32,7 +33,7 @@ async function setup(enabled = true) {
   const read = vi.fn(async () => {
     const data = releaseAssociations(scene)
     for (const pull of data.pulls) Object.assign(pull, { state: 'merged', freshness: 'fresh', mergeSha: 'a'.repeat(40) })
-    const reconciled = await reconcileReleases(data, scene, evidence, async () => ({ state: 'ancestor' }))
+    const reconciled = await reconcileReleases(data, scene, evidence, async () => ({ state: 'ancestor' }), await writer().receipts())
     reconciled.automation = planReleaseAutomation(reconciled, scene, { requestedEnabled: enabled, configuration: 'configured', warnings: [] })
     return reconciled
   })
@@ -93,16 +94,29 @@ describe('default-OFF production writer and shared Desk publication', () => {
   })
   it('retires resolved routes during reconciliation and publishes only a later release', async () => {
     const f = await setup(), writer = f.writer()
+    f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toHaveLength(1)
     await writer.run()
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toHaveLength(1)
     f.scene.cards[0]!.source.properties.Status!.value = 'Done'
     await writer.run()
     f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
     expect(await f.writer().desk(f.scene.cards.map(card => card.source))).toEqual([])
+    const reopened = await f.read()
+    expect(filterReleases(reopened.pulls, 'Verify in Prod')).toEqual([])
+    expect(filterReleases(reopened.pulls, 'Shipped')).toHaveLength(1)
+    expect(releaseState(reopened.pulls[0]!)).toBe('Shipped')
+    expect(reopened.automation!.proposals).toEqual([])
     f.scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
     f.evidence.receipts[0]!.id = 'next-prod-run'
     await writer.run()
     const queue = await f.writer().desk(f.scene.cards.map(card => card.source))
     expect(queue).toHaveLength(1)
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toHaveLength(1)
+    await writer.run()
+    expect(await writer.desk(f.scene.cards.map(card => card.source))).toHaveLength(1)
     const routes = (await writer.receipts()).filter(row => row.proposal.desk)
     expect(routes).toHaveLength(2)
     expect(queue[0]!.id).toBe(routes[1]!.proposal.desk!.item.id)
