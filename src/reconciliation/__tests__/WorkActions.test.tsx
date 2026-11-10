@@ -134,3 +134,51 @@ it('refreshes a definite conflict and saves explicit re-issue with a new ID and 
   expect(second.input.properties).toEqual({ Priority: 'High' })
   expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
 })
+
+it('explicitly re-issues a partial save after a direct edit, card-changed response and refresh', async () => {
+  const original = structuredClone(fixtureScene().cards[0]!)
+  original.source.properties.Priority = { type: 'select', value: 'Low' } as any
+  let remotePriority = 'Low'
+  const refresh = vi.fn(async () => {})
+  function Editor() {
+    const [card, setCard] = useState(original)
+    return <><p>Current priority: {String(card.source.properties.Priority!.value)}</p>
+      <button onClick={() => { remotePriority = 'Medium' }}>Edit card directly</button>
+      <WorkActions card={card} onSaved={async result => {
+        if (!result) { await refresh(); const updated = structuredClone(card); updated.source.properties.Priority!.value = remotePriority; setCard(updated) }
+      }} /></>
+  }
+  const fetcher = vi.mocked(apiFetch)
+  fetcher.mockImplementationOnce(async () => {
+    remotePriority = 'High'
+    return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', code: 'save-unconfirmed', message: 'Priority saved; note failed', saved_fields: ['Priority'] } }))
+  })
+  fetcher.mockImplementationOnce(async () => {
+    expect(remotePriority).toBe('Medium')
+    return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', code: 'card-changed', message: 'Card changed; review and re-issue', saved_fields: ['Priority'] } }))
+  })
+  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { outcome: 'saved', code: 'saved', message: 'Priority and note saved', saved_fields: ['Priority', 'note'] } })))
+  render(<Editor />)
+  fireEvent.click(screen.getByLabelText('Change an ordinary property'))
+  fill('Property', 'Priority'); fill('New value (relation IDs separated by commas)', 'High'); fill('Note', 'Raise priority')
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Partially saved. Priority saved; note failed'))
+  expect(screen.queryByRole('button', { name: 'Re-issue with refreshed card' })).not.toBeInTheDocument()
+  const first = JSON.parse(String(fetcher.mock.calls[0]![1]!.body))
+  fireEvent.click(screen.getByRole('button', { name: 'Edit card directly' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Partially saved. Card changed'))
+  expect(JSON.parse(String(fetcher.mock.calls[1]![1]!.body))).toEqual(first)
+  expect(screen.getByRole('status')).toHaveTextContent('Confirmed: Priority.')
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh card' }))
+  await waitFor(() => expect(screen.getByText('Current priority: Medium')).toBeInTheDocument())
+  expect(refresh).toHaveBeenCalledTimes(1)
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  fireEvent.click(screen.getByRole('button', { name: 'Re-issue with refreshed card' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saved. Priority and note saved'))
+  const reissued = JSON.parse(String(fetcher.mock.calls[2]![1]!.body))
+  expect(reissued.input.operation_id).not.toBe(first.input.operation_id)
+  expect(reissued.input.expected).toEqual({ Priority: 'Medium' })
+  expect(reissued.input.properties).toEqual({ Priority: 'High' })
+  expect(reissued.input.note).toBe('Raise priority')
+})

@@ -24,7 +24,7 @@ function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>) {
     } catch { setResult({ outcome: 'partially-saved', code: 'response-unavailable', operation_id: attempt.current.id, saved_fields: [], message: 'Save unconfirmed. Refresh, then retry; this attempt will be reused.' }) }
     finally { setBusy(false) }
   }
-  return { busy, result, save, canReissue: result?.outcome === 'not-saved' && result.code === 'conflict', newAttempt: () => { attempt.current = undefined } }
+  return { busy, result, save, canReissue: result?.outcome === 'not-saved' && result.code === 'conflict' || result?.outcome === 'partially-saved' && result.code === 'card-changed', newAttempt: () => { attempt.current = undefined } }
 }
 const field = (label: string, value: string, set: (value: string) => void, required = true, multiline = false) => <label>{label}{multiline ? <textarea required={required} maxLength={12000} value={value} onChange={e => set(e.target.value)} /> : <input required={required} value={value} onChange={e => set(e.target.value)} />}</label>
 
