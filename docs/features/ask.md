@@ -335,7 +335,9 @@ with its index and string ID when available, or a collection-level reason when
 the field is not an array. Desk displays a small rejection note, and
 subsequent conversation history retains the details. Bridge POST receipts return
 the same details in `data.reply_warnings` (including on delivery retries), so
-pullers can surface them. The published 6.0.0 puller ignores this extra field.
+pullers can surface them. The published 6.0.0 puller ignores this extra field;
+updated adapters deliver them through the
+[First Mate warning-receipt flow](ask-puller-service.md#rejected-action-receipts-for-first-mate).
 Request/note correlation and immutable-answer conflicts still
 reject delivery.
 The first three structured choices appear as compact buttons immediately after
