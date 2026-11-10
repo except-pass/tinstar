@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
+import { observeTargets } from '../../reconciliation/presentationVisibility'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
 import { AskCardAction } from '../Ask'
@@ -417,4 +418,53 @@ it.each(['card', 'execution'] as const)('routes a mixed reveal with an additiona
   expect(new URLSearchParams(location.search).get('view')).toBeNull()
   expect(document.querySelector('.ov')).toBeTruthy()
   expect([...document.querySelectorAll<HTMLElement>('[data-semantic-id]')].some(node => node.dataset.semanticId === `${kind}:${extra}`)).toBe(true)
+})
+
+
+it.each(['navigate-card', 'focus', 'flash', 'reveal-search'] as const)('delivers %s for secondary and coordination cards through Overview, including background replay', async type => {
+  vi.useFakeTimers()
+  window.history.replaceState(null, '', '/?view=decisions')
+  source.queue = fixtureQueue()
+  const rows = source.queue.needsWill ?? source.queue.items
+  const primary = rows[0]!.cardIds[0]!, secondary = fixtureId(4)
+  rows[0]!.cardIds = [primary, secondary]
+  rows[1]!.title = 'Owner calls via operational coordination'
+  const coordination = rows[1]!.cardIds[0]!
+  let hidden = true
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => hidden ? 'hidden' : 'visible')
+  vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 100, height: 40 }] as unknown as DOMRectList)
+  const ids = [primary, secondary, coordination]
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const index = ids.indexOf((this.dataset.semanticId ?? '').replace('card:', ''))
+    const left = 10 + Math.max(0, index) * 110
+    return { left, right: left + 100, top: 10, bottom: 50, width: 100, height: 40 } as DOMRect
+  })
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: (x: number) => document.querySelector(`.ov [data-semantic-id="card:${ids[Math.floor((x - 10) / 110)]}"]`) })
+  const fallback = read.getMockImplementation()!
+  let command = 0
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url !== '/api/reconciliation/ui') return fallback(url, init)
+    const body = JSON.parse(String(init?.body))
+    let data: unknown = body.type === 'register' ? { scene_id: 'test', key: 'secret' } : { commands: [] }
+    if (body.type === 'sync' && command < 2) {
+      const id = command++ === 0 ? secondary : coordination
+      const target = { kind: 'card', id }, targets = [{ kind: 'card', id: primary }, target]
+      const action = type === 'navigate-card' ? { type, cardId: id } : type === 'focus' ? { type, target } : type === 'flash' ? { type, targets } : { type, target: targets[0], targets: [target] }
+      data = { commands: [{ scene_id: 'test', command_id: String(command), expected_revision: body.state.revision, expires_at: Date.now() + 8000, action: { ...action, origin: 'assistant', expectedRevision: body.state.revision } }] }
+    }
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<App />)
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+  expect(new URLSearchParams(location.search).get('view')).toBeNull()
+  expect(observeTargets([`card:${secondary}`], 'overview').rendered_targets).toEqual([`card:${secondary}`])
+  await act(async () => { await vi.advanceTimersByTimeAsync(6500) })
+  hidden = false
+  act(() => window.dispatchEvent(new Event('focus')))
+  await act(async () => { await vi.advanceTimersByTimeAsync(3100) })
+  const expected = (type === 'flash' || type === 'reveal-search' ? [primary, coordination] : [coordination]).map(id => `card:${id}`)
+  expect(observeTargets(expected, 'overview')).toMatchObject({ stage: 'foreground-visible', rendered_targets: expected, visible_targets: expected, pending: false })
+  const acknowledgments = read.mock.calls.flatMap(([url, init]) => url === '/api/reconciliation/ui' ? JSON.parse(String(init?.body)).acknowledgments ?? [] : [])
+  expect(acknowledgments).toEqual(expect.arrayContaining([expect.objectContaining({ command_id: '2', delivery: expect.objectContaining({ stage: 'foreground-visible', visible_targets: expected, pending: false }) })]))
 })

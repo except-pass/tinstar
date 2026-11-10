@@ -4,6 +4,7 @@ import { useFloorScene } from '../reconciliation/useFloorScene'
 import { useDeskQueue } from '../reconciliation/useDeskQueue'
 import { usePresentation } from '../reconciliation/usePresentation'
 import { presentationTargets } from '../shared/presentationObservation'
+import { isCoordinationRequest } from '../shared/requestText'
 import { AskDesk, AskProvider, useAskControls } from './Ask'
 import { deskConversations, type DeskView } from './deskInbox'
 import { DeskRail } from './DeskRail'
@@ -52,7 +53,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     const targets = presentationTargets(action)
     if (!targets.length) return
     setCloseRequest(value => value + 1)
-    const inDecisions = targets.every(target => target.kind === 'card' && (queue?.needsWill ?? queue?.items ?? []).some(item => item.cardIds.includes(target.id)))
+    const inDecisions = targets.every(target => target.kind === 'card' && (queue?.needsWill ?? queue?.items ?? []).some(item => !isCoordinationRequest(item.title) && item.cardIds[0] === target.id))
     if (action.type === 'navigate-card' && inDecisions && onDecisions) { if (!decisionsActive) onDecisions() }
     else if (!overviewActive && !inDecisions) onOverview()
   })
