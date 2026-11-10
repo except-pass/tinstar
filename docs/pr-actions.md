@@ -1,6 +1,6 @@
 # Installed PR actions
 
-PRs and Releases share the existing registry, executor, scoped owner grants, receipts,
+PR Operations uses the existing registry, executor, scoped owner grants, receipts,
 per-PR locks and repository write serialization. The default remains trusted fixture
 simulation with actual GitHub writes = 0. Custom source can be inspected/installed but
 is not evaluated in default mode.

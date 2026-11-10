@@ -134,7 +134,8 @@ in [local voice retention](voice.md#boundary-resource-use-and-retention).
 ## Typed artifact origins and returns
 
 The same composer supports PRs, action receipts, deployment targets and deployment receipts.
-PR rows in both PRs and Releases ask about the actual GitHub PR. Right-click a
+PR rows in PR Operations ask about the actual GitHub PR. Releases uses the
+[release-scoped detail drawer](releases.md); it has no inline Ask composer. Right-click a
 PR CI/review/changes field or deployment/receipt text to prepare an editable
 question. Blank Ask icons remain blank, and native links outside semantic Ask
 fields, selection, inspection and table scrolling retain their existing

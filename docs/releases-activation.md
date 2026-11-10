@@ -5,10 +5,10 @@
 
 # Releases activation packet
 
-The implementation is default OFF. The production verification decision is
-already approved and remains opt-in. This packet requests only activation of the
-writer, the checkbox schema, and the coordinated operational instructions.
-It does not authorize deployment, merging, activation, or backfill during review.
+The implementation is default OFF. The request and replacement instructions below
+are historical records of the superseded proposal, not current activation guidance.
+The [Releases reference](features/releases.md#d2-read-model-and-evidence-boundaries)
+owns the current acceptance-policy boundary.
 
 ## Owner activation request (exact text)
 

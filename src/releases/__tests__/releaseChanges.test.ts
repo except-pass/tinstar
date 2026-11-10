@@ -36,7 +36,7 @@ describe('release-scoped work outcomes', () => {
     release.pulls = [member]; release.supportingPulls = [older]
     release.targets = [{ component: 'api', target: 'prod', readiness: 'ready', readinessEvidence: [], receipt }]
     const changes = releaseChanges(release, data, scene)
-    expect(changes).toHaveLength(1)
+    expect(changes).toHaveLength(2) // The member PR explicitly links two independent cards.
     expect(changes[0]).toMatchObject({ delivery: 'Deployed', requiredPulls: [member.url, older.url], pulls: [member, older] })
     expect(release.pulls).toEqual([member])
     older.deployment!.targets[0]!.state = 'absent'
