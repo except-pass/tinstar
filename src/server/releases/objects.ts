@@ -101,6 +101,7 @@ export class ReleaseObjectReader {
       const cardIds = new Set(pulls.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
       const supporting = data.pulls.filter(pull => !memberIds.has(pull.id) && activeReleaseLinks(pull).some(link => cardIds.has(link.cardId)))
       const scoped = await this.reconciler.get({ ...data, pulls: [...pulls, ...supporting] }, scene, { ...evidence,
+        collectedAt: release.candidateId ? release.provenance.asOf : evidence.collectedAt,
         receipts: release.kind === 'production' ? release.targets.flatMap(target => target.receipt ? [target.receipt] : []) : [] })
       release.pulls = scoped.pulls.filter(pull => memberIds.has(pull.id))
       release.supportingPulls = scoped.pulls.filter(pull => !memberIds.has(pull.id))

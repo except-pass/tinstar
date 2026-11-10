@@ -82,6 +82,29 @@ describe('authoritative coordinator release objects', () => {
     expect(objects.every(row => row.membership.status === 'unknown')).toBe(true)
     expect(data).toEqual(before)
   })
+  it('uses source collection time for members and supporting PRs without changing aggregate evidence', async () => {
+    const { evidence, bundle, head } = source(), scene = releaseFixture(), data = releaseAssociations(scene)
+    const member = data.pulls[0]!, supporting = data.pulls[1]!
+    supporting.links = structuredClone(member.links)
+    bundle.journalMetadata[head] = { lastModified: '2026-11-10T18:10:00Z' }
+    evidence.coordinatorSources![0]!.asOf = '2026-11-10T18:15:00Z'
+    const receipt = cmsandboxReceipts(bundle)[0]!
+    for (const pull of [member, supporting]) {
+      Object.assign(pull, { repository: receipt.repository, state: 'merged', freshness: 'fresh', mergeSha: 'a'.repeat(40), exceptions: [] })
+      evidence.requirements.set(pull.id, { targets: [{ component: receipt.component, target: receipt.target }], exceptions: [] })
+    }
+    evidence.repositories.set(receipt.repository, 'github')
+    const memberships = new ReleaseMembershipReader()
+    vi.spyOn(memberships, 'get').mockResolvedValue({ membership: { status: 'complete', baseline: 'v1.23.0', baselineSha: 'b'.repeat(40), observedAt: null, reason: null }, pulls: new Map([[member.id, member]]), commits: [], cursor: 0, page: 1, total: 1, retryAt: 0 })
+    const reader = new ReleaseObjectReader(memberships, new ReleaseReconciler(vi.fn().mockResolvedValue({ state: 'ancestor' })))
+    const records = await reader.get(evidence, data, scene)
+    const production = records.find(record => record.kind === 'production')!
+    expect(production.pulls).toHaveLength(1)
+    expect(production.pulls[0]!.deployment!.state).toBe('shipped')
+    expect(production.supportingPulls![0]!.deployment!.state).toBe('shipped')
+    expect(records.find(record => record.kind === 'candidate')!.pulls[0]!.deployment!.state).toBe('unknown')
+    expect(evidence.collectedAt).toBe('2026-11-06T18:15:00Z')
+  })
   it('retains readable release identities with visible partial-source warnings and historical freshness', () => {
     const { evidence } = source()
     evidence.status = 'error'; evidence.warnings = ['Another configured receipt source could not be read']
