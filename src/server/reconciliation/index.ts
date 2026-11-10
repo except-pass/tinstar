@@ -177,8 +177,11 @@ export class ReconciliationSources {
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
-      .filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
-    const states = authorized ? await (this.readPullReadiness?.(urls) ?? this.queuePulls.get(urls)) : new Map<string, PullReadiness>()
+    const readableUrls = urls.filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
+    const states = authorized ? await (this.readPullReadiness?.(readableUrls) ?? this.queuePulls.get(readableUrls)) : new Map<string, PullReadiness>()
+    if (authorized && pullRead) for (const url of urls) if (inventoryPullState(url, pullRead) === 'unverified') {
+      states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
+    }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is

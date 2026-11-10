@@ -406,7 +406,12 @@ authorization placeholders.
 
 Needs Will uses current active Releases/PR Operations associations independently
 of the open-only PR list. For an associated PR absent from a repository inventory
-reported fresh and complete, only its merge ask is suppressed. Other decisions,
+reported fresh and complete **within a scope covering that identity**, only its
+merge ask is suppressed. `all-open` covers every PR in that repository;
+`authored-or-associated` supports an absence conclusion only for an identity
+explicitly included by the active associations. Unknown scope is not absence.
+A Link/Evidence-only identity outside the declared scope stays listed as
+**PR state unverified**, including an unknown readiness entry without a new lookup. Other decisions,
 elevated actions and waits on Will remain. Partial, stale, unavailable or missing
 repository coverage retains the merge ask as **PR state unverified**, not as a
 verified wait for merge. Non-owner HTTP and MCP callers still receive owner

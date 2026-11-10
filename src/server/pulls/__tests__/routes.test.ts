@@ -156,3 +156,62 @@ it.each(['complete', 'partial', 'stale', 'unavailable'] as const)('uses producti
     expect(read.mock.calls.every(([path]) => path === '/user' || path.startsWith('/user/orgs?') || path.startsWith('/repos/owner/repo/pulls?state=open&'))).toBe(true)
   } finally { context.mockRestore() }
 })
+
+it('retains an Evidence-only merge ask outside complete authored-or-associated inventory without fetching the PR', async () => {
+  const { ReconciliationSources } = await import('../../reconciliation')
+  const { CardContextReader } = await import('../../reconciliation/cardContext')
+  const { fixtureSources } = await import('../../../../test-fixtures/reconciliation/scenes')
+  const { inventoryPullState } = await import('../../../shared/pulls')
+  const root = await mkdtemp(join(process.cwd(), '.scope-coverage-'))
+  cleanups.push(() => rm(root, { recursive: true, force: true }))
+  await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['upstream/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+  const url = 'https://github.com/upstream/repo/pull/9'
+  const read = vi.fn(async (path: string) => {
+    if (path === '/user') return { login: 'owner' }
+    if (path.startsWith('/user/orgs?')) return []
+    if (path.startsWith('/search/issues?')) return { total_count: 0, incomplete_results: false, items: [] }
+    throw new Error('An Evidence-only PR by another author must not be fetched')
+  })
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] }, undefined, undefined, root)
+  const snapshot = fixtureSources({ now: Date.now() }), card = snapshot.intentions.data!.cards[0]!
+  snapshot.intentions.data!.cards = [card]; snapshot.fleet = []
+  delete card.properties.Link
+  card.properties.Evidence = { id: 'evidence', type: 'url', value: url, hasMore: false }
+  card.properties['Will action'] = { id: 'actions', type: 'multi_select', value: ['Merge', 'Decision'], hasMore: false }
+  card.properties['Next action'] = { id: 'next', type: 'rich_text', value: 'Merge the reviewed change', hasMore: false }
+  const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
+  scene.cards = scene.cards.filter(item => item.id === card.id); scene.cards[0]!.source = card
+  scene.executions = []; scene.backlog = []; scene.claims = []
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  vi.spyOn(sources, 'scene').mockResolvedValue(scene)
+  const context = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockResolvedValue({ outcome: 'available', blocks: [] })
+  try {
+    const api = new PullsApi(sources, new AssociationStore(root), root, new PullReader(read))
+    const inventory = await api.read()
+    expect(inventory).toMatchObject({ pulls: [], associations: [], repositories: [{ repository: 'upstream/repo', scope: 'authored-or-associated', complete: true, status: 'fresh' }] })
+    expect(inventoryPullState(url, inventory)).toBe('unverified')
+    expect(inventoryPullState(url, { ...inventory, repositories: inventory.repositories.map(repo => ({ ...repo, scope: undefined })) })).toBe('unverified')
+    expect(inventoryPullState(url, { ...inventory, repositories: inventory.repositories.map(repo => ({ ...repo, scope: 'all-open' as const })) })).toBe('not-open')
+    const associated = { ...inventory, associations: [{ id: 'upstream/repo#9', repository: 'upstream/repo', number: 9, url, links: [{ cardId: card.id, active: true, sources: ['Manual association'], events: [] }] }] }
+    expect(inventoryPullState(url, associated)).toBe('not-open')
+    associated.associations[0]!.links[0]!.active = false
+    expect(inventoryPullState(url, associated)).toBe('unverified')
+    sources.authorizePulls = req => api.authorized(req)
+    sources.readPulls = () => api.read()
+    const readiness = vi.fn(async () => new Map())
+    sources.readPullReadiness = readiness
+    const owner = { headers: { 'tailscale-user-login': 'owner@example.test' }, socket: { remoteAddress: '127.0.0.1' } } as import('node:http').IncomingMessage
+    const view = await sources.queue(owner)
+    expect(view.needsWill).toHaveLength(1)
+    expect(view.needsWill[0]).toMatchObject({ kind: 'merge', action: 'PR state unverified', reasons: expect.arrayContaining(['PR state unverified']) })
+    expect(view.needsWill[0]!.sources.find(source => source.request?.kind === 'notion-card')?.actions).toEqual(['Merge', 'Decision'])
+    expect(view.needsWill[0]!.sources.find(source => source.kind === 'github')).toMatchObject({ id: url, status: 'unknown', observedAt: null })
+    expect(readiness).toHaveBeenCalledWith([])
+    expect(read).toHaveBeenCalledTimes(3)
+    card.properties['Will action']!.value = ['Merge']
+    expect((await sources.queue(owner)).needsWill).toHaveLength(1)
+    expect(read).toHaveBeenCalledTimes(3)
+    const restricted = await sources.queue()
+    expect(restricted.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
+  } finally { context.mockRestore() }
+})

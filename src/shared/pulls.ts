@@ -39,5 +39,7 @@ export function inventoryPullState(url: string, inventory: PullsRead | null): 'o
   const pull = inventory.pulls.find(pull => releasePull(pull.url)?.id === identity.id)
   if (pull) return pull.freshness === 'fresh' ? 'open' : 'unverified'
   const coverage = inventory.repositories.find(repository => repository.repository === identity.repository)
-  return coverage?.status === 'fresh' && coverage.complete ? 'not-open' : 'unverified'
+  const covered = coverage?.scope === 'all-open' || coverage?.scope === 'authored-or-associated' &&
+    inventory.associations?.some(pull => releasePull(pull.url)?.id === identity.id && pull.links.some(link => link.active))
+  return covered && coverage?.status === 'fresh' && coverage.complete ? 'not-open' : 'unverified'
 }
