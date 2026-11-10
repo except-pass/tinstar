@@ -414,8 +414,7 @@ The remaining parent-card items are follow-up slices:
 
 `useElementAsk` and `askElement` in `src/ask/` provide one field contract for
 Overview cards (including expanded relationship hints and card/execution
-Inspector fields), PR rows/details, Releases rows/evidence, and Discuss items
-including Card context text. Manager, group and First Mate Inspector selections
+Inspector fields), PR rows/details, Releases rows/evidence, and Discuss items. Manager, group and First Mate Inspector selections
 do not expose element Ask. Existing `data-ask-field`
 markup works with the same hook. Right-click, Shift+F10, the Context Menu key,
 and a stationary 550 ms touch hold open the semantic draft directly from the

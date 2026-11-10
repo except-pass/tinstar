@@ -56,7 +56,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-For Discuss response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, its retained notes remain available under the Decisions diagnostics. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
+For Decisions response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, its retained notes remain available under the Decisions diagnostics. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
 
 ## Quick start
 
