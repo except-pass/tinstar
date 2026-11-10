@@ -33,6 +33,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home], ports: { start: portStart, count: 20 } } }))
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
+    writeFileSync(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
     writeFileSync(join(home, 'data', 'scroll', 'brief.md'), '# Brief\n\n## Captain\'s intent\n\nScroll the worker terminal.\n')
@@ -52,8 +53,9 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       backlog: { records: [{ id: 'scroll', title: 'scroll objective' }, { id: 'other', title: 'other objective' }] },
     }))
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '80', '-y', '24', '-n', 'supervisor')
+    // Leave the top row for tmux's copy-mode status, which overlays narrow terminals.
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-scroll',
-      'python3 -c \'print("SCROLL-EARLY"); print("\\n".join(f"FILL-{i:03d}" for i in range(1,150))); print("SCROLL-LATE")\'; exec cat')
+      'python3 -c \'print("\\nSCROLL-EARLY"); print("\\n".join(f"FILL-{i:03d}" for i in range(1,150))); print("SCROLL-LATE")\'; exec cat')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-other', 'exec cat')
 
     const env: NodeJS.ProcessEnv = {
