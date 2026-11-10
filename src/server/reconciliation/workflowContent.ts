@@ -77,9 +77,10 @@ export class WorkflowContent {
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete body read')
       for (const block of body.results) if ((block.type === 'paragraph' || includeStructured && ['heading_2', 'code'].includes(block.type)) && !block.archived && !block.in_trash) result.push({ id: block.id, type: block.type, text: plainText(block[block.type]?.rich_text) })
       if (!body.has_more) return result
-      if (typeof body.next_cursor !== 'string' || !body.next_cursor || cursors.has(body.next_cursor)) break
-      cursor = body.next_cursor
-      cursors.add(cursor)
+      const nextCursor = body.next_cursor
+      if (typeof nextCursor !== 'string' || !nextCursor || cursors.has(nextCursor)) break
+      cursor = nextCursor
+      cursors.add(nextCursor)
     }
     throw new Error('Body truncated; cannot safely locate the requested section')
   }
