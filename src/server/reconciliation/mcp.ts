@@ -14,6 +14,7 @@ import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../
 import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
+import { searchWorkSchema, getWorkSchema, startWorkSchema, workflowRules, type StartWorkInput } from '../../shared/workflow'
 import type { WorkerLinkReport } from './workerLinkReport'
 
 export function installToken(root = getConfigRoot()) {
@@ -51,6 +52,9 @@ const commandInput = {
   ttl_ms: z.number().int().min(500).max(15_000).default(8000), action: actionSchema,
 }
 export interface PresentationReaders {
+  searchWork?(input: unknown): Promise<unknown>
+  getWork?(input: unknown): Promise<unknown>
+  startWork?(input: StartWorkInput, actor: string): Promise<unknown>
   scene(): Promise<FloorScene>
   card(id: string): Promise<unknown>
   queue(): Promise<QueueRead>
@@ -67,9 +71,13 @@ export class ReconciliationMcp {
     // MCP config trouble degrades this interface only; source viewing still works.
     try { this.token = installToken(root) } catch { this.token = null }
   }
-  createServer() {
+  createServer(actor = 'Tin Star MCP') {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    server.registerTool('search_work', { description: 'Find configured-board work by owner, status, initiative, epic or checkpoint. Independent of browser filters; default scope excludes Done/Archived. Paginated bounded property reads share UI links and Smart Search patterns (unknown is not none). No scene/window required.', inputSchema: searchWorkSchema.shape, annotations: readAnnotations }, async input => result(await this.readers.searchWork?.(input) ?? { outcome: 'unavailable' }))
+    server.registerTool('get_work', { description: 'Read an exact configured-board card, including outside the active scope, bounded body/comments with authors, linked worker/PR evidence and freshness. Current/historical/conflicting/unverified links remain distinct. No scene/window required.', inputSchema: getWorkSchema.shape, annotations: readAnnotations }, async input => result(await this.readers.getWork?.(input) ?? { outcome: 'unavailable' }))
+    server.registerTool('get_workflow_rules', { description: 'Read code-enforced workflow rules, external-worker provenance and the operations reserved for later slices. No separate rules-page permission required.', inputSchema: {}, annotations: readAnnotations }, async () => result(workflowRules))
+    server.registerTool('start_work', { description: 'Record a real execution: merge exact tracked worker provenance and set In Progress together, attributed to the authenticated caller. Requires Owner and Area; rejects stale/historical/owner-only evidence. Returns confirmed readback or precise not-saved/partially-saved result. Retry identical operation_id/input; no checkpoint/ask changes. External running evidence is explicitly consumer-reported.', inputSchema: startWorkSchema.shape, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.startWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
     server.registerTool('list_ui_sessions', { description: 'List authorized ephemeral Overview windows and connected state. Choose an explicit scene_id; never guess a window.', inputSchema: {}, annotations: readAnnotations }, async () => result({ sessions: this.sessions.list() }))
     server.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => {
       const window = this.sessions.read(scene_id)
@@ -123,7 +131,7 @@ export class ReconciliationMcp {
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]
     const report = path === '/api/reconciliation/worker-links/report'
-    if (!report && path !== '/api/reconciliation/mcp' && path !== '/api/reconciliation/ui') return false
+    if (!report && path !== '/api/reconciliation/mcp' && path !== '/api/reconciliation/ui' && path !== '/api/reconciliation/workflow') return false
     const allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin: req.headers.origin, allowlist }), 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Tinstar-UI, MCP-Protocol-Version', 'Cache-Control': 'no-store' }
     if (!privatePeer(req.socket.remoteAddress) || req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Unauthorized private interface', { headers })
@@ -140,7 +148,11 @@ export class ReconciliationMcp {
       if (!secretEquals(String(req.headers.authorization ?? ''), `Bearer ${this.token}`)) return fail(res, 'FORBIDDEN', 'unauthorized', { headers, status: 401 })
       let parsed: unknown
       try { parsed = await body(req) } catch { return fail(res, 'BAD_REQUEST', 'Invalid bounded JSON request', { headers }) }
-      const server = this.createServer()
+      // The facade authenticates its caller before forwarding. Only the
+      // install-token authority may assert this identity; browser input cannot.
+      const forwarded = req.headers['x-tinstar-caller']
+      const actor = typeof forwarded === 'string' && /^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,99}$/.test(forwarded) ? forwarded : 'Tin Star MCP'
+      const server = this.createServer(actor)
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
       for (const [key, value] of Object.entries(headers)) res.setHeader(key, value)
       res.on('close', () => { void transport.close(); void server.close() })
@@ -151,6 +163,15 @@ export class ReconciliationMcp {
     // A custom header forces a browser preflight, preventing cross-site form
     // registration; this uses the app's existing local/desktop origin authority.
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
+    if (path === '/api/reconciliation/workflow') {
+      try {
+        const request = z.object({ operation: z.enum(['search', 'get', 'start', 'rules']), input: z.unknown().optional() }).strict().parse(await body(req))
+        if (request.operation === 'rules') return ok(res, workflowRules, { headers })
+        if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
+        if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
+        return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+      } catch { return fail(res, 'BAD_REQUEST', 'Invalid workflow request; use the shared workflow operation schema', { headers }) }
+    }
     try {
       const parsed = z.discriminatedUnion('type', [
         z.object({ type: z.literal('register'), state: stateSchema, rendered_scene: renderedSchema.optional() }).strict(),

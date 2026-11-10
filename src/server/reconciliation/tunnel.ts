@@ -7,7 +7,7 @@ import { CallToolRequestSchema, JSONRPCRequestSchema, ListToolsRequestSchema, Re
 import { z } from 'zod/v4'
 import { secretEquals } from './sessions'
 
-const reads = ['list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
+const reads = ['search_work', 'get_work', 'get_workflow_rules', 'start_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command']
 const views = ['present_view', 'next_queue_item']
 const modernVersion = '2026-07-28'
 const supportedVersions = [modernVersion, ...SUPPORTED_PROTOCOL_VERSIONS]
@@ -24,7 +24,7 @@ export function createTunnelFacade(options: TunnelOptions) {
   const { caller, installToken, upstreamPort } = options
   // Missing/ambiguous caller policy must not turn the private install token into
   // ambient authority for an Internet tunnel or another local HTTP proxy.
-  if (!caller.id.trim() || caller.token.length < 32 || /\s/.test(caller.token) || !installToken || secretEquals(caller.token, installToken) || typeof caller.allowView !== 'boolean') throw new Error('Explicit separate caller credential and scope required')
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,99}$/.test(caller.id) || caller.token.length < 32 || /\s/.test(caller.token) || !installToken || secretEquals(caller.token, installToken) || typeof caller.allowView !== 'boolean') throw new Error('Explicit separate caller credential and scope required')
   if (!Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535) throw new Error('Invalid local upstream port')
   const allowed = new Set([...reads, ...(caller.allowView ? views : [])])
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
@@ -89,7 +89,7 @@ export function createTunnelFacade(options: TunnelOptions) {
         }))
       }
       await upstream.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${upstreamPort}/api/reconciliation/mcp`), {
-        requestInit: { headers: { Authorization: `Bearer ${installToken}` }, redirect: 'error' },
+        requestInit: { headers: { Authorization: `Bearer ${installToken}`, 'X-Tinstar-Caller': caller.id }, redirect: 'error' },
       }))
       server.setRequestHandler(ListToolsRequestSchema, async () => {
         const tools = await upstream.listTools()

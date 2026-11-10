@@ -2,6 +2,7 @@ import { CachedObservation, retainMissing } from './observation'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, readWorkerLinks, type WorkerLinks } from './workerLinks'
 import type { ReconciliationConfig } from './config'
+export interface WorkScope { owner?: string; statuses?: string[]; initiative?: string; epic?: string; checkpoint_before?: string; history?: boolean }
 
 // Malformed hyphen strings must not normalize into supposedly canonical links.
 const UUID = /^(?:[a-fA-F0-9]{32}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12})$/
@@ -69,7 +70,7 @@ export async function readNotionCard(config: ReconciliationConfig['notion'], id:
 // 2,000 cards leaves room beyond the current board size without unbounded
 // pagination. Schema, query pages and relation reads still share one 20s deadline.
 export const NOTION_QUERY_PAGE_LIMIT = 20
-export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' = 'board') {
+export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board') {
   return new CachedObservation(async () => {
     if (!config) throw new Error('Notion is not configured')
     // One deadline across schema + pagination; no retries on the UI read path.
@@ -114,7 +115,27 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       if (type !== 'select' && type !== 'status') throw new Error('Unsupported check-in filter property')
       return { property: name, [type]: { equals: value } }
     }
-    const filter = scope === 'check-ins' ? { and: [condition('Owner', 'Firstmate'), { or: [condition('Status', 'In Progress'), condition('Status', 'Waiting For')] }] } : undefined
+    const clauses: unknown[] = []
+    const work = typeof scope === 'object' ? scope : null
+    const fieldCondition = (name: string, value: string) => {
+      const type = properties[name]?.type
+      if (!type || !['select', 'status', 'multi_select', 'relation', 'rich_text', 'title'].includes(type)) throw new Error(`Unsupported ${name} filter property`)
+      return { property: name, [type]: { [type === 'multi_select' || type === 'relation' ? 'contains' : 'equals']: value } }
+    }
+    if (work) {
+      if (work.owner) clauses.push(fieldCondition('Owner', work.owner))
+      if (work.statuses) clauses.push({ or: work.statuses.map(status => condition('Status', status)) })
+      else if (!work.history) clauses.push({ and: ['Done', 'Archived'].map(status => {
+        const type = properties.Status?.type
+        if (type !== 'select' && type !== 'status') throw new Error('Unsupported Status filter property')
+        return { property: 'Status', [type]: { does_not_equal: status } }
+      }) })
+      if (work.initiative) clauses.push(fieldCondition('Initiative', work.initiative))
+      if (work.epic) clauses.push(fieldCondition('Epic', work.epic))
+      if (work.checkpoint_before) clauses.push({ property: 'Next check-in', date: { on_or_before: work.checkpoint_before } })
+    }
+    const filter = scope === 'check-ins' ? { and: [condition('Owner', 'Firstmate'), { or: [condition('Status', 'In Progress'), condition('Status', 'Waiting For')] }] }
+      : clauses.length ? { and: clauses } : undefined
     const cards = new Map<string, ReturnType<typeof notionCard>>()
     let cursor: string | undefined
     let hasMore = false
@@ -180,7 +201,7 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
     }
     const truncatedRelations = items.flatMap(item => Object.entries(item.properties)
       .filter(([, p]) => p.hasMore).map(([name]) => ({ pageId: item.id, property: name })))
-    const required = scope === 'check-ins' ? ['Owner', 'Status', 'Next check-in'] : ['Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item', 'Link']
+    const required = scope === 'check-ins' ? ['Owner', 'Status', 'Next check-in'] : work ? ['Name', 'Owner', 'Status', ...(work.checkpoint_before ? ['Next check-in'] : [])] : ['Name', 'Status', 'Owner', 'Last touched by', 'Will action', 'Parent item', 'Sub-item', 'Link']
     const missingSchemaProperties = required
       .filter(name => !(name in properties))
     const partial = hasMore || scope === 'board' && truncatedRelations.length > 0 || missingSchemaProperties.length > 0
@@ -188,7 +209,7 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       observedAt: new Date().toISOString(), coverage: partial ? 'partial' as const : 'complete' as const,
       data: { dataSourceId: notionPageId(config.dataSourceId), schema: properties, cards: items,
         hasMore, truncatedRelations, missingSchemaProperties,
-        scope: scope === 'check-ins' ? 'configured-data-source; Owner Firstmate; Status In Progress or Waiting For; eligibility census only' : 'configured-data-source-properties; card bodies and related external sources not collected' },
+        scope: work ? JSON.stringify(work) : scope === 'check-ins' ? 'configured-data-source; Owner Firstmate; Status In Progress or Waiting For; eligibility census only' : 'configured-data-source-properties; card bodies and related external sources not collected' },
     }
-  }, 30_000, 120_000, config ? 'Notion read failed or returned an unsupported response; verify token access and data source' : 'Notion token and dataSourceId are not configured', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
+  }, 60_000, 120_000, config ? 'Notion read failed or returned an unsupported response; verify token access and data source' : 'Notion token and dataSourceId are not configured', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
 }

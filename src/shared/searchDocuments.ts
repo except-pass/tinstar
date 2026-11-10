@@ -22,14 +22,15 @@ export const searchTextLimit = 8192
 export const searchTotalLimit = 2 * 1024 * 1024
 /** Redact likely credential literals before either snippets or the browser index.
  * This only handles published prose/allowlisted fields, never raw source objects. */
-export function searchText(input: unknown): string {
+export function redactSourceText(input: unknown): string {
   return (typeof input === 'string' ? input : '')
     .replace(/\b(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
     .replace(/\b(?:bearer\s+)[A-Za-z0-9._~+\/-]{12,}/gi, '[credential omitted]')
     .replace(/\b(password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?[^\s"',;]{6,}/gi, '$1=[credential omitted]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
-    .slice(0, searchTextLimit)
+
 }
+export function searchText(input: unknown): string { return redactSourceText(input).slice(0, searchTextLimit) }
 const scalar = (value: unknown): string => Array.isArray(value) ? value.filter(v => typeof v === 'string').join(' · ') : typeof value === 'string' ? value : ''
 const technicalIds = (values: string[]) => [...new Set(values.flatMap(value => [value, ...[...value.matchAll(/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/gi)].flatMap(match => [`PR #${match[1]}`, match[1]!])]).filter(Boolean))]
 

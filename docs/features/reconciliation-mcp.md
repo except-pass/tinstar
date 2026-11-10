@@ -1,6 +1,6 @@
 # Conversational Overview
 
-Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. There are no execution, command, approval, merge, Notion-edit, claim-repair or domain-priority tools.
+Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers an explicitly selected Overview window. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware start work](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
 
 ## Start and connect
 
@@ -44,7 +44,7 @@ TINSTAR_CONFIG_HOME=/absolute/private/tinstar-config node bin/tinstar-mcp-tunnel
   --caller-id owner-chatgpt --caller-token-file /absolute/private/facade-caller-header
 ```
 
-The facade binds only `127.0.0.1`, exposes `/mcp`, and defaults to seven read tools. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
+The facade binds only `127.0.0.1`, exposes `/mcp`, and exposes ten read tools plus the shared `start_work` mutation to authenticated consumers. Its default port is 5296; the examples and LIVE handoff explicitly select 5297.
 Add `--allow-view` explicitly to authorize `present_view` and `next_queue_item`; these change presentation only.
 The approved caller boundary is the private org tunnel. Generate a separate opaque random token of at least 32 non-whitespace characters. Store the full Authorization header value in a single owner-only file shared by the facade and tunnel-client: `Bearer <opaque-random-token>` on one line, with an optional trailing newline. Raw tokens, extra lines and double prefixes are rejected by the CLI. Normal ChatGPT needs no extra authentication; tunnel-client injects the header from this file.
 Both credential files must be owned by the runtime user with no group/other permissions (normally 0600).
@@ -79,7 +79,7 @@ The control-plane key is already placed at the path above; never read or print i
 Do not enable embedded stub mode, payload capture, raw HTTP logging or public health listeners.
 The facade checks the injected bearer on every request, sends only the separate install token to the fixed localhost backend, and refuses redirects. It does not implement OAuth/DCR or advertise an OAuth issuer.
 
-Firstmate owns deployment and live ChatGPT acceptance after deploy; local SDK/browser proof does not establish live acceptance. The first ChatGPT test enables `--allow-view`, retaining seven read tools plus the two browser-acknowledged view tools and no domain writes. Do not modify or restart the existing live tunnel during validation.
+Firstmate owns deployment and live ChatGPT acceptance after deploy; local SDK/browser proof does not establish live acceptance. Presentation tools still require `--allow-view`; shared workflow tools use the same authenticated caller boundary. Catalog changes require connector refresh after deploy. Do not modify or restart the existing live tunnel during validation.
 
 For the LIVE floor operator handoff, use the installed Node executable and deployed repository directory as the service's working directory. The exact facade command is:
 
@@ -97,6 +97,10 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 
 | Tool | Result |
 | --- | --- |
+| `search_work(...)` | Scoped, paginated work properties, UI search predicates, links, evidence and coverage without a browser |
+| `get_work(...)` | Exact configured-board card, bounded body/comments, linked worker/PR evidence and freshness without a browser |
+| `get_workflow_rules()` | Code-enforced workflow rules and deferred operations |
+| `start_work(...)` | Merge current tracked worker provenance, set In Progress and actor; confirm readback through the same policy as Inspector |
 | `list_ui_sessions` | Authorized window IDs, connected state, last heartbeat, revision; no browser session secrets |
 | `get_scene(scene_id)` | Last browser-applied presentation, rendered-scene timestamp/read-failure status, current server freshness/coverage, counts, semantic card/actor/claim indexes, legacy arrangements and shared organizer groups |
 | `read_record(scene_id, target, evidence?)` | Actor/execution, manager, task/card, claim, group or root; optional bounded claim evidence and source freshness |
@@ -150,7 +154,7 @@ ascending. New clients should use `set-organizer`.
 
 Focus and flash reveal relevant ancestors/roadmap and clear the exception filter. Saved filters remain unchanged; the [Overview scope rules](overview.md) govern temporary reveal. Focus reveal lasts while selected; flash reveal lasts until its flash expires. `navigate-card` uses the [Desk navigation behavior](overview.md), with independent reveal/highlight state in `navigation: {cardId, revision}`; an ID missing from the current scene returns `unknown-id`. Arrangement preserves selection. Flash preserves selection, accepts at most 100 semantic targets and lasts at most four seconds, with a static outline for reduced motion. Assistant changes show a subtle cue with **Clear cue**; clearing does not undo domain work because no domain changes occurred.
 
-Card context reads only IDs already on the configured authorized board. Context is cached for 60 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
+Card context reads only IDs already on the configured authorized board. Context is cached for 30 seconds, coalesced, bounded to 100 cards, ten requests, four nested levels, 2 MiB and a 20-second deadline. Code, attachments, embeds and unsupported blocks are omitted; omissions and truncation are labeled. Full available prose is returned rather than a fabricated summary. Common credential literals in prose are redacted. No terminal transcript is fetched. An unconfigured or denied source returns unavailable. Source properties/relations retain the existing coverage semantics.
 
 ## Delivery and acknowledgment
 
