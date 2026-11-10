@@ -384,7 +384,7 @@ describe('remaining shared workflow operations', () => {
     const f = fixture(); f.raw.properties.Owner.select = null; f.raw.properties.Status.status.name = 'In Progress'
     const edit = input('edit', { properties: { Priority: 'High' }, content: { brief: 'Implement bounded operations', acceptance_criteria: 'UI and MCP agree' }, note: 'Keep the unknown worker state unknown' })
     f.raw.properties.Priority = { type: 'select', select: { name: 'Low' } }
-    expect(await f.workflow.update(edit, 'Consumer')).toMatchObject({ outcome: 'saved', saved_fields: ['Priority', 'Last touched by', 'brief', 'acceptance_criteria', 'note'] })
+    expect(await f.workflow.update(edit, 'Consumer')).toMatchObject({ outcome: 'saved', saved_fields: ['note', 'Priority', 'Last touched by', 'brief', 'acceptance_criteria'] })
     expect(f.raw.properties.Owner.select).toBeNull()
     expect(f.raw.properties.Status.status.name).toBe('In Progress')
     expect(f.blocks.filter(block => block.id !== 'body-1')).toHaveLength(2)
@@ -461,21 +461,21 @@ describe('remaining shared workflow operations', () => {
     expect(await dst.workflow.update(input('checkpoint', { operation_id: 'dst-day', checkpoint: { ...cp, confirmation: 'provisional' } }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect(dst.raw.properties['Next check-in'].date.start).toBe('2026-11-01T14:00:00.000Z')
   })
-  it('repairs properties-saved/note-failed and lost-note-response retries without duplicate comments or replacing later unrelated edits', async () => {
-    const f = fixture(); f.controls.failNote()
+  it('repairs note-saved/properties-failed and lost-note-response retries without duplicate comments or replacing later unrelated edits', async () => {
+    const f = fixture(); f.controls.failPatch()
     const assign = input('assign', { owner: 'Other consumer' })
-    expect(await f.workflow.update(assign, 'Owner')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['Owner', 'Status', 'Last touched by'] })
+    expect(await f.workflow.update(assign, 'Owner')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['note', 'Status'] })
     f.raw.properties.Priority = { type: 'select', select: { name: 'High' } }
-    f.controls.failNote(false)
+    f.controls.failPatch(false)
     const patches = f.requests.filter(request => request.method === 'PATCH').length
     expect(await f.workflow.update(assign, 'Owner')).toMatchObject({ outcome: 'saved' })
-    expect(f.requests.filter(request => request.method === 'PATCH')).toHaveLength(patches)
+    expect(f.requests.filter(request => request.method === 'PATCH')).toHaveLength(patches + 1)
     expect(f.comments).toHaveLength(2)
     expect(f.raw.properties.Priority.select.name).toBe('High')
     f.controls.lostNote()
     const note = input('edit', { note: 'A substantive update after owner handoff' })
     expect(await f.workflow.update(note, 'Consumer')).toMatchObject({ outcome: 'partially-saved' })
-    expect(await f.workflow.update(note, 'Consumer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+    expect(await f.workflow.update(note, 'Consumer')).toMatchObject({ outcome: 'saved', code: 'saved' })
     expect(f.comments).toHaveLength(3)
     const restarted = new WorkflowOperations(f.reader, async () => [])
     expect(await restarted.update(note, 'Consumer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
@@ -524,10 +524,10 @@ it('revalidates missing execution and appointments on retry but permits confirme
   expect(await f.workflow.update(checkpoint, 'Owner')).toMatchObject({ code: 'invalid-checkpoint' })
   const repair = fixture()
   const answer = { card_id: id, operation_id: 'repair-answer', kind: 'answer_decision', request_id: 'body-1', answer: 'Continue this run', next: { owner: 'Firstmate', status: 'In Progress', worker: repair.external.worker } } as UpdateWorkInput
-  repair.controls.failNote(); expect(await repair.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved' })
-  repair.controls.failNote(false); vi.setSystemTime(new Date(Date.now() + 300_000))
+  repair.controls.lost(); expect(await repair.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved' })
+  vi.setSystemTime(new Date(Date.now() + 300_000))
   const patches = repair.requests.filter(r => r.method === 'PATCH').length
-  expect(await repair.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect(await new WorkflowOperations(repair.reader, async () => []).update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
   expect(repair.requests.filter(r => r.method === 'PATCH')).toHaveLength(patches)
 })
 it('rejects partial wait cleanup and removes only the complete selected entry', async () => {
@@ -564,4 +564,61 @@ it('keeps cached broader declarations separate from watchdog eligibility without
   expect(snapshot.intentions.data!.cards.map(c => c.id)).toContain(other.id)
   expect(snapshot.checkIns!.data!.cards.map(c => c.id)).toEqual([id])
   expect(f.requests.filter(r => r.url.endsWith('/query'))).toHaveLength(queries)
+})
+
+it.each([true, false])('recovers decision tag provenance after a failed patch and restart (pre-existing: %s)', async preexisting => {
+  const f = fixture()
+  if (!preexisting) f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
+  const request = { card_id: id, operation_id: 'request-restart', kind: 'request_decision', request_id: 'restart-ask', question: 'Approve this choice?', action: 'Decision', requested_from: 'Will' } as UpdateWorkInput
+  f.controls.failPatch()
+  const partial = await f.workflow.update(request, 'Owner')
+  expect(partial).toMatchObject({ outcome: 'partially-saved', saved_fields: preexisting ? ['note', 'Will action'] : ['note'] })
+  expect(partial.message).toContain('Note saved')
+  expect(f.comments).toHaveLength(2)
+  const noteWrite = f.requests.findIndex(r => r.method === 'POST' && r.url.endsWith('/comments'))
+  expect(noteWrite).toBeLessThan(f.requests.findIndex(r => r.method === 'PATCH'))
+  f.controls.failPatch(false)
+  const restarted = new WorkflowOperations(f.reader, async () => [])
+  expect(await restarted.update(request, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect(f.comments).toHaveLength(2)
+  const answer = { card_id: id, operation_id: 'answer-restart', kind: 'answer_decision', request_id: 'restart-ask', answer: 'Approved this choice', next: { owner: 'Firstmate', status: 'Queued' } } as UpdateWorkInput
+  expect(await restarted.update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(preexisting ? ['Merge', 'Decision'] : ['Merge'])
+})
+it('recovers an exact wait resolution from its note after patch failure and restart without another note', async () => {
+  const f = fixture()
+  const answer = { card_id: id, operation_id: 'resolve-restart', kind: 'answer_decision', request_id: 'body-1', legacy_action: 'Decision', answer: 'Dependency resolved', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: 'Preserve another request' } as UpdateWorkInput
+  f.controls.failPatch()
+  expect(await f.workflow.update(answer, 'Owner')).toMatchObject({ outcome: 'partially-saved' })
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
+  f.controls.failPatch(false)
+  expect(await new WorkflowOperations(f.reader, async () => []).update(answer, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('')
+  expect((await f.reader.card(id)).properties['Will action']!.value).toEqual(['Merge'])
+  const patches = f.requests.filter(r => r.method === 'PATCH').length
+  expect(await new WorkflowOperations(f.reader, async () => []).update(answer, 'Owner')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(f.requests.filter(r => r.method === 'PATCH')).toHaveLength(patches)
+  expect(f.comments).toHaveLength(2)
+})
+it('does not apply properties when the note fails and rechecks fresh operations normally', async () => {
+  const f = fixture(); f.controls.failNote()
+  const edit = { card_id: id, operation_id: 'no-note-no-patch', kind: 'edit', properties: { Name: 'Changed name' }, expected: { Name: 'Fixture start' } } as UpdateWorkInput
+  expect(await f.workflow.update(edit, 'Owner')).toMatchObject({ outcome: 'partially-saved', saved_fields: [] })
+  expect(f.requests.filter(r => r.method === 'PATCH')).toHaveLength(0)
+  f.controls.failNote(false)
+  expect(await new WorkflowOperations(f.reader, async () => []).update(edit, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect(await new WorkflowOperations(f.reader, async () => []).update(edit, 'Owner')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(f.comments).toHaveLength(2)
+  expect(await new WorkflowOperations(f.reader, async () => []).update({ ...edit, properties: { Name: 'Different intent' } } as UpdateWorkInput, 'Owner')).toMatchObject({ code: 'operation-conflict' })
+})
+it('repairs a checkpoint after lost patch readback and restart even when its confirmed appointment elapsed', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T12:00:00Z'))
+  const f = fixture(); f.controls.lost()
+  const checkpoint = { card_id: id, operation_id: 'checkpoint-readback', kind: 'checkpoint', checkpoint: { assessment: 'Checked output', evidence: 'Fixture evidence', next_action: 'Review', confirmation: 'owner-confirmed', next_check_in: '2026-11-10T12:01:00Z' } } as UpdateWorkInput
+  expect(await f.workflow.update(checkpoint, 'Owner')).toMatchObject({ outcome: 'partially-saved' })
+  const patches = f.requests.filter(r => r.method === 'PATCH').length
+  vi.setSystemTime(new Date('2026-11-10T13:00:00Z'))
+  expect(await new WorkflowOperations(f.reader, async () => []).update(checkpoint, 'Owner')).toMatchObject({ outcome: 'saved' })
+  expect(f.requests.filter(r => r.method === 'PATCH')).toHaveLength(patches)
+  expect(f.comments).toHaveLength(2)
 })

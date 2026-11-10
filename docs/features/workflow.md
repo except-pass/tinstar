@@ -174,7 +174,15 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Properties save before content. Results report each confirmed field/section/note;
+Updates save their history note before changing properties or managed sections.
+The note records the operation ID, original preconditions, target values and
+provenance such as whether a decision tag pre-existed. If properties fail, the
+result reports the saved note and pending steps. Identical retries, including
+after restart, read that note and repair only missing effects without posting
+another note. Only still-missing transitions recheck execution evidence or
+appointment timing. A saved note alone does not mean the operation completed.
+
+Results report each confirmed field/section/note;
 not-saved and partially-saved are visible, never concealed as an offline success.
 Identical retries use minimal operation receipts, comment markers and named body
 sections to skip saved effects. If a property changed after a partial save,
