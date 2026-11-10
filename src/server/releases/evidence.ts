@@ -4,7 +4,7 @@ import { z } from 'zod'
 import type { DeploymentReceipt, RequiredTarget } from '../../shared/releaseReconciliation'
 import { releasePull } from '../../shared/releases'
 import { cmsandboxReceipts } from './cmsandbox'
-import { readCoordinatorStore } from './coordinatorStore'
+import { readCoordinatorBundle } from './coordinatorStore'
 
 const stamp = z.string().datetime({ offset: true })
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
@@ -27,6 +27,7 @@ const settingsSchema = z.object({
   maxSnapshotAgeSeconds: z.number().positive().default(300),
 })
 export interface EvidenceRead {
+  coordinatorSources?: Array<{ bundle: Awaited<ReturnType<typeof readCoordinatorBundle>>; asOf: string; historical: boolean }>
   status: 'fresh' | 'snapshot' | 'stale' | 'unconfigured' | 'error'
   collectedAt: string | null
   warnings: string[]
@@ -74,6 +75,7 @@ export class ReleaseEvidenceReader {
         }
         const rows = raw.schema === 'tinstar.cmsandbox-production-export.v1' ? cmsandboxReceipts(raw)
           : z.object({ schema: z.literal('tinstar.deployment-receipts.v1'), receipts: z.array(receipt) }).parse(raw).receipts
+        if (raw.schema === 'tinstar.cmsandbox-production-export.v1') (result.coordinatorSources ??= []).push({ bundle: raw as Awaited<ReturnType<typeof readCoordinatorBundle>>, asOf: collectedAt, historical: result.status !== 'fresh' })
         for (const row of rows) {
           const checked = receipt.parse(row), signature = JSON.stringify(checked), previous = identities.get(checked.id)
           if (previous && previous !== signature) throw new Error('Conflicting receipt identity')
@@ -85,7 +87,9 @@ export class ReleaseEvidenceReader {
     }
     for (const snapshot of settings.coordinatorSnapshots) {
       try {
-        const rows = await readCoordinatorStore(snapshot.directory)
+        const bundle = await readCoordinatorBundle(snapshot.directory)
+        const rows = cmsandboxReceipts(bundle)
+        ;(result.coordinatorSources ??= []).push({ bundle, asOf: snapshot.collectedAt, historical: true })
         times.push(snapshot.collectedAt)
         for (const row of rows) {
           const checked = receipt.parse(row), signature = JSON.stringify(checked), previous = identities.get(checked.id)

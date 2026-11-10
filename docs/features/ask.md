@@ -134,7 +134,8 @@ in [local voice retention](voice.md#boundary-resource-use-and-retention).
 ## Typed artifact origins and returns
 
 The same composer supports PRs, action receipts, deployment targets and deployment receipts.
-PR rows in both PRs and Releases ask about the actual GitHub PR. Right-click a
+PR rows in PR Operations ask about the actual GitHub PR. Releases provides PR and
+receipt composers in its [release-scoped detail drawer](releases.md). Right-click a
 PR CI/review/changes field or deployment/receipt text to prepare an editable
 question. Blank Ask icons remain blank, and native links outside semantic Ask
 fields, selection, inspection and table scrolling retain their existing
@@ -160,7 +161,11 @@ Deployment targets add target/component; receipt targets also carry the immutabl
 receipt ID. Shared `src/shared/ask.ts` owns this contract. Source metadata and
 return targets are resolved through the same PR/Releases projections used by the
 screens or the scoped individual PR read described below, after the existing
-Ask owner authentication. Client field text and head are hints; First Mate still
+Ask owner authentication. Releases captures `view.release_id`; the server resolves
+member and supporting PRs and exact immutable receipts within that authorized
+release, even when the aggregate projection has a newer receipt. Supporting PRs
+remain evidence rather than additional release members.
+Client field text and head are hints; First Mate still
 investigates fresh authoritative sources. A missing,
 superseded or out-of-scope object is reported honestly. No linkage is inferred
 from names or titles.
@@ -173,10 +178,12 @@ captured context even if the source disappears later. Client-supplied provenance
 or return locators are not accepted by the create endpoint.
 
 Opening an artifact conversation uses the existing browser history and a typed
-URL locator to reveal the exact authorized PR or release row despite the current
-filter. Deployment/receipt origins reveal their read-only evidence inline in the
-main workspace. Action receipt origins open and focus the matching retained receipt
-in PRs or Releases. Source removal, receipt replacement and changed PR heads have
+URL locator to reveal the exact authorized PR despite the current filter. In
+Releases, return selects the captured release and opens its associated work drawer,
+including supporting PR evidence; shared receipts focus the originating PR's
+context. Deployment/receipt evidence appears in that drawer. Action receipt origins
+in PR Operations open and focus the matching retained receipt. Source removal,
+receipt replacement and changed PR heads have
 visible fallback messages; source links remain available in the answer. Manual
 section navigation or clearing the origin ends pending focus.
 

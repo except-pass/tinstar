@@ -19,9 +19,9 @@ For worker-to-card associations, see [Notion-owned worker links](docs/notion-wor
 
 Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text. Use the adjacent Pattern Dial for operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
-The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue, with production reconciliation, card completion previews and a separately enabled, default-off automatic writer. See its reference for evidence requirements, activation and local link/unlink controls.
+Use the [Releases page](docs/features/releases.md) to select a frozen candidate in Plan or an observed production release in Verify, then inspect its Changes, Acceptance and Release notes. The reference covers source configuration, evidence limits and the legacy default-OFF writer.
 
-For actions on selected PRs in PRs or Releases, see the [PR actions guide](docs/pr-actions.md).
+For actions on selected PRs in PR Operations, see the [PR actions guide](docs/pr-actions.md).
 
 The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only operational-card audit, offline JSON replay and opt-in local semantic pilot.
 
@@ -47,7 +47,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 | --- | --- |
 | `/?view=decisions` | Decisions queue. |
 | `/?view=pulls` | PR Operations review table. |
-| `/?view=releases` | Releases PR queue. |
+| `/?view=releases` | Releases page. |
 | `/?card=NOTION_PAGE_ID` | Reveal that authorized card in Overview. |
 | `/?q=text` | Overview; the legacy filter parameter is retained. |
 | `/?worker=TASK_ID` | That worker's detail, including on a fresh load. `TASK_ID` is the First Mate task id. |

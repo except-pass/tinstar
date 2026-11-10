@@ -1,11 +1,10 @@
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { cmsandboxReceipts, receiptHash } from './cmsandbox'
 
 /** Read an exported coordinator directory, never AWS or the deployment control
- * plane. Exporters preserve S3 LastModified as file mtime. Only committed journal
- * and referenced frozen objects are loaded; unrelated exports are ignored. */
-export async function readCoordinatorStore(directory: string) {
+ * plane. Exporters preserve S3 LastModified as file mtime. Committed journal and content-addressed frozen objects are loaded. */
+export async function readCoordinatorBundle(directory: string) {
   let bytes = 0
   const read = async (path: string) => {
     const metadata = await stat(path)
@@ -14,7 +13,9 @@ export async function readCoordinatorStore(directory: string) {
     if (metadata.size > 8 * 1024 * 1024 || bytes > 32 * 1024 * 1024) throw new Error('Coordinator export exceeds bounded snapshot size')
     return { value: JSON.parse(await readFile(path, 'utf8')), at: metadata.mtime.toISOString() }
   }
-  const control = (await read(join(directory, 'control.json'))).value
+  let control
+  try { control = (await read(join(directory, 'control.json'))).value }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; control = { head: null } }
   const journal: Record<string, any> = {}, journalMetadata: Record<string, { lastModified: string }> = {}, objects: Record<string, any> = {}
   const digest = (id: unknown): string => {
     if (typeof id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(id)) throw new Error('Invalid coordinator object reference')
@@ -34,6 +35,11 @@ export async function readCoordinatorStore(directory: string) {
     if (receiptHash(value) !== id) throw new Error('Corrupted frozen coordinator object')
     objects[id] = value; return value
   }
+  const files = await readdir(join(directory, 'objects'))
+  if (files.length > 1000) throw new Error('Coordinator export exceeds bounded object count')
+  for (const file of files) {
+    if (/^[a-f0-9]{64}\.json$/.test(file)) await load(`sha256:${file.slice(0, -5)}`)
+  }
   for (const event of Object.values(journal)) {
     if (!event.state?.releases?.[event.binding?.release_id]?.binding && event.result?.status === 'superseded') continue
     const plan = await load(event.binding.plan)
@@ -46,5 +52,9 @@ export async function readCoordinatorStore(directory: string) {
     }
   }
   const bundle = { schema: 'tinstar.cmsandbox-production-export.v1', repository: 'fortresspower/cmsandbox', bucket: 'fortresspower-cmsandbox-release-prod-298117917676', control, journal, journalMetadata, objects }
-  return cmsandboxReceipts(bundle)
+  return bundle
+}
+
+export async function readCoordinatorStore(directory: string) {
+  return cmsandboxReceipts(await readCoordinatorBundle(directory))
 }

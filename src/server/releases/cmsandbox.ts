@@ -21,8 +21,8 @@ const verifiedIdentity = (input: unknown) => {
 }
 
 /** Consume the coordinator's current committed journal chain and frozen objects.
- * An orphan event, rehearsal, stage-only step or partial release never certifies PROD. */
-export function cmsandboxReceipts(input: unknown): DeploymentReceipt[] {
+ * Writer receipts require a completed close; observations retain exact target readback. */
+export function cmsandboxReceipts(input: unknown, requireCompletedClose = true): DeploymentReceipt[] {
   const bundle = object(input)
   requireThat(bundle.schema === 'tinstar.cmsandbox-production-export.v1' && bundle.repository === 'fortresspower/cmsandbox' && bundle.bucket === bucket, 'Unsupported cmsandbox production export')
   const journal = object(bundle.journal), objects = object(bundle.objects), metadata = object(bundle.journalMetadata)
@@ -34,7 +34,7 @@ export function cmsandboxReceipts(input: unknown): DeploymentReceipt[] {
   }
   const chain: Array<{ digest: string; event: Record<string, any> }> = [], visited = new Set<string>()
   let next = object(bundle.control).head
-  requireThat(typeof next === 'string', 'Current coordinator control pointer missing')
+  requireThat(next === null || typeof next === 'string', 'Current coordinator control pointer missing')
   while (next) {
     requireThat(typeof next === 'string' && !visited.has(next) && visited.size < 1000, 'Invalid coordinator journal chain')
     visited.add(next)
@@ -74,7 +74,7 @@ export function cmsandboxReceipts(input: unknown): DeploymentReceipt[] {
       requireThat(Array.isArray(members) && members.length > 0, 'Deployed component members missing')
       const completion = object(release.steps?.[step.id])
       const expected = { kind: step.kind, target: step.target ?? step.destination, digest: step.desired, revision: step.kind === 'service' ? step.config?.revision : step.revision ?? null, config_digest: step.kind === 'service' ? step.config?.digest : null }
-      const verified = succeeded && step.action !== 'skip' && completion.status === 'succeeded' && receiptHash(verifiedIdentity(completion.verified)) === receiptHash(verifiedIdentity(expected))
+      const verified = (!requireCompletedClose || succeeded) && step.action !== 'skip' && completion.status === 'succeeded' && receiptHash(verifiedIdentity(completion.verified)) === receiptHash(verifiedIdentity(expected))
       for (const member of members.map(object)) {
         const selected = object(candidate.desired?.[member.component]), target = object(member.target)
         requireThat(target.adapter !== 'ecs' || [target.cluster, target.service, target.container].every(value => typeof value === 'string' && value.length > 0), 'Exact deployed ECS target missing')

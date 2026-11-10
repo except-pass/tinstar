@@ -4,6 +4,7 @@ import App from '../../App'
 import { preferencesKey } from '../../reconciliation/presentationPreferences'
 import { emptySearch } from '../../shared/smartSearch'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { objectFixture } from '../../../test-fixtures/releases/objects'
 import { askItemSchema, type AskItem, type AskTarget } from '../../shared/ask'
 import type { ReleasesRead } from '../../shared/releases'
 import type { Worker } from '../../cockpit/shell/types'
@@ -27,6 +28,7 @@ beforeEach(() => {
   configure({ asyncUtilTimeout: 10_000 })
   fleetWorkers = []; localStorage.clear(); sessionStorage.clear(); window.history.replaceState(null, '', '/?view=pulls'); fixture.scene = fixtureScene(); records = []; requests = []; inventory = [pull, { ...pull, id: 'other/repo#17', repository: 'other/repo', url: 'https://github.com/other/repo/pull/17' }]; originResult = null
   releases = { generatedAt: date, pulls: [{ ...pull, state: 'merged', mergedAt: date, mergeSha: head, exceptions: [], deployment: { state: 'shipped', targets: [{ target: 'production', component: 'web', state: 'live', reason: 'Verified evidence', ancestry: 'ancestor', receipt }] } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
+  releases.releases = [{ ...objectFixture('production'), version: '6.0', pulls: releases.pulls, targets: [{ component: 'web', target: 'production', readiness: 'Ready', readinessEvidence: [], receipt }] }]
   Element.prototype.scrollIntoView = vi.fn()
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
@@ -70,23 +72,24 @@ it('keeps PR inspect normal while CI right-click opens the shared editable, genu
   expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, field_key: 'ci', field_value: 'failed', view: { scene: 'pulls' } })
   expect(requests[0]).not.toHaveProperty('card_id')
 })
-it('asks about a Releases PR row as a PR and receipt evidence as its exact immutable receipt', async () => {
+it('asks about a selected release PR as a PR and receipt evidence as its exact immutable receipt', async () => {
   window.history.replaceState(null, '', '/?view=releases')
   render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Shipped' }))
-  const row = (await screen.findByRole('button', { name: 'Inspect owner/repo#17' })).closest('tr')!
-  fireEvent.click(within(row).getByRole('button', { name: 'Ask about this item' }))
-  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue('')
-  expect(screen.getByRole('dialog')).toHaveTextContent(pull.id)
+  fireEvent.click(await screen.findByRole('tab', { name: 'Verify' }))
+  fireEvent.click(screen.getByRole('tab', { name: /Changes/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Exact artifact title/ }))
+  const detail = screen.getByRole('dialog')
+  fireEvent.contextMenu(within(detail).getByRole('link', { name: `${pull.id} ↗` }))
+  expect(screen.getByRole('textbox', { name: 'Question' })).toHaveValue("What's the current situation with this task?")
+  expect(screen.getByRole('dialog', { name: 'Ask First Mate' })).toHaveTextContent(pull.id)
   fireEvent.click(screen.getByRole('button', { name: 'Close question' }))
-  fireEvent.click(within(row).getByRole('button', { name: 'Inspect owner/repo#17' }))
   const evidence = document.querySelector('[data-receipt-id="receipt-17"]')!
-  fireEvent.contextMenu(evidence.querySelector('p')!)
+  fireEvent.contextMenu(evidence.querySelector('[data-ask-field="receipt"]')!)
   const question = screen.getByRole('textbox', { name: 'Question' })
   expect(question).toHaveValue('What does this deployment receipt establish?')
   fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
   await waitFor(() => expect(requests).toHaveLength(1))
-  expect(requests[0]).toMatchObject({ target: { kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, field_key: 'receipt', view: { scene: 'releases' } })
+  expect(requests[0]).toMatchObject({ target: { kind: 'receipt', id: pull.id, target: 'production', component: 'web', receipt_id: receipt.id }, field_key: 'receipt', view: { scene: 'releases', release_id: 'production' } })
 })
 it('returns a retained PR Ask from Releases to its exact authorized row, with canonical URL and browser Back', async () => {
   window.history.replaceState(null, '', '/?view=releases')
@@ -120,14 +123,15 @@ it('reveals and highlights exact receipt evidence in Releases without replacing 
 })
 
 
-it('keeps neighbor previews inline and restores Releases filter and grouping with one Back', async () => {
+it('keeps neighbor previews inline and restores the selected release tab and audience with one Back', async () => {
   window.history.replaceState(null, '', '/?view=releases')
   const first = item({ kind: 'pull', id: pull.id, head }, 'pulls')
   const neighbor = { ...item({ kind: 'pull', id: 'other/repo#17', head }, 'pulls'), question: 'Second independent question' }
   records = [first, neighbor]
   render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Shipped' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Repository' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Verify' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Release notes' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Customer' }))
   fireEvent.click(await screen.findByRole('button', { name: /New answer.*What is the artifact evidence/ }))
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
   expect(screen.queryByRole('dialog')).toBeNull()
@@ -136,8 +140,9 @@ it('keeps neighbor previews inline and restores Releases filter and grouping wit
   const popped = new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
   fireEvent.click(screen.getByRole('button', { name: 'Back to previous view' }))
   await act(async () => { await popped })
-  expect(screen.getByRole('button', { name: 'Shipped' })).toHaveAttribute('aria-pressed', 'true')
-  expect(screen.getByRole('button', { name: 'Repository' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('tab', { name: 'Verify' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('tab', { name: 'Release notes' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('button', { name: 'Customer' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent('Evidence detail')
   fireEvent.click(screen.getByRole('button', { name: /New answer.*Second independent question/ }))
   expect(screen.getAllByRole('region', { name: /Answer thread/ })).toHaveLength(1)

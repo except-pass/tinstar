@@ -45,7 +45,9 @@ export async function readGithubScalars(path: string, projection: string): Promi
     }
     throw new Error('Scalar Reader operation outside PR evidence scope')
   }
-  const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection], { timeout: 5_000, maxBuffer: 64 * 1024 })
+  // Full scalar strings are required for serialized release-history rows; the
+  // CLI's display truncation can otherwise cut valid JSON in the middle.
+  const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection, '--full'], { timeout: 5_000, maxBuffer: 64 * 1024 })
   return Object.fromEntries(stdout.trim().split('\n').map(line => {
     const match = /^([a-z_]+): (.*)$/.exec(line)
     if (!match) throw new Error('Unsupported GitHub response')
