@@ -108,9 +108,64 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 | `get_card_context(scene_id, card_id)` | Authorized board card properties plus bounded Notion prose, with explicit availability/omissions |
 | `get_queue(scene_id)` | Ordered readiness, exact per-source identities/readiness and response anchors (read only), or `queue-source-unavailable` |
 | `get_worker_link_report()` | Read-only [worker-link backfill report](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report); no open window or `scene_id` required |
+| `list_prs(offset?, limit?)` | Shared PR Operations open inventory, captured heads, card links and coverage; requires a verified owner binding |
+| `get_pr(url, head, include_files?, offset?, limit?)` | Shared exact-head description, checks, reviews, optional file metadata and card/worker attribution; requires a verified owner binding |
+| `get_release_status(offset?, limit?)` | Shared Releases PR-first observations, links, production receipts/ancestry, dry-run eligibility and verification requirements; no owner/write authority |
 | `present_view(...)` | Enqueue a semantic action for one explicit window and wait up to two seconds for its acknowledgment |
 | `next_queue_item(...)` | Navigate the real S4 ordered verified-ready queue with the same acknowledgment protocol |
 | `get_command(scene_id, command_id)` | Query a prior command outcome without applying it again |
+
+### PR and release reads (Slice B)
+
+These tools use the same `PullsApi` / `ReleasesApi` instances as the UI, including
+its bounded demand caches and shared `AssociationStore`. They require no open
+Overview window. They never write associations, change releases or approve PRs.
+
+Exact input schemas (all fields other than `url` and `head` are optional):
+
+```text
+list_prs: { offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
+get_pr: { url: GitHub PR URL (max 2048 characters), head: lowercase hex SHA (40..64 characters),
+          include_files: boolean = false, offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
+get_release_status: { offset: integer[0..100000] = 0, limit: integer[1..100] = 25 }
+```
+
+**PR authorization is pending an owner-binding decision.** Production currently
+returns `{outcome:"unauthorized", prerequisite:"...verified owner binding..."}`
+for `list_prs` and `get_pr`, before invoking any private PR reader. Install-token
+possession, a tunnel caller named `owner-chatgpt`, window IDs, localhost and
+forwarded Tailscale identity headers do not grant the PR Operations browser owner
+identity. No header is synthesized. The server-owned adapter authorization hook
+is denied by default; only synthetic tests supply a grant. Until that binding is
+approved and implemented, the positive “show my PRs” conversation is unavailable.
+
+Once authorized, inventory preserves the authenticated reader account/scope,
+canonical `repository#number` identity, captured head, multiple active/historical
+association events, repository statuses and `associationsComplete`. CI/reviews
+load on demand with `get_pr`; the inventory cannot decide “needs review”. Detail
+rechecks the current origin before consulting head-keyed caches, retains unknown
+or partial checks/reviews, and returns the shared attribution projection with its
+completeness and claim verification/state fields. Files are bounded metadata,
+with independent source completeness and response pagination. No patches are
+returned. Observed approval/CI is never a merge permission or branch-policy claim.
+
+`get_release_status` calls `ReleasesApi.read(false)`. Its `pulls`,
+`unassociatedCards`, `reconciliation.cards` and `reconciliation.targets` are each
+paginated independently using the same `offset`/`limit`. Each collection has its
+own `{total,next_offset}` under `pagination`; follow every relevant next offset.
+These totals describe observed rows, not a certified production queue count.
+All collection warnings, association completeness, GitHub sync status, receipt
+source status/timestamps, per-target provenance and opt-in verification decisions
+remain visible. An `available` outcome means the projection was read; inspect
+those fields to determine whether its sources are complete/fresh. A source outage
+returns `unavailable` and unknown status rather than an empty successful queue.
+Automation drafts are omitted; eligibility remains a dry run. Missing evidence
+or a tag alone never proves production shipment.
+
+Pagination is a view of the current shared projection, not a frozen snapshot;
+source refreshes can change membership between pages. There is no new service,
+cache or persistent graph. Refresh the ChatGPT connector tool catalog after the
+owner deploys the updated facade.
 
 Targets have `{kind,id}`. Kinds are `card`, `execution`, `claim`, `manager`, `group`, `you` and `firstMate`. Use IDs returned by reads, never title matching. Executions retain First Mate home/task/attempt identity. Claims distinguish confirmed, textual, inferred and conflicting relationships.
 

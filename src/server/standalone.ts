@@ -5,6 +5,7 @@ import { createReadStream, existsSync, readFileSync, statSync, writeFileSync, un
 import httpProxy from 'http-proxy'
 import { CockpitFleet, handleCockpitRequest } from './fleet/cockpit'
 import { ReconciliationMcp } from './reconciliation/mcp'
+import { DomainReadTools } from './reconciliation/domainReads'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
@@ -85,7 +86,7 @@ export function startServer(opts: ServerOptions) {
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
   reconciliation.readPullReadiness = urls => pulls.readiness(urls)
   const actions = new ActionsApi()
-  const reconciliationMcp = new ReconciliationMcp(reconciliation)
+  const reconciliationMcp = new ReconciliationMcp(reconciliation, configDir, new DomainReadTools(pulls, releases))
   const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns, workUpdates)
   fleet.start()
   process.on('exit', () => fleet.stop())

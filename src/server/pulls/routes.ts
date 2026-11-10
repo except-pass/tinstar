@@ -61,6 +61,24 @@ export class PullsApi {
     if (!(user.repositories ? user.repositories.includes(identity.repository) : user.owners.includes(identity.repository.split('/')[0]!)) && pull.author.toLowerCase() !== user.account && !associated.some(row => row.id === pull.id)) throw new Error('PR unavailable in the current authored or associated scope.')
     return { ...pull, links: auditAvailable ? associations.pulls.find(row => row.id === pull.id)?.links ?? [] : [] }
   }
+  /** Internal read facade. Callers must establish owner authority before entry.
+   * Resolve the current origin before consulting head-keyed caches, so an old
+   * cached green check cannot be presented as evidence for a newly pushed head. */
+  async inspect(url: string, head: string, includeFiles = false) {
+    const pull = await this.origin(url)
+    if (pull.head !== head) throw new Error('PR head changed. Refresh the PR list before inspecting.')
+    const [detail, footprint, relationships] = await Promise.allSettled([
+      this.reader.detail(pull.url, head),
+      includeFiles ? this.files.get(pull.url, head) : Promise.resolve(null),
+      this.relationships(pull.id),
+    ])
+    return { pull, detail: detail.status === 'fulfilled' ? detail.value : null,
+      footprint: footprint.status === 'fulfilled' ? footprint.value : null,
+      relationships: relationships.status === 'fulfilled' ? relationships.value : null,
+      warnings: [...(detail.status === 'rejected' ? ['PR detail/check/review evidence unavailable or head changed.'] : []),
+        ...(footprint.status === 'rejected' ? ['File evidence unavailable or diff changed.'] : []),
+        ...(relationships.status === 'rejected' ? ['Card/worker attribution unavailable; relationships are unknown.'] : [])] }
+  }
   async relationships(id: string): Promise<AskContext['relationships']> {
     const { scene, associations, auditAvailable } = await this.scope()
     const context = pullContext(scene, { id, links: auditAvailable ? associations.pulls.find(row => row.id === id)?.links ?? [] : [] })
