@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Decisions } from '../Decisions'
+import { requestAnchor } from '../../shared/deskSource'
+import type { QueueSource } from '../../server/reconciliation/queue'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { initialPresentation, type PresentationState } from '../presentation'
 import { loadPresentationPreferences, savePresentationPreferences } from '../presentationPreferences'
@@ -273,4 +275,31 @@ it('exposes every supporting card context in one canonical request', async () =>
   const related = screen.getAllByRole('button', { name: 'Open related work' })
   fireEvent.click(related[1]!)
   expect(workspace.value.send).toHaveBeenCalledWith({ type: 'navigate-card', cardId: fixtureId(5) })
+})
+
+it('labels merged PR response controls with their own questions and routes each answer', async () => {
+  const queue = fixtureQueue(), pull = 'https://github.com/example/repo/pull/42'
+  const questions = ['May we merge the security fix?', 'Should we defer the rollout?']
+  const sources: QueueSource[] = questions.map((question, index) => {
+    const request = { home: 'test-home', taskId: `worker-${index}`, kind: 'decision' as const, id: `question-${index}` }
+    return { kind: 'firstmate', id: request.taskId, field: 'decision', request, action: `fm-hold-v1:${btoa(question)}`, responseAnchor: requestAnchor(request), readiness: 'ready-now', status: 'fresh', coverage: 'complete', observedAt: null, expiresAt: null }
+  })
+  queue.items = [{ ...queue.items[0]!, id: 'merged-pr-request', identities: [pull], title: 'PR review', action: 'Review the PR questions', readiness: 'ready-now', cardIds: [], sources, evidence: [{ kind: 'pull-request', url: pull }] }]
+  workspace.value.queue = queue
+  const submit = vi.fn(async () => ({ saved: true, canReceive: true as const }))
+  workspace.value.submit = submit
+  const view = render(<Decisions />)
+  fireEvent.click(view.container.querySelector('.decisions-row')!)
+  expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(1)
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'merged-pr-request')
+  for (const [index, question] of questions.entries()) {
+    const section = screen.getByText(question).closest('section')!
+    expect(section).toBeVisible()
+    expect(section).not.toHaveTextContent('fm-hold-v1:')
+    expect(within(section).getByRole('slider', { name: 'Slide to dismiss' })).toBeVisible()
+    fireEvent.click(within(section).getByText('Answer', { exact: true }))
+    fireEvent.change(within(section).getByLabelText('Answer this decision'), { target: { value: `Response ${index}` } })
+    await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Send to First Mate' })) })
+    expect(submit).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({ anchorKey: sources[index]!.responseAnchor, kind: 'answer', text: `Response ${index}` }))
+  }
 })

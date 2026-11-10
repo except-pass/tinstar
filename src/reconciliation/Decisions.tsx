@@ -150,6 +150,7 @@ function DecisionDetail({ entry, items, unavailable, onClose }: { entry: Decisio
       const linked = route ? findLinkedWorker(workers, route) : null
       const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
       return <section key={`${source.id}:${source.field}:${index}`} className="decisions-response" aria-label="Decision response">
+        <p>{displayRequestText(source.action ?? '', 'Read the source to verify this question.')}</p>
         {href && <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}
         {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><details className="decisions-evidence"><summary>Response delivery details</summary><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</details></> : ready && request.kind !== 'notion-card' && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
       </section>
