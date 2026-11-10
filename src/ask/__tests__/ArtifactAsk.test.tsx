@@ -456,3 +456,17 @@ it.each([false, true])('restores Overview Order by and direction after one sourc
   expect(screen.getByRole('region', { name: /Answer thread/ })).toBeVisible()
 })
 }, 30_000)
+
+it('sends directly from the PR detail shared form with its exact head and view', async () => {
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect owner/repo#17' }))
+  const detail = await screen.findByRole('region', { name: 'Details owner/repo#17' })
+  const question = within(detail).getByRole('textbox', { name: /^Question about/ })
+  fireEvent.change(question, { target: { value: 'Explain the pending review.' } })
+  fireEvent.keyDown(question, { key: 'Enter', shiftKey: true })
+  expect(requests).toHaveLength(0)
+  fireEvent.keyDown(question, { key: 'Enter' })
+  await waitFor(() => expect(requests).toHaveLength(1))
+  expect(requests[0]).toMatchObject({ target: { kind: 'pull', id: pull.id, head }, question: 'Explain the pending review.', view: { scene: 'pulls' } })
+  expect(screen.queryByRole('dialog')).toBeNull()
+})

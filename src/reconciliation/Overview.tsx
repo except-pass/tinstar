@@ -25,7 +25,7 @@ import { SwipeReveal } from '../ask/SwipeReveal'
 import { AskSurface } from '../ask/AskSurface'
 import { askElement } from '../ask/element'
 import { useElementAsk } from '../ask/useElementAsk'
-import { AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit, useAskControls } from '../ask/Ask'
+import { AskContextComposer, AskCardAction, useCardAsk, useSemanticAsk, AskRelationshipHit, useAskControls } from '../ask/Ask'
 import { combinedPatternResult, sceneWorkHealth, patternEmptyText } from '../shared/workHealth'
 
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
@@ -320,7 +320,9 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <h4>Activity history</h4>{execution && <p {...askElement('description', 'Activity history')}>{execution.source.last_event.note ?? 'No activity report published'} · {ageLabel(reportTimestamp(execution), now)}</p>}{card && <p {...askElement('last_edited')}>Edited {ageLabel(Date.parse(card.source.last_edited_time), now)}</p>}{claims.map(c => <p {...askElement('relationship', 'Connection history')} key={c.id}>{c.state === 'historical' ? 'Connection ended' : 'Connection observed'} · {c.endedAt ?? c.observedAt ?? 'Time unknown'}</p>)}
     <details><summary>Evidence & diagnostics</summary><pre>{JSON.stringify({ selection, execution, card, home, group, findings, backlog, claims, historyScope: scene.historyScope }, null, 2)}</pre></details>
   </>
-  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className="ov-inspector" aria-label="Inspector">{content}</AskSurface>
+  const composerSubject = claim && scene.claims.some(item => item.id === claim.id) ? { target: { kind: 'claim' as const, id: claim.id } } : card ? { cardId: card.id } : execution ? { target: { kind: 'execution' as const, id: execution.id } } : null
+  const composerView = { scene: 'overview' as const, organizer: state.organizer, statusFilter: state.statusFilter }
+  return card || execution ? <AskSurface as="section" subject={card ? { cardId: card.id } : { target: { kind: 'execution', id: execution!.id } }} className="ov-inspector" aria-label="Inspector">{content}{composerSubject && <AskContextComposer subject={{ ...composerSubject, view: composerView }} />}</AskSurface>
     : <section className="ov-inspector" aria-label="Inspector">{content}</section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {

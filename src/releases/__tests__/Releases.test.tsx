@@ -14,7 +14,7 @@ vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => {
 } }))
 // Ask's existing provider/transport is covered in ask tests; keep the same card-bound affordance here.
 vi.mock('../../ask/AskSurface', () => ({ AskSurface: ({ as = 'tr', children, subject: _subject, ...props }: React.HTMLAttributes<HTMLElement> & { as?: string; subject: unknown }) => React.createElement(as, props, children) }))
-vi.mock('../../ask/Ask', () => ({ useAskControls: () => null, AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
+vi.mock('../../ask/Ask', () => ({ useAskControls: () => null, AskContextComposer: () => null, AskProvider: ({ children }: { children: React.ReactNode }) => children, AskCardAction: ({ cardId }: { cardId: string }) => <button aria-label={`Ask about ${cardId}`}>Ask</button> }))
 let data: ReleasesRead
 beforeEach(() => {
   observed.origin = undefined

@@ -503,3 +503,9 @@ with an explanation that those recommendations are outdated.
 An unknown network acknowledgement offers a retry of the same selection/key;
 a definitive stale or conflicting selection reports the server's rejection.
 Existing delivery retry controls retain the selected request's note identity.
+
+
+The same composer is embedded in expanded card/worker/relationship Inspectors,
+PR details and Releases details. Its prominent microphone captures locally
+transcribed voice and sends through this same conversation protocol. See
+[local voice setup, limits and fallback](voice.md).

@@ -12,6 +12,7 @@ import { fieldDrafts, type AskSeed, type AskSubject } from './semantic'
 import type { AskField } from '../shared/ask'
 import { workerTitle, cardTitle } from '../reconciliation/overviewModel'
 import { answerStatus, deliveryFailed, deskConversations, type DeskView } from './deskInbox'
+import { VoiceInput } from './VoiceInput'
 import './ask.css'
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -173,11 +174,10 @@ function useDialogFocus(enabled: boolean) {
   }, [enabled])
   return ref
 }
-/** The same text form serves every contextual entry and the inline thread.
- * Future voice capture can supply editable text through this component's draft. */
-function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inline = false }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void; inline?: boolean }) {
-  const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.question ?? (seed.target?.kind === 'pull' && seed.target.action_receipt_id ? 'What does this action receipt establish?' : seed.field_key ? fieldDrafts[seed.field_key] : '')), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
-  const ref = useDialogFocus(!inline), locked = useRef(false), titleId = useId()
+/** One form for contextual surfaces, semantic entry points and Desk replies. */
+function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inline = false, embedded = false }: { scene: FloorScene | null; state: PresentationState; seed: AskSeed; parent?: AskItem; clientKey: string; submit: (body: unknown) => Promise<void>; close: () => void; inline?: boolean; embedded?: boolean }) {
+  const [chosen, setChosen] = useState(seed.cardId ?? ''), [question, setQuestion] = useState(seed.question ?? (seed.target?.kind === 'pull' && seed.target.action_receipt_id ? 'What does this action receipt establish?' : seed.field_key ? fieldDrafts[seed.field_key] : '')), [busy, setBusy] = useState(false), [voiceBusy, setVoiceBusy] = useState(false), [error, setError] = useState<string | null>(null)
+  const ref = useDialogFocus(!inline && !embedded), locked = useRef(false), titleId = useId()
   const card = scene?.cards.find(card => card.id === chosen)
   const worker = seed.target?.kind === 'execution' ? scene?.executions.find(worker => worker.id === seed.target!.id) : null
   const claim = seed.target?.kind === 'claim' ? scene?.claims.find(claim => claim.id === seed.target!.id) : null
@@ -187,29 +187,50 @@ function AskComposer({ scene, state, seed, parent, clientKey, submit, close, inl
   const element = (seed.target || chosen === seed.cardId) ? seed.element : undefined
   // Freeze the whole uncertain envelope, including its exact parent. A refresh
   // may discover another turn before a lost acknowledgment is retried.
-  const key = useRef(inline ? crypto.randomUUID() : clientKey), retryBody = useRef<unknown>(null)
+  const key = useRef(inline || embedded ? crypto.randomUUID() : clientKey), retryBody = useRef<unknown>(null)
   const edited = () => { if (retryBody.current) { key.current = crypto.randomUUID(); retryBody.current = null } }
-  const form = <form className="ask-composer" aria-label={inline ? 'Reply to First Mate' : 'New question'} onKeyDown={event => {
+  const send = async (text = question) => {
+    if (locked.current || !bound || !text.trim()) return
+    locked.current = true; setBusy(true); setError(null)
+    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: text.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
+    try {
+      await submit(retryBody.current)
+      if (inline || embedded) { setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
+    } catch (reason) { setError((reason as Error).message) }
+    finally { locked.current = false; setBusy(false) }
+  }
+  const form = <form className="ask-composer" aria-label={inline ? 'Reply to First Mate' : embedded ? `Ask about ${label}` : 'New question'} onKeyDown={event => {
     if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); if (!busy) close() }
   }} onSubmit={event => {
     event.preventDefault()
-    if (locked.current || !bound || !question.trim()) return
-    locked.current = true; setBusy(true); setError(null)
-    retryBody.current ??= { client_key: key.current, ...(seed.target ? { target: seed.target } : { card_id: chosen }), ...((seed.element || seed.field_key) && (seed.target || chosen === seed.cardId) ? { element: seed.element, field_key: seed.field_key, field_value: seed.field_value } : {}), question: question.trim(), view: parent?.context.view ?? seed.view ?? { scene: 'overview', organizer: state.organizer, statusFilter: state.statusFilter }, ...(parent ? { follow_up_to: parent.request_id } : {}) }
-    void submit(retryBody.current).then(() => {
-      if (inline) { setQuestion(''); retryBody.current = null; key.current = crypto.randomUUID() }
-    }).catch(reason => setError((reason as Error).message)).finally(() => { locked.current = false; setBusy(false) })
+    if (!voiceBusy) void send()
   }}>
-    {!inline && <><header><h2 id={titleId}>Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
+    {!inline && !embedded && <><header><h2 id={titleId}>Ask First Mate</h2><button type="button" disabled={busy} onClick={close} aria-label="Close question">×</button></header>
       <p>{seed.element ? 'Ask about this element. Send the suggested question or edit it.' : 'Swipe left on an item to ask; right-click or long-press a field to ask about it.'}</p>
       {bound ? <div className="ask-chip"><span>{seed.target && isArtifactTarget(seed.target) && <small>{seed.target.kind === 'pull' ? 'GitHub PR' : seed.target.kind === 'release' ? 'Deployment target' : 'Deployment receipt'} · </small>}{label}</span>{!parent && !seed.target && <button type="button" disabled={busy} aria-label="Remove task context" onClick={() => { setChosen(''); edited() }}>×</button>}</div> : <label>Task context<select aria-label="Task context" value={chosen} required onChange={event => { setChosen(event.target.value); edited() }}><option value="">Choose a task</option>{scene?.cards.map(card => <option key={card.id} value={card.id}>{String(card.source.properties.Name?.value ?? card.id)}</option>)}</select></label>}
       </>}
     {element && <div className="ask-element-context" aria-label="Element context"><small>{element.label}</small><p>{element.value}</p></div>}
-    <label>{inline ? 'Reply to First Mate' : 'Question'}<textarea autoFocus={!inline || !!seed.question} required maxLength={4000} value={question} aria-busy={busy} readOnly={busy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Ask a follow-up in this conversation…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
+    <label>{inline ? 'Reply to First Mate' : embedded ? `Question about ${label}` : 'Question'}<textarea autoFocus={!inline && !embedded || !!seed.question} required maxLength={4000} value={question} aria-busy={busy || voiceBusy} readOnly={busy || voiceBusy} onChange={event => { setQuestion(event.target.value); edited() }} placeholder={inline ? 'Ask a follow-up in this conversation…' : 'What would you like to know?'} enterKeyHint="send" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} /></label>
     {error && <p role="alert">{error} Retry keeps the same question ID.</p>}
-    <footer>{!inline && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" disabled={busy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send reply' : 'Send question'}</button></footer>
+    <VoiceInput disabled={busy || !bound} onBusyChange={setVoiceBusy} onTranscript={async transcript => {
+      const next = [question.trim(), transcript].filter(Boolean).join('\n')
+      setQuestion(next); edited()
+      if (next.length > 4000) { setError('Recording added to draft. Shorten it to 4,000 characters before sending.'); return }
+      await send(next)
+    }} />
+    <footer>{!inline && !embedded && <button type="button" disabled={busy} onClick={close}>Cancel</button>}<button type="submit" disabled={busy || voiceBusy || !bound || !question.trim()}>{busy ? 'Sending…' : inline ? 'Send reply' : embedded ? 'Send to First Mate' : 'Send question'}</button></footer>
   </form>
-  return inline ? form : <dialog ref={ref} className="ask-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!busy) close() }}>{form}</dialog>
+  return inline || embedded ? form : <dialog ref={ref} className="ask-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!busy) close() }}>{form}</dialog>
+}
+/** Hosts supply the same canonical subject used by right-click and swipe Ask.
+ * Freshness is resolved by the authenticated server, never trusted from text. */
+export function AskContextComposer({ subject }: { subject: AskSubject }) {
+  const controls = useAskControls()
+  const [clientKey] = useState(() => crypto.randomUUID())
+  if (!controls) return null
+  const parent = subject.followUpTo ? controls.items.find(item => item.request_id === subject.followUpTo) : undefined
+  return <div className="ask-context-composer"><AskComposer key={JSON.stringify(subject)} embedded scene={controls.scene} state={controls.state}
+    seed={subject} parent={parent} clientKey={clientKey} submit={controls.submit} close={() => undefined} /></div>
 }
 function sourceAvailable(item: AskItem, scene: FloorScene | null) {
   const target = item.context.target
