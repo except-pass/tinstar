@@ -37,8 +37,9 @@ No matching log produces `codex: null` and a `codex_reason` such as
 turn events retains its activity timestamp with `turn_open: null` and
 `codex_reason: "no_turn_events"`. An unreadable log leaves the signal unknown.
 For owner-facing worker membership and activity, fresh recorded `run-step` state
-takes precedence. An unknown crew state (including an ignored pane-derived state)
-uses a known turn only while the collector observation is less than five minutes
+takes precedence. Unknown or unusable crew state (including a stale run-step
+or an ignored pane-derived state) permits the session fallback.
+It uses a known turn only while the collector observation is less than five minutes
 old and the home observation is fresh. Open means running; closed means waiting.
 Pane contents and pane-derived states never establish activity or completion.
 Historical working status events date the last report but do not prove current

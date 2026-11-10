@@ -977,13 +977,13 @@ for (const density of ['compact', 'detailed']) test(`card worker facts and one u
   helper.current_state.state = 'unknown'
   scene = new SceneReconciler().reconcile(sources, now)
   await page.reload()
-  await expect(card(1)).toContainText('Worker running · Worker state unknown (codex pane)')
+  await expect(card(1)).toContainText('1 worker running · 1 worker, no update since 2026-11-09 20:59 UTC')
   await screenshot(page, `unknown-accountability-after-${density}`)
   helper.current_state.state = 'paused'; helper.last_event.state = 'paused'; helper.last_event.age_seconds = 10800
   scene = new SceneReconciler().reconcile(sources, now)
   await page.reload()
-  await expect(card(1)).toContainText('Worker waiting · reported 3h ago')
+  await expect(card(1)).toContainText('1 worker waiting · reported 3h ago')
   await card(1).click()
-  await expect(card(1)).toContainText('Worker waiting · reported 3h ago')
+  await expect(card(1)).toContainText('1 worker waiting · reported 3h ago')
   await screenshot(page, `worker-facts-expanded-after-${density}`)
 })
