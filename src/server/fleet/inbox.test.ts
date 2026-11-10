@@ -85,8 +85,9 @@ elif command == 'ready':
   expect((await reloaded.submit(context, 'Message about task alpha, failure card (Deploy failed)')).saved).toBe(true)
   expect(await reloaded.list([home], () => false))
     .toMatchObject([{ requestId: message.requestId, state: 'done' }, { requestId: context.requestId, state: 'saved' }])
-  const storedIds = () => JSON.parse(readFileSync(outboxFile, 'utf8')).map((row: OutboxMessage) => row.requestId)
-  await expect.poll(storedIds, { timeout: 5_000 }).toEqual([context.requestId])
+  // The file rename precedes the in-memory update; wait for the public outbox
+  // state before checking either representation of the completed prune.
+  await expect.poll(() => reloaded.get(message.requestId), { timeout: 5_000 }).toBeUndefined()
   expect(await reloaded.list([home], () => false)).toMatchObject([{ requestId: context.requestId, state: 'saved' }])
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toMatchObject([context])
   writeFileSync(join(home, 'state', 'acked'), '')
@@ -103,7 +104,7 @@ elif command == 'ready':
   writeFileSync(outboxFile, JSON.stringify([stale]))
   const aged = new FleetOutbox()
   expect(await aged.list([home], () => false)).toMatchObject([{ requestId: stale.requestId, state: 'sending' }])
-  await expect.poll(() => JSON.parse(readFileSync(outboxFile, 'utf8')), { timeout: 5_000 }).toEqual([])
+  await expect.poll(() => aged.get(stale.requestId), { timeout: 5_000 }).toBeUndefined()
   expect(await aged.list([home], () => false)).toEqual([])
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
   // Decision receipts survive reply/age/source disappearance until both the
