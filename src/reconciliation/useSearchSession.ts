@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import type { WorkspaceHistory } from '../ask/workspaceHistory'
-import { directNeighbors, emptySearch } from '../shared/smartSearch'
+import { directNeighbors, emptySearch, type SearchFilter } from '../shared/smartSearch'
 import { targetExists, semanticId, type FloorScene, type PresentationAction, type PresentationState, type Target } from './presentation'
 import { saveOverviewDensity, type OverviewDensity } from './overviewDensity'
 
@@ -26,6 +26,9 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   roots: Target[]; setRoots: Dispatch<SetStateAction<Target[]>>; density: OverviewDensity; setDensity: Dispatch<SetStateAction<OverviewDensity>>
 }) {
   const [open, setOpen] = useState(false)
+  // A selected initiative is an applied filter, not a temporary reveal. Retain
+  // only its restore session here; membership stays in the canonical reducer.
+  const appliedSearch = useRef<SearchFilter | null>(null)
   const snapshot = useRef<ViewSnapshot | null>(null), restorePending = useRef<ViewSnapshot | null>(null)
   const [historySession] = useState(() => crypto.randomUUID())
   const historyEntries = useRef(0), ignorePop = useRef<boolean | 'restore'>(false)
@@ -64,7 +67,7 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
   const dismiss = (back = true) => {
     if (back) leaveHistory(Math.min(1, ownedHistoryDepth()))
     setOpen(false)
-    if (!state.searchFocus) snapshot.current = null
+    if (!state.searchFocus && state.search !== appliedSearch.current) snapshot.current = null
   }
   const restoreView = (saved: ViewSnapshot, clear = false) => {
     const { searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } = saved.state
@@ -76,15 +79,15 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     if (back) leaveHistory(ownedHistoryDepth(), true)
     if (snapshot.current) restoreView(snapshot.current, clear)
     else if (clear) send({ type: 'clear-search' })
-    snapshot.current = null; setOpen(false)
+    snapshot.current = null; appliedSearch.current = null; setOpen(false)
   }
   // A dial/filter action can clear focus outside the palette. End its temporary
   // session too, so a later Escape/Back cannot restore the superseded view.
   useLayoutEffect(() => {
-    if (!active || open || state.searchFocus || !snapshot.current || restorePending.current) return
+    if (!active || open || state.searchFocus || state.search === appliedSearch.current || !snapshot.current || restorePending.current) return
     leaveHistory(ownedHistoryDepth(), true)
-    snapshot.current = null
-  }, [active, open, state.searchFocus])
+    snapshot.current = null; appliedSearch.current = null
+  }, [active, open, state.searchFocus, state.search])
   useLayoutEffect(() => {
     const saved = restorePending.current
     if (!active || !saved || !canvas.current) return
@@ -135,11 +138,18 @@ export function useSearchSession({ views, active, scene, state, send, canvas, ro
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
   }, [])
-  return { remember, dismiss, isRestoring: () => !!restorePending.current, open, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target]) => {
+  return { remember, dismiss, isRestoring: () => !!restorePending.current, open, focused: !!state.searchFocus || !!appliedSearch.current && state.search === appliedSearch.current, active: !!snapshot.current, begin, restore: () => restore(), clear: () => restore(true), choose: (target: Target, targets: Target[] = [target], initiative?: string) => {
     if (!scene || [target, ...targets].some(item => !targetExists(scene, item, state))) return false
     remember()
     leaveHistory(Math.max(0, ownedHistoryDepth() - 1))
-    send({ type: 'reveal-search', target, targets }); setRoots(targets)
+    if (initiative !== undefined) {
+      const search = state.search ?? emptySearch()
+      appliedSearch.current = { ...search, facets: [...search.facets.filter(facet => facet.field !== 'initiative'), { field: 'initiative', value: initiative }] }
+      send({ type: 'set-search', search: appliedSearch.current }); setRoots([])
+    } else {
+      appliedSearch.current = null
+      send({ type: 'reveal-search', target, targets }); setRoots(targets)
+    }
     const cluster = directNeighbors(scene, targets)
     setDetails(values => values.filter(id => !cluster.has(id))); setOpen(false)
     return true

@@ -20,7 +20,7 @@ export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismis
   documents?: SearchDocument[]
   scene: FloorScene; state: PresentationState; now: number; open: boolean; focused: boolean
   onOpen: () => void; onDismiss: () => void; onRestore: () => void
-  onChoose: (target: Target, targets?: Target[]) => void
+  onChoose: (target: Target, targets?: Target[], initiative?: string) => void
 }) {
   const input = useRef<HTMLInputElement>(null), trigger = useRef<HTMLButtonElement>(null), host = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState(''), [active, setActive] = useState(0)
@@ -37,7 +37,7 @@ export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismis
     return () => document.removeEventListener('pointerdown', outside)
   }, [open, onDismiss])
   const dismiss = () => { onDismiss(); trigger.current?.focus({ preventScroll: true }) }
-  const choose = (document: SearchDocument) => onChoose(document.target, document.focusTargets)
+  const choose = (document: SearchDocument) => onChoose(document.target, document.focusTargets, document.entity === 'initiative' ? document.key.slice('initiative:'.length) : undefined)
   return <div className="ov-smart-search" ref={host}>
     <button ref={trigger} type="button" className="ov-search-trigger" aria-label="Smart Search (Ctrl or Command K)" aria-keyshortcuts="Control+k Meta+k" aria-expanded={open} aria-controls="ov-search-panel" onClick={open ? dismiss : onOpen}>⌕<span> Search</span></button>
     {focused && <button type="button" className="ov-search-back" onClick={onRestore} aria-label="Clear search focus" title="Restore previous view · Esc">◎ ×</button>}

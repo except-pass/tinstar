@@ -1,9 +1,9 @@
 import { emptySearch, type SearchFilter } from '../shared/smartSearch'
 import { patternNames } from '../shared/workHealth'
-import type { PresentationAction, PresentationState } from './presentation'
+import type { FloorScene, PresentationAction, PresentationState } from './presentation'
 
 /** Present the existing explicit predicates; organizer and Search focus are not filters. */
-export function ActiveFilters({ state, send, onEditScope }: { state: PresentationState; send: (action: PresentationAction) => void; onEditScope: (button: HTMLButtonElement) => void }) {
+export function ActiveFilters({ scene, state, send, onEditScope }: { scene: FloorScene; state: PresentationState; send: (action: PresentationAction) => void; onEditScope: (button: HTMLButtonElement) => void }) {
   const search = state.search ?? emptySearch(), selection = state.donutFilter ?? { cards: [], workers: [] }
   // Reuse the existing view action so editing facets does not dismiss a temporary
   // Search reveal, clear its navigation, or change the saved restore stack.
@@ -12,7 +12,7 @@ export function ActiveFilters({ state, send, onEditScope }: { state: Presentatio
     send({ type: 'restore-search-view', view: { search: value, searchReveal, searchFocus, selection, collapsed, navigation, exceptionsOnly, roadmapExpanded, organizer, statusFilter, donutFilter, linksVisible, arrangement, sort } })
   }
   const terms: Array<{ key: string; kind: string; value: string; remove: () => void }> = [
-    ...search.facets.map((facet, index) => ({ key: `facet:${index}`, kind: `${facet.field[0]!.toUpperCase()}${facet.field.slice(1)}`, value: facet.value, remove: () => editFacets({ ...search, facets: search.facets.filter((_, i) => i !== index) }) })),
+    ...search.facets.map((facet, index) => ({ key: `facet:${index}`, kind: `${facet.field[0]!.toUpperCase()}${facet.field.slice(1)}`, value: facet.field === 'initiative' ? String(scene.cards.find(card => card.id === facet.value)?.source.properties.Name?.value ?? facet.value) : facet.value, remove: () => editFacets({ ...search, facets: search.facets.filter((_, i) => i !== index) }) })),
     ...search.patterns.map(pattern => ({ key: `pattern:${pattern}`, kind: 'Pattern', value: patternNames[pattern], remove: () => editFacets({ ...search, patterns: search.patterns.filter(value => value !== pattern) }) })),
     ...(['workers', 'cards'] as const).flatMap(domain => selection[domain].map(status => ({ key: `${domain}:${status}`, kind: domain === 'cards' ? 'Cards' : 'Workers', value: status, remove: () => send({ type: 'set-donut-filter', filter: { ...selection, [domain]: selection[domain].filter(value => value !== status) } }) }))),
     ...(state.exceptionsOnly ? [{ key: 'gaps', kind: 'View', value: 'Gaps only', remove: () => send({ type: 'set-exceptions', enabled: false }) }] : []),
