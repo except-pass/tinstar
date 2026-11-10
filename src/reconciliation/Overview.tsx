@@ -269,8 +269,14 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const selectedCardId = selection?.kind === 'card' ? selection.id : null
   const [contextRevision, setContextRevision] = useState(0)
   const retainedCard = useRef<SceneCard | null>(null)
+  const renderedScene = useRef(scene.generatedAt)
+  renderedScene.current = scene.generatedAt
+  const confirmedInScene = useRef<string | null>(null)
   const refreshWork = async (result?: StartWorkResult) => {
-    if (retainedCard.current && result?.card) retainedCard.current = { ...retainedCard.current, source: result.card as SceneCard['source'] }
+    if (retainedCard.current && result?.card) {
+      retainedCard.current = { ...retainedCard.current, source: result.card as SceneCard['source'] }
+      confirmedInScene.current = renderedScene.current
+    }
     await refreshAfterMutation(); setContextRevision(revision => revision + 1)
   }
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
@@ -287,8 +293,8 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const claim = [...scene.claims, ...scene.claimHistory].find(c => selection.kind === 'claim' && c.id === selection.id)
   const execution = scene.executions.find(e => e.id === (claim?.executionId ?? (selection.kind === 'execution' ? selection.id : '')))
   const currentCard = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
-  if (currentCard) retainedCard.current = currentCard
-  const card = currentCard ?? (selection.kind === 'card' && retainedCard.current?.id === selection.id ? retainedCard.current : undefined)
+  if (currentCard && confirmedInScene.current !== scene.generatedAt) { retainedCard.current = currentCard; confirmedInScene.current = null }
+  const card = (currentCard && confirmedInScene.current !== scene.generatedAt ? currentCard : undefined) ?? (selection.kind === 'card' && retainedCard.current?.id === selection.id ? retainedCard.current : undefined)
   const home = scene.coverage.homes.find(h => h.source.home === (selection.kind === 'manager' ? selection.id : execution?.home))
   const group = selection.kind === 'group' ? resolveFloorGroup(scene, state, selection.id, now) : undefined
   const groupHomes = group ? relevantWorkerHomes(scene, state.organizer, group) : scene.coverage.homes

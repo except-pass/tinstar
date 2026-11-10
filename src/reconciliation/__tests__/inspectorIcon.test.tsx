@@ -2,24 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
+import { apiFetch } from '../../apiClient'
 import { overviewDensityKey } from '../overviewDensity'
 import type { FloorScene } from '../presentation'
 
-const observed = vi.hoisted(() => ({ scene: null as unknown }))
-vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now() }) }))
+const observed = vi.hoisted(() => ({ scene: null as unknown, refresh: undefined as (() => Promise<void>) | undefined }))
+vi.mock('../useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now(), refreshAfterMutation: () => observed.refresh?.() ?? Promise.resolve() }) }))
 vi.mock('../useDeskQueue', () => ({ useDeskQueue: () => ({ queue: null, error: null }) }))
 vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
-vi.mock('../../apiClient', () => ({ apiFetch: () => new Promise(() => {}) }))
+vi.mock('../../apiClient', () => ({ apiFetch: vi.fn(() => new Promise(() => {})) }))
 
 let scene: FloorScene
 beforeEach(() => {
   localStorage.clear()
+  observed.refresh = undefined
+  vi.mocked(apiFetch).mockImplementation(() => new Promise(() => {}))
   scene = fixtureScene()
   observed.scene = scene
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
 })
-afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 const mount = (density: 'compact' | 'detailed') => {
   localStorage.setItem(overviewDensityKey, density)
@@ -200,4 +203,34 @@ describe('Copy Notion link', () => {
     expect(screen.queryByText('Copied')).toBeNull()
     expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy()
   })
+})
+
+
+it('retains the confirmed status and partial-save recovery when completion removes the card from the active view', async () => {
+  localStorage.setItem(overviewDensityKey, 'detailed')
+  const saved = structuredClone(scene.cards.find(card => card.id === fixtureId(1))!.source)
+  saved.properties.Status!.value = 'Done'
+  vi.mocked(apiFetch).mockImplementation(async path => {
+    if (String(path).endsWith('/workflow')) return new Response(JSON.stringify({ ok: true, data: { outcome: 'partially-saved', message: 'Status saved; note failed', operation_id: 'test', saved_fields: ['Status'], card: saved } }))
+    return new Response(JSON.stringify({ ok: true, data: { outcome: 'available', blocks: [] } }))
+  })
+  const view = <Overview workers={[]} messages={[]} submit={vi.fn()} />
+  const mounted = render(view)
+  observed.refresh = async () => {
+    // Let the result render while the old scene is still on screen, as happens
+    // during the real shared refresh. It must not replace confirmed readback.
+    await new Promise(resolve => setTimeout(resolve, 0))
+    observed.scene = { ...scene, generatedAt: new Date(Date.now() + 1000).toISOString(), cards: scene.cards.filter(card => card.id !== saved.id) }
+    mounted.rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+  }
+  fireEvent.click(inspectorButton(endpoint(mounted.container, 'task')))
+  const inspector = screen.getByLabelText('Inspector')
+  fireEvent.change(within(inspector).getByLabelText('Operation'), { target: { value: 'complete' } })
+  fireEvent.change(within(inspector).getByLabelText('Supported disposition'), { target: { value: 'Owner accepted the required behavior' } })
+  fireEvent.change(within(inspector).getByLabelText('Completion evidence'), { target: { value: 'Acceptance receipt in fixture' } })
+  fireEvent.click(within(inspector).getByRole('button', { name: 'Save update' }))
+  await waitFor(() => expect(within(inspector).getByText(/Outside the current view/)).toBeTruthy())
+  expect(within(inspector).getByText('Done')).toBeTruthy()
+  expect(within(inspector).getByText(/Partially saved. Status saved; note failed/)).toBeTruthy()
+  expect(within(inspector).getByRole('button', { name: 'Save update' })).toBeEnabled()
 })
