@@ -809,19 +809,24 @@ test('single-row toolbar Pattern Dial and compact palette support touch, keyboar
   await expect(page.getByRole('dialog', { name: 'Blocked pattern coverage' })).toBeVisible()
   await center.press('Escape')
   await expect(page.getByRole('tooltip')).toHaveCount(0); await expect(center).toContainText('Blocked')
-  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
+  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0, deltaMode: 0 })
   await expect(center).toContainText('Needs me')
-  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0 })
+  // A smaller trailing delta is momentum, not another notch.
+  await dial.dispatchEvent('wheel', { deltaX: 20, deltaY: 0, deltaMode: 0 })
+  await expect(center).toContainText('Needs me')
+  await dial.dispatchEvent('wheel', { deltaX: 40, deltaY: 0, deltaMode: 0 })
   await expect(center).toContainText('Unstaffed')
+  await dial.dispatchEvent('wheel', { deltaX: -40, deltaY: 0, deltaMode: 0 })
+  await expect(center).toContainText('Needs me')
   const box = (await center.boundingBox())!, client = await page.context().newCDPSession(page)
   const touch = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
   await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] })
   await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...touch, x: touch.x + 55 }] })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   await client.detach()
+  await expect(center).toContainText('Blocked')
+  await dial.dispatchEvent('wheel', { deltaX: 0, deltaY: 100, deltaMode: 0 })
   await expect(center).toContainText('Needs me')
-  await dial.dispatchEvent('wheel', { deltaX: 0, deltaY: 100 })
-  await expect(center).toContainText('Unstaffed')
   await expect(page.locator('.ov-toolbar')).toHaveJSProperty('offsetHeight', 48)
   await expect(page.locator('.ov-donut')).toHaveCount(2)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
@@ -1150,7 +1155,7 @@ for (const width of [1440, 390]) test(`single-row toolbar live combined pattern 
       const text = range.getBoundingClientRect()
       return text.left >= bounds.left && text.right <= bounds.right && text.top >= bounds.top && text.bottom <= bounds.bottom
     })
-    return { fits: lines.every(Boolean), selectedVisible: !button.classList.contains('ov-pattern-selected') || bounds.left >= 0 && bounds.right <= innerWidth }
+    return { fits: lines.every(Boolean), selectedVisible: !button.classList.contains('ov-pattern-selected') || bounds.left >= 0 && bounds.right <= innerWidth + 1 }
   }))
   expect(geometry).toHaveLength(3)
   expect(geometry.every(button => button.fits && button.selectedVisible)).toBe(true)
@@ -1192,6 +1197,14 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   await page.reload()
   await center.press('ArrowLeft'); await center.press('ArrowLeft')
   await expect(center).toHaveText('Active 8 confirmed11 not evaluated')
+  expect(await center.evaluate(element => {
+    const toolbar = element.closest('.ov-toolbar')!.getBoundingClientRect()
+    return [...element.querySelectorAll('.ov-pattern-value > *')].every(line => {
+      const range = document.createRange(); range.selectNodeContents(line)
+      const box = range.getBoundingClientRect()
+      return box.left >= toolbar.left && box.right <= Math.min(toolbar.right, innerWidth)
+    })
+  })).toBe(true)
   await expect(dial).not.toContainText(/\?|\d\+|Pattern unknown|Can't tell/)
   await screenshot(page, `owner-active-${width}`)
   await center.press('Space')

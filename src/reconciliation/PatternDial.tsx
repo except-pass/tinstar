@@ -90,6 +90,9 @@ export function PatternDial({ scene, state, send, now, coverage, onInspectCovera
   const label = (pattern: DialPattern | Pattern) => `${pattern === 'idle' ? patternNames.idle : dialNames[pattern]}, ${count(pattern)}${counts[pattern].coverage ? `, ${counts[pattern].coverage!.label}` : ''}`
   const reminder = (pattern: DialPattern) => `${dialNames[pattern]}: ${definitions[pattern]}`
   const neighbor = (pattern: DialPattern) => <span className="ov-pattern-value"><span>{dialNames[pattern]} <b>{count(pattern)}</b></span>{pattern !== 'all' && counts[pattern].coverage && <small className="ov-pattern-coverage">{counts[pattern].coverage!.label}</small>}</span>
+  useLayoutEffect(() => {
+    center.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [selectedName, selectedCount, scopedCoverage?.label])
   useEffect(() => () => { clearTimeout(timer.current); clearTimeout(holdTimer.current) }, [])
   useEffect(() => {
     const wheel = (event: WheelEvent) => {
