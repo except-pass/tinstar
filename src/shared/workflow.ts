@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { firstMateRequestSchema } from './deskSource'
 const identity = z.string().min(1).max(1024).refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value), 'Use an exact nonempty identity')
 export const cardIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const workerSchema = z.discriminatedUnion('kind', [
@@ -45,9 +46,9 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
   z.object({ ...base, kind: z.literal('wait'), dependency: prose, unblocks_when: prose, follow_up_by: label, note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose,
-    action: label.default('Decision'), requested_from: label }).strict(),
+    action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
   z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose,
-    next: z.object(next).strict(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
+    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
   z.object({ ...base, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
   z.object({ ...base, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
 ])
@@ -81,12 +82,21 @@ export const workflowRules = {
   views: ['Associated PR absence suppresses only the merge ask when repository open inventory is fresh, complete and covers that identity: all-open, or authored-or-associated with an active association. Unknown scope and Link/Evidence-only identities outside the scope remain PR state unverified with unknown readiness and no extra lookup. Partial/stale/unavailable coverage retains it as PR state unverified. This infers not-open, never merged, delivered or complete; no extra PR lookups or history are added.', 'Needs Will requires a current explicit ask; green PRs alone do not create merge permission. Request age is unknown unless request history supplies a timestamp; PR creation is labelled separately.', 'In Progress warnings inspect linked sources with their existing freshness windows. Stale or missing evidence is unknown, never stranded. Warnings do not mutate or block existing cards.'],
   retained_dependencies: ['First Mate owns worker dispatch/supervision and its inbox. Tin Star owns pickup/update notices and the mechanical check-in watchdog.', 'The Mac poller and duplicate PM Bot monitors are retired by their owners only after guarded live feed validation. No paused routine is restarted; PM Bot reasoning/reporting remains.'],
 }
+export interface DecisionResolutionStatus {
+  state: 'pending' | 'resolved' | 'verification-needed'
+  message: string
+  delivery_id?: string
+  source_anchor?: string
+  request_id?: string
+  requests?: DecisionResolutionStatus[]
+}
 export interface StartWorkResult {
   outcome: 'saved' | 'not-saved' | 'partially-saved'
   code: string
   message: string
   operation_id: string
   saved_fields: string[]
+  decision_resolution?: DecisionResolutionStatus
   requires_new_operation_id?: boolean
   card?: unknown
 }

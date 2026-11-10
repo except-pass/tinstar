@@ -426,3 +426,55 @@ closed or establish delivery/completion. It adds no per-PR requests, history sca
 stores or replay. Association ambiguity, multiple linked PRs and unavailable
 association coverage may require owner verification; cleanup beyond this rule is
 an accepted limitation, without suppressing unrelated asks or exposing PR data.
+
+## First Mate decision reconciliation
+
+Publish a First Mate proposal with `update_work(kind: "request_decision")` and
+`source_request: {home, taskId, kind: "hold" | "decision", id}`. The source must
+be fresh, owner-actionable and explicitly linked to this canonical card. The
+published Notion request retains the exact identity, question and task generation;
+a card ID, title or bare decision key never substitutes for request identity.
+
+Answer that proposal with the existing `answer_decision` operation. UI and MCP
+use the same function. Source approvals leave implementation queued; starting or
+completing implementation is a separate workflow operation. Only the selected
+request's action and caller-specified exact wait are removed. Other asks survive.
+The selected answer is recorded in Notion before property writes, allowing an
+interrupted write to resume against its original preconditions after restart.
+An unrelated edit prevents replay. Refresh and submit a new explicit operation
+against the current card to supersede an interrupted operation; existing history
+is preserved.
+
+The existing fleet outbox delivers the exact answer to that source. Its stable
+request ID is scoped to the source and immutable proposal answer, so retries and
+different consumers converge on one delivery. A saved message or acknowledged
+receipt alone does not resolve Decisions: the acknowledgment and fresh, complete
+source closure must both be observed, then confirmed in Notion. Until then the
+shared projection reports **Decision recorded · First Mate not yet updated**.
+There is no independent poller or request store.
+
+Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
+`get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
+answer can use the same published proposal and these explicit lines:
+
+```text
+Tin Star answer: "the-published-proposal-id"
+Answer: R3
+Next owner: Firstmate
+Next status: Queued
+Resolved wait: exact single wait entry (optional; omit this line to preserve waits)
+```
+
+Refresh records the scoped effects through the same workflow operation and
+retries delivery. A general approval comment, missing binding, contradictory
+answers, changed source question/generation or ambiguous card linkage requires
+verification; it never answers a similarly named request. Notion status edits
+and navigation do not acknowledge First Mate requests.
+
+For an older approval such as the already-approved R3 request, use
+`answer_decision` with `request_id` set to the exact existing proposal/approval
+comment or paragraph ID, `source_request` set to the exact originating request,
+`answer` set to the already-recorded answer, and the existing queued next state.
+This binds and reconciles the old approval without creating another Will request
+or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` when
+those asks were already removed; never clear an unrelated remaining action.

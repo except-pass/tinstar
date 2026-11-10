@@ -69,9 +69,11 @@ describe('desk queue correctness', () => {
     expect(build(s).items[0]?.readiness).toBe('ready-now')
   })
 
-  it.each(['Done', 'Archived', 'Completed', 'Answered', 'Resolved'])('excludes %s cards and their retained worker calls', Status => {
+  it.each(['Done', 'Archived', 'Completed', 'Answered', 'Resolved'])('excludes %s Notion cards while retaining unacknowledged First Mate requests', Status => {
     const worker = task(); worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
-    expect(build(snapshot([card({ Owner: 'Will', 'Will action': ['Decision'], Status })], [worker])).items).toEqual([])
+    const result = build(snapshot([card({ Owner: 'Will', 'Will action': ['Decision'], Status })], [worker]))
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]!.sources.some(source => source.kind === 'firstmate')).toBe(true)
   })
 
   it.each(['Backlog', 'Queued', 'Planned', 'Todo'])('retains %s in its work context without immediate work', Status => {
@@ -310,7 +312,7 @@ describe('desk queue correctness', () => {
       expect(result.items[0]).toMatchObject({ readiness: 'needs-readiness-verification', cardIds: [], oneTouch: false })
     }
     const held = hold({ cardReferences: [{ pageId: a, basis: 'explicit', source: 'notion_page_id' }] })
-    expect(build(snapshot([card({ Status: 'Done' })], [], [held])).items).toEqual([])
+    expect(build(snapshot([card({ Status: 'Done' })], [], [held])).items).toHaveLength(1)
   })
 
   it.each(['stale', 'expired'] as const)('retains %s completion evidence for verification', mode => {
@@ -614,7 +616,7 @@ describe('bounded cached PR reads', () => {
   })
 })
 
-it('serves queue through the same read-only HTTP boundary and never calls domain-write scripts', async () => {
+it('serves the shared queue boundary without unapproved domain writes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tinstar-queue-'))
   const home = join(dir, 'home')
   await mkdir(join(home, 'bin'), { recursive: true })
@@ -632,7 +634,7 @@ it('serves queue through the same read-only HTTP boundary and never calls domain
     expect(await restricted.json()).toMatchObject({ ok: true, data: { warnings: expect.arrayContaining(['PR details require owner authorization']) } })
     const response = await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })
     expect(response.headers.get('cache-control')).toBe('no-store')
-    expect(await response.json()).toMatchObject({ ok: true, data: { readOnly: true, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
+    expect(await response.json()).toMatchObject({ ok: true, data: { readOnly: false, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
     for (const method of ['POST', 'PATCH', 'DELETE']) expect((await fetch(url, { method })).status).toBe(400)
     expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
     expect((await fetch(url, { method: 'OPTIONS' })).status).toBe(204)

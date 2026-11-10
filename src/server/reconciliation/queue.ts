@@ -29,6 +29,7 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  decisionResolution?: import('../../shared/workflow').StartWorkResult['decision_resolution']
   identities?: string[]
   id: string
   title: string
@@ -194,7 +195,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const known = refs.map(id => cards.get(id)).filter((card): card is Card => !!card)
       const explicitRelationship = refs.length === 1 && known.length === 1 &&
         [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
-      if (fresh(intentions) && explicitRelationship && known.some(card => card.archived || card.in_trash || complete(word(card, 'Status')))) continue
+      // A Notion status change is not an acknowledgment of a First Mate request.
       const item = blank(call.key, call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
       restrictAction(item, text(hold?.hold_reason))
@@ -321,7 +322,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   }).sort((a, b) => rank[a.readiness] - rank[b.readiness] ||
     (Date.parse(a.checkpoint ?? '') || Infinity) - (Date.parse(b.checkpoint ?? '') || Infinity) || a.id.localeCompare(b.id))
   const meta = <T>(observation: Observation<T>) => { const { data: _data, ...rest } = observation; return rest }
-  return { generatedAt: new Date(now).toISOString(), scope: input.scope, readOnly: true as const,
+  return { generatedAt: new Date(now).toISOString(), scope: input.scope, readOnly: true as boolean,
     coverage: { intentions: meta(intentions), fleet: fleet.map(home => ({ home: home.source.home, ...meta(home.observation) })),
       wholeFarm: 'not-certified' as const, cardBodies: 'not-collected' as const, emptyQueueMeansAllClear: false as const },
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],

@@ -97,6 +97,7 @@ export function startServer(opts: ServerOptions) {
   const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation, configDir, new DomainReadTools(pulls, releases, req => authorizePrReadGrant(req, configDir)))
   const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns, workUpdates)
+  reconciliation.workflow.decisionDelivery = fleet
   fleet.start()
   process.on('exit', () => fleet.stop())
   const otlpExporter = new OtlpExporter()

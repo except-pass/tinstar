@@ -106,6 +106,22 @@ elif command == 'ready':
   await expect.poll(() => JSON.parse(readFileSync(outboxFile, 'utf8')), { timeout: 5_000 }).toEqual([])
   expect(await aged.list([home], () => false)).toEqual([])
   expect(JSON.parse(readFileSync(outboxFile, 'utf8'))).toEqual([])
+  // Decision receipts survive reply/age/source disappearance until both the
+  // acknowledgment and the durable Notion confirmation have been checked.
+  const resolution = { ...message, decisionResolution: { cardId: 'a'.repeat(32), requestId: 'proposal', answerId: 'proposal' }, sentAt: Date.now() - 86_400_001 }
+  writeFileSync(outboxFile, JSON.stringify([resolution]))
+  rmSync(join(home, 'state', 'acked')); rmSync(join(home, 'state', 'reply'))
+  const decisionOutbox = new FleetOutbox()
+  expect(await decisionOutbox.list([home], () => false)).toMatchObject([{ state: 'saved' }])
+  expect(await new FleetOutbox().get(resolution.requestId)).toMatchObject({ decisionResolution: resolution.decisionResolution })
+  writeFileSync(join(home, 'state', 'acked'), '')
+  writeFileSync(join(home, 'state', 'reply'), 'R3 reconciled')
+  expect(await decisionOutbox.list([home], () => true)).toMatchObject([{ state: 'acknowledged' }])
+  expect(await decisionOutbox.list([home], () => false, false)).toMatchObject([{ state: 'acknowledged' }])
+  expect(await decisionOutbox.list([home], () => false)).toMatchObject([{ state: 'done' }])
+  expect(await new FleetOutbox().get(resolution.requestId)).toBeDefined()
+  await decisionOutbox.completeDecision(resolution.requestId)
+  expect(await new FleetOutbox().get(resolution.requestId)).toBeUndefined()
   writeFileSync(join(home, 'state', 'broken'), '')
   const unread = { ...message, requestId: 'tinstar-00000000-0000-4000-8000-000000000003' }
   expect(await aged.submit(unread, target)).toEqual({ saved: false, error: 'fm-inbox: invalid request id', canReceive: 'unknown' })

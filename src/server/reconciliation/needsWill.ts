@@ -21,7 +21,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
   if (!authorized) { inventory = null; readiness = new Map() }
   const cards = new Map(scene.cards.map(card => [card.id, card]))
   return queue.items.flatMap(item => {
-    let real = item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action)
+    let real = !!item.decisionResolution && item.decisionResolution.state !== 'resolved' || item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action)
     const since: string[] = [], requests: ReturnType<typeof decisionRequests> = []
     for (const id of item.cardIds) {
       const card = cards.get(id)
