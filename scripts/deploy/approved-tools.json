@@ -17,5 +17,6 @@
   "read_record",
   "search_work",
   "start_work",
+  "submit_handoff",
   "update_work"
 ]

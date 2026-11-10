@@ -9,12 +9,12 @@ export const canonical = (value: unknown): string => JSON.stringify(value, (_key
 const manifestPrefix = 'Tin Star implementation contract: '
 const chunkPrefix = (version: string) => `Tin Star contract chunk: ${version} `
 const completeText = (manifest: ContractManifest) => `Tin Star contract complete: ${canonical(Object.fromEntries(
-  ['schema', 'version', 'submission_id', 'revision_id', 'actor', 'input_hash', 'hash', 'length', 'bytes', 'chunks', 'spec_offset', 'spec_length', 'previous_hash']
+  ['schema', 'version', 'submission_id', 'revision_id', 'actor', 'external_ref', 'input_hash', 'hash', 'length', 'bytes', 'chunks', 'spec_offset', 'spec_length', 'previous_hash']
     .map(key => [key, manifest[key as keyof ContractManifest]])))}`
 export interface ContractManifest {
   schema: 'tinstar.implementation-contract.v1'; version: string; submission_id: string; revision_id: string; actor: string
   input_hash: string; hash: string; length: number; bytes: number; chunks: number; spec_offset: number; spec_length: number
-  previous_hash: string | null
+  previous_hash: string | null; external_ref: string | null
 }
 export class ContractError extends Error {
   constructor(readonly code: string, message: string) { super(message) }
@@ -36,7 +36,7 @@ export function implementationContract(input: SubmitHandoffInput, actor: string)
   }
   if (part) chunks.push(part)
   const manifest: ContractManifest = { schema: 'tinstar.implementation-contract.v1', version: digest(canonical([actor, input.submission_id, revision])),
-    submission_id: input.submission_id, revision_id: revision, actor, input_hash: digest(canonical(input)), hash: digest(text), length: text.length,
+    submission_id: input.submission_id, revision_id: revision, actor, external_ref: 'external_ref' in input.target ? input.target.external_ref : null, input_hash: digest(canonical(input)), hash: digest(text), length: text.length,
     bytes: Buffer.byteLength(text, 'utf8'), chunks: chunks.length, spec_offset: prefix.length, spec_length: input.spec_markdown.length, previous_hash: input.expected_contract_hash ?? null }
   return { manifest, text, chunks, brief: input.objective }
 }
@@ -64,7 +64,7 @@ export class ImplementationContracts {
     return { chunks, text }
   }
   async inventory(id: string) {
-    const sections = await this.content.sections(id, true), versions = this.manifests(sections)
+    const sections = await this.content.sections(id, true, true), versions = this.manifests(sections)
     if (new Set(versions.map(version => version.version)).size !== versions.length) throw new ContractError('contract-conflict', 'Duplicate implementation contract version markers')
     const approved = versions.filter(version => sections.filter(block => block.text === completeText(version)).length === 1)
     return { sections, versions, current: approved.at(-1) }

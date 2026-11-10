@@ -193,6 +193,15 @@ describe('one-call approved implementation handoff', () => {
     for (const name of ['Status', 'Owner', 'Waiting For', 'Will action', 'First Mate tasks', 'Next check-in']) expect(f.raw.properties[name]).toEqual(old[name])
     expect(f.pages.size).toBe(1); expect(f.blocks.find(block => block.id === 'body-1').paragraph.rich_text[0].plain_text).toBe('Acceptance: retain provenance')
   })
+  it('retrieves full contracts beyond the ordinary 1,000-block body bound without truncating history', async () => {
+    const f = await setup(), input = handoffInput({ target: { card_id: id } })
+    f.blocks.push(...Array.from({ length: 1100 }, (_value, index) => ({ id: `old-history-${index}`, type: 'paragraph', paragraph: { rich_text: [{ plain_text: `Unrelated historical content ${index}` }] } })))
+    expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' } })
+    const read: any = await f.workflow.readImplementationContract(id, { offset: 0, limit: 20 })
+    expect(read).toMatchObject({ outcome: 'available', verified: true, complete_response: true })
+    expect(read.chunks.map((chunk: any) => chunk.text).join('')).toContain(input.spec_markdown)
+    expect(f.blocks.filter(block => block.id.startsWith('old-history-'))).toHaveLength(1100)
+  })
   it('rejects changed payloads and accepts exactly one explicit appended revision while preserving history', async () => {
     const f = await setup(), input = handoffInput({ target: { card_id: id } })
     const first = await f.workflow.submitHandoff(input, 'ChatGPT'), oldVersion = (first.record as any).spec_version
@@ -312,6 +321,14 @@ describe('one-call approved implementation handoff', () => {
     expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved' })
     expect(f.requests.filter(row => row.method === 'POST' && row.url.endsWith('/comments'))).toHaveLength(posts)
   })
+  it('does not replay a history POST when an uncertain response has no visible receipt', async () => {
+    const f = await setup(), input = handoffInput({ target: { card_id: id } }); f.controls.failNote()
+    expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved', record: { full_spec_readback: 'verified' } })
+    const posts = f.requests.filter(row => row.method === 'POST' && row.url.endsWith('/comments')).length
+    f.controls.failNote(false)
+    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ recovery: { code: 'update-unconfirmed', pending_update: expect.any(String) } })
+    expect(f.requests.filter(row => row.method === 'POST' && row.url.endsWith('/comments'))).toHaveLength(posts)
+  })
   it('keeps a saved contract distinct from failed notification and safely retries that notice', async () => {
     const f = await setup(), input = handoffInput({ target: { card_id: id } }); f.workflow.onChange = async () => { throw new Error('inbox offline') }
     expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved', record: { state: 'updated', full_spec_readback: 'verified' }, delivery: { state: 'unknown' }, recovery: { code: 'notification-unconfirmed' } })
@@ -361,6 +378,8 @@ describe('one-call approved implementation handoff', () => {
     vi.setSystemTime(new Date(Date.now() + 10_001))
     const updates = (await feed.bridgeWork()).pending.flatMap(notice => JSON.parse(notice.body.split('\n').slice(1).join('\n')).changes)
     expect(updates.length).toBeGreaterThan(0); expect(updates.every((row: any) => row.kind === 'update')).toBe(true)
+    f.home.observation.expiresAt = new Date(Date.now() - 1).toISOString()
+    expect(await call(revision)).toMatchObject({ assignment: { status: 'In Progress' }, execution: { state: 'unknown' } })
   })
 })
 afterEach(async () => {

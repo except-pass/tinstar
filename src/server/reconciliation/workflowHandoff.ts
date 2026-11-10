@@ -61,7 +61,9 @@ export class HandoffOperations {
             ...(code === 'assignment-conflict' ? { blocked_from_transition: true } : {}) },
           delivery: card ? await this.deps.delivery(card.id, operation('contract')).catch(() => ({ state: 'unknown' })) : { state: 'unknown' },
           execution: current ? await this.deps.execution(current).catch(() => ({ state: 'unknown' })) : { state: 'unknown' },
-          recovery: code ? { code, message, pending_batch_hashes: state.pending ?? [], pending_update: state.pending_update ? operation(state.pending_update) : null, retry: 'Retry identical submission_id, revision_id and payload. Never change the ID merely to bypass an uncertain create/append. For a changed approved contract use a new revision_id and expected_contract_hash; inspect concurrent edits before correction.' } : null }
+          recovery: code ? { code, message, pending_batch_hashes: state.pending ?? [], pending_update: state.pending_update ? operation(state.pending_update) : null,
+            creation_operation_id: 'external_ref' in input.target ? `handoff-create-${digest(canonical(['handoff-external', input.target.external_ref])).slice(0, 48)}` : null,
+            retry: 'Retry identical submission_id, revision_id and payload. Never change the ID merely to bypass an uncertain create/append. For a changed approved contract use a new revision_id and expected_contract_hash; inspect concurrent edits before correction.' } : null }
       }
       try {
         const previous = await this.deps.receipts.get(key)
