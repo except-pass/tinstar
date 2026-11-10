@@ -10,7 +10,7 @@ afterEach(cleanup)
 const scene = fixtureScene()
 function Harness({ initial }: { initial: PresentationState }) {
   const [state, setState] = useState(initial)
-  return <><ActiveFilters state={state} send={action => setState(value => applyPresentationAction(value, action, scene).state)} /><output data-testid="view">{JSON.stringify(state)}</output></>
+  return <><ActiveFilters state={state} onEditScope={() => {}} send={action => setState(value => applyPresentationAction(value, action, scene).state)} /><output data-testid="view">{JSON.stringify(state)}</output></>
 }
 const current = () => JSON.parse(screen.getByTestId('view').textContent!) as PresentationState
 
@@ -31,7 +31,9 @@ it('Clear all removes explicit filters while keeping scope, organizer, navigatio
   render(<Harness initial={state} />)
   fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
   expect(current()).toMatchObject({ statusFilter: state.statusFilter, organizer: state.organizer, selection: state.selection, navigation: state.navigation, collapsed: state.collapsed, searchFocus: state.searchFocus, searchReveal: state.searchReveal, search: { query: 'global term', facets: [], patterns: [] }, donutFilter: { cards: [], workers: [] }, exceptionsOnly: false })
-  expect(screen.getByText('No active filters')).toBeTruthy()
+  expect(screen.queryByText('No active filters')).toBeNull()
+  expect(screen.getByRole('complementary', { name: 'Applied filters' })).toHaveTextContent('Active filters 1')
+  expect(screen.getByRole('button', { name: 'Edit Status scope: All' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
 })
 
@@ -48,9 +50,22 @@ it.each(['clear all', 'remove last status'] as const)('%s preserves Custom scope
     expect(current().organizer).toEqual(state.organizer)
     expect(current().donutFilter).toEqual({ cards: [], workers: [] })
     expect(statusProjection(scene, current(), Date.now()).cards).toContain(done)
-    expect(screen.getByText('No active filters')).toBeTruthy()
+    expect(screen.queryByText('No active filters')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Edit Status scope: Custom - Done' })).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: 'Applied filters' })).toHaveTextContent('Active filters 1')
     expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
   } finally {
     done.source.properties.Status!.value = previous
   }
+})
+
+it.each([
+  { statuses: [], label: 'Custom - No statuses' },
+  { statuses: ['Done', 'Waiting For'], label: 'Custom - Done, Waiting For' },
+])('represents $label as one editable scope term', ({ statuses, label }) => {
+  render(<Harness initial={{ ...initialPresentation(), statusFilter: { preset: 'custom', statuses } }} />)
+  expect(screen.getByRole('button', { name: `Edit Status scope: ${label}` })).toBeTruthy()
+  expect(screen.getByRole('complementary', { name: 'Applied filters' })).toHaveTextContent('Active filters 1')
+  expect(screen.queryByText('No active filters')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
 })

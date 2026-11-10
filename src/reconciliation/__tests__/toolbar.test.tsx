@@ -37,6 +37,31 @@ describe('Overview toolbar and filter shelf', () => {
     expect(screen.getByRole('region', { name: 'Workers statuses' })).toHaveTextContent('5 / 5')
 
   })
+  it('shows Custom scope chosen through Filters and opens those controls from its scope token', () => {
+    scene.cards.find(card => card.id === fixtureId(1))!.source.properties.Status!.value = 'Done'
+    const { container } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Filters', exact: true }))
+    for (const checkbox of screen.getAllByRole('checkbox')) {
+      if ((checkbox as HTMLInputElement).checked) fireEvent.click(checkbox)
+    }
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Done' }))
+    expect(screen.getByLabelText('Status preset')).toHaveValue('custom')
+    const shelf = screen.getByRole('complementary', { name: 'Applied filters' })
+    expect(shelf).toHaveTextContent('Active filters 1')
+    expect(within(shelf).queryByText('No active filters')).toBeNull()
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+    fireEvent.click(screen.getByRole('button', { name: 'Close Customize' }))
+    const scope = screen.getByRole('button', { name: 'Edit Status scope: Custom - Done' })
+    fireEvent.click(scope)
+    expect(screen.getByRole('region', { name: 'Filters', exact: true })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Done' })).toBeChecked()
+    expect(screen.getByLabelText('Status preset')).toHaveValue('custom')
+    fireEvent.keyDown(screen.getByRole('checkbox', { name: 'Done' }), { key: 'Escape' })
+    expect(scope).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+  })
   it('offers Operational status only in Order and rejects grouping drops', () => {
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }))

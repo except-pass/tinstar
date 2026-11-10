@@ -47,7 +47,7 @@ export function FloorToolbar({ scene, state, workerScope, send, gaps, density, o
       {onSourceDetails && <button type="button" className={`ov-source-indicator ${sourceLabel === 'Sources connected' ? 'ov-signal' : 'ov-warning'}`} title={sourceLabel} aria-label={`${sourceLabel} · Details`} onClick={onSourceDetails}>◉</button>}
     </div>
     <div className="ov-filter-shelf">
-      <ActiveFilters state={state} send={send} />
+      <ActiveFilters state={state} send={send} onEditScope={button => { trigger.current = button; setPanel('customize'); setAdvanced('filters') }} />
       <div className="ov-legend-panel" aria-label="Status legend and status filters">{(['workers', 'cards'] as const).map(domain => <StatusDonut key={domain} domain={domain} countNote={countNotes?.[domain]} counts={distribution(domain === 'cards' ? projection.cardCandidates.map(cardStatusName) : workerProjection.workerCandidates.map(worker => floorWorkerStatus(worker, now)))} selected={selection[domain]} visible={domain === 'cards' ? visibleCards ?? projection.cards.length : visibleWorkers ?? projection.workers.length} onClear={() => send({ type: 'set-donut-filter', filter: { ...selection, [domain]: [] } })} onToggle={status => toggle(domain, status)} />)}</div>
     </div>
     {panel === 'customize' && <section className="ov-popover ov-customize" id="floor-customize" aria-label="Customize view">
