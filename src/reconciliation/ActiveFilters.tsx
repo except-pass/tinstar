@@ -1,4 +1,3 @@
-import { defaultStatusFilter } from '../shared/floorOrganization'
 import { emptySearch, type SearchFilter } from '../shared/smartSearch'
 import { patternNames } from '../shared/workHealth'
 import type { PresentationAction, PresentationState } from './presentation'
@@ -16,13 +15,11 @@ export function ActiveFilters({ state, send }: { state: PresentationState; send:
     ...search.facets.map((facet, index) => ({ key: `facet:${index}`, kind: `${facet.field[0]!.toUpperCase()}${facet.field.slice(1)}`, value: facet.value, remove: () => editFacets({ ...search, facets: search.facets.filter((_, i) => i !== index) }) })),
     ...search.patterns.map(pattern => ({ key: `pattern:${pattern}`, kind: 'Pattern', value: patternNames[pattern], remove: () => editFacets({ ...search, patterns: search.patterns.filter(value => value !== pattern) }) })),
     ...(['workers', 'cards'] as const).flatMap(domain => selection[domain].map(status => ({ key: `${domain}:${status}`, kind: domain === 'cards' ? 'Cards' : 'Workers', value: status, remove: () => send({ type: 'set-donut-filter', filter: { ...selection, [domain]: selection[domain].filter(value => value !== status) } }) }))),
-    ...(state.statusFilter?.preset === 'custom' ? state.statusFilter.statuses.map(status => ({ key: `scope:${status}`, kind: 'Task Status', value: status, remove: () => send({ type: 'set-status-filter', filter: state.statusFilter!.statuses.length === 1 ? defaultStatusFilter() : { preset: 'custom', statuses: state.statusFilter!.statuses.filter(value => value !== status) } }) })) : []),
     ...(state.exceptionsOnly ? [{ key: 'gaps', kind: 'View', value: 'Gaps only', remove: () => send({ type: 'set-exceptions', enabled: false }) }] : []),
   ]
   const clear = () => {
     if (search.facets.length || search.patterns.length) editFacets({ ...search, facets: [], patterns: [] })
     send({ type: 'clear-donut-filter' })
-    if (state.statusFilter?.preset === 'custom') send({ type: 'set-status-filter', filter: defaultStatusFilter() })
     if (state.exceptionsOnly) send({ type: 'set-exceptions', enabled: false })
   }
   return <aside className="ov-active-panel" aria-label="Applied filters">

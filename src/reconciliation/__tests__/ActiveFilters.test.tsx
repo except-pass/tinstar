@@ -3,6 +3,7 @@ import { afterEach, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { ActiveFilters } from '../ActiveFilters'
 import { applyPresentationAction, initialPresentation, type PresentationState } from '../presentation'
+import { statusProjection } from '../../shared/floorOrganization'
 import { fixtureId, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 
 afterEach(cleanup)
@@ -32,4 +33,24 @@ it('Clear all removes explicit filters while keeping scope, organizer, navigatio
   expect(current()).toMatchObject({ statusFilter: state.statusFilter, organizer: state.organizer, selection: state.selection, navigation: state.navigation, collapsed: state.collapsed, searchFocus: state.searchFocus, searchReveal: state.searchReveal, search: { query: 'global term', facets: [], patterns: [] }, donutFilter: { cards: [], workers: [] }, exceptionsOnly: false })
   expect(screen.getByText('No active filters')).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
+})
+
+it.each(['clear all', 'remove last status'] as const)('%s preserves Custom scope containing Done and keeps Done visible', action => {
+  const done = scene.cards.find(card => card.id === fixtureId(1))!
+  const previous = done.source.properties.Status!.value
+  done.source.properties.Status!.value = 'Done'
+  try {
+    const state: PresentationState = { ...initialPresentation(), statusFilter: { preset: 'custom', statuses: ['Done'] }, donutFilter: { cards: ['Done'], workers: [] } }
+    render(<Harness initial={state} />)
+    expect(statusProjection(scene, current(), Date.now()).cards).toContain(done)
+    fireEvent.click(screen.getByRole('button', { name: action === 'clear all' ? 'Clear all' : 'Remove Cards: Done' }))
+    expect(current().statusFilter).toEqual(state.statusFilter)
+    expect(current().organizer).toEqual(state.organizer)
+    expect(current().donutFilter).toEqual({ cards: [], workers: [] })
+    expect(statusProjection(scene, current(), Date.now()).cards).toContain(done)
+    expect(screen.getByText('No active filters')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Clear all' })).toBeDisabled()
+  } finally {
+    done.source.properties.Status!.value = previous
+  }
 })
