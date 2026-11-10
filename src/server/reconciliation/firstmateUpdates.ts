@@ -28,7 +28,7 @@ const itemSchema = z.object({ kind: z.enum(['pickup', 'update']), card_id: z.str
   body_sections: z.array(z.string()), operation_ids: z.array(z.string()).optional(), omissions: z.string().optional() })
 const batchSchema = z.object({ requestId: z.string().uuid(), actor: z.string(), readyAt: z.number(), items: z.array(itemSchema), body: z.string().nullable(),
   noteId: z.string().nullable(), announced: z.boolean(), offered: z.boolean(), error: z.string().nullable(), createdAt: z.number(),
-  delivered: z.array(z.object({ card_id: z.string(), operation_ids: z.array(z.string()) })).optional() })
+  delivered: z.array(z.object({ card_id: z.string(), kind: z.enum(['pickup', 'update']).optional(), operation_ids: z.array(z.string()) })).optional() })
 const stateSchema = z.object({ cards: z.record(storedCard), batches: z.array(batchSchema) })
 type State = z.infer<typeof stateSchema>
 type Item = z.infer<typeof itemSchema>
@@ -272,7 +272,9 @@ export class FirstmateUpdates {
     const batches = state.batches.filter(batch => batch.items.some(matches) || batch.delivered?.some(matches))
     const latest = batches.at(-1)
     // A retained inbox receipt proves delivery only, never worker acceptance.
-    return { state: latest?.announced ? 'confirmed' : latest?.offered ? 'offered' : 'unknown',
+    const items = latest ? [...latest.items, ...(latest.delivered ?? [])].filter(matches) : []
+    const pickupOffered = !latest || !latest.offered ? false : items.some(item => item.kind === 'pickup') ? true : items.some(item => item.kind === undefined) ? null : false
+    return { pickup_offered: pickupOffered, state: latest?.announced ? 'confirmed' : latest?.offered ? 'offered' : 'unknown',
       request_id: latest?.requestId ?? null, note_id: latest?.noteId ?? null, error: latest?.error ?? null,
       detail: latest ? 'Existing Firstmate bridge inbox notice; worker acceptance is separate' : 'No retained matching bridge delivery evidence' }
   }
@@ -287,7 +289,7 @@ export class FirstmateUpdates {
           state.batches.some(other => other.requestId !== batch.requestId && other.noteId === update.note!.id)) throw new AskConflict('Note does not match workflow notice')
         batch.noteId = update.note.id; batch.announced ||= update.note.announced === true
         if (batch.announced) {
-          batch.delivered ??= batch.items.map(item => ({ card_id: item.card_id, operation_ids: item.operation_ids ?? [] }))
+          batch.delivered ??= batch.items.map(item => ({ card_id: item.card_id, kind: item.kind, operation_ids: item.operation_ids ?? [] }))
           batch.items = []; batch.body = null
         }
         batch.error = batch.announced ? null : 'wake-failed'

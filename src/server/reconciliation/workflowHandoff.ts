@@ -47,6 +47,7 @@ export class HandoffOperations {
         let inventory: Awaited<ReturnType<ImplementationContracts['inventory']>> | undefined
         if (card) inventory = await this.deps.contracts.inventory(card.id).catch(() => undefined)
         const confirmed = contract.chunks.flatMap((text, index) => (inventory?.sections ?? []).filter(block => block.text === `Tin Star contract chunk: ${contract.manifest.version} ${index}\n${text}`).map(block => ({ index, block_id: block.id })))
+        const delivery = card ? await this.deps.delivery(card.id, operation('contract')).catch(() => ({ state: 'unknown' })) : { state: 'unknown' }
         const verified = spec?.outcome === 'available', complete = verified && !code
         return { submission_id: input.submission_id, outcome: complete ? 'saved' : card || attempted ? 'partially-saved' : 'not-saved',
           record: { state: verified ? wasRecorded ? 'already-recorded' : state.created ? 'created' : 'updated' : card ? 'partially-saved' : 'not-saved',
@@ -58,8 +59,11 @@ export class HandoffOperations {
             reader: { tool: 'get_work', card_id: card?.id, implementation_contract: { revision: contract.manifest.version, offset: 0, limit: 10 } } },
           assignment: { owner: current?.properties.Owner?.value ?? null, status: current?.properties.Status?.value ?? null,
             state: !current ? 'unknown' : current.properties.Status?.value === 'In Progress' ? 'existing-active' : state.assignment_done && current.properties.Status?.value === 'Queued' ? 'newly-queued' : 'preserved',
+            requested: Boolean(state.created || input.assignment),
+            detail: !state.created && !input.assignment ? 'Owner and Status were left unchanged. To request assignment, submit a new revision with assignment { owner, status, expected_owner, expected_status } and expected_contract_hash.' : 'Assignment uses explicit preconditions; Owner and Status above are the current readback.',
+            pickup_offered: delivery && typeof delivery === 'object' && 'pickup_offered' in delivery ? delivery.pickup_offered : null,
             ...(code === 'assignment-conflict' ? { blocked_from_transition: true } : {}) },
-          delivery: card ? await this.deps.delivery(card.id, operation('contract')).catch(() => ({ state: 'unknown' })) : { state: 'unknown' },
+          delivery,
           execution: current ? await this.deps.execution(current).catch(() => ({ state: 'unknown' })) : { state: 'unknown' },
           recovery: code ? { code, message, pending_batch_hashes: state.pending ?? [], pending_update: state.pending_update ? operation(state.pending_update) : null,
             creation_operation_id: 'external_ref' in input.target ? `handoff-create-${digest(canonical(['handoff-external', input.target.external_ref])).slice(0, 48)}` : null,
@@ -106,13 +110,14 @@ export class HandoffOperations {
             card = await this.deps.reader.card((created.card as WorkCard).id, true)
             state.created = true
             state.properties_done = this.deps.matches(card, creationFields)
+            await save()
             await this.deps.receipts.put(externalKey, input.target.external_ref, card.id)
             if (created.outcome !== 'saved') { await save(); return response(created.code, created.message) }
           }
         }
         if (card.archived || card.in_trash) return response('archived', 'Restore the card explicitly before adding an implementation contract')
-        await this.deps.receipts.put(targetKey, input.submission_id, card.id)
         await save()
+        await this.deps.receipts.put(targetKey, input.submission_id, card.id)
         return await this.deps.exclusive(card.id, async () => {
           try {
             card = await this.deps.reader.card(card!.id, true)

@@ -20,6 +20,7 @@ import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
 import { externalWorkers, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
+import { CreationReceipts } from '../workflowReceipts'
 import { digest, implementationContract } from '../implementationContract'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { workerLinkRecord } from '../workerLinks'
@@ -159,6 +160,35 @@ describe('one-call approved implementation handoff', () => {
     expect(f.blocks.length).toBe(before.blocks); expect(f.comments.length).toBe(before.notes)
     expect(f.requests.filter(row => row.method !== 'GET')).toHaveLength(before.writes)
     expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
+  })
+  it.each(['handoff-external', 'handoff-target'])('retains creation state after publishing %s fails', async binding => {
+    const f = await setup(), input = handoffInput()
+    const put = CreationReceipts.prototype.put
+    let interrupted = false
+    const spy = vi.spyOn(CreationReceipts.prototype, 'put').mockImplementation(async function (this: CreationReceipts, ...args) {
+      await put.apply(this, args)
+      if (!interrupted && JSON.parse(args[0])[0] === binding && args[2]) {
+        interrupted = true
+        throw new Error('process interrupted after binding publication')
+      }
+    })
+    try {
+      expect(await f.workflow.submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'partially-saved' })
+    } finally { spy.mockRestore() }
+    expect(interrupted).toBe(true)
+    expect(await f.make().submitHandoff(input, 'ChatGPT')).toMatchObject({ outcome: 'saved', record: { state: 'created' }, assignment: { status: 'Queued' } })
+    expect(f.requests.filter(row => row.url.endsWith('/pages') && row.method === 'POST')).toHaveLength(1)
+  })
+  it.each(['Backlog', 'Todo'])('truthfully reports preserved %s assignment separately from contextual delivery', async status => {
+    const f = await setup()
+    f.raw.properties.Status.status.name = status
+    f.raw.properties.Owner.select.name = 'Captain'
+    f.workflow.deliveryStatus = async () => ({ state: 'confirmed', pickup_offered: false })
+    const result = await f.workflow.submitHandoff(handoffInput({ target: { card_id: id } }), 'ChatGPT')
+    expect(result).toMatchObject({ outcome: 'saved', assignment: { state: 'preserved', owner: 'Captain', status, requested: false, pickup_offered: false }, delivery: { state: 'confirmed' } })
+    expect(result.assignment).toHaveProperty('detail', expect.stringContaining('expected_owner'))
+    expect(f.raw.properties.Owner.select.name).toBe('Captain')
+    expect(f.raw.properties.Status.status.name).toBe(status)
   })
   it('roundtrips a large multipart Markdown/Unicode contract through every paginated reader page', async () => {
     const f = await setup(), input = handoffInput({ spec_markdown: handoffInput().spec_markdown.repeat(3000) })
@@ -366,10 +396,10 @@ describe('one-call approved implementation handoff', () => {
     expect(pending).toHaveLength(1)
     const changes = JSON.parse(pending[0]!.body.split('\n').slice(1).join('\n')).changes
     expect(changes.filter((row: any) => row.kind === 'pickup')).toHaveLength(1)
-    expect(await call()).toMatchObject({ record: { state: 'already-recorded' }, delivery: { state: 'offered' }, execution: { state: 'queued' } })
+    expect(await call()).toMatchObject({ record: { state: 'already-recorded' }, assignment: { pickup_offered: true }, delivery: { state: 'offered', pickup_offered: true }, execution: { state: 'queued' } })
     expect((await feed.bridgeWork()).pending).toEqual(pending)
     await feed.ingest({ request_id: pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'fixture-note', request_id: inboxRequestId(pending[0]!.request_id) } })
-    expect(await call()).toMatchObject({ delivery: { state: 'confirmed' }, execution: { state: 'queued' } })
+    expect(await call()).toMatchObject({ assignment: { pickup_offered: true }, delivery: { state: 'confirmed', pickup_offered: true }, execution: { state: 'queued' } })
     // Model the empty property that Notion includes by default on a real page.
     f.pages.get(cardId).properties['First Mate tasks'] = { type: 'rich_text', rich_text: [] }
     expect(await f.workflow.start({ ...f.native, card_id: cardId }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
@@ -378,6 +408,7 @@ describe('one-call approved implementation handoff', () => {
     vi.setSystemTime(new Date(Date.now() + 10_001))
     const updates = (await feed.bridgeWork()).pending.flatMap(notice => JSON.parse(notice.body.split('\n').slice(1).join('\n')).changes)
     expect(updates.length).toBeGreaterThan(0); expect(updates.every((row: any) => row.kind === 'update')).toBe(true)
+    expect(await call(revision)).toMatchObject({ assignment: { pickup_offered: false }, delivery: { state: 'offered', pickup_offered: false } })
     f.home.observation.expiresAt = new Date(Date.now() - 1).toISOString()
     expect(await call(revision)).toMatchObject({ assignment: { status: 'In Progress' }, execution: { state: 'unknown' } })
   })

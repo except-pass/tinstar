@@ -559,6 +559,11 @@ concurrent changes to those properties conflict, while unrelated changes survive
 Reassignment/reopening requires a separate explicit `assignment` object with
 `owner`, `status` (Queued/Todo/Backlog), `expected_owner`, and `expected_status`.
 An In Progress amendment is a contextual bridge update, never another pickup.
+Assignment outcomes report the current read-back Owner/Status, whether assignment
+was requested, and how to request it explicitly when fields were preserved.
+`pickup_offered` distinguishes a bridge pickup offer from a contextual notice;
+null means pickup evidence is unavailable, including older delivery receipts
+that did not retain the notice kind. Delivery never confirms worker acceptance.
 
 The executive brief is inserted at the top without deleting existing content.
 The distinct **Implementation contract** section stores immutable version
