@@ -129,7 +129,7 @@ describe('card worker facts', () => {
     expect(fact()).toBe('Worker running')
     expect(cardWorkerFact(fixtureScene({ now }), fixtureId(1), now)).toBe('2 workers running')
   })
-  it.each(['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'])('shows %s as waiting, with only the matching report age', state => {
+  it.each(['parked', 'paused', 'blocked'])('shows %s as waiting, with only the matching report age', state => {
     const { worker, fact } = singleWorker()
     worker.source.current_state.state = state
     worker.source.last_event.state = state
@@ -137,6 +137,12 @@ describe('card worker facts', () => {
     expect(fact()).toBe('Worker waiting · reported 3h ago')
     worker.source.last_event.state = 'working'
     expect(fact()).toBe('Worker waiting')
+  })
+  it.each(['waiting', 'held', 'needs-decision'])('keeps unsupported crew-state %s unknown', state => {
+    const { worker, fact } = singleWorker()
+    worker.source.current_state.state = state
+    worker.source.last_event.state = state
+    expect(fact()).toContain('Worker state unknown')
   })
   it.each([true, false])('uses a fresh Codex turn (%s) without dating it from an old report', turn => {
     const { scene, worker, fact } = singleWorker()

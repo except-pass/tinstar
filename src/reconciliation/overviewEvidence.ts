@@ -47,7 +47,7 @@ export function cardWorkerFact(scene: FloorScene, cardId: string, now: number, r
     else if (activity === 'waiting') {
       // Only a matching state report supplies an age; snapshot time is not the
       // start of a wait, and an old working report cannot date a newer pause.
-      const age = ['waiting', 'parked', 'paused', 'blocked', 'held', 'needs-decision'].includes(String(state.state)) && worker.source.last_event.state === state.state ? ageLabel(reportTimestamp(worker), now) : 'Unknown'
+      const age = ['parked', 'paused', 'blocked'].includes(String(state.state)) && worker.source.last_event.state === state.state ? ageLabel(reportTimestamp(worker), now) : 'Unknown'
       fact = `waiting${age === 'Unknown' ? '' : ` · reported ${age}`}`
     } else if (activity === 'terminal') fact = String(state.state)
     else fact = `state unknown${state.source === 'pane' ? ` (${worker.source.harness ? `${worker.source.harness} ` : ''}pane)` : ''}`
