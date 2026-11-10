@@ -14,7 +14,7 @@ import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../
 import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
-import { searchWorkSchema, getWorkSchema, startWorkSchema, workflowRules, type StartWorkInput } from '../../shared/workflow'
+import { searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, workflowRules, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
 import type { WorkerLinkReport } from './workerLinkReport'
 
 export function installToken(root = getConfigRoot()) {
@@ -55,6 +55,8 @@ export interface PresentationReaders {
   searchWork?(input: unknown): Promise<unknown>
   getWork?(input: unknown): Promise<unknown>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
+  updateWork?(input: UpdateWorkInput, actor: string): Promise<unknown>
+  createWork?(input: CreateWorkInput, actor: string): Promise<unknown>
   scene(force?: boolean, scope?: { history?: boolean }): Promise<FloorScene>
   card(id: string): Promise<unknown>
   queue(): Promise<QueueRead>
@@ -78,6 +80,8 @@ export class ReconciliationMcp {
     server.registerTool('get_work', { description: 'Read an exact configured-board card, including outside the active scope, bounded body/comments with authors, linked worker/PR evidence and freshness. Current/historical/conflicting/unverified links remain distinct. No scene/window required.', inputSchema: getWorkSchema, annotations: readAnnotations }, async input => result(await this.readers.getWork?.(input) ?? { outcome: 'unavailable' }))
     server.registerTool('get_workflow_rules', { description: 'Read code-enforced workflow rules, external-worker provenance and the operations reserved for later slices. No separate rules-page permission required.', inputSchema: {}, annotations: readAnnotations }, async () => result(workflowRules))
     server.registerTool('start_work', { description: 'Record a real execution: merge exact tracked worker provenance and set In Progress together, attributed to the authenticated caller. Requires Owner and Area; rejects stale/historical/owner-only evidence. Returns confirmed readback or precise not-saved/partially-saved result. Retry identical operation_id/input; no checkpoint/ask changes. External running evidence is explicitly consumer-reported.', inputSchema: startWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.startWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
+    server.registerTool('create_work', { description: 'Create a configured-board card with declared owner/area, ordinary properties, brief and acceptance criteria. Firstmate assignment is Queued. Authenticated attribution, confirmed readback and retryable operation_id; no scene/window required.', inputSchema: createWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.createWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
+    server.registerTool('update_work', { description: 'Shared workflow operation: edit ordinary properties/brief/acceptance or note; assign/handoff; evidence-backed checkpoint (provisional or owner-confirmed); wait with dependency/unblock/follow-up; request/answer a specific decision with declared next owner/status; complete/park with supported disposition. In Progress requires worker evidence, other asks/history survive. Returns exact saved fields and partial results. Retry identical operation_id/input; no scene/window required.', inputSchema: updateWorkSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.updateWork?.(input, actor) ?? { outcome: 'not-saved', code: 'unavailable' }))
     server.registerTool('list_ui_sessions', { description: 'List authorized ephemeral Overview windows and connected state. Choose an explicit scene_id; never guess a window.', inputSchema: {}, annotations: readAnnotations }, async () => result({ sessions: this.sessions.list() }))
     server.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid() }, annotations: readAnnotations }, async ({ scene_id }) => {
       const window = this.sessions.read(scene_id)
@@ -169,10 +173,12 @@ export class ReconciliationMcp {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     if (path === '/api/reconciliation/workflow') {
       try {
-        const request = z.object({ operation: z.enum(['search', 'get', 'start', 'rules']), input: z.unknown().optional() }).strict().parse(await body(req))
+        const request = z.object({ operation: z.enum(['search', 'get', 'start', 'update', 'create', 'rules']), input: z.unknown().optional() }).strict().parse(await body(req))
         if (request.operation === 'rules') return ok(res, workflowRules, { headers })
         if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
         if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
+        if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(updateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+        if (request.operation === 'create') return ok(res, await this.readers.createWork?.(createWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
         return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
       } catch { return fail(res, 'BAD_REQUEST', 'Invalid workflow request; use the shared workflow operation schema', { headers }) }
     }

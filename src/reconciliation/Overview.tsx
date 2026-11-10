@@ -1,4 +1,5 @@
-import { externalWorkers } from '../shared/workflow'
+import { externalWorkers, type StartWorkResult } from '../shared/workflow'
+import { WorkActions, CreateWork } from './WorkActions'
 import { StartWork } from './StartWork'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Execution, SceneCard } from '../server/reconciliation/scene'
@@ -30,6 +31,11 @@ import { combinedPatternResult, sceneWorkHealth, patternEmptyText } from '../sha
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
 import { OpenInChatGPT } from '../ask/OpenInChatGPT'
 import { checkInIndicatorText } from '../shared/checkIn'
+
+function CreateWorkAction() {
+  const { refreshAfterMutation } = useDeskWorkspace()
+  return <CreateWork onSaved={refreshAfterMutation} />
+}
 
 type Dispatch = (action: PresentationAction) => void
 interface View { scene: FloorScene; state: PresentationState; send: Dispatch; now: number; readFailed: boolean; actionableCardIds: Set<string>; searchMatches?: ReadonlySet<string>; detailed?: { collapsed: string[]; toggle: (item: Target) => void }; compact?: { expanded: ReadonlySet<string>; toggle: (item: Target) => void; roots: readonly Target[] } }
@@ -261,6 +267,12 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const close = useRef<HTMLButtonElement>(null)
   useEffect(() => { if (selection) close.current?.focus({ preventScroll: true }) }, [selection])
   const selectedCardId = selection?.kind === 'card' ? selection.id : null
+  const [contextRevision, setContextRevision] = useState(0)
+  const retainedCard = useRef<SceneCard | null>(null)
+  const refreshWork = async (result?: StartWorkResult) => {
+    if (retainedCard.current && result?.card) retainedCard.current = { ...retainedCard.current, source: result.card as SceneCard['source'] }
+    await refreshAfterMutation(); setContextRevision(revision => revision + 1)
+  }
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
   useEffect(() => {
     setContext(null)
@@ -270,11 +282,13 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
       .then(res => res.json()).then(body => { if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' }) })
       .catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()
-  }, [selectedCardId])
+  }, [selectedCardId, contextRevision, scene.generatedAt])
   if (!selection) return null
   const claim = [...scene.claims, ...scene.claimHistory].find(c => selection.kind === 'claim' && c.id === selection.id)
   const execution = scene.executions.find(e => e.id === (claim?.executionId ?? (selection.kind === 'execution' ? selection.id : '')))
-  const card = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
+  const currentCard = scene.cards.find(c => c.id === (claim?.cardId ?? (selection.kind === 'card' ? selection.id : '')))
+  if (currentCard) retainedCard.current = currentCard
+  const card = currentCard ?? (selection.kind === 'card' && retainedCard.current?.id === selection.id ? retainedCard.current : undefined)
   const home = scene.coverage.homes.find(h => h.source.home === (selection.kind === 'manager' ? selection.id : execution?.home))
   const group = selection.kind === 'group' ? resolveFloorGroup(scene, state, selection.id, now) : undefined
   const groupHomes = group ? relevantWorkerHomes(scene, state.organizer, group) : scene.coverage.homes
@@ -291,7 +305,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     <small className="ov-eyebrow">{card ? 'Notion card' : execution ? 'Worker' : home ? 'Manager' : 'Overview'}</small>
     <h3 {...(card || execution ? askElement('title') : {})}>{card ? cardTitle(card) : execution ? workerTitle(execution) : home ? managerName(scene, home.source.home) : group?.label ?? (selection.kind === 'firstMate' ? 'First Mate' : 'Selected record unavailable')}</h3>
     {execution && <><p><span {...askElement('machine', 'Machine')}>{execution.placement.machine ?? 'Unknown machine'}</span> · <span {...askElement('status', 'Worker status')}>{workerState(execution)}</span></p><p>Manager: <span {...askElement('worker', 'Manager')}>{managerName(scene, execution.home)}</span> · <span {...askElement('last_edited', 'Last activity')}>Last activity {ageLabel(activityTimestamp(execution), now)}{(readFailed || stale(execution.observation, now)) && ' · Last known observation'}</span></p><h4>Latest activity</h4><p {...askElement('description', 'Latest activity')}>{String(execution.source.last_event.note ?? execution.source.lastEventText ?? 'No report published')}</p>{terminal && <a href={terminal} target="_blank" rel="noreferrer">Open worker terminal ↗</a>}</>}
-    {card && <><AskCardAction cardId={card.id} /><StartWork key={card.id} cardId={card.id} scene={scene} onSaved={refreshAfterMutation} /><p {...askElement('relationship', 'Work hierarchy')} className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd {...askElement(({ 'Next check-in': 'next_check_in', 'Last edited': 'last_edited', 'Due Date': 'due_date', 'Waiting For': 'waiting_for', 'Will action': 'will_action' } as Record<string, string>)[label] ?? label.toLowerCase().replaceAll(' ', '_'), label, value, label === 'Next check-in' && checkIn(card, now).state === 'overdue' ? 'overdue' : undefined)}>{value}</dd></div>)}</dl><p {...askElement('waiting_for', 'Next action')}>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p {...askElement('waiting_for', 'Prerequisite')} key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}{externalWorkers(card.source.properties['Delegated To']?.value, now).map(run => <p key={JSON.stringify([run.system, run.run_id, run.observed_at, run.reported_by])}><a href={run.reference} target="_blank" rel="noreferrer">{run.system} · {run.run_id} ↗</a> · {run.freshness === 'current-report' ? 'Reported running' : 'Execution unknown'} · reported by {run.reported_by} at {run.observed_at}</p>)}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
+    {card && <>{!currentCard && <p role="status">Outside the current view. Last confirmed card retained for history and any remaining save steps.</p>}<AskCardAction cardId={card.id} /><WorkActions key={`actions-${card.id}`} card={card} sources={context?.blocks} onSaved={refreshWork} /><StartWork key={card.id} cardId={card.id} scene={scene} onSaved={refreshWork} /><p {...askElement('relationship', 'Work hierarchy')} className="ov-breadcrumb">{workBreadcrumb(scene, card)}</p><dl className="ov-detail-fields">{taskFields(card, now).map(([label, value]) => <div key={label}><dt>{label}</dt><dd {...askElement(({ 'Next check-in': 'next_check_in', 'Last edited': 'last_edited', 'Due Date': 'due_date', 'Waiting For': 'waiting_for', 'Will action': 'will_action' } as Record<string, string>)[label] ?? label.toLowerCase().replaceAll(' ', '_'), label, value, label === 'Next check-in' && checkIn(card, now).state === 'overdue' ? 'overdue' : undefined)}>{value}</dd></div>)}</dl><p {...askElement('waiting_for', 'Next action')}>{card.nextAction ?? (backlog.some(entry => entry.source.hold_reason) ? 'Waiting on a prerequisite' : card.expectationReason)}</p>{backlog.map(entry => <p {...askElement('waiting_for', 'Prerequisite')} key={entry.id}>{[entry.source.hold_reason, entry.source.blocked_by && `Blocked by ${entry.source.blocked_by}`, entry.source.hold_until && `Until ${entry.source.hold_until}`].filter(Boolean).join(' · ')}</p>)}{notionUrl && <span className="ov-source-actions"><a href={notionUrl} target="_blank" rel="noreferrer">Open Notion card ↗</a><CopyNotionLink url={notionUrl} /></span>}{externalWorkers(card.source.properties['Delegated To']?.value, now).map(run => <p key={JSON.stringify([run.system, run.run_id, run.observed_at, run.reported_by])}><a href={run.reference} target="_blank" rel="noreferrer">{run.system} · {run.run_id} ↗</a> · {run.freshness === 'current-report' ? 'Reported running' : 'Execution unknown'} · reported by {run.reported_by} at {run.observed_at}</p>)}<h4>Full card</h4>{['available', 'partial'].includes(context?.outcome ?? '') ? <>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text.split('\n').filter(line => !/^Tin Star (?:operation|section|request|answer):/.test(line)).join('\n')}</p>)}{context?.outcome === 'partial' && <p>Some content omitted. Use the Notion source link for the full card.</p>}</> : <p>{context ? 'Card body unavailable. Use the Notion source link.' : 'Reading card…'}</p>}
       {card.parentIds.map(id => <button {...askElement('relationship', 'Parent')} key={id} type="button" disabled={!scene.cards.some(c => c.id === id)} onClick={() => send({ type: 'focus', target: target('card', id) })}>Parent: {scene.cards.find(c => c.id === id) ? cardTitle(scene.cards.find(c => c.id === id)!) : 'Unavailable'}</button>)}</>}
     {home && <><p>{workerSummary(scene.coverage.homes.filter(h => h.source.home === home.source.home), now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && e.home === home.source.home).length, state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 0 : undefined)} · {home.source.machine ?? 'Unknown machine'}</p><button type="button" onClick={() => send({ type: 'set-expanded', target: target('manager', home.source.home), expanded: state.collapsed.includes(semanticId(target('manager', home.source.home))) })}>{state.collapsed.includes(semanticId(target('manager', home.source.home))) ? 'Expand' : 'Collapse'} workers</button></>}
     {group && <><p>{workerSummary(groupHomes, now, readFailed, scene.executions.filter(e => e.kind !== 'secondmate' && !historyRecord(e) && group.executionIds.includes(e.id)).length)} · {group.cardIds.length} cards</p><details><summary>Epics & parents</summary>{scene.cards.filter(c => group.cardIds.includes(c.id) && (c.parentIds.length || scene.cards.some(child => child.parentIds.includes(c.id)))).map(c => <div key={c.id} className="ov-related"><button type="button" onClick={() => send({ type: 'focus', target: target('card', c.id) })}>{cardTitle(c)}</button>{c.parentIds.length > 0 && <small>Parent: {c.parentIds.map(id => scene.cards.find(parent => parent.id === id)).map(parent => parent ? cardTitle(parent) : 'Unavailable').join(', ')}</small>}</div>)}</details></>}
@@ -382,6 +396,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
           send({ type: 'clear-selection' })
         }
       }} />
+      <CreateWorkAction />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
       {patternSummary && <p className="ov-pattern-summary" role="status">{patternSummary}</p>}
       <div className="ov-workspace"><div ref={canvas} className="ov-canvas"><div className="ov-headings"><span>WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</span><small>RELATIONSHIPS</small><span>NOTION TASKS · {visibleCards}{notionUnavailable ? ' last known' : ''}</span></div>
