@@ -106,3 +106,11 @@ unavailable. Recovery searches all pages matching the selection-derived title fo
 the exact owner and operation receipt; an unconfirmed creation is never repeated.
 Fresh preflight is required before a new creation. Tin Star
 does not execute these commands; the installed-action Merge restrictions above still apply.
+
+A First Mate suggested action uses this same handoff when it includes
+`merge: { "pr_url": "https://github.com/owner/repo/pull/N" }`. The suggestion
+does not carry a head. The owner’s click reads that pull request then, and this
+route binds the head it just read. The same refusals apply: a red, pending,
+draft, merged, or conflicting pull request produces no card and a plain
+explanation. The thread shows the card link after a successful click. One click
+writes one card. An action without `merge` stays an ordinary recommendation.

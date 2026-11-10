@@ -1023,6 +1023,58 @@ it('creates one Clawson merge card with the owner click properties and deduplica
 })
 
 
+it('writes one guarded Clawson card for a suggested merge at the head read when the owner clicks', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-suggested-')); roots.push(root)
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  const head = 'c'.repeat(40)
+  const pr = 'https://github.com/owner/repo/pull/7'
+  const input = { operation_id: '0c0a8e76-453a-43fb-8c87-5b8bc23e697a', targets: [{ url: pr, head }] }
+  const read = async (path: string): Promise<unknown> => {
+    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: false, draft: false, mergeable: true }
+    if (path.includes('/rules/')) return []
+    if (path.includes('/branches/')) return { protection: { required_status_checks: { contexts: ['CI'] } } }
+    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: 'completed', conclusion: 'success', app: { id: 1 } }] }
+    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
+    throw new Error(`Unexpected read: ${path}`)
+  }
+  const prepare = () => prepareClawsonMerge(input, 'owner@example.test', read)
+  const [first, second] = await Promise.all([
+    workflow.createClawsonMerge(input, 'owner@example.test', prepare),
+    workflow.createClawsonMerge(input, 'owner@example.test', prepare),
+  ])
+  for (const result of [first, second]) expect(result).toMatchObject({ outcome: 'saved' })
+  const creates = f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))
+  expect(creates).toHaveLength(1)
+  const text = JSON.stringify(creates[0]!.body.children)
+  expect(text).toContain(`Exact head SHA: ${head}`)
+  expect(text).toContain(`gh pr merge ${pr} --squash --admin --match-head-commit ${head}`)
+  expect(text).toContain('headRefOid')
+  expect(text).toContain('MERGEABLE')
+})
+
+it.each([
+  ['red', { conclusion: 'failure', status: 'completed', draft: false, merged: false, mergeable: true }, 'CI is failure'],
+  ['pending', { conclusion: null, status: 'in_progress', draft: false, merged: false, mergeable: true }, 'CI is pending'],
+  ['draft', { conclusion: 'success', status: 'completed', draft: true, merged: false, mergeable: true }, 'still a draft'],
+  ['merged', { conclusion: 'success', status: 'completed', draft: false, merged: true, mergeable: true }, 'already merged'],
+  ['conflict', { conclusion: 'success', status: 'completed', draft: false, merged: false, mergeable: false }, 'has merge conflicts'],
+])('writes no Clawson card when a suggested merge is %s', async (_name, state, reason) => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-suggested-stop-')); roots.push(root)
+  const workflow = new WorkflowOperations(f.reader, async () => [], root)
+  const head = 'c'.repeat(40)
+  const input = { operation_id: '11111111-1111-4111-8111-111111111111', targets: [{ url: 'https://github.com/owner/repo/pull/7', head }] }
+  const read = async (path: string): Promise<unknown> => {
+    if (/\/pulls\/\d+$/.test(path)) return { head: { sha: head }, base: { ref: 'main' }, state: 'open', merged: state.merged, draft: state.draft, mergeable: state.mergeable }
+    if (path.includes('/rules/')) return []
+    if (path.includes('/branches/')) return {}
+    if (path.includes('/check-runs')) return { total_count: 1, check_runs: [{ name: 'CI', head_sha: head, status: state.status, conclusion: state.conclusion, app: { id: 1 } }] }
+    if (path.includes('/status?')) return { total_count: 0, sha: head, statuses: [] }
+    throw new Error(`Unexpected read: ${path}`)
+  }
+  await expect(workflow.createClawsonMerge(input, 'owner@example.test', () => prepareClawsonMerge(input, 'owner@example.test', read))).rejects.toThrow(reason)
+  expect(f.requests.filter(request => request.method === 'POST' && request.url.endsWith('/pages'))).toHaveLength(0)
+})
+
 it('creates a bounded Clawson card for green PRs across all ten Reader repositories', async () => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'clawson-ten-repos-')); roots.push(root)
   const workflow = new WorkflowOperations(f.reader, async () => [], root)

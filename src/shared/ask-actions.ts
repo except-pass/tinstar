@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { releasePull } from './releases'
 
 export const askActionIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/)
 
@@ -14,10 +15,14 @@ const prose = (max: number) => z.string().min(1).max(max)
   .refine(value => !linkSyntax.test(value), 'URLs and link syntax are not allowed; put URLs in references')
   .transform(value => value.trim())
 
+// One optional merge target. The head is read when the owner clicks, never taken from the suggestion.
+const githubPullUrl = z.string().refine(value => releasePull(value) !== null, 'pr_url must be a GitHub pull request URL').transform(value => releasePull(value)!.url)
+export const askMergeTargetSchema = z.object({ pr_url: githubPullUrl }).strict()
 export const askActionSchema = z.object({
   id: askActionIdSchema,
   label: prose(64),
   instruction: prose(2000),
+  merge: askMergeTargetSchema.optional(),
 }).strict()
 export type AskAction = z.infer<typeof askActionSchema>
 

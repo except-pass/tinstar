@@ -327,6 +327,15 @@ nonblank single-line text. Both fields allow ordinary punctuation, parentheses, 
 semicolons and version numbers. They reject control/line-separator characters,
 backticks/code fences, HTML tags and URLs/link syntax; URLs belong in references.
 Instructions are inert text and are never executed by Tin Star.
+A recommendation may also carry one optional `merge` object, exactly
+`{ "pr_url": "https://github.com/owner/repo/pull/1" }`. No head SHA and no other
+fields. The installed puller forwards that object inside the reply body unchanged.
+When the owner clicks that button, Tin Star does not open an operator request and
+does not merge. It reads the pull request at click time and uses the same
+Clawson handoff as [Send selected PRs to Clawson](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge).
+One click writes one card for that head, or shows the refusal with no card.
+A malformed `merge` value is omitted like any other invalid suggestion and
+returned in `reply_warnings`; the owner does not see the rejection text.
 Historical string suggestions still display as inert text.
 Malformed structured reply content is accepted with `reply.degraded: true`.
 String summaries and details are truncated to their schema limits; a missing or
