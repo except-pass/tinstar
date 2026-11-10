@@ -17,7 +17,9 @@ export const searchWorkSchema = z.object({ owner: z.string().min(1).max(200).opt
   offset: z.number().int().min(0).max(2000).default(0), limit: z.number().int().min(1).max(100).default(50), refresh: z.boolean().default(false),
 }).strict()
 export type SearchWorkInput = z.infer<typeof searchWorkSchema>
-export const getWorkSchema = z.object({ card_id: cardIdSchema, details: z.boolean().default(true), refresh: z.boolean().default(false) }).strict()
+export const getWorkSchema = z.object({ card_id: cardIdSchema, details: z.boolean().default(true), refresh: z.boolean().default(false),
+  implementation_contract: z.object({ revision: z.string().max(128).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(20).default(10) }).strict().optional(),
+}).strict()
 // Ordinary properties are explicit; policy fields have operations so neither
 // the Inspector nor MCP can bypass coupled transitions through a raw editor.
 const prose = z.string().trim().min(1).max(12000)
@@ -27,6 +29,7 @@ export const ordinaryPropertiesSchema = z.object({
   'Sub-area': label.nullable().optional(), Attention: label.nullable().optional(),
   Initiative: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
   Epic: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
+  'Parent item': z.array(cardIdSchema).max(100).optional(),
   Link: z.string().url().max(2048).nullable().optional(),
   'Due Date': z.string().max(100).nullable().optional(), 'Start Date': z.string().max(100).nullable().optional(),
   'Next action': prose.optional(),
@@ -60,6 +63,28 @@ export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(1
   properties: ordinaryPropertiesSchema.omit({ Name: true, Area: true }).optional(), content: contentSchema.optional(),
 }).strict()
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
+const reference = z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use a durable HTTP reference')
+export const submitHandoffSchema = z.object({
+  submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
+  target: z.union([
+    z.object({ card_id: cardIdSchema }).strict(),
+    z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(cardIdSchema).max(20).default([]) }).strict(),
+  ]),
+  title: label, area: label, owner: label,
+  initiative: ordinaryPropertiesSchema.shape.Initiative, epic: ordinaryPropertiesSchema.shape.Epic,
+  priority: label.optional(), parent_card_id: cardIdSchema.optional(),
+  objective: z.string().min(1).max(12000), spec_markdown: z.string().min(1).max(1000000),
+  acceptance_criteria: z.array(z.string().min(1).max(100000)).min(1).max(200),
+  decisions: z.array(z.string().min(1).max(100000)).max(200),
+  forbidden_approaches: z.array(z.string().min(1).max(100000)).max(200),
+  references: z.array(z.object({ url: reference, description: label, durable: z.literal(true) }).strict()).max(100),
+  source_conversation: reference.optional(),
+  ui_prototype: reference.optional(),
+  revision_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters').optional(), expected_contract_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  // A specification never implicitly reassigns/reopens an existing card.
+  assignment: z.object({ owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']), expected_owner: z.string().nullable(), expected_status: z.string().nullable() }).strict().optional(),
+}).strict()
+export type SubmitHandoffInput = z.infer<typeof submitHandoffSchema>
 export const workflowRules = {
   pr_authorization: 'PR details require owner authorization through the existing trusted Tailscale ask.ownerLogins check. MCP work views retain asks with an explicit authorization placeholder.',
   version: 'tinstar.workflow.s3', enforced: [
@@ -76,7 +101,7 @@ export const workflowRules = {
   ],
   operations: {
     read: ['search_work: current assigned cards, independent of UI filters; history is explicit', 'get_work: exact card, properties/worker evidence and optional bounded body/comments', 'get_work_views: shared Needs Will/PR evidence and advisory execution warnings; no window required'],
-    write: ['create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (edit,assign,checkpoint,wait,request_decision,answer_decision,complete,park); use tool schema for coupled fields'],
+    write: ['submit_handoff: stable submission_id, exact target card_id or external_ref, declared title/area/owner, objective, entire spec_markdown, explicit acceptance_criteria/decisions/forbidden_approaches/references. Revisions require revision_id and expected_contract_hash. Exact full contract is paginated by get_work implementation_contract; read every chunk and verify hash. Same-ID retries reconcile durable receipts; uncertain appends are never replayed. Separate record/assignment/delivery/execution outcomes; inbox delivery is not worker acceptance.', 'create_work: operation_id, name, owner, area, optional ordinary properties and content {brief,acceptance_criteria}', 'start_work: card_id, operation_id, worker (firstmate exact home/task/spawn generation, or external system/run_id/reference/card_id/observed_at/state/evidence)', 'update_work: card_id, operation_id, kind (edit,assign,checkpoint,wait,request_decision,answer_decision,complete,park); use tool schema for coupled fields'],
     decisions: 'request_decision records request_id, question, requested_from and action; optional options [{id,label}] publishes up to five choices. answer_decision option_id must match the published choice and answer its exact label. answer_decision requires that request_id, answer and next {owner,status}; In Progress also requires worker, Waiting For requires wait, Done/Archived requires disposition/evidence. legacy_action and resolve_wait clear only explicitly identified legacy asks/waits.',
     checkpoints: 'checkpoint requires assessment, evidence, next_action, next_check_in, confirmation (provisional or owner-confirmed); include the original watchdog request_id when responding, and blocker when applicable. Business days 8 AM–8 PM Eastern: at most four hours; otherwise no later than 10 AM next business morning. Date-only is 9 AM Eastern; Due Date is a separate delivery deadline.',
     repair: 'Retry identical operation_id and intent after an uncertain response. A definite result with requires_new_operation_id means refresh and explicitly re-issue. Ordinary repair is limited to a missing history note in-process while its confirmed card state is unchanged. Exception: existing refresh/pickup reconciliation can resume an immutable Notion-recorded decision answer after restart against its original preconditions, bound to the exact First Mate home/task/request kind/id, published question, generation and explicit canonical card link. Unrelated edits prevent replay. The existing outbox delivers the answer; resolution requires both acknowledgment of that exact delivery and fresh, complete source closure, confirmed in Notion. Missing/ambiguous binding, contradictory answers, changed question/generation or ambiguous card linkage require verification; stale/incomplete source evidence never authorizes delivery. See docs/features/workflow.md#first-mate-decision-reconciliation for the authoritative recovery and direct-answer contract.',

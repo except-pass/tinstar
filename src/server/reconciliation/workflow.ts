@@ -3,7 +3,9 @@ import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowReq
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
-import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { ContractError, ImplementationContracts } from './implementationContract'
+import { HandoffOperations } from './workflowHandoff'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
@@ -31,6 +33,7 @@ export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: stri
 export class WorkflowOperations {
   decisionDelivery?: DecisionDelivery
   onChange?: (change: WorkflowChange) => Promise<void>
+  deliveryStatus?: (cardId: string, operationId?: string) => Promise<unknown>
   private content: WorkflowContent
   private creations: CreationReceipts
   private noteRepairs = new Map<string, { signature: string; version: string; note: string; result: StartWorkResult }>()
@@ -38,6 +41,40 @@ export class WorkflowOperations {
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
   constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string) { this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
+  private exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
+    const result = (this.locks.get(key) ?? Promise.resolve()).catch(() => {}).then(perform)
+    this.locks.set(key, result)
+    void result.finally(() => { if (this.locks.get(key) === result) this.locks.delete(key) }).catch(() => {})
+    return result
+  }
+  readImplementationContract(id: string, options: { revision?: string; offset: number; limit: number }) {
+    return new ImplementationContracts(this.content).read(id, options).catch(error => ({ outcome: 'unavailable', complete_response: false,
+      code: error instanceof ContractError ? error.code : 'source-unavailable', message: error instanceof ContractError ? error.message : 'Full specification read unavailable; no completeness claim' }))
+  }
+  submitHandoff(input: SubmitHandoffInput, actor: string) {
+    return new HandoffOperations({ reader: this.reader, receipts: this.creations, contracts: new ImplementationContracts(this.content),
+      exclusive: (id, perform) => this.exclusive(id, perform),
+      create: (create, caller) => this.serialize('create', create, caller, () => this.performCreate(create, caller, { signature: JSON.stringify(create), properties: { Status: 'Backlog' } })),
+      update: (update, caller) => this.performUpdate(update, caller),
+      hasNote: async (id, caller, operationId) => (await this.content.notes(id)).some(note => note.text.split('\n').includes(receiptMarker(caller, operationId))),
+      matches: (card, desired) => Object.entries(desired).every(([name, value]) => this.matches(card, name, this.normalized(card, name, value))),
+      notify: async change => { if (!this.onChange) throw new Error('Firstmate bridge unavailable'); await this.onChange(change) },
+      delivery: (id, operationId) => this.deliveryStatus?.(id, operationId) ?? Promise.resolve({ state: 'unknown', reason: 'Firstmate bridge observation unavailable' }),
+      execution: async card => {
+        if (card.properties.Status?.value === 'Queued') return { state: 'queued', worker: null }
+        if (card.properties.Status?.value === 'In Progress') {
+          const links = card.properties[FIRST_MATE_TASKS]?.workerLinks
+          if (links?.status === 'valid') for (const worker of links.tasks) {
+            try {
+              await this.startPlan(card, { card_id: card.id, operation_id: 'handoff-observe', worker: { kind: 'firstmate', ...worker } }, actor)
+              return { state: 'running', worker, evidence: 'Fresh tracked native execution and canonical card worker link' }
+            } catch { /* A stale/historical link does not prove execution. */ }
+          }
+        }
+        return { state: 'unknown', worker: null }
+      },
+    }).submit(input, actor)
+  }
   private serialize(cardId: string, input: { operation_id: string }, actor: string, perform: () => Promise<StartWorkResult>) {
     const failed = (code: string, message: string): StartWorkResult => ({ outcome: 'not-saved', code, message, operation_id: input.operation_id, saved_fields: [] })
     if (!actor.trim()) return Promise.resolve(failed('unauthenticated', 'Authenticated caller identity required'))

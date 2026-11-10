@@ -142,7 +142,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
 
 Ordinary properties are Name, Area, Priority, Sub-area, Attention, Initiative,
-Epic, Link, Due Date, Start Date and Next action. The server uses the actual
+Epic, Parent item, Link, Due Date, Start Date and Next action. The server uses the actual
 Notion property type; relation classifications accept canonical page ID arrays.
 An unsupported/truncated property fails only the operation that replaces it.
 Owner/Area are required on new assignments/starts/waits, while notes, ordinary
@@ -507,3 +507,130 @@ or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` whe
 those asks were already removed; never clear an unrelated remaining action.
 
 Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.
+
+## One-call approved implementation handoffs
+
+`submit_handoff` extends the same authenticated MCP facade and
+`WorkflowOperations`. It records caller-authored requirements; it does not
+design, summarize, dispatch workers or grant operational authority. Existing
+create/update/start tools and their retry rules remain compatible.
+
+Required input:
+
+```json
+{
+  "submission_id": "caller-generated-stable-approval-id",
+  "target": { "external_ref": "source-system:approved-design:123" },
+  "title": "Implement the approved design",
+  "owner": "Firstmate",
+  "area": "Engineering",
+  "objective": "A readable executive brief",
+  "spec_markdown": "The ENTIRE approved implementation specification",
+  "acceptance_criteria": ["Explicit measurable acceptance"],
+  "decisions": ["Approved decisions, or an explicit empty array"],
+  "forbidden_approaches": ["Binding constraints, or an explicit empty array"],
+  "references": [{ "url": "https://durable.example/design.png", "description": "Approved design", "durable": true }]
+}
+```
+
+Use `target: {card_id: "<canonical 32-character ID>"}` for a known card. An
+explicit ID is authoritative and must belong to the configured board. Otherwise,
+the existing receipt file binds the submission and external reference to one
+creation identity. `target.candidate_ids` supplies narrow candidates, but even a
+single candidate requires an explicit target: `needs-target` returns identities
+without overwriting or creating. Titles never determine identity.
+
+Optional fields include `initiative`, `epic`, `priority`, `parent_card_id`,
+`source_conversation`, and `ui_prototype`. Initiative/Epic retain existing text or
+relation-ID semantics. Every UI handoff must supply its approved durable
+`ui_prototype`; the saved contract explicitly requires comparison of a real
+first-pass implementation screenshot with it before claiming done. References
+are caller-declared durable HTTP links, recorded verbatim. Linked media is not
+downloaded or independently verified: the response states this limitation. Do
+not label temporary/unsaved media durable; replace it with a durable reference
+before submission.
+
+New cards are staged in Backlog until all contract bytes verify, then assigned
+Queued through the existing transition operation. This prevents a partially
+written contract from becoming a pickup. Existing cards retain Owner, Status,
+worker links, asks, waits and checkpoints. Declared title/area/classification
+edits use the ordinary update path and captured property preconditions;
+concurrent changes to those properties conflict, while unrelated changes survive.
+Reassignment/reopening requires a separate explicit `assignment` object with
+`owner`, `status` (Queued/Todo/Backlog), `expected_owner`, and `expected_status`.
+An In Progress amendment is a contextual bridge update, never another pickup.
+
+The executive brief is inserted at the top without deleting existing content.
+The distinct **Implementation contract** section stores immutable version
+manifests, ordered raw-text chunks, and a completion marker. Markdown, Unicode,
+tables, code fences, acceptance, decisions, constraints and references are retained
+without normalization or truncation. Each version records the input identity,
+SHA-256, UTF-16 length, UTF-8 byte length, exact source-spec offset/length and
+previous hash. The whole reconstructed contract is compared before the completion
+marker or assignment is confirmed. A later approval needs an explicit
+`revision_id` and `expected_contract_hash`; previous versions remain readable.
+Ordinary progress notes remain outside the approved contract.
+
+The contract bound is 1,500,000 UTF-8 bytes. Rich text is split into at most 2,000
+UTF-16 code units per element without dividing Unicode code points; contract
+chunks are at most 8,000 code units and append batches at most 20 blocks. These
+stay below the [Notion request limits](https://developers.notion.com/reference/request-limits).
+The brief uses [Notion's insert-at-start position](https://developers.notion.com/reference/patch-block-children#controlling-insert-position).
+The existing shared limiter and Retry-After policy serve every read/write. Both
+MCP transport request bounds are 2 MiB so large contracts can traverse the same
+tunnel. Oversize input fails explicitly; nothing is condensed to fit.
+
+Routine `get_work` still reads bounded/redacted context and explicitly says the
+full contract was not requested. It never loads contract bodies for board sweeps.
+Retrieve exact approved text on demand:
+
+```json
+{
+  "card_id": "<canonical ID>",
+  "details": false,
+  "implementation_contract": { "revision": "<spec_version>", "offset": 0, "limit": 10 }
+}
+```
+
+Follow `next_offset` until null. Concatenate `chunks[].text` by index, verify
+`manifest.hash`, `length`, `bytes` and `version`, and recover the original
+`spec_markdown` with `spec_offset`/`spec_length`. This explicitly requested
+authenticated reader preserves exact source text, including strings the routine
+prose preview redacts. `complete_response` is false for a partial response;
+`verified` refers to the full stored contract, never just the page returned.
+Omit revision for the latest completed version; the returned version must be
+used on subsequent pages. Incomplete/malformed/unavailable content reports a
+specific failure and never claims completeness.
+
+Results separate `record` (created/updated/already-recorded, canonical ID/URL,
+current verified fields, spec version/hash and full-spec readback), `assignment`
+(current Owner/Status), `delivery` (unknown/offered/confirmed inbox evidence),
+`execution` (Queued, fresh tracked native worker, or unknown), and `recovery`.
+An inbox receipt proves notification delivery only. It never proves acceptance,
+worker dispatch or In Progress. Missing/stale execution stays unknown.
+
+The existing creation receipt file also holds submission hashes, target IDs,
+captured preconditions, step flags and uncertain batch hashes, not authoritative
+specification text or an offline task queue. A changed payload under the same
+submission/revision conflicts. A same-ID retry reads Notion first, verifies saved
+chunks and continues only never-submitted batches. The latch is written before
+each append/history operation to prevent duplicate production writes after a
+lost response or restart. An uncertain append or comment POST is never replayed.
+Partial results identify the canonical card, verified/missing chunk indices and
+block IDs, pending batch hashes or history operation ID. If an uncertain batch
+remains incomplete, inspect Notion and explicitly correct the missing blocks or
+history before retrying the identical submission. Do not create a new task or
+change IDs to bypass uncertainty. A definite Notion rejection can be retried
+after its Retry-After; no independent polling loop is added.
+
+Rollout is separate from code delivery. The catalog adds **submit_handoff** and
+extends **get_work** with optional full-contract retrieval; existing calls stay
+valid. After guarded deployment, verify the deployed commit and authenticated
+catalog, then ask the owner to refresh the ChatGPT connector catalog once.
+Firstmate must run the authorized disposable-card proof through that connected
+ChatGPT tool, inspect exact Notion readback and one real pickup/canonical worker
+link in Tin Star, and put the evidence on card
+`41450ce6d42281028a15d04e769f3f3e`. Fixture tests prove the protocol only; they do
+not complete this live acceptance. Keep the parent shared-workflow cutover
+dependency explicit and do not activate another pickup mechanism or real inbox
+delivery from a preview.

@@ -25,9 +25,10 @@ const diff = (before: Record<string, unknown>, after: Record<string, unknown>) =
 const storedCard = z.object({ edited: z.string(), observed: z.string(), queued: z.boolean(), operations: z.array(z.string()).optional() })
 const itemSchema = z.object({ kind: z.enum(['pickup', 'update']), card_id: z.string(), card_url: z.string(),
   current: z.record(z.unknown()), properties: z.record(z.object({ before: z.unknown(), after: z.unknown() })), comments: z.array(z.object({ text: z.string(), author: z.string().nullable(), id: z.string().optional() })),
-  body_sections: z.array(z.string()), omissions: z.string().optional() })
+  body_sections: z.array(z.string()), operation_ids: z.array(z.string()).optional(), omissions: z.string().optional() })
 const batchSchema = z.object({ requestId: z.string().uuid(), actor: z.string(), readyAt: z.number(), items: z.array(itemSchema), body: z.string().nullable(),
-  noteId: z.string().nullable(), announced: z.boolean(), offered: z.boolean(), error: z.string().nullable(), createdAt: z.number() })
+  noteId: z.string().nullable(), announced: z.boolean(), offered: z.boolean(), error: z.string().nullable(), createdAt: z.number(),
+  delivered: z.array(z.object({ card_id: z.string(), operation_ids: z.array(z.string()) })).optional() })
 const stateSchema = z.object({ cards: z.record(storedCard), batches: z.array(batchSchema) })
 type State = z.infer<typeof stateSchema>
 type Item = z.infer<typeof itemSchema>
@@ -79,6 +80,7 @@ export class FirstmateUpdates {
       for (const [name, change] of Object.entries(item.properties)) existing.properties[name] = { before: existing.properties[name]?.before ?? change.before, after: change.after }
       existing.comments.push(...item.comments.filter(comment => !existing.comments.some(old => old.id && old.id === comment.id || old.text === comment.text && old.author === comment.author)))
       existing.body_sections = [...new Set([...existing.body_sections, ...item.body_sections])]
+      existing.operation_ids = [...new Set([...(existing.operation_ids ?? []), ...(item.operation_ids ?? [])])]
       if (item.omissions) existing.omissions = item.omissions
     } else if (batch && jsonBytes(batch.items) + jsonBytes(item) < 96 * 1024) batch.items.push(item)
     else state.batches.push({ requestId: randomUUID(), actor, readyAt: this.now() + 10_000, items: [item], body: null, noteId: null, announced: false, offered: false, error: null, createdAt: this.now() })
@@ -156,7 +158,7 @@ export class FirstmateUpdates {
       if (newPickup || newUpdate || enrichPickup) {
         const comments = (contentSeen ? [] : own?.notes)?.map(text => ({ text, author: actor })) ?? newComments.map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const sections = (contentSeen ? [] : own?.sections) ?? bodyChanges
-        const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections,
+        const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections, ...(own ? { operation_ids: [own.operationId] } : {}),
           ...(!own && old && old.edited !== card.last_edited_time && !sections.length ? { omissions: 'card body changed (details unavailable)' } : !own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
         // Redaction is an output boundary; raw current-state comparisons stay exact.
         const bounded = boundedItem(item)
@@ -264,6 +266,16 @@ export class FirstmateUpdates {
     })
   }
   async owns(requestId: string) { return (await this.load()).batches.some(batch => batch.requestId === requestId) }
+  async deliveryStatus(cardId: string, operationId?: string) {
+    const state = await this.load()
+    const matches = (item: { card_id: string; operation_ids?: string[] }) => item.card_id === cardId && (!operationId || item.operation_ids?.includes(operationId))
+    const batches = state.batches.filter(batch => batch.items.some(matches) || batch.delivered?.some(matches))
+    const latest = batches.at(-1)
+    // A retained inbox receipt proves delivery only, never worker acceptance.
+    return { state: latest?.announced ? 'confirmed' : latest?.offered ? 'offered' : 'unknown',
+      request_id: latest?.requestId ?? null, note_id: latest?.noteId ?? null, error: latest?.error ?? null,
+      detail: latest ? 'Existing Firstmate bridge inbox notice; worker acceptance is separate' : 'No retained matching bridge delivery evidence' }
+  }
   ingest(input: BridgeUpdate) {
     const update = bridgeUpdateSchema.parse(input)
     return this.change(state => {
@@ -274,7 +286,10 @@ export class FirstmateUpdates {
         if (update.note.request_id !== inboxRequestId(batch.requestId) || batch.noteId && batch.noteId !== update.note.id ||
           state.batches.some(other => other.requestId !== batch.requestId && other.noteId === update.note!.id)) throw new AskConflict('Note does not match workflow notice')
         batch.noteId = update.note.id; batch.announced ||= update.note.announced === true
-        if (batch.announced) { batch.items = []; batch.body = null }
+        if (batch.announced) {
+          batch.delivered ??= batch.items.map(item => ({ card_id: item.card_id, operation_ids: item.operation_ids ?? [] }))
+          batch.items = []; batch.body = null
+        }
         batch.error = batch.announced ? null : 'wake-failed'
       }
       if (update.reply && (!batch.noteId || batch.noteId !== update.reply.id)) throw new AskConflict('Reply does not match workflow notice')

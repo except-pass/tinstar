@@ -17,7 +17,7 @@ import { NotionApi } from './notionApi'
 import { WorkReader, type WorkCard } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
-import { externalWorkers, searchWorkSchema, getWorkSchema, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
 import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
@@ -149,8 +149,12 @@ export class ReconciliationSources {
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
-      return workReadback({ outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
+      const result = workReadback({ outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
         ...(args.details ? { context: await this.context.details(card.id) } : {}) })
+      // Explicit full-contract retrieval preserves bytes; routine reads remain bounded.
+      return { ...result, implementation_contract: args.implementation_contract
+        ? await this.workflow.readImplementationContract(card.id, args.implementation_contract)
+        : { outcome: 'not-requested', complete_response: false, reader: 'get_work with implementation_contract {offset,limit,revision?}; concatenate exact chunks and verify manifest hash' } }
     } catch {
       const known = this.workReader.lastKnown(args.card_id)
       return { outcome: known ? 'stale' : 'unavailable', ...(known ? { card: workReadback(known.card), observedAt: known.observedAt } : {}),
@@ -170,6 +174,11 @@ export class ReconciliationSources {
   }
   async createWork(input: CreateWorkInput, actor: string) {
     return workReadback(await this.workflow.create(input, actor))
+  }
+  async submitHandoff(input: SubmitHandoffInput, actor: string) {
+    const result = await this.workflow.submitHandoff(input, actor)
+    if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.context.invalidate(result.record.card_id)
+    return workReadback(result)
   }
   async firstmateWork(force = false) {
     return this.workReader.query({ owner: 'Firstmate', statuses: ['Queued', 'In Progress', 'Waiting For'] }, force)
