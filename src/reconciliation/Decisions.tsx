@@ -138,7 +138,7 @@ function ProposalChoices({ cardId, proposal, onResult }: { cardId: string; propo
     shownResult.current = result
   }, [result, onResult])
   return <div className="ask-recommendations ask-action-choices" role="group" aria-label={proposal.question ?? 'Decision choices'}>
-    {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={busy || !!result?.decision_resolution} onClick={() => void save('update', {
+    {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={busy || !!result?.decision_resolution} onClick={() => void save({
       kind: 'answer_decision', card_id: cardId, request_id: proposal.id, option_id: option.id, answer: option.label,
       next: { owner: 'Firstmate', status: 'Queued' },
     })}>{option.label}</button>)}
