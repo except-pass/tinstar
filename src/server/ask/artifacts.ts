@@ -11,7 +11,10 @@ export interface AskArtifactSources { actionReceipt?: (id: string) => Promise<Ac
 export async function artifactContext(target: ArtifactAskTarget, view: AskView, fields: { element?: AskElement; field_key?: AskField; field_value?: string }, sources: AskArtifactSources): Promise<AskContext> {
   const identity = pullSource(target.id)
   if (!identity) throw new AskNotFound('Artifact identity unavailable')
-  const release = target.kind !== 'pull' || view.scene === 'releases' ? (await sources.releases()).pulls.find(pull => pull.id === target.id) : undefined
+  const releases = target.kind !== 'pull' || view.scene === 'releases' ? await sources.releases() : undefined
+  const selected = view.release_id ? releases?.releases?.find(release => release.id === view.release_id) : undefined
+  const release = (view.release_id ? selected && [...selected.pulls, ...(selected.supportingPulls ?? [])] : releases?.pulls)?.find(pull => pull.id === target.id)
+  if (view.release_id && !release) throw new AskNotFound('Artifact unavailable in the selected authorized release')
   const pull = target.kind === 'pull' && !release ? ((await sources.pulls()).pulls.find(pull => pull.id === target.id) ?? await sources.pullOrigin?.(identity.url)) : undefined
   const observed = release ?? pull
   if (!observed) throw new AskNotFound('Artifact unavailable in the authorized source')
