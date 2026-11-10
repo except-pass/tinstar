@@ -31,6 +31,32 @@ const group = (name: string) => within(screen.getByRole('region', { name: 'Waiti
 const card = (host: HTMLElement, n: number) => host.querySelector<HTMLButtonElement>(`.ov-waiting-card[data-entity-id="${fixtureId(n)}"]`)!
 
 describe('Waiting For in the native Overview', () => {
+  it.each(['dropdown', 'chip'])('enters Waiting For through %s after selecting other work in Search', entry => {
+    set(3, { Name: 'Search entry regression', Status: 'In Progress' })
+    const { container } = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Smart Search (Ctrl or Command K)' }))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Search entry regression' } })
+    fireEvent.click(within(screen.getByRole('listbox', { name: 'Search results' })).getAllByRole('option')[0]!)
+    expect(container.querySelector(`.ov-card.ov-search-match[data-entity-id="${fixtureId(3)}"]`)).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Waiting For work' })).toBeNull()
+    if (entry === 'dropdown') {
+      fireEvent.click(screen.getByRole('button', { name: 'Choose pattern' }))
+      fireEvent.click(screen.getByRole('option', { name: 'Waiting For' }))
+    } else fireEvent.click(screen.getByRole('button', { name: 'Waiting For' }))
+    expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
+    expect(container.querySelectorAll('.ov-search-match')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+  })
+  it('keeps the chip entry-only with a sole Custom Waiting For status', () => {
+    localStorage.setItem(preferencesKey, JSON.stringify({ statusFilter: { preset: 'custom', statuses: ['Waiting For'] } }))
+    mount()
+    const chip = screen.getByRole('button', { name: 'Waiting For' })
+    fireEvent.click(chip)
+    fireEvent.click(chip)
+    expect(chip).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Remove cards: Waiting For' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
+  })
   it('preserves worker rows and organizer, filters only the Work groups and restores on exit', () => {
     const { container } = mount()
     const workers = [...container.querySelectorAll<HTMLElement>('.ov-execution')].map(row => row.dataset.entityId).sort()

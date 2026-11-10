@@ -73,3 +73,7 @@
 .ov-toolbar .ov-filter-chips:has(button) { flex:none; max-width:none; }
 .ov-toolbar .ov-filter-chips button { flex:none; max-width:none; }
 .ov-pattern-popover .ov-pattern-close { margin-left:8px; }
+/* Keep the labelled entry intact when the toolbar scrolls on narrow screens. */
+.ov-toolbar .ov-waiting-entry { flex:none; white-space:nowrap; border-color:#3b5059; border-radius:12px; }
+.ov-pattern-dial { grid-template-columns:minmax(0,1fr) minmax(95px,1.3fr) minmax(0,1fr) 20px; }
+@media(max-width:600px) { .ov-pattern-dial { width:200px; min-width:200px; grid-template-columns:minmax(0,1fr) 104px minmax(0,1fr) 20px; } }

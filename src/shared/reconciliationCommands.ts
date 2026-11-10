@@ -28,6 +28,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('set-organizer'), organizer: organizerSchema }).strict(),
   z.object({ type: z.literal('set-status-filter'), filter: statusFilterSchema }).strict(),
   z.object({ type: z.literal('set-donut-filter'), filter: donutFilterSchema }).strict(),
+  z.object({ type: z.literal('enter-waiting-for') }).strict(),
   z.object({ type: z.literal('clear-donut-filter') }).strict(),
   z.object({ type: z.literal('reset-floor') }).strict(),
   z.object({ type: z.literal('set-sort'), sort: z.enum(['activity', 'priority']) }).strict(),

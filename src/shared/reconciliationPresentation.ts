@@ -53,6 +53,7 @@ type Change =
   | { type: 'set-organizer'; organizer: Organizer }
   | { type: 'set-status-filter'; filter: StatusFilter }
   | { type: 'set-donut-filter'; filter: DonutFilter }
+  | { type: 'enter-waiting-for' }
   | { type: 'clear-donut-filter' }
   | { type: 'reset-floor' }
   | { type: 'set-arrangement'; arrangement: Arrangement }
@@ -131,6 +132,7 @@ export function applyPresentationAction(state: PresentationState, action: Presen
     case 'set-organizer': next.organizer = { ...action.organizer }; next.collapsed = state.collapsed.filter(id => !id.startsWith('group:')); break
     case 'set-status-filter': next.statusFilter = { ...action.filter, statuses: [...new Set(action.filter.statuses)] }; break
     case 'set-donut-filter': next.donutFilter = { cards: [...new Set(action.filter.cards)], workers: [...new Set(action.filter.workers)] }; break
+    case 'enter-waiting-for': next.donutFilter = { cards: ['Waiting For'], workers: state.donutFilter?.workers ?? [] }; next.searchReveal = null; next.searchFocus = undefined; break
     case 'clear-donut-filter': next.donutFilter = emptyDonutFilter(); break
     case 'reset-floor': next.searchFocus = undefined; next.search = emptySearch(); next.searchReveal = null; next.donutFilter = emptyDonutFilter(); next.navigation = null; next.organizer = defaultOrganizer(); next.statusFilter = defaultStatusFilter(); next.collapsed = []; next.exceptionsOnly = false; next.roadmapExpanded = true; break
     case 'set-arrangement': next.arrangement = action.arrangement; next.organizer = { ...(state.organizer ?? defaultOrganizer()), outer: action.arrangement === 'secondMate' ? 'manager' : action.arrangement === 'machine' ? 'machine' : 'none', inner: 'none' }; break
