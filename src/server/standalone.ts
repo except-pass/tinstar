@@ -75,6 +75,7 @@ export function startServer(opts: ServerOptions) {
   const reconciliation = new ReconciliationSources()
   const checkIns = new CheckInWatchdog(reconciliation)
   const workUpdates = new FirstmateUpdates(reconciliation)
+  reconciliation.onWorkRefresh = async cards => { for (const card of cards) await workUpdates.refreshComments(card) }
   reconciliation.workflow.onChange = change => workUpdates.confirmed(change)
   reconciliation.checkInIndicators = () => checkIns.indicators()
   const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })

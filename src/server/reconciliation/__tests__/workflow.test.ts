@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { NotionWriteError, WorkflowContent } from '../workflowContent'
+import { NotionWriteError, receiptMarker, WorkflowContent } from '../workflowContent'
 import { FirstmateUpdates } from '../firstmateUpdates'
 import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
@@ -701,7 +701,7 @@ it.each(['property', 'body', 'comment'] as const)('preserves an unobserved human
   const sources = f.sources(root)
   const feed = new FirstmateUpdates({
     firstmateWork: async () => ({ status: 'fresh', coverage: 'complete', data: { cards: [await f.reader.card(id, true)] } }) as any,
-    currentCard: cardId => f.reader.card(cardId, true), updateContext: cardId => sources.updateContext(cardId),
+    currentCard: cardId => f.reader.card(cardId, true), updateComments: (cardId, force) => sources.updateComments(cardId, force), updateContext: cardId => sources.updateContext(cardId),
   }, root, async () => ({ deliveryEnabled: true }))
   f.workflow.onChange = change => feed.confirmed(change)
   await feed.sweep(true)
@@ -738,7 +738,7 @@ it.each(['brief', 'acceptance_criteria'] as const)('observes confirmed %s before
   const sources = f.sources(root)
   const feed = new FirstmateUpdates({
     firstmateWork: async () => ({ status: 'fresh', coverage: 'complete', data: { cards: [await f.reader.card(id, true)] } }) as any,
-    currentCard: cardId => f.reader.card(cardId, true), updateContext: cardId => sources.updateContext(cardId),
+    currentCard: cardId => f.reader.card(cardId, true), updateComments: (cardId, force) => sources.updateComments(cardId, force), updateContext: cardId => sources.updateContext(cardId),
   }, root, async () => ({ deliveryEnabled: true }))
   const changes: Array<{ sections?: string[]; notes?: string[] }> = []
   f.workflow.onChange = async change => { changes.push(change); await feed.confirmed(change) }
@@ -770,4 +770,74 @@ it.each(['brief', 'acceptance_criteria'] as const)('observes confirmed %s before
   const batch = JSON.parse(notices[0]!.body.split('\n').slice(1).join('\n'))
   expect(batch.actor).toBe('Notion actor unknown')
   expect(batch.changes[0].properties['Waiting For'].after).toBe('Unrelated human dependency')
+})
+
+it('observes comment-only edits through rotating and explicit refreshes without routine body reads or self wakes', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
+  const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
+  const cardIds = [id, ...Array.from({ length: 8 }, (_, index) => (index + 1).toString(16).padStart(32, '0'))]
+  for (const [index, cardId] of cardIds.entries()) {
+    if (cardId === id) continue
+    const page = { ...structuredClone(f.raw), id: cardId }
+    page.properties.Status.status.name = index % 2 ? 'Waiting For' : 'In Progress'
+    f.pages.set(cardId, page)
+  }
+  const comments = new Map(cardIds.map(cardId => [cardId, [] as any[]]))
+  const fetcher = f.fetcher.getMockImplementation()!
+  f.fetcher.mockImplementation(async (url, init) => {
+    const parsed = new URL(String(url))
+    if (parsed.pathname === '/v1/comments') return json({ has_more: false, results: comments.get(parsed.searchParams.get('block_id')!) ?? [] })
+    return fetcher(url, init)
+  })
+  const root = await mkdtemp(join(tmpdir(), 'workflow-comment-rotation-')); roots.push(root)
+  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  sources.onWorkRefresh = async cards => { for (const card of cards) await feed.refreshComments(card) }
+  const comment = (commentId: string, text: string) => ({ id: commentId, created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: text }] })
+  await feed.sweep(true)
+  expect(f.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/comments')).toHaveLength(9)
+  expect(f.requests.filter(request => request.url.includes('/blocks/'))).toHaveLength(0)
+  const self = `Confirmed self note\n${receiptMarker('Firstmate', 'self-comment')}`
+  comments.get(id)!.push(comment('self-comment-id', self))
+  const current = await sources.currentCard(id)
+  await feed.confirmed({ before: current, card: current, actor: 'Firstmate', operationId: 'self-comment', properties: {}, notes: ['Confirmed self note'] })
+  expect((await feed.bridgeWork()).pending).toEqual([])
+  for (const cardId of cardIds) comments.get(cardId)!.push(comment(`human-${cardId}`, 'Human comment without property edits'))
+  const bodyReads = f.requests.filter(request => request.url.includes('/blocks/')).length
+  const observed = new Set<string>()
+  for (let cycle = 0; cycle < 3; cycle++) {
+    vi.setSystemTime(new Date(Date.now() + 60_001))
+    f.fetcher.mockClear()
+    await feed.sweep()
+    expect(f.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/comments').length).toBeLessThanOrEqual(4)
+    expect(f.requests.filter(request => request.url.includes('/blocks/'))).toHaveLength(bodyReads)
+    vi.setSystemTime(new Date(Date.now() + 10_001))
+    const notices = (await feed.bridgeWork()).pending
+    for (const notice of notices) {
+      const changes = JSON.parse(notice.body.split('\n').slice(1).join('')).changes
+      for (const change of changes) {
+        expect(change).toMatchObject({ kind: 'update', body_sections: [], comments: [{ id: `human-${change.card_id}`, author: 'human-author' }] })
+        expect(observed.has(change.card_id)).toBe(false)
+        observed.add(change.card_id)
+      }
+      await feed.ingest({ request_id: notice.request_id, error: 'wake-failed' })
+    }
+    expect((await feed.bridgeWork()).pending).toEqual(notices)
+    for (const notice of notices) await feed.ingest({ request_id: notice.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: notice.request_id, request_id: inboxRequestId(notice.request_id) } })
+  }
+  expect([...observed].sort()).toEqual([...cardIds].sort())
+  comments.get(id)!.push(comment('forced-comment', 'Forced refresh human input'))
+  f.fetcher.mockClear()
+  await feed.sweep(true)
+  expect(f.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/comments')).toHaveLength(9)
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const forced = (await feed.bridgeWork()).pending
+  expect(forced).toHaveLength(1)
+  expect(JSON.parse(forced[0]!.body.split('\n').slice(1).join('')).changes[0].comments).toEqual([{ id: 'forced-comment', text: 'Forced refresh human input', author: 'human-author' }])
+  await feed.ingest({ request_id: forced[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: forced[0]!.request_id, request_id: inboxRequestId(forced[0]!.request_id) } })
+  comments.get(id)!.push(comment('explicit-comment', 'Immediate human input'))
+  await sources.getWork({ card_id: id, refresh: true, details: false })
+  vi.setSystemTime(new Date(Date.now() + 10_001))
+  const explicit = (await feed.bridgeWork()).pending
+  expect(explicit).toHaveLength(1)
+  expect(JSON.parse(explicit[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'explicit-comment', text: 'Immediate human input', author: 'human-author' }] })
 })

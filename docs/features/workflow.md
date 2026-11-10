@@ -221,8 +221,12 @@ diff baselines stay in memory; persisted state contains assignment latches,
 edit times, minimal deduplication and pending inbox notices, not a board mirror.
 Delivered notice payloads are discarded. After restart, unavailable prior diffs
 are disclosed with current context; no perfect historical replay is promised.
-Direct comment-only changes that do not change the observed page revision need
-an explicit refresh or a subsequent observed card edit to be included. Failed or
+Comment-only edits are checked without body reads on a rotating batch of four
+active Firstmate cards per minute, covering a stable set of N cards within
+ceil(N/4) sweeps. Explicit refresh checks comments immediately for the requested
+active cards; a forced feed sweep checks all active cards. These reads share the
+comment cache and API limiter. New comment IDs, including author, enter the
+existing coalesced update and retry path even when page revisions are unchanged. Failed or
 partial source reads retain prior assignment state and never imply deletion.
 New pickup delivery rechecks the exact card; source failure retains it for retry.
 Preview delivery follows the watchdog's existing disabled-by-default settings.

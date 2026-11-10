@@ -27,7 +27,7 @@ async function fixture() {
     const found = observation.data!.cards.find(card => card.id === id)
     if (!found) throw new Error('unavailable')
     return structuredClone(found)
-  }), updateContext: vi.fn(async () => structuredClone(context)) }
+  }), updateComments: vi.fn(async () => ({ ...structuredClone(context), blocks: structuredClone(context.blocks.filter(block => block.type === 'comment')) })), updateContext: vi.fn(async () => structuredClone(context)) }
   const settings = async () => ({ deliveryEnabled: true })
   const feed = new FirstmateUpdates(sources, root, settings, () => now)
   return { root, observation, card, sources, context, feed, settings, now: () => now, advance: (ms = 10_001) => { now += ms }, restarted: () => new FirstmateUpdates(sources, root, settings, () => now) }

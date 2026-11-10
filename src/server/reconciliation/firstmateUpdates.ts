@@ -32,18 +32,19 @@ type State = z.infer<typeof stateSchema>
 type Item = z.infer<typeof itemSchema>
 const boundedItem = (item: Item): Item => JSON.parse(JSON.stringify(workReadback(item), (_key, value) => typeof value === 'string' && value.length > 1500 ? `${value.slice(0, 1500)} [truncated; read current card]` : Array.isArray(value) ? value.slice(0, 30) : value))
 const writers = new Map<string, Promise<unknown>>()
-type Sources = Pick<ReconciliationSources, 'firstmateWork' | 'currentCard' | 'updateContext'>
+type Sources = Pick<ReconciliationSources, 'firstmateWork' | 'currentCard' | 'updateContext' | 'updateComments'>
 
 /** A current-state pickup latch and small outstanding inbox outbox, not an event
  * ledger/replay service. First Mate remains the only dispatcher/supervisor. */
 export class FirstmateUpdates {
   readonly path: string
   private pickupCursor = 0
+  private commentCursor = 0
   private scanning = false
   private nextSweep = 0
   private version = 0
   private mutations = new Map<string, number>()
-  private baselines = new Map<string, { properties: Record<string, unknown>; details?: CardContextRead['blocks'] }>()
+  private baselines = new Map<string, { properties: Record<string, unknown>; details?: CardContextRead['blocks']; comments?: CardContextRead['blocks'] }>()
   constructor(private sources: Sources, private root = getConfigRoot(), private settings = () => checkInSettings(root), private now = Date.now) {
     this.root = resolve(root); this.path = join(this.root, 'firstmate-work-updates.json')
   }
@@ -95,7 +96,15 @@ export class FirstmateUpdates {
       ? await this.sources.updateContext(change.card.id).catch(() => undefined) : undefined
     return this.observe(change.card, change.actor, context, change)
   }
-  private async observe(card: WorkCard, actor: string, context?: CardContextRead, own?: WorkflowChange) {
+  async refreshComments(card: WorkCard, force = true) {
+    if (!active(card)) return
+    const version = this.version
+    const old = (await this.load()).cards[card.id], baseline = this.baselines.get(card.id)
+    const changed = !!old && (old.edited !== card.last_edited_time || !!baseline && JSON.stringify(baseline.properties) !== JSON.stringify(values(card)))
+    const context = await (changed ? this.sources.updateContext(card.id) : this.sources.updateComments(card.id, force)).catch(() => undefined)
+    if (context?.outcome === 'available' && (this.mutations.get(card.id) ?? 0) <= version) await this.observe(card, 'Notion actor unknown', context, undefined, !changed)
+  }
+  private async observe(card: WorkCard, actor: string, context?: CardContextRead, own?: WorkflowChange, commentsOnly = false) {
     return this.change(state => {
       const old = state.cards[card.id]
       if (!queued(card)) this.retirePickup(state, card.id)
@@ -103,7 +112,7 @@ export class FirstmateUpdates {
       const operationSeen = own && old?.operations?.includes(own.operationId)
       const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
       const noteMatches = (text: string, note: string) => !!own && (note.split('\n').includes(receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
-      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.details?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
+      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
         (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}
@@ -120,7 +129,7 @@ export class FirstmateUpdates {
         const ownNote = (text: string) => own.notes?.some(note => noteMatches(text, note))
         const ownSection = (text: string) => own.sectionTexts?.some(section => text === contextText(section))
         const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block.text) &&
-          (baseline.details ? !baseline.details.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
+          (baseline.comments ? !baseline.comments.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !operationSeen
         const sections = (context?.blocks ?? []).filter(block => block.type !== 'comment' && !ownSection(block.text) &&
@@ -133,16 +142,16 @@ export class FirstmateUpdates {
         }
         for (const name of Object.keys(changes)) if (!(name in effects) || JSON.stringify(after[name]) !== JSON.stringify(effects[name])) delete changes[name]
       }
+      const newComments = (context?.blocks ?? []).filter(block => block.type === 'comment' &&
+        (baseline?.comments ? !baseline.comments.some(previous => previous.id === block.id) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old?.observed ?? '')))
       const newPickup = queued(card) && !old?.queued
       const enrichPickup = queued(card) && own && !contentSeen && (own.notes?.length || own.sections?.length) && state.batches.some(batch => batch.actor === actor && !batch.announced && !batch.offered && batch.items.some(item => item.card_id === card.id && item.kind === 'pickup'))
       const newUpdate = !newPickup && (active(card) || !!own?.before && active(own.before)) && !firstmateActor(actor) &&
-        (!!own && (Object.keys(changes).length > 0 || !contentSeen && (!!own.notes?.length || !!own.sections?.length)) || !!old && (old.edited !== card.last_edited_time || Object.keys(changes).length > 0))
+        (!!own && (Object.keys(changes).length > 0 || !contentSeen && (!!own.notes?.length || !!own.sections?.length)) || !!old && (old.edited !== card.last_edited_time || Object.keys(changes).length > 0 || newComments.length > 0))
       if (newPickup || newUpdate || enrichPickup) {
-        const comments = (contentSeen ? [] : own?.notes)?.map(text => ({ text, author: actor })) ?? (context?.blocks ?? []).filter(block => block.type === 'comment' &&
-          (baseline?.details ? !baseline.details.some(previous => previous.id === block.id) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old?.observed ?? '')))
-          .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
+        const comments = (contentSeen ? [] : own?.notes)?.map(text => ({ text, author: actor })) ?? newComments.map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const sections = (contentSeen ? [] : own?.sections) ?? (context?.blocks ?? []).filter(block => block.type !== 'comment' && baseline?.details && baseline.details.find(previous => previous.id === block.id)?.text !== block.text).map(block => block.id)
-        if (!own && context?.outcome === 'available') sections.push(...(baseline?.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
+        if (!own && !commentsOnly && context?.outcome === 'available') sections.push(...(baseline?.details ?? []).filter(block => block.type !== 'comment' && !context.blocks.some(current => current.id === block.id)).map(block => block.id))
         const item: Item = { kind: newPickup || enrichPickup ? 'pickup' : 'update', card_id: card.id, card_url: card.url ?? `https://www.notion.so/${card.id}`, current: after, properties: changes, comments, body_sections: sections,
           ...(!own && (!context || context.outcome !== 'available' || !baseline?.details || !baseline) ? { omissions: 'Property changes are observed; body/comment changes are bounded and may lack a prior baseline. Reconcile current card if needed; no historical diff/replay guarantee.' } : {}) }
         // Redaction is an output boundary; raw current-state comparisons stay exact.
@@ -151,7 +160,9 @@ export class FirstmateUpdates {
       }
       const operations = [...(old?.operations ?? []), ...(!operationSeen && own && (own.notes?.length || own.sections?.length) ? [own.operationId] : [])].slice(-30)
       state.cards[card.id] = { operations, edited: card.last_edited_time, observed: new Date(this.now()).toISOString(), queued: queued(card) }
-      this.baselines.set(card.id, { properties: after, ...(context?.outcome === 'available' ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}) })
+      this.baselines.set(card.id, { properties: after,
+        ...(context?.outcome === 'available' && !commentsOnly ? { details: context.blocks } : baseline?.details ? { details: baseline.details } : {}),
+        ...(context?.outcome === 'available' ? { comments: context.blocks.filter(block => block.type === 'comment') } : baseline?.comments ? { comments: baseline.comments } : {}) })
     })
   }
   /** Called from the existing refresh callback, never a second scheduler. */
@@ -163,12 +174,19 @@ export class FirstmateUpdates {
       const observation = await this.sources.firstmateWork(force)
       if (!observation.data || observation.status !== 'fresh' || observation.coverage !== 'complete') return
       const state = await this.load(), seen = new Set<string>()
+      const activeCards = observation.data.cards.filter(active).sort((a, b) => a.id.localeCompare(b.id))
+      const selected = new Set((force ? activeCards : Array.from({ length: Math.min(4, activeCards.length) }, (_, offset) => activeCards[(this.commentCursor + offset) % activeCards.length]!)).map(card => card.id))
+      if (!force && activeCards.length) this.commentCursor = (this.commentCursor + selected.size) % activeCards.length
       for (const card of observation.data.cards) {
         seen.add(card.id)
         if ((this.mutations.get(card.id) ?? 0) > startVersion) continue
         const old = state.cards[card.id]
-        if (old && old.edited === card.last_edited_time && JSON.stringify(this.baselines.get(card.id)?.properties) === JSON.stringify(values(card))) continue
+        if (old && old.edited === card.last_edited_time && JSON.stringify(this.baselines.get(card.id)?.properties) === JSON.stringify(values(card))) {
+          if (selected.has(card.id)) await this.refreshComments(card, force)
+          continue
+        }
         const actor = 'Notion actor unknown'
+        if (!old && selected.has(card.id)) { await this.refreshComments(card, force); continue }
         const details = old && active(card) ? await this.sources.updateContext(card.id).catch(() => undefined) : undefined
         if ((this.mutations.get(card.id) ?? 0) <= startVersion) await this.observe(card, actor, details)
       }
