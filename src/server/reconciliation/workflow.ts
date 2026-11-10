@@ -1,9 +1,10 @@
+import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, createWorkSchema, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import type { SourceSnapshot } from './index'
@@ -141,6 +142,38 @@ export class WorkflowOperations {
     const parsed = createWorkSchema.safeParse(input)
     if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
     return this.serialize('create', parsed.data, actor, () => this.performCreate(parsed.data, actor))
+  }
+  /** Owner-only PR handoff; shares create_work's Notion writer and durable receipts. */
+  createClawsonMerge(input: ClawsonMergeInput, actor: string, prepare: () => Promise<ClawsonMergePlan>): Promise<StartWorkResult> {
+    const signature = JSON.stringify({ kind: 'clawson-merge', ...input })
+    return this.serialize('create', input, actor, async () => {
+      const previous = await this.creations.get(JSON.stringify([actor, input.operation_id]))
+      if (previous && previous.input !== signature) return { outcome: 'not-saved', code: 'operation-conflict', message: 'This click was already used with a different selection.', operation_id: input.operation_id, saved_fields: [] }
+      if (previous?.cardId) {
+        const card = await this.reader.card(previous.cardId, true)
+        return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card }
+      }
+      if (previous) {
+        try {
+          const card = await this.findCreation(actor, input.operation_id, clawsonMergeTitle(input))
+          if (!card) return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation remains unconfirmed; this retry will not create a duplicate.', operation_id: input.operation_id, saved_fields: [] }
+          await this.creations.put(JSON.stringify([actor, input.operation_id]), signature, card.id)
+          const current = await this.reader.card(card.id, true)
+          this.reader.confirm(current)
+          await this.changed({ card: current, actor, operationId: input.operation_id, properties: {} })
+          return { outcome: 'saved', code: 'already-saved', message: 'Already sent to Clawson.', operation_id: input.operation_id, saved_fields: ['card'], card: current }
+        } catch {
+          return { outcome: 'partially-saved', code: 'create-unconfirmed', message: 'Earlier creation could not be reconciled; retry to retrieve its receipt.', operation_id: input.operation_id, saved_fields: [] }
+        }
+      }
+      const prepared = await prepare()
+      const create = createWorkSchema.parse({ operation_id: input.operation_id, name: prepared.name, owner: 'Clawson', area: 'CI', status: 'Queued', content: { brief: prepared.brief } })
+      return this.performCreate(create, actor, { signature, properties: { Status: 'In Progress', 'Next check-in': prepared.at, 'Will action': ['Merge'] }, children: [
+        heading('Authority'), paragraph(prepared.brief), heading('Step 1 (run once)'), codeBlock(prepared.script),
+        paragraph('If any check line fails (head moved, not mergeable, a red or pending check): STOP and post the output. Otherwise post the final lines and hand back. Nothing else: no other PR, no deploy.'),
+        heading('Return'), paragraph('Post one comment per PR on this card with its PR URL, exact head SHA, command result, and final state + merge commit (with the commit URL on success). On any stop, post the output and do not continue the batch.'),
+      ] })
+    })
   }
   private property(card: WorkCard, name: string, value: unknown) {
     const prop = card.properties[name], type = prop?.type
@@ -369,10 +402,30 @@ export class WorkflowOperations {
       return partial
     }
   }
-  private async performCreate(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
+  private async findCreation(actor: string, operationId: string, name: string): Promise<WorkCard | undefined> {
+    const config = this.reader.config
+    if (!config) throw new Error('Not configured')
+    const marker = receiptMarker(actor, operationId)
+    let cursor: string | undefined
+    const cursors = new Set<string>()
+    for (;;) {
+      const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, filter: { property: 'Name', title: { equals: name } }, ...(cursor ? { start_cursor: cursor } : {}) })
+      if (!Array.isArray(candidates.results)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+      for (const raw of candidates.results) {
+        const candidate = notionCard(raw)
+        if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) return candidate
+      }
+      if (candidates.has_more === false) return
+      const nextCursor = candidates.next_cursor
+      if (candidates.has_more !== true || typeof nextCursor !== 'string' || !nextCursor || cursors.has(nextCursor)) throw new WorkflowError('create-scope-incomplete', 'Creation search is incomplete; cannot safely deduplicate creation')
+      cursor = nextCursor
+      cursors.add(nextCursor)
+    }
+  }
+  private async performCreate(input: CreateWorkInput, actor: string, handoff?: { signature: string; properties: Record<string, unknown>; children?: WorkflowCreateBlock[] }): Promise<StartWorkResult> {
     let attempted = false, card: WorkCard | undefined
     const saved: string[] = []
-    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = JSON.stringify(input)
+    const marker = receiptMarker(actor, input.operation_id), key = JSON.stringify([actor, input.operation_id]), signature = handoff?.signature ?? JSON.stringify(input)
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string, saved_fields: string[] = saved): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields, ...(card ? { card } : {}) })
     try {
       const config = this.reader.config
@@ -380,27 +433,21 @@ export class WorkflowOperations {
       const previous = await this.creations.get(key)
       if (previous && previous.input !== signature) throw new WorkflowError('operation-conflict', 'operation_id was used with different creation input')
       if (previous?.cardId) { saved.push('card'); card = await this.reader.card(previous.cardId, true); this.reader.confirm(card); return result('saved', 'already-saved', 'Card creation previously confirmed; current card returned', ['card']) }
-      // A creation receipt is in the initial page children, so lost responses and
-      // restarts can recover it without an authoritative offline queue or schema.
-      const candidates = await this.content.request(`data_sources/${config.dataSourceId}/query`, 'POST', { page_size: 100, filter: { property: 'Name', title: { equals: input.name } } })
-      if (!Array.isArray(candidates.results) || candidates.has_more !== false) throw new WorkflowError('create-scope-incomplete', 'Matching-name search is incomplete; cannot safely deduplicate creation')
-      for (const raw of candidates.results) {
-        const candidate = notionCard(raw)
-        if ((await this.content.sections(candidate.id)).some(section => section.text.split('\n').includes(marker))) {
-          card = candidate; saved.push('card')
-          await this.creations.put(key, signature, card.id)
-          card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
-          await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
-          return result('saved', 'already-saved', 'Card creation already saved', ['card'])
-        }
+      const candidate = await this.findCreation(actor, input.operation_id, input.name)
+      if (candidate) {
+        card = candidate; saved.push('card')
+        await this.creations.put(key, signature, card.id)
+        card = await this.reader.card(candidate.id, true); this.reader.confirm(card)
+        await this.changed({ card, actor, operationId: input.operation_id, properties: {} })
+        return result('saved', 'already-saved', 'Card creation already saved', ['card'])
       }
       if (previous) return result('partially-saved', 'create-unconfirmed', 'An earlier creation is unconfirmed and its receipt is not visible in the current name search. Reconcile that card before using a new operation_id; this retry will not create a duplicate.')
       const schema = await this.content.request(`data_sources/${config.dataSourceId}`)
       const template = { properties: Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, value]) => [name, { type: (value as { type: string }).type }])) } as WorkCard
       const values = { ...input.properties, Name: input.name, Owner: input.owner, Area: input.area,
-        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor }
+        Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
-      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value)))]
+      const children = [paragraph(`Created by: ${actor}\n${marker}`), ...(handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value))))]
       await this.creations.put(key, signature)
       attempted = true
       let created: Awaited<ReturnType<WorkflowContent['request']>>
@@ -419,9 +466,9 @@ export class WorkflowOperations {
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
       const fields = Object.keys(values).filter(name => this.matches(card!, name, this.normalized(card!, name, values[name as keyof typeof values])))
       saved.push(...fields)
-      const sections = await this.content.sections(card.id)
-      const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.text === child.paragraph.rich_text.map(r => r.text.content).join('')))
-      await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(child => child.paragraph.rich_text.map(r => r.text.content).join('')) })
+      const sections = await this.content.sections(card.id, true)
+      const complete = fields.length === Object.keys(values).length && children.every(child => sections.some(section => section.type === child.type && section.text === createBlockText(child)))
+      await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(createBlockText) })
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)

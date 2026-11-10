@@ -86,6 +86,7 @@ it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls
   expect(fixture.requests).toHaveLength(0)
 })
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
+  expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
   for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents']]) {
     expect(readerScope(`/repos/fortresspower/cmsandbox/${suffix}`).permissions).toEqual({ metadata: 'read', [permission!]: 'read' })
   }

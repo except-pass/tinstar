@@ -59,6 +59,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   else if (/^\/commits\/[a-f0-9]{40,64}\/check-runs$/.test(suffix)) permissions.checks = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/(?:status|statuses)$/.test(suffix)) permissions.statuses = 'read'
   else if (/^\/actions\/(?:runs(?:\/[1-9]\d*(?:\/jobs)?)?|jobs\/[1-9]\d*|workflows\/[1-9]\d*)$/.test(suffix)) permissions.actions = 'read'
+  else if (/^\/rules\/branches\/[^/]+$/.test(suffix)) { /* Active branch rules require metadata read only. */ }
   else if (/^\/branches\/[^/]+$/.test(suffix) || /^\/contents\/\.github\/workflows\/[\w.-]+\.ya?ml$/.test(suffix)) permissions.contents = 'read'
   else throw new Error('Reader operation outside PR evidence scope')
   for (const [key, value] of parsed.searchParams) {

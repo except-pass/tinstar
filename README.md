@@ -21,7 +21,7 @@ Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and 
 
 The [Releases page](docs/features/releases.md) groups explicit PR↔card associations in a dense PR-first queue, with read-only production reconciliation and card completion previews. See its reference for evidence requirements and local link/unlink controls.
 
-For actions on selected PRs in PRs or Releases, see the [installed PR actions guide](docs/pr-actions.md).
+For actions on selected PRs in PRs or Releases, see the [PR actions guide](docs/pr-actions.md).
 
 The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only operational-card audit, offline JSON replay and opt-in local semantic pilot.
 
@@ -35,7 +35,7 @@ Expand a Desk conversation and use **Reply to First Mate** to continue inline wi
 
 Use **Open in ChatGPT** on an Overview work card or PR row for an external discussion. See the [Open in ChatGPT reference](docs/features/open-in-chatgpt.md) for URL prefill limits, copy-prompt recovery and metadata privacy.
 
-The activity strip provides **Overview**, **Decisions**, **PRs** and **Releases**. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the read-only review table, repository scope and required owner access. The **Desk** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
+The activity strip provides **Overview**, **Decisions**, **PRs** and **Releases**. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the review table, repository scope and required owner access. The **Desk** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
 A worker opens a live terminal with its objective, project, worktree, branch and pull request in a detail rail (**Details** on windows 1200px wide or narrower). In the collapsible prompt composer, **Ctrl+Enter** (or **Cmd+Enter**) pastes the prompt into the worker's pane and presses Enter. It retains recent prompts, stash slots and quick menu keys. Paste a screenshot or drop a file to upload it under the config root's `screenshots/` folder and insert its `@path`. Mark a worker **Direct** in the detail rail to indicate you are working with it yourself; First Mate receives an inbox note when the mark changes. A snapshot kind of `secondmate` shows a **Second mate** badge in that rail. Each worker keeps the same face and color across reloads.
 

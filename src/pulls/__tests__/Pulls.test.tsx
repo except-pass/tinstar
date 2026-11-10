@@ -147,3 +147,25 @@ it.each([
   }
   if (label !== 'Confirmed') expect(screen.queryByText(/^Confirmed work:/)).toBeNull()
 })
+
+it('selects two PRs, sends one click, shows the card link and keeps both selected', async () => {
+  let finish!: (value: Response) => void
+  const sent = new Promise<Response>(resolve => { finish = resolve })
+  const read = vi.fn((input: string, _init?: RequestInit) => input === '/api/pulls/clawson-merge' ? sent : Promise.resolve(new Response(JSON.stringify({ ok: true, data: { pulls: pulls.slice(0, 2), repositories: [], warnings: [], associationsComplete: true } }))))
+  vi.stubGlobal('fetch', read)
+  render(<Pulls />)
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Select alpha/repo#1' }))
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha/repo#2' }))
+  const button = screen.getByRole('button', { name: 'Send to Clawson for admin merge' })
+  fireEvent.click(button); fireEvent.click(button)
+  expect(read.mock.calls.filter(([path]) => path === '/api/pulls/clawson-merge')).toHaveLength(1)
+  const payload = JSON.parse(String(read.mock.calls.find(([path]) => path === '/api/pulls/clawson-merge')![1]!.body))
+  expect(payload.targets).toEqual(pulls.slice(0, 2).map(({ url, head }) => ({ url, head })))
+  finish(new Response(JSON.stringify({ ok: true, data: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc', message: 'Sent to Clawson for admin merge.' } })))
+  expect(await screen.findByRole('link', { name: 'Open Clawson card ↗' })).toHaveAttribute('href', 'https://www.notion.so/cccccccccccccccccccccccccccccccc')
+  expect(screen.getByText('2 selected')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Send to Clawson for admin merge' }))
+  await waitFor(() => expect(read.mock.calls.filter(([path]) => path === '/api/pulls/clawson-merge')).toHaveLength(2))
+  const retry = JSON.parse(String(read.mock.calls.filter(([path]) => path === '/api/pulls/clawson-merge')[1]![1]!.body))
+  expect(retry.operation_id).toBe(payload.operation_id)
+})

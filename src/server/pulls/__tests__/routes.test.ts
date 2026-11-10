@@ -220,3 +220,40 @@ it('retains an Evidence-only merge ask outside complete authored-or-associated i
     expect(restricted.needsWill?.[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
   } finally { context.mockRestore() }
 })
+
+it('requires the PR owner principal and UI intent before reading heads or creating a Clawson card', async () => {
+  const { WorkflowOperations } = await import('../../reconciliation/workflow')
+  const { WorkReader } = await import('../../reconciliation/workReader')
+  const { NotionApi } = await import('../../reconciliation/notionApi')
+  const root = await mkdtemp(join(tmpdir(), 'pr-clawson-owner-'))
+  await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['owner/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+  const workflow = new WorkflowOperations(new WorkReader(undefined, new NotionApi()), async () => [])
+  const create = vi.spyOn(workflow, 'createClawsonMerge').mockImplementation(async (input, _actor, prepare) => {
+    await prepare()
+    return { outcome: 'saved', code: 'saved', message: 'saved', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }
+  })
+  const prepare = vi.fn(async () => ({ at: new Date().toISOString(), name: 'Admin merge 2 PRs: owner/repo', brief: 'Exact selected PRs only', script: 'set -euo pipefail' }))
+  const api = new PullsApi({ scene: async () => ({ ...fixtureScene(), searchIndex: { documents: [], notes: [] } }), workflow }, undefined, root, undefined, undefined, prepare)
+  const scope = vi.spyOn(api, 'origin').mockResolvedValue({} as never)
+  const server = createServer((req, res) => { void api.handle(req, res) }); server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  cleanups.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) })
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  seedOriginAllowlist((server.address() as { port: number }).port)
+  const body = JSON.stringify({ operation_id: randomUUID(), targets: [1, 2].map(number => ({ url: `https://github.com/owner/repo/pull/${number}`, head: 'a'.repeat(40) })) })
+  const headers = { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }
+  for (const login of [undefined, 'stranger@example.test']) {
+    expect((await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: { ...headers, ...(login ? { 'Tailscale-User-Login': login } : {}) }, body })).status).toBe(403)
+  }
+  expect(create).not.toHaveBeenCalled(); expect(scope).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled()
+  const ownerHeaders = { ...headers, 'Tailscale-User-Login': 'owner@example.test' }
+  expect((await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: { ...ownerHeaders, Origin: 'https://evil.invalid' }, body })).status).toBe(403)
+  expect(create).not.toHaveBeenCalled()
+  const result = await (await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: ownerHeaders, body })).json()
+  expect(result.data.url).toBe('https://www.notion.so/cccccccccccccccccccccccccccccccc')
+  expect(scope).toHaveBeenCalledTimes(2)
+  expect(create.mock.calls[0]![1]).toBe('owner@example.test')
+  prepare.mockRejectedValueOnce(new Error('Nothing sent to Clawson. Required CI is red.'))
+  const red = await fetch(`${base}/api/pulls/clawson-merge`, { method: 'POST', headers: ownerHeaders, body })
+  expect(red.status).toBe(409)
+  expect((await red.json()).error.message).toContain('Required CI is red')
+})

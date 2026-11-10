@@ -36,7 +36,7 @@ outside channel is bounded typed broker IPC. Seccomp denies process creation and
 limits bound CPU, memory, tasks, files, descriptors, output and wall clock. There is
 one source slot to protect shared host capacity. Unsupported isolation refuses to run.
 
-Admin Merge is **globally disabled**, including when a fixture CI matrix is complete.
+The installed-action Admin Merge capability is **globally disabled**, including when a fixture CI matrix is complete.
 No live Merge App profile, key reader or adapter is reachable. The existing
 [cmsandbox check inventory](../data/tinstar-pr-ops-actions/cmsandbox-check-policy.v2.json)
 still enforces its incomplete-workload holds; completing it does not activate Merge.
@@ -73,3 +73,36 @@ No test creates an App, mints a token against GitHub or writes to GitHub. Owner-
 App registration, key placement, activation, read verification, limits and rollback
 are in [provisioning.md](../data/tinstar-pr-ops-actions/provisioning.md). Merge provisioning
 is not requested.
+
+## Send selected PRs to Clawson for admin merge
+
+The Pulls view has a built-in **Send to Clawson for admin merge** action for the
+same authenticated owner principal used by PR reads. Select up to ten PRs, then
+click once. Tin Star checks their current GitHub heads, open/draft/conflict state,
+active branch rules and branch protection requirements, check runs and commit
+statuses. A changed head or any failed, pending, missing required or unreadable
+check stops the handoff with the affected PR and reason. This prevents a card
+from granting merge permission against an unverified or different commit.
+
+One click creates one card through `create_work`'s shared workflow writer and
+creation receipts: Owner **Clawson**, Status **In Progress**, Next check-in at the
+click time, and Will action **Merge**. The card records the authenticated owner’s
+merge word for only the listed URLs and exact heads, with one command per PR:
+
+```text
+gh pr merge <url> --squash --admin --match-head-commit <sha>
+```
+
+The card uses an **Authority** heading and a **Step 1 (run once)** Bash code
+block. Before each merge, the script checks the recorded head, `MERGEABLE` state,
+and zero checks in the `fail` or `pending` buckets. `set -euo pipefail` stops the
+batch on a failed line. Clawson must post the output on any stop, or post each
+final state and merge commit and hand back. Nothing else is authorized: no other
+PR and no deploy. Red and pending checks both stop the merge. The button shows the card link and preserves selection. Double-clicks
+and retries of the same selection in the mounted view reuse the same operation receipt.
+If a creation response is lost, retrying recovers the existing card before fresh
+GitHub preflight, even if a selected PR has since merged or changed or GitHub is
+unavailable. Recovery searches all pages matching the selection-derived title for
+the exact owner and operation receipt; an unconfirmed creation is never repeated.
+Fresh preflight is required before a new creation. Tin Star
+does not execute these commands; the installed-action Merge restrictions above still apply.
