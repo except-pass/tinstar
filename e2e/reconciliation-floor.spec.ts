@@ -1224,9 +1224,9 @@ for (const width of [1440, 390]) test(`single-row toolbar owner dial revision at
   await page.reload()
   await center.press('ArrowLeft')
   await clickStatusSlice(page, 'Cards: Waiting For, 1')
-  const waiting = page.getByRole('button', { name: 'Remove cards: Waiting For', exact: true })
+  const waiting = page.getByRole('button', { name: 'Remove Cards: Waiting For', exact: true })
   await waiting.scrollIntoViewIfNeeded()
-  await expect(waiting).toHaveText('▤ Waiting For ×')
+  await expect(waiting).toHaveText(/^Cards:\s*Waiting For\s*×$/)
   expect(await waiting.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
 })
 

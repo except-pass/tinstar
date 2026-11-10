@@ -54,7 +54,7 @@ describe('Waiting For in the native Overview', () => {
     fireEvent.click(chip)
     fireEvent.click(chip)
     expect(chip).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Remove cards: Waiting For' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Remove Cards: Waiting For' })).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
   })
   it('preserves worker rows and organizer, filters only the Work groups and restores on exit', () => {
