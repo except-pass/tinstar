@@ -295,12 +295,15 @@ describe('deterministic read-only Janitor', () => {
   it('handles missing, invalid and overdue check-ins without implementing a PM verdict', () => {
     const snapshot = source([card(1), card(2, 'Past', { 'Next check-in': { start: '2026-11-05' } }),
       card(3, 'Missing', { 'Next check-in': null }), card(4, 'Invalid month', { 'Next check-in': { start: '2026-13-99' } }),
-      card(5, 'Invalid day', { 'Next check-in': { start: '2026-02-30' } }), card(6, 'Invalid type', { 'Next check-in': { start: 123 } })])
+      card(5, 'Invalid day', { 'Next check-in': { start: '2026-02-30' } }), card(6, 'Invalid type', { 'Next check-in': { start: 123 } }),
+      card(7, 'Future appointment', { 'Next check-in': { start: '2026-11-06T16:00:00Z' } })])
     const report = buildJanitorReport({ snapshot })
     const checkins = report.proposals.filter(p => p.category === 'check-in')
-    expect(checkins.map(p => p.pages[0]!.id).sort()).toEqual([2, 3, 4, 5, 6].map(fixtureId))
+    expect(checkins.map(p => p.pages[0]!.id).sort()).toEqual([1, 2, 3, 4, 5, 6].map(fixtureId))
     expect(checkins.every(p => p.abstainReason?.includes('No working-hour SLA'))).toBe(true)
-    expect(checkins.some(p => p.pages[0]!.id === fixtureId(1))).toBe(false)
+    // At 10 AM ET today's date-only 9 AM appointment is already overdue.
+    expect(checkins.some(p => p.pages[0]!.id === fixtureId(1))).toBe(true)
+    expect(checkins.some(p => p.pages[0]!.id === fixtureId(7))).toBe(false)
   })
 
   it('surfaces ambiguous ownership/relations and reuses worker-link diagnostics without assignment inference', () => {
