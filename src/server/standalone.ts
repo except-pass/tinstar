@@ -82,7 +82,7 @@ export function startServer(opts: ServerOptions) {
   const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
   const releaseWriter = new ReleaseAutomationWriter(getConfigRoot(), reconciliation.releaseTransport(), () => releases.read(false, true))
-  reconciliation.releaseDesk = cards => releaseWriter.desk(cards)
+  reconciliation.releaseDesk = () => releaseWriter.desk()
   const reconcileProduction = () => { void releaseWriter.run().catch(() => log.warn('releases', 'Automatic reconciliation could not read its sources or durable receipts; inspect Releases configuration and writer-receipts.json.')) }
   // This scheduled deterministic pass is independent of GET and custom actions.
   // Missing/false automation.json returns before any board or evidence reads.

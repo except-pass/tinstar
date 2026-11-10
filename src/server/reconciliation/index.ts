@@ -32,7 +32,7 @@ export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['inte
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
-  releaseDesk?: (cards: WorkCard[]) => Promise<import('./queue').QueueItem[]>
+  releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
   readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
   readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
@@ -187,7 +187,7 @@ export class ReconciliationSources {
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
     if (this.releaseDesk && snapshot.intentions.status === 'fresh' && snapshot.intentions.coverage === 'complete' && snapshot.intentions.data) {
-      try { queue.items.push(...await this.releaseDesk(snapshot.intentions.data.cards)) }
+      try { queue.items.push(...await this.releaseDesk()) }
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
       for (const readiness of Object.keys(queue.counts)) queue.counts[readiness] = queue.items.filter(item => item.readiness === readiness).length
     }

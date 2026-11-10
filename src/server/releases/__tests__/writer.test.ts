@@ -60,7 +60,7 @@ describe('default-OFF production writer and shared Desk publication', () => {
     const f = await setup(), writer = f.writer()
     await writer.run()
     expect(f.scene.cards.map(card => card.source.properties.Status!.value)).toEqual(['In Progress', 'Done'])
-    const queue = await writer.desk(f.scene.cards.map(card => card.source))
+    const queue = await writer.desk()
     expect(queue).toHaveLength(1)
     expect(queue[0]).toMatchObject({ title: expect.stringContaining('Ada:'), readiness: 'ready-now', oneTouch: false, cardIds: [f.scene.cards[0]!.id] })
     const desk = { ...buildQueue(fixtureSources()), items: queue }
@@ -75,9 +75,9 @@ describe('default-OFF production writer and shared Desk publication', () => {
     // can finish the check; observing Done removes its actionable queue entry.
     expect(f.scene.cards[0]!.source.properties.Status!.value).toBe('In Progress')
     f.scene.cards[0]!.source.properties.Status!.value = 'Done'
-    expect(await writer.desk(f.scene.cards.map(card => card.source))).toEqual([])
+    expect(await writer.desk()).toEqual([])
     f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
-    expect(await f.writer().desk(f.scene.cards.map(card => card.source))).toEqual([])
+    expect(await f.writer().desk()).toEqual([])
   })
   it('completes ownerless unchecked work and retains post-transition projections', async () => {
     const f = await setup()
@@ -103,7 +103,7 @@ describe('default-OFF production writer and shared Desk publication', () => {
     f.scene.cards[0]!.source.properties.Status!.value = 'Done'
     await writer.run()
     f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
-    expect(await f.writer().desk(f.scene.cards.map(card => card.source))).toEqual([])
+    expect(await f.writer().desk()).toEqual([])
     const reopened = await f.read()
     expect(filterReleases(reopened.pulls, 'Verify in Prod')).toEqual([])
     expect(filterReleases(reopened.pulls, 'Shipped')).toHaveLength(1)
@@ -112,14 +112,52 @@ describe('default-OFF production writer and shared Desk publication', () => {
     f.scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
     f.evidence.receipts[0]!.id = 'next-prod-run'
     await writer.run()
-    const queue = await f.writer().desk(f.scene.cards.map(card => card.source))
+    const queue = await f.writer().desk()
     expect(queue).toHaveLength(1)
     expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toHaveLength(1)
     await writer.run()
-    expect(await writer.desk(f.scene.cards.map(card => card.source))).toHaveLength(1)
+    expect(await writer.desk()).toHaveLength(1)
     const routes = (await writer.receipts()).filter(row => row.proposal.desk)
     expect(routes).toHaveLength(2)
     expect(queue[0]!.id).toBe(routes[1]!.proposal.desk!.item.id)
+  })
+  it('reads current cards after a Desk request waits behind a routing writer', async () => {
+    const f = await setup(), writer = f.writer()
+    let release!: () => void, entered!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const transition = f.transport.transition
+    f.transport.transition = vi.fn(async (card, proposal) => {
+      if (proposal.desk) { entered(); await paused }
+      await transition(card, proposal)
+    })
+    const running = writer.run()
+    await started
+    const captured = structuredClone(f.scene.cards.map(card => card.source))
+    expect(captured[0]!.properties.Status!.value).toBe('Waiting for Prod Release')
+    const desk = writer.desk()
+    release()
+    await running
+    expect(await desk).toHaveLength(1)
+    expect((await writer.receipts()).find(row => row.proposal.desk)?.verificationResolvedAt).toBeUndefined()
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toHaveLength(1)
+    const read = f.read.getMockImplementation()!
+    const stale = structuredClone(await read())
+    stale.reconciliation!.cards[0]!.status = 'Waiting for Prod Release'
+    f.read.mockResolvedValueOnce(stale)
+    await writer.run()
+    expect(await writer.desk()).toHaveLength(1)
+    f.scene.cards[0]!.source.properties.Status!.value = 'Done'
+    expect(await writer.desk()).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'In Progress'
+    expect(await writer.desk()).toEqual([])
+    expect(filterReleases((await f.read()).pulls, 'Verify in Prod')).toEqual([])
+    f.scene.cards[0]!.source.properties.Status!.value = 'Waiting for Prod Release'
+    f.evidence.receipts[0]!.id = 'next-prod-run'
+    await writer.run()
+    expect(await writer.desk()).toHaveLength(1)
+    await writer.run()
+    expect(await writer.desk()).toHaveLength(1)
   })
   it('waits for both required PRs and evaluates one shared PR/card edge independently', async () => {
     const f = await setup()

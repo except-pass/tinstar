@@ -117,12 +117,7 @@ export class ReleaseAutomationWriter {
     if (!await this.enabled()) return { enabled: false, completed: [] }
     const journal = await this.journal(), data = await this.read()
     if (data.reconciliation?.sourceStatus !== 'fresh') return { enabled: true, held: 'Current production evidence is required; historical snapshots never authorize writes', completed: [] }
-    const unresolved = new Set(unresolvedVerificationRecords(journal.records))
-    for (const row of journal.records) {
-      if (row.phase !== 'done' || !row.proposal.desk || row.verificationResolvedAt) continue
-      const card = data.reconciliation.cards.find(card => card.cardId === row.proposal.cardId)
-      if (data.associationsComplete && (!unresolved.has(row) || !card || card.status !== 'In Progress' || !card.requiresProductionVerification)) row.verificationResolvedAt = this.now()
-    }
+    await this.verificationCards(journal)
     const proposals = data.automation?.proposals ?? [], completed: string[] = []
     for (const proposal of proposals) {
       if (!journal.records.some(row => row.proposal.id === proposal.id)) journal.records.push({ proposal, phase: 'pending', createdAt: this.now(), updatedAt: this.now() })
@@ -176,20 +171,29 @@ export class ReleaseAutomationWriter {
   }
   /** Publish through the shared Desk queue, using current card/owner/status.
    * Only a confirmed opt-in route appears; reads never acknowledge verification. */
-  desk(cards: WorkCard[]): Promise<QueueItem[]> {
-    return this.exclusive(() => this.publishDesk(cards))
+  desk(): Promise<QueueItem[]> {
+    return this.exclusive(() => this.publishDesk())
   }
-  private async publishDesk(cards: WorkCard[]): Promise<QueueItem[]> {
-    const result: QueueItem[] = []
-    const journal = await this.journal()
+  private async verificationCards(journal: Journal) {
+    const cards = new Map<string, WorkCard>()
     let changed = false
     const unresolved = new Set(unresolvedVerificationRecords(journal.records))
     for (const row of journal.records) {
-      const { proposal } = row, card = cards.find(card => card.id === proposal.cardId)
-      if (row.phase !== 'done' || !proposal.desk || row.verificationResolvedAt) continue
-      if (!unresolved.has(row) || !card || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) {
-        row.verificationResolvedAt = this.now(); changed = true; continue
-      }
+      if (row.phase !== 'done' || !row.proposal.desk || row.verificationResolvedAt) continue
+      const card = await this.transport.card(row.proposal.cardId)
+      if (!unresolved.has(row) || card.archived || card.in_trash || property(card, 'Status') !== 'In Progress' || property(card, 'Requires production verification') !== true) {
+        row.verificationResolvedAt = this.now(); changed = true
+      } else cards.set(row.proposal.cardId, card)
+    }
+    return { cards, changed }
+  }
+  private async publishDesk(): Promise<QueueItem[]> {
+    const result: QueueItem[] = []
+    const journal = await this.journal()
+    const { cards, changed } = await this.verificationCards(journal)
+    for (const row of unresolvedVerificationRecords(journal.records)) {
+      const { proposal } = row, card = cards.get(proposal.cardId)
+      if (!card || !proposal.desk) continue
       const owner = String(property(card, 'Owner') ?? '').trim()
       if (!owner) continue
       const item = proposal.desk.item
