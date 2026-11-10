@@ -2,4 +2,4 @@
 
 @media(max-width:600px){.ov-toolbar>.session-connection{order:-1}.ov-toolbar .session-connection-label{display:none}.ov-toolbar .session-connection-menu{position:fixed;top:47px;left:66px;right:6px;width:auto;max-width:none}}
 
-.ov-inspector.flashed{border-color:#dfff63;box-shadow:inset 0 0 0 2px #dfff63,-14px 0 32px #0009}
+.ov .ov-inspector.flashed{border-color:#dfff63;box-shadow:inset 0 0 0 2px #dfff63,-14px 0 32px #0009}
