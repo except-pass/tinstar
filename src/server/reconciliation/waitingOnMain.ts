@@ -19,7 +19,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
   const items: MainWaitItem[] = [], unknown: string[] = [], complete = new Set<string>()
   const board = ageObservation(snapshot.intentions, now)
   const boardFresh = ['fresh', 'partial'].includes(board.status) && !!board.data
-  if (board.status === 'fresh' && board.coverage === 'complete' && !board.data?.hasMore) complete.add('board')
+  if (board.status === 'fresh' && board.coverage === 'complete' && board.data && !board.data.hasMore) complete.add('board')
   else unknown.push('Board waits unknown or incomplete')
   for (const card of board.data?.cards ?? []) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')

@@ -7,6 +7,7 @@ import { namesMain, MAIN_WAIT_INTERVAL as FOUR_HOURS, waitAlertDue, type MainWai
 import { MAIN_WAIT_CARD, MAIN_WAIT_OWNER, mainWaitCandidates, mainWaitComment, mainWaitNotifier, WaitingOnMain } from '../waitingOnMain'
 import { NotionApi } from '../notionApi'
 import { fleetObservation } from '../fleet'
+import { ReconciliationSources } from '../index'
 
 const now = Date.parse('2026-11-11T12:00:00Z')
 const roots: string[] = []
@@ -53,6 +54,18 @@ describe('Waiting on main', () => {
     expect(mainWaitCandidates(value, now).items.find(row => row.kind === 'mate')?.fresh).toBe(true)
     value.fleet[1]!.observation.data!.generated = new Date(now - 300_000).toISOString()
     expect(mainWaitCandidates(value, now).items.find(row => row.kind === 'mate')?.fresh).toBe(false)
+  })
+  it('keeps the backstop global when a tool asks for a filtered scene', async () => {
+    const directory = await root(), full = snapshot(), filtered = snapshot()
+    filtered.intentions.data!.cards = []
+    const sources = new ReconciliationSources({ fleet: [], warnings: [] }, fetch, undefined, directory)
+    vi.spyOn(sources, 'snapshot').mockImplementation(async (_force, scope) => ({ ...(scope?.owner ? filtered : full), diagnostics: { notion: sources.notionApi.diagnostics } }))
+    const waiting = vi.fn(async (value: typeof full) => ({ items: mainWaitCandidates(value, now).items, unknown: [] }))
+    sources.waitingOnMain = waiting
+    const scene = await sources.scene(false, { owner: 'Will' })
+    expect(scene.cards).toHaveLength(0)
+    expect(scene.waitingOnMain?.items).toHaveLength(2)
+    expect(waiting.mock.calls[0]?.[0].intentions).toBe(full.intentions)
   })
   it('enforces the exact four-hour boundary', () => {
     expect(waitAlertDue(new Date(now - FOUR_HOURS + 1).toISOString(), null, now)).toBe(false)

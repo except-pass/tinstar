@@ -185,7 +185,10 @@ export class ReconciliationSources {
       const indicators = await this.checkInIndicators()
       for (const card of scene.cards) card.checkInRequest = indicators.get(card.id)
     }
-    return { ...scene, searchIndex: this.search.get(scene), ...(this.waitingOnMain ? { waitingOnMain: await this.waitingOnMain(snapshot) } : {}) }
+    // Filtered tool reads must not close waits outside their requested scope.
+    const filtered = Object.entries(scope).some(([key, value]) => key !== 'history' && value !== undefined)
+    const waits = this.waitingOnMain ? await this.waitingOnMain(filtered ? await this.snapshot() : snapshot) : undefined
+    return { ...scene, searchIndex: this.search.get(scene), ...(waits ? { waitingOnMain: waits } : {}) }
   }
 
 
