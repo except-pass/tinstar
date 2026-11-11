@@ -152,7 +152,7 @@ describe('deployment audit reconciliation', () => {
     const deployment: FloorDeployment = { action: 'floor-deployment', id: review.deployment_id, time: new Date().toISOString(), oldSha: 'e'.repeat(40), newSha: sha,
       membershipComplete: true, pulls: [{ url: pr, head, mergeSha: sha }], ownerHome: null, evidence: [], nonReviewable: [], warnings: [] }
     const newer = { ...deployment, id: `floor:${head}`, oldSha: sha, newSha: head, pulls: [] }
-    const receipts = [deployment, { action: 'floor-smoke', deploymentId: deployment.id, newSha: sha, time: new Date().toISOString(), passed: true, receipt: 'Historical guarded smoke' }, newer]
+    const receipts = [{ ...deployment, pulls: [], membershipComplete: false, warnings: ['Discovery failed'] }, deployment, { action: 'floor-smoke', deploymentId: deployment.id, newSha: sha, time: new Date().toISOString(), passed: true, receipt: 'Historical guarded smoke' }, newer]
     await writeFile(audit.path, receipts.map(row => JSON.stringify(row)).join('\n') + '\n')
     const workflow = f.restart(); workflow.validateReview = input => audit.validate(input, scene(), associations)
     const update = vi.fn(workflow.update.bind(workflow)), deliver = vi.fn(async () => ({ saved: true }))

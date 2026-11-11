@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer, type Server } from 'node:http'
-import { recordLateEvidence, recordSmoke } from '../../scripts/deploy/review-handoff.mjs'
+import { recordDeployment, recordLateEvidence, recordSmoke } from '../../scripts/deploy/review-handoff.mjs'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -44,6 +44,44 @@ describe('late evidence operator command', () => {
     await writeFile(f.manifest, JSON.stringify({ nonReviewable: [], evidence: [{ review: Object.fromEntries(Object.entries(f.review).reverse()), card_id: card }] }))
     await run()
     expect(await readFile(f.audit, 'utf8')).toBe(saved)
+  })
+  it('uses verified retry membership for smoke and historical evidence after failed discovery', async () => {
+    const f = await fixture()
+    await writeFile(f.audit, '')
+    let discoveryFails = true
+    const execute = (command: string, args: string[]) => {
+      if (command === 'gh-axi') {
+        if (discoveryFails) throw new Error('Membership read unavailable')
+        return `rows: ${JSON.stringify(f.deployment.pulls)}`
+      }
+      if (args.includes('rev-parse') || args.includes('rev-list')) return sha
+      if (args.includes('merge-base')) return ''
+      throw new Error('Unexpected command')
+    }
+    const deployEnv = { ...f.env, TINSTAR_PREVIOUS_DEPLOYED_SHA: head }
+    const failed = await recordDeployment(deployEnv, execute)
+    expect(failed).toMatchObject({ pulls: [], membershipComplete: false })
+    discoveryFails = false
+    const verified = await recordDeployment(deployEnv, execute)
+    expect(verified).toMatchObject({ oldSha: head, newSha: sha, pulls: f.deployment.pulls, membershipComplete: true })
+    const server = createServer((req, res) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(req.url === '/api/deployment' ? { ok: true, data: { sha } } : { ok: true, data: { reviewExceptions: [], warnings: [] } })) })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    await recordSmoke({ ...f.env, TINSTAR_BRIDGE_URL: base, TINSTAR_OWNER_URL: base })
+    await writeFile(f.audit, (await readFile(f.audit, 'utf8')) + JSON.stringify(f.newer) + '\n')
+    f.review.instructions = 'Inspect the historically deployed panel'
+    await writeFile(f.manifest, JSON.stringify({ evidence: [{ card_id: card, review: f.review }] }))
+    await recordLateEvidence(f.deployment.id, f.env)
+    const saved = await readFile(f.audit, 'utf8')
+    await recordLateEvidence(f.deployment.id, f.env)
+    expect(await readFile(f.audit, 'utf8')).toBe(saved)
+    const records = saved.trim().split('\n').map(line => JSON.parse(line))
+    expect(records[0]).toEqual(failed)
+    expect(records[1]).toEqual(verified)
+    expect(records.at(-1)).toMatchObject({ action: 'floor-review-evidence', deploymentId: verified.id })
+    const repeated = await recordDeployment({ ...deployEnv, TINSTAR_PREVIOUS_DEPLOYED_SHA: sha }, execute)
+    expect(repeated).toMatchObject({ oldSha: head, pulls: verified.pulls, membershipComplete: true })
   })
   it.each(['unknown', 'sha', 'tested-sha', 'head', 'pull', 'classification', 'proof', 'url', 'home'])('refuses %s evidence without changing the audit', async scenario => {
     const f = await fixture()

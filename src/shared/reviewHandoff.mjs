@@ -56,8 +56,7 @@ export function deploymentsWithEvidence(events) {
   for (const event of events) {
     if (event.action === 'floor-deployment') {
       const receipt = /** @type {T} */ (event)
-      const previous = deployments.get(receipt.id)
-      deployments.set(receipt.id, previous ? { ...previous, ownerHome: receipt.ownerHome, evidence: receipt.evidence, nonReviewable: receipt.nonReviewable } : receipt)
+      deployments.set(receipt.id, receipt)
     } else if (event.action === 'floor-review-evidence') {
       const deployment = deployments.get(event.deploymentId)
       if (!deployment) throw new Error('Late review evidence has no existing deployment receipt')
