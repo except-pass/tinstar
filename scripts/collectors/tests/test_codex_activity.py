@@ -208,6 +208,63 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertTrue(marker.exists())
 
+    def test_parent_resolutions_publish_secondmate_keys_from_the_parent_home(self):
+        home = self.root / 'main'
+        state = home / 'state'
+        state.mkdir(parents=True)
+        (state / 'remote-mate.status').write_text(
+            'needs-decision [key=api] [at=100]: choose\n'
+            'resolved [key=api] [at=50]: first\n'
+            'resolved [key=other] [at=150]: closed\n'
+            'resolved [key=unstamped]: answered: no time\n'
+            'resolved [key=dup] [at=1] [at=2]: ambiguous\n'
+            'resolved [key=pad] [at=01]: padded\n'
+            'working [key=other] [at=160]: not a close\n'
+            'resolved [key=api] [at=200]: answered: use REST\n'
+            'resolved [key=partial] [at=999]: still writing')
+        (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')
+        (state / 'by-role.status').write_text('resolved [key=role-key] [at=50]: answered\n')
+        (state / 'from-registry.status').write_text(
+            'resolved [key=reg] [at=10]: first\nresolved [key=reg] [at=80]: later\n')
+        (state / 'quiet-mate.status').mkdir()
+        (home / 'escape.status').write_text('resolved [key=escaped] [at=1]: no\n')
+        snapshot = {
+            'schema': 'fm-fleet-snapshot.v1', 'fm_home': str(home),
+            'tasks': [
+                {'id': 'remote-mate', 'kind': 'secondmate', 'harness': 'claude'},
+                {'id': 'quiet-mate', 'kind': 'secondmate', 'harness': 'claude'},
+                {'id': 'absent-mate', 'kind': 'secondmate', 'harness': 'claude'},
+                {'id': 'ship-worker', 'kind': 'ship', 'harness': 'claude'},
+                {'id': 'by-role', 'role': 'secondmate', 'harness': 'claude'},
+                {'id': '../escape', 'kind': 'secondmate', 'harness': 'claude'},
+            ],
+            'secondmate_current': {'records': [{'id': 'from-registry'}, {'id': 'remote-mate'}]},
+        }
+        published = collector.parent_resolutions(str(home), snapshot, NOW)
+        self.assertEqual(published['status'], 'unknown')
+        self.assertEqual(published['observed_at'], collector.iso(NOW.timestamp()))
+        self.assertEqual(published['mates']['remote-mate'], {'status': 'known', 'keys': [
+            {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}]})
+        self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}]})
+        self.assertEqual(published['mates']['from-registry']['keys'], [{'key': 'reg', 'at': 80}])
+        self.assertEqual(published['mates']['absent-mate'], {'status': 'known', 'keys': []})
+        self.assertEqual(published['mates']['quiet-mate'], {'status': 'unknown', 'keys': []})
+        self.assertEqual(published['mates']['../escape'], {'status': 'unknown', 'keys': []})
+        self.assertNotIn('ship-worker', published['mates'])
+        self.assertNotIn('escaped', json.dumps(published))
+        script = home / 'bin/fm-fleet-snapshot.sh'
+        script.parent.mkdir()
+        script.write_text('#!/bin/sh\ncat <<\'JSON\'\n' + json.dumps(snapshot) + '\nJSON\n')
+        script.chmod(0o755)
+        collected = collector.collect(str(home), [], NOW)
+        self.assertEqual(collected['parent_resolutions']['mates']['remote-mate']['keys'],
+                         published['mates']['remote-mate']['keys'])
+
+    def test_parent_resolutions_omitted_when_the_home_has_no_secondmates(self):
+        home = self.home('plain')
+        self.assertIsNone(collector.parent_resolutions(str(home), {'tasks': []}, NOW))
+        self.assertNotIn('parent_resolutions', collector.collect(str(home), [], NOW))
+
     def test_cli_runs_home_snapshot_and_config_isolates_failures(self):
         home = self.home('fm')
         output = self.root / 'published.json'

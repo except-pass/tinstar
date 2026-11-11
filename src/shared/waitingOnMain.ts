@@ -12,6 +12,11 @@ export function mainWaitField(waitingFor: string, waitingForId: string): 'Waitin
 export const MAIN_WAIT_INTERVAL = 4 * 3600_000
 export interface ParentAsk { key: string; corr: string | null; state: 'blocked' | 'needs-decision'; at: number | null; text: string }
 export interface ParentAsks { status: 'known' | 'unknown'; observed_at: string; items: ParentAsk[] }
+/** One resolved key from a parent home's `state/<mate-id>.status`. */
+export interface ParentResolution { key: string; at: number }
+export interface ParentMateResolutions { status: 'known' | 'unknown'; keys: ParentResolution[] }
+/** Resolved keys main recorded, keyed by secondmate id. Unknown mates close nothing. */
+export interface ParentResolutions { status: 'known' | 'unknown'; observed_at: string; mates: Record<string, ParentMateResolutions> }
 export interface MainWaitItem {
   id: string; source: string; kind: 'card' | 'mate'; label: string; key: string; text: string
   since: string | null; ageBasis: 'status timestamp' | 'at least'; url: string | null; fresh: boolean

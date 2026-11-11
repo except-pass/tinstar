@@ -8,15 +8,37 @@ import { ageObservation } from './observation'
 import type { SourceSnapshot } from './index'
 import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
-import { mainHomeLabel, mainWaitField, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead } from '../../shared/waitingOnMain'
+import { mainHomeLabel, mainWaitField, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead, type ParentResolution } from '../../shared/waitingOnMain'
 
 export const MAIN_WAIT_OWNER = '84d29212-4a5b-49f1-91bf-92b7adeff516'
 export const MAIN_WAIT_CARD = '41550ce6d42281239fd4f9f20c901b80'
+
+/** A recorded resolution closes the ask when its time is at or after the ask.
+ * A missing list, or an ask with no timestamp, proves nothing and closes nothing. */
+export function parentAskClosed(ask: { key: string; at: number | null }, resolutions: readonly ParentResolution[] | undefined): boolean {
+  return ask.at !== null && !!resolutions?.some(row => row.key === ask.key && row.at >= ask.at!)
+}
+
+/** Main's published resolutions for this child. Stale, missing, or unknown mate data closes nothing. */
+function mainResolutionKeys(snapshot: SourceSnapshot, parentHome: string, childHome: string, now: number): ParentResolution[] | undefined {
+  const mainRow = snapshot.fleet.find(row => row.source.home === parentHome)
+  const observation = mainRow ? ageObservation(mainRow.observation, now) : undefined
+  const resolutions = observation?.data?.parent_resolutions
+  const generated = Date.parse(observation?.data?.generated ?? '')
+  const observed = Date.parse(resolutions?.observed_at ?? '')
+  const fresh = !!observation && !observation.error && Number.isFinite(generated) && now - generated < 300_000 && generated <= now + 60_000 &&
+    Number.isFinite(observed) && now - observed < 300_000 && observed <= now + 60_000
+  if (!fresh || !resolutions) return undefined
+  const mate = observation.data?.tasks.find(task => task.kind === 'secondmate' && task.paths.home === childHome && typeof task.id === 'string')
+  const entry = typeof mate?.id === 'string' ? resolutions.mates[mate.id] : undefined
+  return entry?.status === 'known' ? entry.keys : undefined
+}
 
 /** Positive records survive incomplete reads. Only a complete fresh source can
  * establish absence. Main identity comes from configured labels/parent links. */
 export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
   const items: MainWaitItem[] = [], unknown: string[] = [], complete = new Set<string>()
+  const resolutionsBySource = new Map<string, ParentResolution[]>()
   const board = ageObservation(snapshot.intentions, now)
   const boardFresh = ['fresh', 'partial'].includes(board.status) && !!board.data
   if (board.status === 'fresh' && board.coverage === 'complete' && board.data && !board.data.hasMore) complete.add('board')
@@ -48,12 +70,17 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
       Number.isFinite(observed) && now - observed < 300_000 && observed <= now + 60_000
     if (fresh && asks?.status === 'known') complete.add(source)
     else unknown.push(`${label}: parent asks unknown or stale`)
-    for (const ask of asks?.items ?? []) items.push({ id: JSON.stringify([source, ask.key]), source, kind: 'mate', label,
+    const resolutions = mainResolutionKeys(snapshot, row.source.parentHome, row.source.home, now)
+    if (resolutions) resolutionsBySource.set(source, resolutions)
+    for (const ask of asks?.items ?? []) {
+      if (parentAskClosed(ask, resolutions)) continue
+      items.push({ id: JSON.stringify([source, ask.key]), source, kind: 'mate', label,
       key: ask.key, text: ask.text, since: ask.at === null ? null : new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
       fresh: fresh && asks?.status === 'known' })
+    }
   }
   if (!snapshot.fleet.length) unknown.push('Fleet parent asks unknown; no homes configured')
-  return { items, unknown: [...new Set(unknown)], complete }
+  return { items, unknown: [...new Set(unknown)], complete, resolutionsBySource }
 }
 
 export function mainWaitComment(item: MainWaitItem | MainWaitItem[], mention: boolean, now = Date.now()) {
@@ -141,7 +168,9 @@ export class WaitingOnMain {
     const saved = new Map(state.rows.map(row => [row.item.id, row]))
     const seen = new Set(projection.items.map(item => item.id))
     for (const [id, row] of saved) {
-      if (!seen.has(id) && projection.complete.has(row.item.source)) saved.delete(id)
+      const resolved = row.item.kind === 'mate' && parentAskClosed({ key: row.item.key,
+        at: row.item.since === null ? null : Date.parse(row.item.since) / 1000 }, projection.resolutionsBySource.get(row.item.source))
+      if (resolved || (!seen.has(id) && projection.complete.has(row.item.source))) saved.delete(id)
       else row.item.fresh = false
     }
     for (const item of projection.items) {
