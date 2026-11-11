@@ -230,12 +230,16 @@ export class WorkflowOperations {
     }
     return results
   }
-  async reconcileDecisions(cardId: string, fleet?: SourceSnapshot['fleet'], force = true) {
+  decisionCensus() {
+    let census: Promise<SourceSnapshot['intentions']> | undefined
+    return () => census ??= this.reader.query({}, true)
+  }
+  async reconcileDecisions(cardId: string, fleet?: SourceSnapshot['fleet'], force = true, census = this.decisionCensus()) {
     const revision = JSON.stringify([this.reader.lastKnown(cardId)?.card.last_edited_time, fleet?.map(home => [home.source.home, home.observation.observedAt, home.observation.status]), await this.proposals?.revision()])
     const cached = this.decisionRefreshes.get(cardId)
     if (!force && cached && cached.until > Date.now() && cached.revision === revision) return cached.result
     const prior = this.locks.get(cardId) ?? Promise.resolve()
-    const result = prior.catch(() => {}).then(() => this.performDecisionReconcile(cardId, fleet, true))
+    const result = prior.catch(() => {}).then(() => this.performDecisionReconcile(cardId, fleet, true, census))
     this.locks.set(cardId, result)
     if (this.decisionRefreshes.size >= 200) this.decisionRefreshes.delete(this.decisionRefreshes.keys().next().value!)
     this.decisionRefreshes.set(cardId, { until: Date.now() + 30_000, revision, result })
@@ -243,7 +247,7 @@ export class WorkflowOperations {
     void result.finally(() => { if (this.locks.get(cardId) === result) this.locks.delete(cardId) }).catch(() => {})
     return result
   }
-  private async performDecisionReconcile(cardId: string, fleet?: SourceSnapshot['fleet'], repair = false) {
+  private async performDecisionReconcile(cardId: string, fleet?: SourceSnapshot['fleet'], repair = false, census = this.decisionCensus()) {
     let card = await this.reader.card(cardId, true)
     let notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
     const jsonLines = (prefix: string) => decisionRecordRows(notes, prefix)
@@ -276,7 +280,7 @@ export class WorkflowOperations {
       notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
     }
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
-      (text, marker) => this.content.note(cardId, text, marker), await this.proposals?.read(cardId, notes))
+      (text, marker) => this.content.note(cardId, text, marker), await this.proposals?.read(cardId, notes), census)
   }
   create(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
     const parsed = createWorkSchema.safeParse(input)
@@ -414,7 +418,7 @@ export class WorkflowOperations {
         const related = requests.filter(row => row.action === input.action && !answered.has(row.id))
         const preserve = related.length ? related.some(row => row.preserve_action) : tags.includes(input.action)
         set('Will action', [...new Set([...tags, input.action])])
-        const binding = input.source_request ? bindDecision(fleet!, input.source_request, card.id) : {}
+        const binding = input.source_request ? bindDecision(fleet!, input.source_request, card.id, await this.reader.query({}, true)) : {}
         note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\n${workflowMarkers.request} ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...(input.proposal ? { proposal: input.proposal, source_request_key: sourceRequestKey } : {}), ...binding })}`
       } else {
         let request = requests.find(row => row.id === input.request_id)
@@ -435,7 +439,7 @@ export class WorkflowOperations {
         if (input.source_request) {
           if (published?.source_request && requestKey(published.source_request) !== requestKey(input.source_request)) throw new WorkflowError('decision-conflict', 'This proposal is already bound to a different First Mate request')
           if (!published?.source_request) {
-            const binding = bindDecision(await this.fleet(), input.source_request, card.id)
+            const binding = bindDecision(await this.fleet(), input.source_request, card.id, await this.reader.query({}, true))
             answerBinding = { id: input.request_id, action: request.action, preserve_action: request.preserve_action, ...binding }
             note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.request} ${JSON.stringify(answerBinding)}`
           }
@@ -512,7 +516,9 @@ export class WorkflowOperations {
         const published = eligibleRequests.find(row => row.id === input.request_id)
         const request = published?.source_request ?? input.source_request
         if (request) {
-          const live = bindDecision(await this.fleet(), request, card.id)
+          // Refresh the census so a cached task link cannot authorize an answer
+          // after that link was removed or a second card declared the same task.
+          const live = bindDecision(await this.fleet(), request, card.id, await this.reader.query({}, true))
           if (published?.source_request && (published.source_question !== live.source_question || (published.source_spawn_gen ?? null) !== live.source_spawn_gen)) throw new DecisionSourceError('source request changed since publication; refresh before answering')
         }
       }

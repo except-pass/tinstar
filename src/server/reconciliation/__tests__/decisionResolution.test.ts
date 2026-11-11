@@ -5,6 +5,8 @@ import type { ListedMessage } from '../../fleet/inbox'
 import type { WorkflowNote } from '../workflowContent'
 import { notionCard } from '../notion'
 import { queueSignals } from '../queueInputs'
+import { workerLinkRecord } from '../workerLinks'
+import { buildQueue } from '../queue'
 
 const cardId = '41450ce6d4228114a5a9cc54ba311d54'
 function fixture() {
@@ -36,6 +38,113 @@ function fixture() {
   const reconcile = () => reconcileDecision(card, notes, snapshot.fleet, delivery, confirm)
   return { snapshot, home, request, card, notes, messages, delivery, confirm, reconcile }
 }
+
+function taskLinkFixture() {
+  const f = fixture()
+  const task = structuredClone(f.snapshot.fleet[1]!.observation.data!.tasks[0]!)
+  task.identity.fm_home = f.request.home
+  task.cardReferences = []
+  f.home.observation.data!.tasks = [task]
+  const hold = f.home.observation.data!.backlog![0]!
+  hold.cardReferences = []
+  hold.queue!.originTaskId = String(task.id)
+  const request = { ...f.request, taskId: String(task.id) }
+  const links = workerLinkRecord([{ fm_home: request.home, task_id: request.taskId, first_observed_spawn_gen: task.identity.spawn_gen! }])
+  const card = notionCard({ object: 'page', id: cardId, last_edited_time: new Date().toISOString(), properties: {
+    Status: { type: 'status', status: { name: 'In Progress' } }, Owner: { type: 'select', select: { name: 'Firstmate' } },
+    'First Mate tasks': { type: 'rich_text', ...links.properties['First Mate tasks'] },
+  } })
+  f.snapshot.intentions.data!.cards = [card]
+  const bind = () => bindDecision(f.snapshot.fleet, request, cardId, f.snapshot.intentions)
+  return { ...f, task, hold, request, card, bind }
+}
+
+describe('canonical card binding from First Mate tasks', () => {
+  it('binds exactly one validated home/task match and projects the same card in Decisions', () => {
+    const f = taskLinkFixture()
+    expect(f.bind()).toEqual({ source_request: f.request, source_question: f.hold.hold_reason, source_spawn_gen: f.task.identity.spawn_gen })
+    expect(buildQueue(f.snapshot).items.find(item => item.sources.some(source => source.request?.id === f.request.id)))
+      .toMatchObject({ cardIds: [cardId], readiness: 'ready-now' })
+  })
+  it.each(['home', 'task'] as const)('refuses no match when the linked %s differs, naming the exact search', field => {
+    const f = taskLinkFixture()
+    f.card.properties['First Mate tasks']!.workerLinks = { status: 'valid', tasks: [{ fm_home: field === 'home' ? '/other-home' : f.request.home,
+      task_id: field === 'task' ? 'other-task' : f.request.taskId, first_observed_spawn_gen: f.task.identity.spawn_gen! }] }
+    expect(f.bind).toThrow(`fm_home=${JSON.stringify(f.request.home)} + task_id=${JSON.stringify(f.request.taskId)}: 0 matching cards`)
+  })
+  it('refuses two distinct cards linking the same task', () => {
+    const f = taskLinkFixture(), other = { ...structuredClone(f.card), id: 'b'.repeat(32) }
+    f.snapshot.intentions.data!.cards.push(other)
+    expect(f.bind).toThrow('2 matching cards')
+  })
+  it('keeps an explicit source reference authoritative over competing card links', () => {
+    const f = taskLinkFixture(), other = { ...structuredClone(f.card), id: 'b'.repeat(32) }
+    f.snapshot.intentions.data!.cards = [other]
+    f.hold.cardReferences = [{ pageId: cardId, basis: 'explicit', source: 'work_item' }]
+    expect(f.bind().source_request).toEqual(f.request)
+    expect(() => bindDecision(f.snapshot.fleet, f.request, other.id, f.snapshot.intentions)).toThrow(`canonical card ${cardId}`)
+    f.hold.cardReferences.push({ pageId: other.id, basis: 'explicit', source: 'notion_page_id' })
+    expect(f.bind).toThrow('request lacks one explicit canonical card link')
+  })
+  it.each(['fleet-stale', 'fleet-partial', 'cards-stale', 'cards-expired', 'cards-partial', 'pagination', 'invalid-schema', 'missing-property', 'truncated-property'] as const)(
+    'preserves unknown coverage for %s instead of claiming no match', mode => {
+      const f = taskLinkFixture()
+      if (mode === 'fleet-stale') f.home.observation.status = 'stale'
+      if (mode === 'fleet-partial') f.home.observation.coverage = 'partial'
+      if (mode === 'cards-stale') f.snapshot.intentions.status = 'stale'
+      if (mode === 'cards-expired') f.snapshot.intentions.expiresAt = new Date(Date.now() - 1).toISOString()
+      if (mode === 'cards-partial') f.snapshot.intentions.coverage = 'partial'
+      if (mode === 'pagination') f.snapshot.intentions.data!.hasMore = true
+      if (mode === 'invalid-schema') f.card.properties['First Mate tasks']!.workerLinks = { status: 'invalid', reason: 'Unknown schema' }
+      if (mode === 'missing-property') delete f.card.properties['First Mate tasks']
+      if (mode === 'truncated-property') f.card.properties['First Mate tasks']!.workerLinks = { status: 'unknown', reason: 'Truncated property' }
+      expect(f.bind).toThrow(/unknown|stale or incomplete/)
+      expect(f.bind).not.toThrow('0 matching cards')
+    })
+  it.each(['no-match', 'ambiguous', 'unreadable', 'partial'] as const)('keeps %s fallback ownership out of actionable queue readiness', mode => {
+    const f = taskLinkFixture()
+    if (mode === 'no-match') f.snapshot.intentions.data!.cards = []
+    if (mode === 'ambiguous') f.snapshot.intentions.data!.cards.push({ ...structuredClone(f.card), id: 'b'.repeat(32) })
+    if (mode === 'unreadable') f.snapshot.intentions.data!.cards.push({ ...structuredClone(f.card), id: 'b'.repeat(32), properties: {} })
+    if (mode === 'partial') f.snapshot.intentions.coverage = 'partial'
+    const item = buildQueue(f.snapshot).items.find(item => item.sources.some(source => source.request?.id === f.request.id))!
+    expect(item.readiness).toBe('needs-readiness-verification')
+    expect(item.oneTouch).toBe(false)
+    expect(item.reasons.join(' ')).toContain(`fm_home=${JSON.stringify(f.request.home)} + task_id=${JSON.stringify(f.request.taskId)}`)
+  })
+  it('loads fresh card coverage only for an answered fallback request', async () => {
+    const f = taskLinkFixture(), census = vi.fn(async () => f.snapshot.intentions)
+    f.notes[0]!.text = `Tin Star request: ${JSON.stringify({ id: 'mailbox-proposal', action: 'Decision', ...f.bind() })}`
+    const reconcile = () => reconcileDecision(f.card, f.notes, f.snapshot.fleet, f.delivery, f.confirm, undefined, census)
+    const answer = f.notes.pop()!
+    expect(await reconcile()).toBeUndefined()
+    expect(census).not.toHaveBeenCalled()
+    f.notes.push(answer)
+    f.hold.cardReferences = [{ pageId: cardId, basis: 'explicit', source: 'notion_page_id' }]
+    expect(await reconcile()).toMatchObject({ state: 'pending' })
+    expect(census).not.toHaveBeenCalled()
+    f.hold.cardReferences = []
+    f.snapshot.intentions.data!.cards = []
+    expect(await reconcile()).toMatchObject({ state: 'verification-needed' })
+    expect(census).toHaveBeenCalledTimes(1)
+    expect(f.delivery.submit).toHaveBeenCalledTimes(1)
+  })
+  it('revalidates task links before delivering an answer and retains receipt-plus-closure resolution', async () => {
+    const f = taskLinkFixture()
+    f.notes[0]!.text = `Tin Star request: ${JSON.stringify({ id: 'mailbox-proposal', action: 'Decision', ...f.bind() })}`
+    const reconcile = () => reconcileDecision(f.card, f.notes, f.snapshot.fleet, f.delivery, f.confirm, undefined, f.snapshot.intentions)
+    const duplicate = { ...structuredClone(f.card), id: 'b'.repeat(32) }
+    f.snapshot.intentions.data!.cards.push(duplicate)
+    expect(await reconcile()).toMatchObject({ state: 'verification-needed' })
+    expect(f.delivery.submit).not.toHaveBeenCalled()
+    f.snapshot.intentions.data!.cards.pop()
+    expect(await reconcile()).toMatchObject({ state: 'pending' })
+    expect(f.messages).toHaveLength(1)
+    f.messages[0]!.state = 'acknowledged'
+    f.home.observation.data!.backlog = []
+    expect(await reconcile()).toMatchObject({ state: 'resolved' })
+  })
+})
 
 describe('source-scoped First Mate decision reconciliation', () => {
   it('reproduces R3: a queued Notion answer stays pending until receipt and source closure, then confirms once', async () => {

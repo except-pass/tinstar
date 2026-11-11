@@ -1483,6 +1483,84 @@ function decisionFixture() {
   return { ...f, workflow, fleet, source, bridge, messages, request, answer }
 }
 
+it('publishes a typed recommendation and accepts its authenticated choice using only the card task link', async () => {
+  const { AskApi } = await import('../../ask/routes')
+  const { proposalAnswerId } = await import('../../ask/decision')
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-task-link-')); roots.push(root)
+  f.task.id = 'native-task'
+  f.home.observation.data!.tasks = [f.task]
+  const hold = f.home.observation.data!.backlog![0]!
+  hold.cardReferences = []
+  hold.queue!.originTaskId = f.task.id
+  const source = { ...f.source, taskId: f.task.id }
+  const links = workerLinkRecord([{ fm_home: source.home, task_id: source.taskId, first_observed_spawn_gen: f.task.identity.spawn_gen! }])
+  f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...links.properties['First Mate tasks'] }
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  sources.workflow.decisionDelivery = f.bridge
+  const item = (await sources.queue()).items.find(item => item.sources.some(entry => entry.request?.id === source.id))!
+  expect(item.cardIds).toEqual([id])
+  const proposal = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: source.id, revision: '1' } }
+  expect(await sources.updateWork({ ...f.request, source_request: source, proposal } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const published = (await sources.queue()).needsWill!.find(entry => entry.id === item.id)!
+  expect(published.proposal?.value).toEqual(proposal)
+  expect(published.readiness).toBe('ready-now')
+  const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
+  const server = createServer(async (req, res) => { if (!await asks.handle(req, res)) { res.writeHead(404); res.end() } }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  seedOriginAllowlist(port)
+  const response = await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' },
+    body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
+  expect(response.status).toBe(200)
+  const selected = (await response.json()).data
+  expect(selected.action_selection).toMatchObject({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', label: 'Proceed', actor: 'owner@example.test' })
+  expect(selected.context.target).toEqual({ kind: 'decision', id: item.id })
+  expect(selected.context.anchor.page_id).toBe(id)
+  f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...workerLinkRecord([]).properties['First Mate tasks'] }
+  const writes = f.requests.filter(request => request.method === 'PATCH' || request.method === 'POST' && request.url.endsWith('/comments')).length
+  expect(await sources.updateWork({ ...f.answer, answer: selected.action_selection.label, resolve_wait: undefined } as UpdateWorkInput, 'owner@example.test'))
+    .toMatchObject({ outcome: 'not-saved', code: 'decision-verification-needed', message: expect.stringContaining('0 matching cards') })
+  expect(f.requests.filter(request => request.method === 'PATCH' || request.method === 'POST' && request.url.endsWith('/comments'))).toHaveLength(writes)
+  f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...links.properties['First Mate tasks'] }
+  expect(await sources.updateWork({ ...f.answer, answer: selected.action_selection.label, resolve_wait: undefined } as UpdateWorkInput, 'owner@example.test'))
+    .toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.messages).toHaveLength(1)
+  expect(f.messages[0]!.sourceAnchor).toBe(item.sources.find(entry => entry.kind === 'firstmate')!.responseAnchor)
+  expect(f.messages[0]!.text).toContain('Proceed')
+  expect(f.requests.filter(request => request.method === 'PATCH' && request.url.includes('/pages/'))
+    .some(request => Object.hasOwn(request.body?.properties ?? {}, 'First Mate tasks'))).toBe(false)
+  expect((await f.reader.card(id, true)).properties['First Mate tasks']!.value).toBe(links.json)
+})
+
+it('shares one lazy fresh census across an answered fallback reconciliation pass', async () => {
+  const f = decisionFixture()
+  f.home.observation.data!.tasks = [f.task]
+  const hold = f.home.observation.data!.backlog![0]!
+  hold.cardReferences = []
+  hold.queue!.originTaskId = String(f.task.id)
+  const source = { ...f.source, taskId: String(f.task.id) }
+  const links = workerLinkRecord([{ fm_home: source.home, task_id: source.taskId, first_observed_spawn_gen: f.task.identity.spawn_gen! }])
+  f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...links.properties['First Mate tasks'] }
+  expect(await f.workflow.update({ ...f.request, source_request: source } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const query = vi.spyOn(f.reader, 'query')
+  const unanswered = f.workflow.decisionCensus()
+  await f.workflow.reconcileDecisions(id, f.fleet, true, unanswered)
+  await f.workflow.reconcileDecisions(id, f.fleet, true, unanswered)
+  expect(query).not.toHaveBeenCalled()
+  expect(await f.workflow.update(f.answer, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  query.mockClear()
+  const census = f.workflow.decisionCensus()
+  await f.workflow.reconcileDecisions(id, f.fleet, true, census)
+  await f.workflow.reconcileDecisions(id, f.fleet, true, census)
+  expect(query.mock.calls.filter(([, refresh]) => refresh)).toHaveLength(1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
 it('durably binds the source and answers once across UI/MCP actors, retries and restart, preserving other asks', async () => {
   const f = decisionFixture()
   expect(await f.workflow.update(f.request, 'Publisher')).toMatchObject({ outcome: 'saved' })
@@ -1582,7 +1660,11 @@ it('proves source decision UI/MCP receipt parity and before/after queue readback
   expect((await call('get_work', { card_id: id, details: false })).card.source.properties.Status.value).toBe('Queued')
   expect(after.items.some((item: any) => item.cardIds.includes(id))).toBe(true) // unrelated Merge ask
   const uiQueue = await completeQueueDisplay(`${base}/api/reconciliation/queue`)
-  expect(uiQueue.data.items).toEqual(after.items)
+  // Fresh binding reads may advance observation times between the two APIs;
+  // compare the request, evidence and readiness rather than clock metadata.
+  const meaning = (items: typeof after.items) => items.map((item: any) => ({ ...item,
+    sources: item.sources.map(({ observedAt: _observedAt, expiresAt: _expiresAt, ...source }: any) => source) }))
+  expect(meaning(uiQueue.data.items)).toEqual(meaning(after.items))
 })
 
 it('delivers the exact multiline answer, including protocol-looking text, and ignores quoted decision examples', async () => {

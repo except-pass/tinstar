@@ -1,4 +1,5 @@
 import { reviewView } from './reviews'
+import { decisionCard } from './decisionCard'
 import { isReviewStatus } from '../../shared/reviews'
 import { releasePull } from '../../shared/releases'
 import { inventoryPullState, queuePulls, type PullsRead } from '../../shared/pulls'
@@ -212,10 +213,10 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const requestId = request.id
       const hold = backlog.find(row => row.id === entry.matchedHoldId)
       const execution = scene.executions.find(e => e.home === home.source.home && e.identity.task_id === call.taskId)
-      const refs = unique([...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].map(ref => ref.pageId))
-      const known = refs.map(id => cards.get(id)).filter((card): card is Card => !!card)
-      const explicitRelationship = refs.length === 1 && known.length === 1 &&
-        [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])].some(ref => ref.pageId === refs[0] && ref.basis === 'explicit')
+      const refs = [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])]
+      const canonical = decisionCard(request, refs, intentions)
+      const known = canonical.cardId ? [cards.get(canonical.cardId)].filter((card): card is Card => !!card) : []
+      const canonicalRelationship = known.length === 1
       // A Notion status change is not an acknowledgment of a First Mate request.
       const item = blank(call.key, call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
@@ -238,12 +239,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const questionLinks = (call.headline.match(/https:\/\/[^\s<>"']+/g) ?? []).map(url => url.replace(/[),.;!?]+$/, '')).filter(url => parsePullUrl(url))
       for (const url of questionLinks) link(item, url)
       explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
-      if (explicitRelationship) for (const card of known) context(item, card, intentions, now)
-      if (explicitRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
+      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now)
+      if (canonicalRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
-      if (refs.length > 0 && !explicitRelationship) {
-        lower(item, 'needs-readiness-verification', 'Card relationship is textual, conflicting or outside the readable source; verify context')
+      if (!canonicalRelationship) {
+        lower(item, 'needs-readiness-verification', canonical.reason ?? 'Canonical card is outside the readable source; verify context')
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')
       if (call.type === 'blocked' || !item.action || !entry.ownerReady) {

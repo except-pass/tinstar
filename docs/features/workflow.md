@@ -440,7 +440,15 @@ an accepted limitation, without suppressing unrelated asks or exposing PR data.
 
 Publish a First Mate proposal with `update_work(kind: "request_decision")` and
 `source_request: {home, taskId, kind: "hold" | "decision", id}`. The source must
-be fresh, owner-actionable and explicitly linked to this canonical card. The
+be fresh and owner-actionable. An explicit source card reference is authoritative.
+Without one, Tin Star searches the configured board's current cards for exactly
+one validated `First Mate tasks` (`tinstar.fm-links.v1`) declaration containing
+the source's exact `fm_home` + `task_id`. This lookup is read-only and needs no
+First Mate code change. Zero or multiple matches refuse binding and name the
+searched identity; stale/partial card or source coverage and unreadable link
+records remain unknown, never evidence of no match. Blank properties retain
+their existing unlinked meaning. The same lookup supplies Decisions context
+and is checked again before answering or delivering a recorded answer. The
 published Notion request retains the exact identity, question and task generation;
 a card ID, title or bare decision key never substitutes for request identity.
 
@@ -482,7 +490,9 @@ a newer proposal supersedes it or its source has closed. Currentness gates new
 answers, not delivery, acknowledgment, closure or recovery of recorded answers.
 There is no independent poller or request store.
 
-Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
+Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads.
+A fresh board census is loaded only when an answered request without an explicit
+source card reference needs binding validation, and is shared within that pass;
 `get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
 answer can use the same published proposal and this format:
 

@@ -344,9 +344,10 @@ export class ReconciliationSources {
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
     const resolutions = new Map<string, DecisionResolution>()
     const resolutionIds = new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.filter(item => item.sources.some(source => source.kind === 'firstmate')).flatMap(item => item.cardIds)])
+    const census = this.workflow.decisionCensus()
     for (const id of ids.filter(id => resolutionIds.has(id)).slice(0, 20)) {
       try {
-        const resolution = await this.workflow.reconcileDecisions(id, snapshot.fleet, false)
+        const resolution = await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
         if (resolution) resolutions.set(id, resolution)
       } catch { resolutions.set(id, { state: 'verification-needed', message: 'Decision reconciliation needs verification: current Notion history unavailable' }) }
     }
