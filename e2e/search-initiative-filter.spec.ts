@@ -44,7 +44,6 @@ async function chooseInitiative(page: Page) {
 }
 
 for (const width of [1366, 390]) test(`initiative search and explicit filter edits survive restore and Clear all at ${width}px`, async ({ page }) => {
-  expect('browser-suite').toBe('required-check-proof')
   await page.setViewportSize({ width, height: 900 })
   const scene = fixtureScene()
   for (const id of [1, 4]) scene.cards.find(card => card.id === fixtureId(id))!.source.properties.Initiative = { id: 'initiative', type: 'select', value: 'Tin Star', hasMore: false }
