@@ -50,6 +50,13 @@ function snapshot(cards: Card[] = [], tasks: Task[] = [], backlog: Backlog[] = [
       coverageScope: 'metadata', main_inventory: { valid: true, reason: null, unstructured_current_count: null }, backlogPresent: true,
       ledger: { role: 'change-signal-only', cursor: null, scope: 'local-file-stat' }, tasks, backlog }) }] }
 }
+// Routing, timing and ordering tests use verified card context independently of binding discovery.
+function boundSnapshot(cards: Card[] = [], tasks: Task[] = [], backlog: Backlog[] = []): SourceSnapshot {
+  const refs = [{ pageId: a, basis: 'explicit' as const, source: 'notion_page_id' }]
+  return snapshot(cards.some(card => card.id === a) ? cards : [card(), ...cards],
+    tasks.map(task => ({ ...task, cardReferences: refs })),
+    backlog.map(hold => ({ ...hold, cardReferences: refs })))
+}
 const build = (s: SourceSnapshot, prs = new Map<string, PullReadiness>()) => buildQueue(s, prs, now)
 const readyPull = (values: Partial<PullReadiness> = {}): PullReadiness => ({ status: 'fresh', observedAt: at, expiresAt, state: 'open', head: 'a'.repeat(40), draft: false, checks: 'passed', mergeability: 'ready', ...values })
 const mergeCard = (values = {}) => card({ Owner: 'Will', 'Will action': ['Merge'], 'Next action': 'Merge this PR', Link: pull, ...values })
@@ -110,7 +117,8 @@ describe('desk queue correctness', () => {
 
   it('uses open decision keys and explicitly captain-actionable holds; blocked/held alone needs verification', () => {
     expect(build(snapshot([], [task()])).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', decisionKeys: ['choose'], oneTouch: false })
-    expect(build(snapshot([], [], [hold()])).items[0]?.readiness).toBe('ready-now')
+    expect(build(snapshot([], [], [hold()])).items[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false })
+    expect(build(snapshot([], [], [hold()])).items[0]?.reasons).toEqual(expect.arrayContaining([expect.stringContaining('task identity is unknown')]))
     const unkeyed = task([]); unkeyed.current_state.state = 'needs-decision'
     expect(build(snapshot([], [unkeyed])).items[0]?.readiness).toBe('needs-readiness-verification')
     for (const s of [snapshot([], [], [hold({ captain_actionable: false })]), snapshot([], [task([{ key: 'block', verb: 'blocked', summary: 'Needs review' }])]), snapshot([], [task([{ verb: 'needs-decision', summary: 'No explicit key' }])])]) {
@@ -131,7 +139,7 @@ describe('desk queue correctness', () => {
   it.each(['worker', 'worker-decision-formatter', 'origin-hold'])('does not route formatter through unrelated hold %s', id => {
     const worker = task([{ key: 'formatter', verb: 'needs-decision', summary: 'Choose the formatter' }])
     const held = hold({ id, hold_reason: 'Review proposal', ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: worker'] }) })
-    const result = build(snapshot([], [worker], [held]))
+    const result = build(boundSnapshot([], [worker], [held]))
     expect(result.items.find(item => item.decisionKeys.includes('formatter'))).toMatchObject({
       action: 'Choose the formatter', readiness: 'needs-readiness-verification', oneTouch: false,
     })
@@ -146,7 +154,7 @@ describe('desk queue correctness', () => {
 
   it('routes a keyed decision only through its exact owner-actionable hold', () => {
     for (const captain_actionable of [true, false]) {
-      const result = build(snapshot([], [task()], [hold({ id: 'choose', captain_actionable })]))
+      const result = build(boundSnapshot([], [task()], [hold({ id: 'choose', captain_actionable })]))
       expect(result.items).toHaveLength(1)
       expect(result.items[0]).toMatchObject({ decisionKeys: ['choose'], readiness: captain_actionable ? 'ready-now' : 'needs-readiness-verification', oneTouch: captain_actionable })
     }
@@ -174,7 +182,7 @@ describe('desk queue correctness', () => {
 
   it('binds a shared key to only the hold’s explicitly named origin task', () => {
     const held = hold({ id: 'choose', ...queueSignals({ hold_kind: 'captain', body_lines: ['Origin: worker'] }) })
-    const result = build(snapshot([], [task(), task(undefined, 'second')], [held]))
+    const result = build(boundSnapshot([], [task(), task(undefined, 'second')], [held]))
     expect(result.items).toHaveLength(2)
     const matched = result.items.find(item => item.readiness === 'ready-now')!
     expect(matched.sources.map(source => source.request)).toEqual(expect.arrayContaining([
@@ -249,7 +257,7 @@ describe('desk queue correctness', () => {
   it('deduplicates a Notion and First Mate merge request by canonical PR identity', () => {
     const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = `${pull}/`
     worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
-    const result = build(snapshot([mergeCard()], [worker], [hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })]), new Map([[pull, readyPull()]]))
+    const result = build(boundSnapshot([mergeCard()], [worker], [hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })]), new Map([[pull, readyPull()]]))
     expect(result.items).toHaveLength(1)
     expect(result.items[0]).toMatchObject({ readiness: 'ready-now', cardIds: [a], homeIds: ['/farm/hulk'], decisionKeys: ['merge'] })
     expect(result.items[0]?.sources.map(s => s.kind)).toEqual(expect.arrayContaining(['firstmate', 'notion', 'github']))
@@ -258,7 +266,7 @@ describe('desk queue correctness', () => {
   it('uses a real First Mate request to corroborate a tag-only Notion merge candidate', () => {
     const worker = task([{ key: 'merge', verb: 'needs-decision', summary: 'Merge this PR' }]); worker.pr.url = pull
     worker.cardReferences = [{ pageId: a, basis: 'explicit', source: 'task.notion_page_id' }]
-    expect(build(snapshot([mergeCard({ 'Next action': null, Owner: 'Firstmate' })], [worker], [hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })]), new Map([[pull, readyPull()]])).items[0])
+    expect(build(boundSnapshot([mergeCard({ 'Next action': null, Owner: 'Firstmate' })], [worker], [hold({ id: 'merge', hold_reason: 'Merge this PR', pr_url: pull })]), new Map([[pull, readyPull()]])).items[0])
       .toMatchObject({ action: 'Merge this PR', readiness: 'ready-now', oneTouch: true })
   })
 
@@ -304,7 +312,7 @@ describe('desk queue correctness', () => {
   it.each(['Decide if we should ship', 'Choose when to launch'])('keeps decision subjects actionable: %s', action => {
     expect(build(snapshot([card({ Owner: 'Will', 'Next action': action })])).items[0])
       .toMatchObject({ readiness: 'ready-now', oneTouch: true })
-    expect(build(snapshot([], [task([{ key: 'subject', verb: 'needs-decision', summary: action }])], [hold({ id: 'subject', hold_reason: action })])).items[0])
+    expect(build(boundSnapshot([], [task([{ key: 'subject', verb: 'needs-decision', summary: action }])], [hold({ id: 'subject', hold_reason: action })])).items[0])
       .toMatchObject({ readiness: 'ready-now', oneTouch: true })
   })
 
@@ -441,7 +449,7 @@ describe('desk queue correctness', () => {
       const held = hold({ id: 'choose' })
       if (route === 'task') worker.backlog.hold_until = timing
       else held.hold_until = timing
-      const s = snapshot([], route === 'standalone-hold' ? [] : [worker], [held])
+      const s = boundSnapshot([], route === 'standalone-hold' ? [] : [worker], [held])
       expect(build(s).items).toEqual([expect.objectContaining({ readiness, oneTouch: readiness === 'ready-now' })])
     }
   })
@@ -510,7 +518,10 @@ describe('desk queue correctness', () => {
   })
 
   it('orders ready, verification, future, then checkpoint and stable ID; reads do not mutate input', () => {
-    const s = snapshot([mergeCard({ 'Start Date': { start: '2026-12-01' } }), card({ Owner: 'Will' }, b)], [task()], [hold({ id: 'choose' })])
+    const refs = [{ pageId: 'c'.repeat(32), basis: 'explicit' as const, source: 'notion_page_id' }]
+    const worker = task(); worker.cardReferences = refs
+    const s = snapshot([mergeCard({ 'Start Date': { start: '2026-12-01' } }), card({ Owner: 'Will' }, b), card({}, 'c'.repeat(32))],
+      [worker], [hold({ id: 'choose', cardReferences: refs })])
     const before = structuredClone(s)
     const first = build(s); const next = build(s)
     expect(first.items.map(i => i.readiness)).toEqual(['ready-now', 'needs-readiness-verification', 'future-or-conditional'])
