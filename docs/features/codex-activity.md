@@ -10,6 +10,17 @@ The collector also publishes parent asks for the
 [Waiting on First Mate backstop](waiting-on-main.md), which owns that field's
 contract and coverage rules.
 
+When a task's `current_state` is `unknown` from a pane read and First Mate
+publishes no open decisions, the collector folds `paths.status_log.path` to
+recover keyed `needs-decision` and `blocked` entries. Only `resolved` with the
+same key closes an entry; later `working` or `done` reports do not. It publishes
+`hints.open_decisions` as `{key, verb, summary}` entries, updates
+`pending_decision` and `blocked_event`, and marks
+`hints.open_decisions_source: "tinstar-status-fold"`. Existing open decisions,
+authoritative states, and unreadable logs are left untouched. An incomplete
+final line is ignored until the next collection. The recovered hints feed the
+existing Decisions queue with the original task ID and decision key.
+
 For every Codex task, `paths.worktree.path` is matched exactly against the first
 `session_meta.payload.cwd` in session logs. The scan covers all dated session directories below `$CODEX_HOME/sessions` (default
 `~/.codex/sessions`). Only files modified within the last seven days are

@@ -15,6 +15,7 @@ import { notionObservation, NOTION_QUERY_PAGE_LIMIT } from '../notion'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 import { readFleetSnapshot, MAX_SNAPSHOT_BYTES } from '../../fleet/snapshot'
+import { buildQueue } from '../queue'
 
 const dirs: string[] = []
 async function temp() { const dir = await mkdtemp(join(tmpdir(), 'tinstar-sources-')); dirs.push(dir); return dir }
@@ -51,6 +52,33 @@ describe('source freshness', () => {
 })
 
 describe('fleet collection', () => {
+  it('projects collector-recovered unknown-pane decisions into the Decisions queue with the task identity', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(timestamp))
+    const dir = await temp(), file = join(dir, 'decisions.json')
+    const home = '/farm/hulk', taskId = 'bender-egress-pilot-decision'
+    await writeFile(file, JSON.stringify({ ...snapshot(home), tasks: [{
+      id: taskId, harness: 'codex', spawn_gen: 'attempt-1',
+      current_state: { state: 'unknown', source: 'pane', freshness: 'fresh',
+        detail: 'harness state unavailable (unknown codex-unverified)' },
+      hints: { open_decisions: [{ key: 'pilot-go', verb: 'needs-decision', summary: 'Approve the Bender egress pilot?' }],
+        pending_decision: true, blocked_event: false, open_decisions_source: 'tinstar-status-fold' },
+    }] }))
+    const source = { home, snapshotFile: file, machineBasis: 'configured' as const }
+    const observation = await fleetObservation(source).get()
+    const queue = buildQueue({ generatedAt: timestamp, scope: 'configured-homes-only', warnings: [],
+      intentions: { data: null, status: 'unknown', coverage: 'unknown', observedAt: null,
+        attemptedAt: timestamp, expiresAt: null, error: null },
+      fleet: [{ source, observation }],
+    }, new Map(), Date.parse(timestamp))
+    expect(queue.items).toHaveLength(1)
+    expect(queue.items[0]).toMatchObject({ kind: 'decision', action: 'Approve the Bender egress pilot?',
+      decisionKeys: ['pilot-go'], sources: expect.arrayContaining([expect.objectContaining({
+        kind: 'firstmate', field: 'hints.open_decisions',
+        request: { home, taskId, id: 'pilot-go', kind: 'decision' },
+      })]),
+    })
+  })
+
   it.each([120, 180, 299, 300, 360])('ages published snapshots from generated time at %i seconds', async ageSeconds => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = Date.parse(timestamp) + ageSeconds * 1000
