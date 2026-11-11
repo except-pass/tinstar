@@ -14,7 +14,7 @@ test.beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'tinstar-review-preview-'))
   await mkdir(join(root, 'config'))
   await writeFile(join(root, 'config', 'config.json'), JSON.stringify({ firstmate: { homes: [] }, reconciliation: { fleet: [] } }))
-  const env: NodeJS.ProcessEnv = { ...process.env, TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }
+  const env: NodeJS.ProcessEnv = { ...process.env, TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_STATE_HOME: join(root, 'state'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }
   delete env.TINSTAR_DEPLOY_BLOCK
   server = spawn(process.execPath, ['dist/server/standalone.js', '--port', '5293', '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''

@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -203,11 +204,11 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     const sizesBefore = windowSizes()
     writeFileSync(join(bin, 'quota-axi'), `#!/bin/sh\ncat <<'END_QUOTA'\n${readFileSync(join(repo, 'src/server/quota/__tests__/recorded-quota-axi.json'), 'utf8')}\nEND_QUOTA\n`)
     chmodSync(join(bin, 'quota-axi'), 0o755)
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -375,7 +376,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     console.log(`private alpha ttyd recovered in place: ${crashedTtyd} -> ${await alphaTtyd()}`)
     await second.close()
   } finally {
-    server?.kill('SIGTERM')
+    await stopServer(server)
     try { tmux('kill-server') } catch { /* private server already gone */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }

@@ -1,3 +1,4 @@
+import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
 import { AssociationStore } from '../releases/associations'
@@ -41,6 +42,7 @@ export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['inte
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
+  waitingOnMain?: (snapshot: SourceSnapshot) => Promise<MainWaitRead>
   reconcileReviewHandoffs?: (force?: boolean) => Promise<void>
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
@@ -172,16 +174,21 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
+  mainWaitNotionConfig() { return this.config.notion }
   releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
 
   async scene(force = false, scope: WorkScope = {}) {
-    const scene = this.reconciler.reconcile(await this.snapshot(force, scope))
+    const snapshot = await this.snapshot(force, scope)
+    const scene = this.reconciler.reconcile(snapshot)
     if (this.checkInIndicators) {
       const indicators = await this.checkInIndicators()
       for (const card of scene.cards) card.checkInRequest = indicators.get(card.id)
     }
-    return { ...scene, searchIndex: this.search.get(scene) }
+    // Filtered tool reads must not close waits outside their requested scope.
+    const filtered = Object.entries(scope).some(([key, value]) => key !== 'history' && value !== undefined)
+    const waits = this.waitingOnMain ? await this.waitingOnMain(filtered ? await this.snapshot() : snapshot) : undefined
+    return { ...scene, searchIndex: this.search.get(scene), ...(waits ? { waitingOnMain: waits } : {}) }
   }
 
 

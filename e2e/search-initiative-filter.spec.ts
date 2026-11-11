@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -17,7 +17,7 @@ test.beforeAll(async () => {
   await new Promise<void>(resolve => probe.close(() => resolve()))
   base = `http://127.0.0.1:${port}`
   server = spawn(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, TINSTAR_CONFIG_HOME: root, TINSTAR_NO_SESSIONS: '1', TINSTAR_NO_PORT_FALLBACK: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, TINSTAR_CONFIG_HOME: root, TINSTAR_STATE_HOME: join(root, 'state'), TINSTAR_NO_SESSIONS: '1', TINSTAR_NO_PORT_FALLBACK: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })
@@ -116,4 +116,12 @@ for (const width of [1366, 390]) test(`initiative search and explicit filter edi
   await expect(page.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeVisible()
   await page.getByRole('button', { name: 'Remove Initiative: Tin Star' }).click()
   await expect(count).toHaveText('0')
+})
+
+test('backend stores waiting-on-main state inside the isolated fixture root', async () => {
+  await expect.poll(async () => {
+    try {
+      return JSON.parse(await readFile(join(root, 'state', 'waiting-on-main.json'), 'utf8'))
+    } catch { return null }
+  }).toEqual({ initializedAlerts: false, rows: [] })
 })

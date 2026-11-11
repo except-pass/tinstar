@@ -191,3 +191,14 @@
 /* The merged dial's plain coverage labels need their intrinsic width; fixed
    narrow columns let neighboring labels paint over the Waiting For entry. */
 @media(max-width:600px){.ov-toolbar .ov-pattern-dial{width:max-content;min-width:340px;grid-template-columns:max-content max-content max-content 20px}}
+
+.ov-main-waits { margin: 0 16px 10px; border: 1px solid var(--border, #3b4252); border-radius: 8px; background: var(--bg-panel, #20232b); font-size: 12px; }
+.ov-main-waits > button { width: 100%; padding: 10px 12px; text-align: left; cursor: pointer; border-radius: inherit; }
+.ov-main-waits-overdue { border-color: #ef4444; background: #451a1a; color: #fecaca; }
+.ov-main-waits-list { padding: 0 12px 10px; max-height: 320px; overflow: auto; }
+.ov-main-waits-list article { padding: 10px 0; border-top: 1px solid #ffffff25; display: flex; gap: 6px 12px; flex-wrap: wrap; }
+.ov-main-waits-list article p, .ov-main-waits-list article small { width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ov-main-waits-list code { overflow-wrap: anywhere; }
+.ov-main-waits-list a { text-decoration: underline; }
+
+.ov-main-waits-list article.ov-main-wait-undelivered { color: #fecaca; background: #451a1a; border-color: #ef4444; }

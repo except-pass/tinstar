@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { installDeskAttention } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -42,25 +43,10 @@ async function startCockpit(request: APIRequestContext, names: string[], kind: D
       backlog: { records: holds },
     }))
   }
-  const stop = () => {
-    if (server && server.exitCode === null) {
-      server.kill('SIGTERM')
-      const deadline = Date.now() + 2_000
-      while (server.exitCode === null && Date.now() < deadline) execFileSync('sleep', ['0.05'])
-      if (server.exitCode === null) server.kill('SIGKILL')
-    }
+  const stop = async () => {
+    await stopServer(server)
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server']) } catch { /* private server absent */ }
-    // macOS rmSync throws ENOTEMPTY while the signaled server still has this temp home open.
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        rmSync(root, { recursive: true, force: true, maxRetries: 3 })
-        return
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        if ((code !== 'ENOTEMPTY' && code !== 'EBUSY') || attempt >= 4) throw error
-        execFileSync('sleep', ['0.05'])
-      }
-    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
   try {
     for (const path of [config, bin]) mkdirSync(path, { recursive: true })
@@ -120,10 +106,10 @@ if name == 'fm-captain-hold.sh' and (state / 'fail-hold').exists():
       chmodSync(join(home, 'bin', 'fm-captain-hold.sh'), 0o755)
       snapshot(true, home)
     }
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'), TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
     const base = `http://127.0.0.1:${port}`
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
@@ -132,7 +118,7 @@ if name == 'fm-captain-hold.sh' and (state / 'fail-hold').exists():
     }, { timeout: 15_000 }).toBe(homes.length)
     return { base, home: homes[0]!, homes, notes, calls, snapshot, stop }
   } catch (error) {
-    stop()
+    await stop()
     throw error
   }
 }
@@ -154,5 +140,5 @@ for (const kind of ['keyed', 'held-work'] as const) test(`Decisions keeps ${kind
     await expect(desk.getByRole('button', { name: /Answer|Dismiss|Send to First Mate/i })).toHaveCount(0)
     expect(notes()).toHaveLength(0)
     expect(calls()).toHaveLength(0)
-  } finally { stop() }
+  } finally { await stop() }
 })

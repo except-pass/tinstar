@@ -43,6 +43,34 @@ class CollectorTests(unittest.TestCase):
     def read(self):
         return collector.augment(self.snapshot(), collector.session_candidates(self.sessions, NOW), NOW)
 
+    def test_parent_asks_fold_by_key_or_corr_only_resolved_closes(self):
+        log = ('needs-decision [corr=1234567890abcdef] [key=api] [at=100]: choose API\n'
+               'blocked [key=other] [at=200]: access\n'
+               'working [key=api] [at=300]: resumed\n'
+               'done [key=api] [at=400]: done elsewhere\n'
+               'resolved [corr=1234567890abcdef] [at=500]: answered\n')
+        self.assertEqual([row['key'] for row in collector.fold_parent_asks(log)['items']], ['other'])
+        result = collector.fold_parent_asks(log + 'resolved [key=other] [at=600]: closed\n'
+                                            'blocked [key=api] [at=700]: new request\n')
+        self.assertEqual(result['status'], 'known')
+        self.assertEqual(result['items'][0]['at'], 700)
+        self.assertEqual(result['items'][0]['text'], 'new request')
+
+    def test_parent_asks_missing_malformed_and_partial_append_stay_unknown(self):
+        self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
+        state = self.root / 'state'
+        state.mkdir()
+        path = state / 'parent-replies.status'
+        path.write_text('blocked [key=api] [at=100]: choose\nresolved [key=api]')
+        result = collector.parent_asks(str(self.root), NOW)
+        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(result['items'][0]['key'], 'api')
+        path.write_text('blocked [key=api]: missing timestamp\n')
+        self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
+        path.write_text('')
+        self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'known')
+        self.assertEqual(collector.parent_asks(str(self.root), NOW)['items'], [])
+
     def test_open_closed_and_reopened_turns(self):
         for events, expected in [(['task_started'], True), (['task_started', 'task_complete'], False),
                                  (['task_started', 'task_complete', 'task_started'], True), (['task_complete'], False)]:

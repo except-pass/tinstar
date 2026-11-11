@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -41,12 +42,12 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     tmux('new-session', '-d', '-s', 'firstmate', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "printf 'alpha> '; exec cat")
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -155,15 +156,8 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.locator('.cockpit-context')).toBeHidden()
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
   } finally {
-    server?.kill('SIGTERM')
-    if (server && server.exitCode === null) {
-      await Promise.race([
-        new Promise<void>(resolve => server?.once('exit', () => resolve())),
-        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
-      ])
-    }
+    await stopServer(server)
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server'], { stdio: 'ignore' }) } catch { /* private server absent */ }
-    // Node's recursive rm throws ENOTEMPTY when a file appears mid-delete.
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

@@ -97,7 +97,7 @@ test.beforeEach(async () => {
   base = `http://127.0.0.1:${port}`
   // Own the server process directly, rather than the tsx CLI's parent process.
   server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_STATE_HOME: join(root, 'state'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })

@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -47,12 +48,12 @@ test('worker task-id links, switcher navigation and Overview return on a private
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "printf 'alpha> '; exec cat")
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', "printf 'bravo> '; exec cat")
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -114,7 +115,7 @@ test('worker task-id links, switcher navigation and Overview return on a private
     await expect(page.getByRole('heading', { name: 'No such worker' })).toBeVisible()
     await page.close()
   } finally {
-    server?.kill('SIGTERM')
+    await stopServer(server)
     try { tmux('kill-server') } catch { /* private server already gone */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }

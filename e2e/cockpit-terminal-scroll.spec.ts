@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -68,12 +69,12 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-other', 'exec cat')
 
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -183,7 +184,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     await input.pressSequentially('AFTER_SWITCH')
     await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
   } finally {
-    if (server) server.kill('SIGTERM')
+    await stopServer(server)
     try { tmux('kill-server') } catch { /* already gone */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }

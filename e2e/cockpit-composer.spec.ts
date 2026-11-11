@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -41,10 +42,10 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
       backlog: { records: [] },
     }))
     tmux('new-session', '-d', '-s', 'crew', '-n', 'work', 'exec cat')
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'), TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
     const base = `http://127.0.0.1:${port}`
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
@@ -101,7 +102,7 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
     await expect(composer.locator('[data-testid^="thumb-file-"]')).toContainText('notes.txt')
     await page.screenshot({ path: test.info().outputPath('composer-docked-1440x900.png') })
   } finally {
-    if (server && server.exitCode === null) server.kill('SIGTERM')
+    await stopServer(server)
     try { tmux('kill-server') } catch { /* already gone */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
