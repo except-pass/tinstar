@@ -175,7 +175,7 @@ describe('compact search palette and temporary graph focus', () => {
     window.history.replaceState({ page: 'Overview' }, '', window.location.href)
     const go = vi.spyOn(window.history, 'go')
     const { container } = mount(), before = cardIds(container)
-    const saved = { search: { query: '', patterns: [], facets: [] }, ...JSON.parse(localStorage.getItem(preferencesKey)!) }
+    const saved = JSON.parse(localStorage.getItem(preferencesKey)!)
     const viewport = container.querySelector('.ov-canvas')!.parentElement!
     viewport.scrollLeft = 21
     const nextPop = () => new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true }))
@@ -462,5 +462,136 @@ describe('pattern coverage drilldown', () => {
     expect(within(container.querySelector('.ov-pattern-selected') as HTMLElement).getByText('1 not evaluated')).toBeVisible()
     fireEvent.click(container.querySelector('.ov-pattern-selected')!)
     expect(screen.getByRole('dialog', { name: 'Stale pattern coverage' })).toHaveTextContent('0 confirmed stale · 1 not evaluated')
+  })
+})
+
+describe('initiative selection applies the canonical filter', () => {
+  const preferences = () => JSON.parse(localStorage.getItem(preferencesKey)!)
+  const shelf = () => screen.getByRole('complementary', { name: 'Applied filters' })
+  const chooseInitiative = () => {
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    search('tin')
+    fireEvent.click(screen.getByRole('option', { name: /^Tin Star\. Initiative/ }))
+  }
+  beforeEach(() => {
+    for (const id of [1, 4]) scene.cards.find(card => card.id === fixtureId(id))!.source.properties.Initiative = { id: 'initiative', type: 'select', value: 'Tin Star', hasMore: false }
+    scene.cards.find(card => card.id === fixtureId(2))!.source.properties.Status!.value = 'Waiting For'
+    scene.cards.find(card => card.id === fixtureId(2))!.source.properties.Name!.value = 'Tin unrelated task'
+  })
+
+  it('intersects Waiting For, persists across organizers/reload, and removes each token independently', () => {
+    let view = mount()
+    fireEvent.click(screen.getByRole('button', { name: /^Filter Cards: Waiting For,/ }))
+    expect(new Set(cardIds(view.container))).toEqual(new Set([fixtureId(2), fixtureId(4)]))
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('tin')
+    expect(shelf()).toHaveTextContent('Active filters 1')
+    expect(preferences().search?.facets ?? []).toEqual([])
+    fireEvent.click(screen.getByRole('option', { name: /^Tin Star\. Initiative/ }))
+    expect(shelf()).toHaveTextContent('Active filters 2')
+    expect(preferences().search).toEqual({ query: '', patterns: [], facets: [{ field: 'initiative', value: 'Tin Star' }] })
+    expect(cardIds(view.container)).toEqual([fixtureId(4)])
+    // Waiting For keeps its independent worker column; the initiative facet
+    // must still exclude workers outside this initiative.
+    const linkedWorkers = scene.claims.filter(claim => [fixtureId(1), fixtureId(4)].includes(claim.cardId) && claim.verification === 'confirmed').map(claim => claim.executionId)
+    expect(new Set([...view.container.querySelectorAll<HTMLElement>('.ov-execution')].map(worker => worker.dataset.entityId))).toEqual(new Set(linkedWorkers))
+    for (const name of ['By Machine', 'By Manager', 'By Initiative']) {
+      fireEvent.click(screen.getByRole('button', { name }))
+      expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
+      expect(new Set(cardIds(view.container))).toEqual(new Set([fixtureId(4)]))
+    }
+    view.unmount(); view = mount()
+    expect(shelf()).toHaveTextContent('Active filters 2')
+    expect(cardIds(view.container)).toEqual([fixtureId(4)])
+    fireEvent.click(screen.getByRole('button', { name: /^Filter Cards: In Progress,/ }))
+    expect(new Set(cardIds(view.container))).toEqual(new Set([fixtureId(1), fixtureId(4)]))
+    expect(shelf()).toHaveTextContent('Active filters 3')
+    fireEvent.click(screen.getByRole('button', { name: /^Filter Cards: In Progress,/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' }))
+    expect(new Set(cardIds(view.container))).toEqual(new Set([fixtureId(2), fixtureId(4)]))
+    expect(screen.getByRole('button', { name: 'Remove Cards: Waiting For' })).toBeTruthy()
+    chooseInitiative()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cards: Waiting For' }))
+    expect(new Set(cardIds(view.container))).toEqual(new Set([fixtureId(1), fixtureId(4)]))
+    expect(shelf()).toHaveTextContent('Active filters 1')
+    const organizer = preferences().organizer
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(shelf()).toHaveTextContent('Active filters 0')
+    expect(preferences().organizer).toEqual(organizer)
+    expect(cardIds(view.container)).toContain(fixtureId(2))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(preferences().search.facets).toEqual([])
+  })
+
+  it.each(['Escape', 'Restore previous view'])('restores the temporary view with %s while retaining the selected initiative', exit => {
+    const { container } = mount()
+    fireEvent.click(screen.getByRole('button', { name: /^Filter Cards: Waiting For,/ }))
+    chooseInitiative()
+    const saved = preferences(), before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    search('Release Coordinator')
+    expect(screen.getByRole('option', { name: /Release Coordinator.*Outside current view/ })).toBeTruthy()
+    fireEvent.keyDown(input(), { key: 'ArrowDown' }); fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(cardIds(container)).toEqual([fixtureId(1)])
+    expect(preferences().search.facets).toEqual([{ field: 'initiative', value: 'Tin Star' }])
+    if (exit === 'Escape') fireEvent.keyDown(window, { key: 'Escape' })
+    else fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    expect(preferences()).toEqual(saved)
+    expect(cardIds(container)).toEqual(before)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' }))
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('Tin unrelated task')
+    fireEvent.click(screen.getByRole('option', { name: /Tin unrelated task/ }))
+    expect(preferences().search?.facets ?? []).toEqual([])
+  })
+
+  it.each([true, false])('keeps explicit Gaps-only edits after initiative selection from %s', initiallyEnabled => {
+    const { container } = mount()
+    act(() => observed.send!({ type: 'set-exceptions', enabled: initiallyEnabled }))
+    chooseInitiative()
+    expect(screen.getByRole('button', { name: 'Clear search focus' })).toBeTruthy()
+    if (initiallyEnabled) fireEvent.click(screen.getByRole('button', { name: 'Remove View: Gaps only' }))
+    else act(() => observed.send!({ type: 'set-exceptions', enabled: true }))
+    expect(screen.queryByRole('button', { name: 'Clear search focus' })).toBeNull()
+    const before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(!!screen.queryByRole('button', { name: 'Remove View: Gaps only' })).toBe(!initiallyEnabled)
+    expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
+    expect(cardIds(container)).toEqual(before)
+  })
+
+  it.each(['compact', 'detailed'])('reveals through Gaps only without changing the filter in %s view', density => {
+    const { container } = mount()
+    if (density === 'detailed') {
+      fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+      fireEvent.click(screen.getByRole('button', { name: /^Detailed$/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    }
+    act(() => observed.send!({ type: 'set-exceptions', enabled: true }))
+    const before = cardIds(container)
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true }); search('Release Coordinator')
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(cardIds(container)).toContain(fixtureId(1))
+    expect(screen.getByRole('button', { name: 'Remove View: Gaps only' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    expect(screen.getByRole('button', { name: 'Remove View: Gaps only' })).toBeTruthy()
+    expect(cardIds(container)).toEqual(before)
+  })
+
+  it('uses the relation identity with its display name, matching semantic set-search and Customize', () => {
+    const parent = scene.cards.find(card => card.id === fixtureId(100))!
+    parent.source.properties.Name!.value = 'Tin Star'
+    for (const id of [1, 4]) scene.cards.find(card => card.id === fixtureId(id))!.source.properties.Initiative = { id: 'initiative', type: 'relation', value: [parent.id], hasMore: false }
+    const { container } = mount()
+    chooseInitiative()
+    expect(preferences().search.facets).toEqual([{ field: 'initiative', value: parent.id }])
+    expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
+    const selected = cardIds(container)
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search focus' }))
+    act(() => { observed.send!(actionSchema.parse({ type: 'set-search', search: { query: '', patterns: [], facets: [{ field: 'initiative', value: parent.id }] } })) })
+    expect(cardIds(container)).toEqual(selected)
+    expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Customize' }))
+    fireEvent.change(screen.getByLabelText('Status preset'), { target: { value: 'all' } })
+    expect(preferences().search.facets).toEqual([{ field: 'initiative', value: parent.id }])
+    expect(screen.getByRole('button', { name: 'Remove Initiative: Tin Star' })).toBeTruthy()
   })
 })

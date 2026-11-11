@@ -104,8 +104,8 @@ scope, the panel shows **No active filters**.
 Without explicit donut or search predicates, Operational retains independent and
 unmatched endpoints and its intentional hidden-task labels. Opening a relationship can
 reveal direct tasks through the base status scope; it never overrides explicit
-donut or search predicates. Selecting a Smart Search suggestion uses the temporary
-reveal described below. Filtering never changes claim evidence or absence findings.
+donut or search predicates. Search selection follows the
+[Smart Search rules](#smart-search-core). Filtering never changes claim evidence or absence findings.
 Assistant flash temporarily reveals its targets through saved search and donut
 masks, including in compact mode, without changing saved filters or expansion.
 The exception ends when the flash expires or is cleared.
@@ -303,15 +303,29 @@ never drift into neighboring IDs. Machines, managers and explicit Initiatives
 are named suggestions derived from the same authorized scene; PR matches keep
 their original card/worker target.
 
-Typing leaves Overview unchanged. Arrows/Enter or pointer/touch select a result,
-close the palette and filter to the seed plus its direct verified neighbors in
+Typing leaves Overview unchanged. Arrows/Enter or pointer/touch select a result
+and close the palette. Selecting an **Initiative** result applies or replaces the
+persistent Initiative facet using its canonical identity, with its display name
+on the removable Active filters token. Other applied filters remain in effect;
+the facet survives organizer changes and reloads. Selecting a card result does
+not create an Initiative facet. Search continues to find results outside the
+filtered floor.
+
+Other result selections temporarily filter to the seed plus its direct verified neighbors in
 the existing Workers-left / Tasks-right graph. Unrelated rows are hidden; linked
 counterparts have a secondary, dashed appearance. The real SVG gutter and compact
 row density remain; no recursive fan-out or text-inferred connection is added. An
 outside-view result can temporarily reveal planned work hidden by roadmap
-visibility. Clear search focus restores organizer, scope, donuts, density,
-expansions, scroll and selection. Escape first closes an open palette, then clears
-focus. Mobile Back dismisses the same transient layers. Focus and its restoration
+visibility or Gaps only without changing those saved settings. **Clear search
+focus** (Restore previous view), Escape and mobile Back restore transient view
+state, including focus, expansions, scroll and selection, and the saved density.
+They retain all current persistent filters, including facets, patterns, status
+scope, donuts and Gaps only, as well as current organizer and roadmap settings.
+Restoration therefore does not remove a selected Initiative facet. Editing filters
+after initiative selection ends that selection's restore session; token removal
+and Clear all follow the Active filters rules above.
+Escape first closes an open palette, then clears focus. Mobile Back dismisses the
+same transient layers. Focus and its restoration
 snapshot survive section switches within the application; Clear or Escape after
 returning restores Overview without navigating back to another section. Search
 rewinds browser history only while the current entry belongs to that search

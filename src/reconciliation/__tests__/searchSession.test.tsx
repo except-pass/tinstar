@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { organizedGroups } from '../../shared/floorOrganization'
 import { actionSchema } from '../../shared/reconciliationCommands'
@@ -9,7 +9,7 @@ import { emptySearch } from '../../shared/smartSearch'
 import { useSearchSession } from '../useSearchSession'
 import type { OverviewDensity } from '../overviewDensity'
 
-afterEach(() => { cleanup(); localStorage.clear() })
+afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('search session organizer selection restoration', () => {
   it.each(['Escape', 'Back', 'Clear'] as const)('restores inner and outer group selections through %s', exit => {
@@ -37,9 +37,8 @@ describe('search session organizer selection restoration', () => {
         return { state, send, session }
       })
       act(() => result.current.session.begin())
-      act(() => result.current.send({ type: 'set-search', search: { ...emptySearch(), query: 'no-such-record' } }))
-      expect(organizedGroups(scene, result.current.state, Date.now()).some(group => group[level] === target.id)).toBe(false)
       act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }))
+      expect(organizedGroups(scene, result.current.state, Date.now()).some(group => group[level] === target.id)).toBe(false)
       act(() => {
         if (exit === 'Escape') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
         else if (exit === 'Back') result.current.session.restore()
@@ -49,6 +48,50 @@ describe('search session organizer selection restoration', () => {
       expect(result.current.state.search).toEqual(exit === 'Clear' ? emptySearch() : saved.search)
       expect(result.current.state.searchReveal).toBeNull()
       expect(organizedGroups(scene, result.current.state, Date.now()).some(group => group[level] === target.id)).toBe(true)
+      unmount()
+    }
+  })
+
+  it.each(['Escape', 'Back', 'Restore'] as const)('preserves both directions of Gaps-only edits through %s', async exit => {
+    for (const initiallyEnabled of [true, false]) {
+      vi.stubGlobal('matchMedia', () => ({ matches: exit === 'Back' }))
+      vi.spyOn(window.history, 'go')
+      window.history.replaceState(null, '', window.location.href)
+      const scene = fixtureScene()
+      const { result, unmount } = renderHook(() => {
+        const [state, setState] = useState({ ...initialPresentation(), exceptionsOnly: initiallyEnabled })
+        const current = useRef(state)
+        const send = (action: PresentationAction) => {
+          current.current = applyPresentationAction(current.current, actionSchema.parse(action), scene).state
+          setState(current.current)
+        }
+        const canvas = useRef<HTMLDivElement>(null), root = useRef<HTMLDivElement>(null)
+        const [roots, setRoots] = useState<import('../presentation').Target[]>([])
+        const [details, setDetails] = useState<string[]>([])
+        const [density, setDensity] = useState<OverviewDensity>('compact')
+        const session = useSearchSession({ active: true, scene, state, send, canvas, root, roots, setRoots, details, setDetails, density, setDensity })
+        return { state, send, session }
+      })
+      act(() => result.current.session.begin())
+      act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }, undefined, 'Tin Star'))
+      act(() => result.current.session.begin())
+      // Replacing the lens unwinds a history entry before the user's Back.
+      const replaced = exit === 'Back' ? new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true })) : null
+      act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }))
+      if (replaced) await act(async () => { await replaced })
+      act(() => result.current.send({ type: 'set-exceptions', enabled: !initiallyEnabled }))
+      const filters = result.current.state.search
+      act(() => {
+        if (exit === 'Escape') window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+        else if (exit === 'Back') {
+          window.history.replaceState(null, '', window.location.href)
+          window.dispatchEvent(new PopStateEvent('popstate'))
+        } else result.current.session.restore()
+      })
+      expect(result.current.state.exceptionsOnly).toBe(!initiallyEnabled)
+      expect(result.current.state.search).toEqual(filters)
+      expect(result.current.state.searchFocus).toBeUndefined()
+      expect(result.current.session.active).toBe(false)
       unmount()
     }
   })

@@ -10,7 +10,7 @@ afterEach(cleanup)
 const scene = fixtureScene()
 function Harness({ initial }: { initial: PresentationState }) {
   const [state, setState] = useState(initial)
-  return <><ActiveFilters state={state} onEditScope={() => {}} send={action => setState(value => applyPresentationAction(value, action, scene).state)} /><output data-testid="view">{JSON.stringify(state)}</output></>
+  return <><ActiveFilters scene={scene} state={state} onEditScope={() => {}} send={action => setState(value => applyPresentationAction(value, action, scene).state)} /><output data-testid="view">{JSON.stringify(state)}</output></>
 }
 const current = () => JSON.parse(screen.getByTestId('view').textContent!) as PresentationState
 

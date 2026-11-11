@@ -96,8 +96,8 @@ export function overviewGroups(scene: FloorScene, state: PresentationState, now:
   // Inline expansion reveals immediate counterparts even through a status filter.
   const display = revealed.size ? { ...state, flash: { ...(state.flash && state.flash.until > now ? state.flash : {}), ids: [...(state.flash && state.flash.until > now ? state.flash.ids : []), ...revealed], until: Math.max(state.flash?.until ?? 0, now + 1) } } : state
   return organizedGroups(scene, display, now).map(group => {
-    const workers = group.workers.filter(e => !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || revealed.has(`execution:${e.id}`) || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
-    const cards = group.cards.filter(c => !state.exceptionsOnly || revealed.has(`card:${c.id}`) || entityTone(scene, 'card', c.id, now, readFailed) === 'gap')
+    const workers = group.workers.filter(e => !managerCollapsed(scene, state, e.home) && (!state.exceptionsOnly || !!state.searchFocus?.length || revealed.has(`execution:${e.id}`) || entityTone(scene, 'execution', e.id, now, readFailed) === 'orphan'))
+    const cards = group.cards.filter(c => !state.exceptionsOnly || !!state.searchFocus?.length || revealed.has(`card:${c.id}`) || entityTone(scene, 'card', c.id, now, readFailed) === 'gap')
     return { ...group, workers, cards, cardIds: cards.map(c => c.id) }
   }).filter(g => g.workers.length || g.cards.length)
 }
