@@ -45,3 +45,26 @@ export function handoffMeaning(value) {
   if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${handoffMeaning(item)}`).join(',')}}`
   return JSON.stringify(value) ?? 'null'
 }
+
+/**
+ * @template {{ action: 'floor-deployment', id: string, ownerHome: string | null, evidence: unknown[], nonReviewable: unknown[] }} T
+ * @param {Array<T | { action: string, deploymentId?: string, ownerHome?: string, evidence?: unknown[], nonReviewable?: unknown[] }>} events
+ * @returns {T[]}
+ */
+export function deploymentsWithEvidence(events) {
+  const deployments = new Map()
+  for (const event of events) {
+    if (event.action === 'floor-deployment') {
+      const receipt = /** @type {T} */ (event)
+      const previous = deployments.get(receipt.id)
+      deployments.set(receipt.id, previous ? { ...previous, ownerHome: receipt.ownerHome, evidence: receipt.evidence, nonReviewable: receipt.nonReviewable } : receipt)
+    } else if (event.action === 'floor-review-evidence') {
+      const deployment = deployments.get(event.deploymentId)
+      if (!deployment) throw new Error('Late review evidence has no existing deployment receipt')
+      const evidence = lateEvidenceSchema.parse(event)
+      validateHandoffManifest(evidence, deployment)
+      deployments.set(deployment.id, { ...deployment, ownerHome: evidence.ownerHome, evidence: evidence.evidence, nonReviewable: evidence.nonReviewable })
+    }
+  }
+  return [...deployments.values()]
+}

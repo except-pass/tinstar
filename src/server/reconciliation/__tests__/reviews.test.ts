@@ -145,7 +145,7 @@ describe('durable shared review operations', () => {
 })
 
 describe('deployment audit reconciliation', () => {
-  it('repairs an older handoff once after source advances, preserving receipt and smoke across restart', async () => {
+  it.each(['historical', 'late-first', 'normal-first'])('repairs %s evidence once, preserving receipt and smoke across restart', async order => {
     const f = await fixture(), audit = new ReviewDeploymentAudit(f.root), associations = new AssociationStore(f.root)
     const source = fixtureSources(); source.fleet = []; source.intentions.data!.cards = [notionCard(f.raw)]
     const scene = () => ({ ...reconcileScene({ ...source, intentions: { ...source.intentions, data: { ...source.intentions.data!, cards: [notionCard(f.raw)] } } }), claimHistory: [], historyScope: 'current' })
@@ -165,7 +165,18 @@ describe('deployment audit reconciliation', () => {
     const manifest = join(f.root, 'evidence.json')
     await writeFile(manifest, JSON.stringify({ evidence: [{ card_id: id, review }] }))
     const env = { TINSTAR_CONFIG_HOME: f.root, TINSTAR_REVIEW_EVIDENCE_FILE: manifest }
-    await recordLateEvidence(deployment.id, env)
+    const normal = { ...deployment, ownerHome: '/fixture', evidence: [{ card_id: id, review }] }
+    if (order === 'normal-first') {
+      await writeFile(audit.path, (await readFile(audit.path, 'utf8')) + JSON.stringify({ ...normal, evidence: [] }) + '\n')
+      await recordLateEvidence(deployment.id, env)
+    } else {
+      if (order === 'late-first') await writeFile(manifest, JSON.stringify({ evidence: [] }))
+      await recordLateEvidence(deployment.id, env)
+      if (order === 'late-first') {
+        await writeFile(audit.path, (await readFile(audit.path, 'utf8')) + JSON.stringify(normal) + '\n')
+        await writeFile(manifest, JSON.stringify({ evidence: [{ card_id: id, review }] }))
+      }
+    }
     await reconcile()
     expect((await audit.exceptions()).some(row => row.id === prior.id)).toBe(false)
     expect(update).toHaveBeenCalledTimes(1)
@@ -176,7 +187,7 @@ describe('deployment audit reconciliation', () => {
     await reconcile()
     expect(await readFile(audit.path, 'utf8')).toBe(completed)
     expect(update).toHaveBeenCalledTimes(1)
-    expect((await audit.read()).filter(row => row.action === 'floor-deployment' || row.action === 'floor-smoke')).toEqual(receipts)
+    expect((await audit.read()).filter(row => row.action === 'floor-deployment' || row.action === 'floor-smoke')).toEqual(order === 'historical' ? receipts : [...receipts, order === 'normal-first' ? { ...normal, evidence: [] } : normal])
   })
 
   it('validates actual receipt, PR/head and canonical association and retains missing proof across restart', async () => {

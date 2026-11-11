@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { reviewEvidenceSchema, reviewSha, type ReviewEvidence } from '../../shared/reviews'
-import { lateEvidenceSchema, validateHandoffManifest } from '../../shared/reviewHandoff.mjs'
+import { lateEvidenceSchema, deploymentsWithEvidence } from '../../shared/reviewHandoff.mjs'
 import { releaseAssociations } from '../../shared/releases'
 import { updateWorkSchema, type StartWorkResult } from '../../shared/workflow'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
@@ -26,19 +26,6 @@ export interface HandoffException { id: string; deploymentId: string; deployedSh
 type HandoffEvent = { action: 'review-handoff'; time: string; exception: HandoffException; deliverySaved?: boolean }
 type AuditEvent = FloorDeployment | z.infer<typeof smokeSchema> | z.infer<typeof lateEvidenceSchema> | HandoffEvent
 const stable = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-
-function deploymentsWithEvidence(events: AuditEvent[]): FloorDeployment[] {
-  const deployments = new Map(events.filter((row): row is FloorDeployment => row.action === 'floor-deployment').map(row => [row.id, row]))
-  for (const event of events) if (event.action === 'floor-review-evidence') {
-    const deployment = deployments.get(event.deploymentId)
-    if (!deployment) throw new Error('Late review evidence has no existing deployment receipt')
-    validateHandoffManifest(event, deployment)
-    // Only handoff fields can change. A historical append is never a new deploy
-    // or a smoke receipt, including when the same source is deployed again.
-    deployments.set(deployment.id, { ...deployment, ownerHome: event.ownerHome, evidence: event.evidence, nonReviewable: event.nonReviewable })
-  }
-  return [...deployments.values()]
-}
 
 function validateDeploymentEvidence(deployment: FloorDeployment, evidence: ReviewEvidence) {
   if (evidence.deployment_id !== deployment.id || evidence.deployed_sha !== deployment.newSha) throw new ReviewWriteError('deployment-mismatch', 'Review evidence must identify this guarded deployment and SHA')

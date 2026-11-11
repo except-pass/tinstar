@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
-import { handoffManifestSchema, lateEvidenceSchema, validateHandoffManifest, handoffMeaning } from '../../src/shared/reviewHandoff.mjs'
+import { handoffManifestSchema, lateEvidenceSchema, validateHandoffManifest, handoffMeaning, deploymentsWithEvidence } from '../../src/shared/reviewHandoff.mjs'
 import { http } from './post-deploy-smoke.mjs'
 import { runningSha } from './deploy-support.mjs'
 
@@ -23,7 +23,7 @@ const run = (command, args, options = {}) => execFileSync(command, args, { encod
  * or rewrite deployment/smoke provenance to repair a review-only failure. */
 export async function recordLateEvidence(deploymentId, e = process.env) {
   const history = await events(e)
-  const deployment = history.filter(row => row.action === 'floor-deployment' && row.id === deploymentId).at(-1)
+  const deployment = deploymentsWithEvidence(history).find(row => row.id === deploymentId)
   if (!deployment) throw new Error('No existing guarded deployment receipt for the selected ID')
   const manifest = handoffManifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
   validateHandoffManifest(manifest, deployment)
@@ -33,16 +33,15 @@ export async function recordLateEvidence(deploymentId, e = process.env) {
   // A typo here would strand the durable exception without a usable delivery path.
   if (!ownerHome || !homes.includes(ownerHome)) throw new Error('Select a configured Firstmate home with TINSTAR_REVIEW_FIRSTMATE_HOME')
   const event = lateEvidenceSchema.parse({ action: 'floor-review-evidence', deploymentId, time: new Date().toISOString(), operator: userInfo().username, ownerHome, ...manifest })
-  const previous = history.filter(row => row.action === 'floor-review-evidence' && row.deploymentId === deploymentId).at(-1) ?? deployment
   const meaning = row => handoffMeaning({ ownerHome: row.ownerHome, evidence: row.evidence, nonReviewable: row.nonReviewable })
-  if (meaning(previous) !== meaning(event)) await append(e, event)
+  if (meaning(deployment) !== meaning(event)) await append(e, event)
   return event
 }
 export async function recordDeployment(e = process.env, execute = run) {
   const source = e.TINSTAR_DEPLOY_SOURCE
   const newSha = execute('git', ['-C', source, 'rev-parse', 'HEAD'])
   if (!shaPattern.test(newSha)) throw new Error('Deployment revision unavailable')
-  const id = `floor:${newSha}`, previous = (await events(e)).filter(row => row.action === 'floor-deployment' && row.id === id).at(-1)
+  const id = `floor:${newSha}`, previous = deploymentsWithEvidence(await events(e)).find(row => row.id === id)
   const oldSha = shaPattern.test(e.TINSTAR_PREVIOUS_DEPLOYED_SHA ?? '') ? e.TINSTAR_PREVIOUS_DEPLOYED_SHA : null
   const record = { action: 'floor-deployment', id, time: new Date().toISOString(), oldSha, newSha, pulls: [], membershipComplete: false, ownerHome: null, evidence: [], nonReviewable: [], warnings: [] }
   try {
@@ -85,7 +84,9 @@ export async function recordDeployment(e = process.env, execute = run) {
 }
 export async function recordSmoke(e = process.env) {
   const sha = await runningSha(e)
-  let deployment = (await events(e)).filter(row => row.action === 'floor-deployment').at(-1)
+  const history = await events(e)
+  const current = history.filter(row => row.action === 'floor-deployment').at(-1)
+  let deployment = deploymentsWithEvidence(history).find(row => row.id === current?.id)
   if (!sha || !deployment || sha !== deployment.newSha) throw new Error('Running revision does not match the deployment receipt')
   await append(e, { action: 'floor-smoke', deploymentId: deployment.id, newSha: sha, time: new Date().toISOString(), passed: true, receipt: 'Guarded Ask round-trip and MCP catalog/publication smoke; running /api/deployment SHA verified' })
   // Live proof may be collected after restart. Re-read the evidence file here
@@ -94,7 +95,7 @@ export async function recordSmoke(e = process.env) {
     try {
       const manifest = handoffManifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
       validateHandoffManifest(manifest, deployment)
-      deployment = { ...deployment, evidence: manifest.evidence, nonReviewable: manifest.nonReviewable ?? [], time: new Date().toISOString() }
+      deployment = { ...deployment, evidence: manifest.evidence, nonReviewable: manifest.nonReviewable ?? [] }
       await append(e, deployment)
     } catch { throw new Error('Live evidence manifest unreadable; handoff remains unconfirmed') }
   }
