@@ -347,6 +347,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
   const decision = page.locator(`.decisions-row[data-card-id="${fixtureId(1)}"]`).first()
   await decision.click()
+  await page.getByText('Evidence and delivery details', { exact: true }).click()
   const deskCard = page.getByRole('button', { name: 'Open related work' })
   await deskCard.focus()
   await page.keyboard.press('Enter')

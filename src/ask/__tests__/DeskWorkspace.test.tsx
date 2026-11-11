@@ -77,6 +77,27 @@ it('counts only conversations, keeps decisions out of Discuss and never reads li
   expect(items.map(item => item.read_at)).toEqual(items.map(() => null))
 })
 
+it('opens a delivered decision conversation in Waiting with one composer', async () => {
+  localStorage.setItem(deskPreferencesKey, JSON.stringify({ width: 320, collapsed: true }))
+  window.history.replaceState(null, '', '/?view=decisions')
+  source.queue = fixtureQueue()
+  const request = (source.queue.needsWill ?? source.queue.items)[0]!
+  const delivered = record()
+  delivered.context.target = { kind: 'decision', id: request.id }
+  delivered.context.view = { scene: 'decisions', request_key: request.id }
+  items = [delivered]
+  render(<App />)
+  const full = await screen.findByRole('button', { name: 'Full conversation ↗' })
+  fireEvent.click(full)
+  await act(async () => {})
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
+  fireEvent.click(full)
+  await act(async () => {})
+  expect(screen.getByRole('button', { name: 'Waiting 1' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('region', { name: /Answer thread/ })).toHaveTextContent(delivered.question)
+  expect(screen.getAllByRole('textbox', { name: 'Reply to First Mate' })).toHaveLength(1)
+})
+
 it('keeps queue failures and expired evidence out of conversation counts', async () => {
   source.queue = fixtureQueue()
   const view = render(<Shell />)

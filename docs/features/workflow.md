@@ -445,7 +445,12 @@ published Notion request retains the exact identity, question and task generatio
 a card ID, title or bare decision key never substitutes for request identity.
 
 Answer that proposal with the existing `answer_decision` operation. UI and MCP
-use the same function. Source approvals leave implementation queued; starting or
+use the same function. Before recording a new source-bound answer or changing
+properties, the shared writer verifies the exact source is still open and bound
+to this card, with the published question and generation unchanged. Typed
+proposals must also be current under the [shared resolver](#decisions-workbench-proposals).
+This applies to MCP answers, UI choices and direct-answer recovery without an
+existing recorded intent. Source approvals leave implementation queued; starting or
 completing implementation is a separate workflow operation. Only the selected
 request's action and caller-specified exact wait are removed. Other asks survive.
 The first durable answer intent is recorded in Notion before property writes.
@@ -472,6 +477,9 @@ different consumers converge on one delivery. A saved message or acknowledged
 receipt alone does not resolve Decisions: the acknowledgment and fresh, complete
 source closure must both be observed, then confirmed in Notion. Until then the
 shared projection reports **Decision recorded · First Mate not yet updated**.
+Finalization of an already-recorded answer uses its own durable binding, even if
+a newer proposal supersedes it or its source has closed. Currentness gates new
+answers, not delivery, acknowledgment, closure or recovery of recorded answers.
 There is no independent poller or request store.
 
 Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
@@ -508,6 +516,58 @@ or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` whe
 those asks were already removed; never clear an unrelated remaining action.
 
 Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.
+
+### Decisions workbench proposals
+
+First Mate can add `proposal` to the existing `request_decision` publication. It
+uses `schema: "tinstar.decision-proposal.v1"`, a stable `proposal_id`, the exact
+queue `request_key`, optional canonical `card_id`, `question`, `rationale`,
+`recommended_action_id`, `actions: [{id,label,instruction,merge?}]`, HTTPS
+`references: [{label,url}]`, `source: {kind:"firstmate-request",id,revision}`,
+`published_at` and `supersedes` (null or the prior proposal ID). Use the existing
+`source_request` binding; the source ID identifies that request. Actions use the
+existing Ask action validation. Publication rejects a `request_key` that differs
+from the canonical queue request bound by `source_request`. That exact key is
+recorded with the publication and used for later admission, preserving history
+after source closure without admitting proposals from another request on the
+same card. A revision is a new publication with a new
+`request_id` and proposal ID; it supersedes the prior proposal for that exact ask.
+For the same open request, typed Ask and work publications are resolved together.
+Any proposal named by another publication’s `supersedes` is history; the newest
+remaining publication wins, even when intermediate revisions are absent or
+publications are unrelated. Ties use, in order, the lexicographically greatest
+proposal ID, source kind (`ask-reply` wins over `firstmate-request`), source ID
+and source revision, independent of input order. Legacy rows without typed
+proposals are metadata.
+Legacy options and freeform text retain their existing behavior.
+
+Ask replies may carry the same `decision_proposal` object with
+`source.kind: "ask-reply"` and `source.id` equal to their existing request/answer
+ID. Ask's selection input remains `{answer_id,action_id,client_key}`. Publications
+in work history resolve to a durable source-derived answer ID. At selection time
+the shared selection writer forces a fresh, non-cached source read and verifies
+current queue membership, exact source binding/generation, proposal revision,
+freshness and owner authorization before recording any new choice. It imports
+the publication into the same request's Ask thread and records the ordinary
+idempotent selection.
+Importing a publication never invents an owner message or sends it to First Mate.
+For ordinary actions, the selection is the only new outbound turn. Merge actions
+use the [Clawson handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge)
+and retain its receipt on the selection instead. Unknown delivery retains its key;
+retrying or choosing from a second device converges on the original selection.
+No choice marks a card Done, changes its owner/status, or dismisses the queue.
+
+The [Decisions workbench](reconciliation-queue.md#decisions-tab) owns presentation,
+Discussion and return navigation. The queue projects the authoritative current
+answer ID across configured owners while keeping other owners’ private Ask
+content out of the response. Incomplete publication history retains last-known
+proposals as disabled evidence until a complete refresh. Resolving a contextual
+Ask scopes the existing queue projection to that request so unrelated card
+histories do not delay the turn.
+
+The MCP catalog changes only by the additive optional `request_decision.proposal`
+field; refresh the connector once to discover it. No tools are added.
+`search_work` owner/status filters and `coverage.intentions` are unchanged.
 
 ## One-call approved implementation handoffs
 

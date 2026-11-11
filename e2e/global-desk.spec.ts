@@ -471,6 +471,8 @@ test('retained worker note exposes targeted retry and reply after its worker lea
   })
   await page.goto(base)
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await page.getByText('Some sources need verification', { exact: true }).click()
+  await page.getByText('Technical diagnostics', { exact: true }).click()
   await page.getByText('Retained worker notes', { exact: true }).click()
   const retained = page.locator('.cockpit-messages')
   await expect(retained).toContainText('Delivery failed')
@@ -657,4 +659,40 @@ test('a new reply anchors only when the reader is already at the latest exchange
   await page.getByRole('button', { name: 'Read new answer' }).click()
   await expect.poll(() => viewport.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2)
   await expect(page.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
+})
+
+test('phone workbench navigation and Full conversation return preserve the exact request and one visible composer', async ({ page }) => {
+  const item = fixtureQueue().items[0]!
+  const record = askItemSchema.parse({ request_id: '00000000-0000-4000-8000-000000000010', conversation_id: '10000000-0000-4000-8000-000000000010',
+    question: 'Explain this request', input_mode: 'text', context: {
+      anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Fixture decision', url: null, observed_at: null },
+      target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: 'Build' },
+      return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: 'Build' } },
+    }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered',
+    reply: { summary: 'Evidence for this exact request', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null,
+  })
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`${base}/?view=decisions`)
+  await page.locator('.decisions-row').first().click()
+  const detail = page.getByLabel('Selected decision')
+  await expect(detail).toHaveAttribute('data-decision-id', item.id)
+  await detail.getByRole('button', { name: 'Next decision →' }).click()
+  await expect(detail).not.toHaveAttribute('data-decision-id', item.id)
+  await detail.getByRole('button', { name: '← Previous' }).click()
+  await expect(detail).toHaveAttribute('data-decision-id', item.id)
+  await detail.getByRole('button', { name: 'Full conversation ↗' }).click()
+  const desk = page.getByRole('dialog', { name: 'Discuss' })
+  await expect(desk.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
+  await expect(detail.locator('.ask-composer')).toHaveCount(0)
+  await desk.getByRole('button', { name: 'Return to source' }).click()
+  await expect(desk).toBeHidden()
+  await expect(detail).toBeVisible()
+  await expect(detail).toHaveAttribute('data-decision-id', item.id)
+  await expect(page.locator('.decisions-search input')).toHaveValue('Build')
+  await expect(detail.locator('.ask-composer')).toHaveCount(1)
+  await page.reload()
+  await expect(detail).toBeVisible()
+  await expect(detail).toHaveAttribute('data-decision-id', item.id)
+  await expect(page.locator('.decisions-search input')).toHaveValue('Build')
 })

@@ -1,3 +1,4 @@
+import { currentDecisionProposal, decisionProposalSchema } from '../../shared/decisionProposal'
 import { decisionRecordRows, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
@@ -53,7 +54,7 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export function decisionProposals(notes: WorkflowNote[]) {
+export function decisionHistory(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
@@ -61,7 +62,7 @@ export function decisionProposals(notes: WorkflowNote[]) {
       return { row, added: !!data?.binding }
     })
   })
-  return [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
+  const history = [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
     const matching = entries.filter(entry => entry.row.id === id)
     if (matching.length === 1) return [matching[0]!.row]
     const published = matching.filter(entry => !entry.added), added = matching.filter(entry => entry.added)
@@ -70,6 +71,31 @@ export function decisionProposals(notes: WorkflowNote[]) {
     if (original.source_request || !binding.source_request || original.action !== binding.action || original.preserve_action !== binding.preserve_action) throw new DecisionSourceError('proposal identity has conflicting binding metadata')
     return [{ ...original, source_request: binding.source_request, source_question: binding.source_question, source_spawn_gen: binding.source_spawn_gen }]
   })
+  return history.filter(row => {
+    if (!row.source_request) return !decisionProposalSchema.safeParse(row.proposal).success
+    const request = firstMateRequestSchema.safeParse(row.source_request)
+    if (!request.success) throw new DecisionSourceError('published source binding is incomplete')
+    const value = decisionProposalSchema.safeParse(row.proposal)
+    return !value.success || value.data.source.kind === 'firstmate-request' && value.data.source.id === request.data.id && (publications === undefined || publications.some(entry => entry.source_request && requestKey(entry.source_request) === requestKey(request.data) && JSON.stringify(entry.value) === JSON.stringify(value.data)))
+  })
+}
+export function decisionProposals(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+  const history = decisionHistory(notes, publications)
+  const bound = new Map<string, typeof history>()
+  for (const row of history.filter(row => row.source_request)) {
+    const key = requestKey(firstMateRequestSchema.parse(row.source_request))
+    bound.set(key, [...(bound.get(key) ?? []), row])
+  }
+  const current = [...bound.values()].map(group => {
+    const candidates = group.flatMap(row => {
+      const value = decisionProposalSchema.safeParse(row.proposal)
+      return value.success ? [{ value: value.data }] : []
+    })
+    const keys = new Set(candidates.map(entry => entry.value.request_key))
+    const current = currentDecisionProposal([...candidates, ...(publications ?? []).filter(entry => keys.has(entry.value.request_key))])
+    return group.find(row => row.proposal && JSON.stringify(row.proposal) === JSON.stringify(current?.value))
+  })
+  return history.filter(row => !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
 }
 export function decisionAnswer(note: WorkflowNote) {
   const data = rows([note], 'Tin Star answer data: ')[0]
@@ -83,23 +109,19 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
-  confirm?: (text: string, marker: string) => Promise<void>): Promise<DecisionResolution | undefined> {
-  let requests: ReturnType<typeof decisionProposals>
-  try { requests = decisionProposals(notes) } catch (error) { return verify((error as Error).message) }
-  const bound = requests.filter(row => row && 'source_request' in row)
+  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[]): Promise<DecisionResolution | undefined> {
+  let requests: ReturnType<typeof decisionHistory>
+  try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
+  const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success || rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) || rows(notes, 'Tin Star answer data: ').some(answer => answer.request_id === row.id)))
   if (!bound.length) {
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
-    return linkedSource && rows(notes, 'Tin Star answer: ').length ? verify('answered proposal has no explicit First Mate request binding') : undefined
+    return linkedSource && rows(notes, 'Tin Star answer: ').length && !rows(notes, 'Tin Star request: ').some(row => row.source_request) ? verify('answered proposal has no explicit First Mate request binding') : undefined
   }
-  const sources = new Set<string>()
   const results: DecisionResolution[] = []
   for (const row of bound) {
     const parsed = firstMateRequestSchema.safeParse(row.source_request)
     if (!parsed.success || typeof row.id !== 'string' || typeof row.source_question !== 'string' || !(row.source_spawn_gen === null || typeof row.source_spawn_gen === 'string')) return verify('published source binding is incomplete')
-    const request = parsed.data, key = requestKey(request)
-    if (sources.has(key)) return verify('multiple proposals bind the same source request')
-    sources.add(key)
   }
   // Validate every binding before sending any answer from this card.
   const reconcile = async (row: typeof bound[number]): Promise<DecisionResolution> => {

@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
+import { currentDecisionProposal } from '../../shared/decisionProposal'
+import { clawsonMergeSchema, type ClawsonMergeInput } from '../../shared/clawsonMerge'
+import { decisionContext, decisionFresh, decisionRevision } from './decision'
 import { findSuggestedAction } from '../../shared/ask-actions'
 import { getConfigRoot } from '../configRoot'
 import { ok, fail } from '../api/envelope'
@@ -48,8 +51,15 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
-    this.store = new AskStore(root)
+  constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue' | 'askStore' | 'proposalSource'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
+    this.store = sources.askStore ?? new AskStore(root)
+  }
+  private async sendMerge(input: ClawsonMergeInput, login: string) {
+    if (!this.artifacts?.sendMerge) throw new AskConflict('Merge handoff unavailable')
+    const result = await this.artifacts.sendMerge(input, login)
+    if (result.outcome === 'not-saved' && result.code !== 'operation-conflict') return { blocked: result.message }
+    if (!result.card) throw new Error(result.message)
+    return { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]!
@@ -77,7 +87,7 @@ export class AskApi {
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
           if (conversation) return ok(res, await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId), { headers })
-          const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled)
+          const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled, (input, owner) => this.sendMerge(input, owner))
           const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
           const work = !syntheticId && this.workUpdates ? await this.workUpdates.bridgeWork() : { pending: [], tracked: [] }
           return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
@@ -123,9 +133,39 @@ export class AskApi {
       if (path === '/api/ask/requests' && req.method === 'GET') return ok(res, (await this.store.list(login)).map(publicAsk), { headers })
       if (path === '/api/ask/selections' && req.method === 'POST') {
         const input = askSelectionInputSchema.parse(await readBody(req))
-        const selected = await this.store.createActionSelection(login, input, (answer, actionId) =>
-          findSuggestedAction(answer.reply!.suggested_actions, actionId))
-        return ok(res, publicAsk(selected), { headers })
+        const current = async (key: string) => {
+          const queue = await this.sources.queue?.(req, key, true)
+          const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === key)
+          if (!item || !decisionFresh(item)) throw new AskConflict('Request freshness is unverified; refresh before choosing')
+          return item
+        }
+        const selected = await this.store.createActionSelection(login, input, async (answer, actionId, proposals) => {
+          const proposal = answer.reply!.decision_proposal
+          if (answer.context.target?.kind === 'decision') {
+            const item = await current(answer.context.target.id)
+            if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
+            if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
+            if (answer.published_proposal && !(item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === answer.request_id && JSON.stringify(published.value) === JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
+            const publications = this.sources.proposalSource ? await this.sources.proposalSource.forRequest(item.id, item.cardIds) : [...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))]
+            if (currentDecisionProposal(publications)?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded')
+            if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
+            return findSuggestedAction(proposal.actions, actionId)
+          }
+          return findSuggestedAction(answer.reply!.suggested_actions, actionId)
+        }, async answerId => {
+          const queue = await this.sources.queue?.(req)
+          const item = (queue?.needsWill ?? []).find(item => (item.proposals ?? (item.proposal ? [item.proposal] : [])).some(proposal => proposal.answer_id === answerId))
+          const proposal = (item?.proposals ?? (item?.proposal ? [item.proposal] : [])).find(proposal => proposal.answer_id === answerId)
+          if (!item || !proposal) return undefined
+          if (!decisionFresh(item)) throw new AskConflict('Published request needs refresh')
+          return { context: decisionContext(item, { scene: 'decisions' }), proposal: proposal.value }
+        }, async (action, operationId) => {
+          if (!this.artifacts?.pullOrigin || !this.artifacts.sendMerge) throw new AskConflict('Merge handoff unavailable')
+          const pull = await this.artifacts.pullOrigin(action.merge!.pr_url)
+          return clawsonMergeSchema.parse({ operation_id: operationId, targets: [{ url: action.merge!.pr_url, head: pull.head }] })
+        })
+        const delivered = selected.merge_selection ? await this.store.deliverMerge(login, selected.request_id, input => this.sendMerge(input, login)) : selected
+        return ok(res, publicAsk(delivered), { headers })
       }
       if (path === '/api/ask/requests' && req.method === 'POST') {
         const input = askCreateSchema.parse(await readBody(req))
@@ -138,10 +178,29 @@ export class AskApi {
         const parent = input.follow_up_to ? await this.store.find(login, input.follow_up_to) : undefined
         if (input.follow_up_to && !parent) throw new AskNotFound('Original question unavailable')
         let context: AskContext
-        if (existing || parent) context = (existing ?? parent)!.context
+        if (existing) context = existing.context
+        else if (parent) {
+          context = parent.context
+          if (parent.context.target?.kind === 'decision') {
+            // Keep the thread's exact request and return locator while refreshing
+            // its source observation; old turns retain their original snapshot.
+            try {
+              const queue = await this.sources.queue?.(undefined, parent.context.target.id)
+              const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === parent.context.target!.id)
+              if (item) context = decisionContext(item, parent.context.view)
+              else context = { ...context, anchor: { ...context.anchor, freshness: 'unknown' } }
+            } catch { context = { ...context, anchor: { ...context.anchor, freshness: 'unknown' } } }
+          }
+        }
         else if (input.synthetic_id) {
           if (input.card_id !== '00000000000000000000000000000000') throw new AskNotFound('Synthetic Ask requires the smoke anchor')
           context = { anchor: { kind: 'work', page_id: input.card_id, label: 'Deploy smoke', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: input.view }
+        }
+        else if (input.target?.kind === 'decision') {
+          const queue = await this.sources.queue?.(undefined, input.target.id)
+          const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === input.target!.id)
+          if (!item) throw new AskNotFound('Request unavailable in the authorized queue')
+          context = decisionContext(item, input.view)
         }
         else if (isArtifactTarget(input.target)) {
           if (input.view.worker) throw new AskConflict('Worker view requires a canonical execution')

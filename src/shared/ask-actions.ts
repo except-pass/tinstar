@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { releasePull } from './releases'
+import { releasePull } from './pullIdentity'
 
 export const askActionIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/)
 

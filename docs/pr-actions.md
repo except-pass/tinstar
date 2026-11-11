@@ -113,7 +113,13 @@ instead of creating an operator request. The owner’s initial click reads the P
 and binds its head. The same preflight and card authority apply. The thread shows
 the card link after success or an explanation on refusal. Tin Star does not merge.
 
-Within the mounted answer, retries reuse the operation ID. An uncertain outcome,
+For [typed decision proposals](features/workflow.md#decisions-workbench-proposals),
+the existing Ask selection route records the proposal-bound choice and its
+Clawson receipt durably, without sending an ordinary outbound Ask turn. Retries
+and another device recover that same selection and handoff. A definite blocked
+preflight permits a fresh selection; an uncertain creation retains its identity.
+
+For other Ask suggestions within the mounted answer, retries reuse the operation ID. An uncertain outcome,
 including an unreadable response or `create-unconfirmed`, retains and replays the
 posted URL and head without another GitHub read. A definite refusal clears that
 payload so the next click reads the PR again under the same operation ID. Receipt

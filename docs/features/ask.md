@@ -502,7 +502,7 @@ consumption atomically. Same-key retries and another device's same action recove
 one request before staleness checks; competing choices conflict. Converged device
 keys remain bound to that request across reloads.
 
-A selection creates a normal correlated bridge request, with canonical instruction
+A non-merge selection creates a normal correlated bridge request, with canonical instruction
 as its question and `action_selection` metadata identifying selection, answer,
 action, label, authenticated actor and selection time. History labels it
 `role: action_selection`, provenance `operator_selection`, distinct from model
@@ -519,11 +519,20 @@ The UI maps persisted Sent to Requested, then shows Delivered or Answered only
 when the corresponding bridge evidence exists.
 Answered means First Mate replied; read that reply for completion, a permission
 block or an uncertain effect requiring reconciliation.
-No execution outcome is inferred by Tin Star.
-Historical buttons remain visible and disabled after a later assistant reply,
-with an explanation that those recommendations are outdated.
+For a structured reply to an action selection, optional `outcome` accepts
+`acting`, `completed`, `blocked` or `failed`; the UI displays that reported state.
+Without it, an answer is only a received result. No execution outcome is inferred
+by Tin Star.
+Historical ordinary suggestion buttons remain visible and disabled after a later
+assistant reply, with an explanation that those recommendations are outdated.
+Typed decision proposals follow the [shared proposal currentness contract](workflow.md#decisions-workbench-proposals).
 An unknown network acknowledgement offers a retry of the same selection/key;
-a definitive stale or conflicting selection reports the server's rejection.
+a definitive stale or conflicting new selection reports the server's rejection.
+Recovery of a recorded selection bypasses new-choice eligibility checks. For an
+unconfirmed decision merge, **Retry same selection** remains available even when
+the proposal is superseded, stale or its source is closed. The existing bridge
+also retries that recorded handoff using its persisted operation ID and PR/head
+binding; it creates no new selection or ordinary outbound Ask turn.
 Existing delivery retry controls retain the selected request's note identity.
 
 
@@ -536,7 +545,7 @@ orders individual user and First Mate messages by their timestamps; summaries
 that prefix the full answer are shown once. Markdown links remain links. Validated
 structured actions stay with the proposing answer and remain disabled after a
 superseding answer. Selection receipts report Requested, Delivered or Result
-received; First Mate's ordinary reply supplies the actual outcome.
+received, or the structured outcome supplied by First Mate’s reply.
 
 A latest reply whose actions failed validation shows **One-click action unavailable**
 and **Request new choices**, which prepares an editable follow-up in the same
@@ -544,12 +553,8 @@ conversation. Validation reasons and raw request evidence live in **Technical
 details**. Existing legacy text suggestions remain inert. Old user messages quoting
 the former validator wall retain the full original under Technical details.
 
-Decisions retains the existing queue and canonical identities. It has one compact
-row per request, even when several cards support it. Evidence and existing response
-controls open in its detail pane; conditional and unverified requests display their
-limits before any action. Legacy encoded text is decoded before readiness checks,
-so a request beginning “After the next prod release” remains conditional. Aggregate
-“Owner calls via main” records remain operational coordination in diagnostics,
-with no omnibus acceptance. Source warnings and retained worker notes are
-available on demand near the footer. No new queue, approval engine, poller or
-model call is introduced.
+The [Decisions workbench reference](reconciliation-queue.md#decisions-tab) owns its
+recommendation layout, contextual Discussion, challenges and navigation. The
+[proposal contract](workflow.md#decisions-workbench-proposals) owns typed decision
+publications and cross-source currentness. Decision targets use the existing Ask
+store and selection route, with no separate conversation history or poller.

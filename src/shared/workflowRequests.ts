@@ -1,3 +1,5 @@
+import { decisionProposalSchema } from './decisionProposal'
+import { firstMateRequestSchema } from './deskSource'
 import { decisionOptionsSchema } from './workflow'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
@@ -48,8 +50,10 @@ export function decisionRequests(notes: RequestNote[]) {
     try {
       if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
       const options = decisionOptionsSchema.safeParse(row.options)
+      const proposal = decisionProposalSchema.safeParse(row.proposal), sourceRequest = firstMateRequestSchema.safeParse(row.source_request)
       const lines = note.text.split('\n')
       return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true, options: options.success ? options.data : undefined,
+        ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
         requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) }]

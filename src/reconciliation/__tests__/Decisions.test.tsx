@@ -1,6 +1,9 @@
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { decisionRequestRevision } from '../../shared/decisionProposal'
+import { fixtureProposal } from '../../../test-fixtures/reconciliation/decisionProposal'
+import { AskProvider, AskDesk, useAskControls } from '../../ask/Ask'
 import { Decisions } from '../Decisions'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueSource } from '../../server/reconciliation/queue'
@@ -15,13 +18,37 @@ vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.va
 vi.mock('../../ask/AskSurface', () => ({ AskSurface: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
 let state: PresentationState
 beforeEach(() => {
-  localStorage.clear()
+  localStorage.clear(); sessionStorage.clear()
   state = initialPresentation()
   Element.prototype.scrollIntoView = vi.fn()
   workspace.value = { scene: fixtureScene(), queue: fixtureQueue(), state, now: Date.now(), send: vi.fn(), connection: { scene_id: 'same-window' } }
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('Decisions', () => {
+  it('retains the exact shared-card request across reload while the queue loads', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [] }))))
+    const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }, second = { ...queue.items[0]!, id: 'request-b' }
+    queue.items = [first, second]; queue.needsWill = undefined
+    workspace.value.queue = queue
+    state.selection = { kind: 'card', id: first.cardIds[0]! }
+    const view = render(<Decisions />)
+    fireEvent.click(view.container.querySelectorAll('.decisions-row')[1]!)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    view.unmount()
+
+    workspace.value.queue = null
+    const reloaded = render(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    workspace.value.queue = queue
+    reloaded.rerender(<Decisions />)
+    expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', second.id)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+
+    state.selection = { kind: 'card', id: fixtureId(5) }
+    reloaded.rerender(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBeNull()
+    await act(async () => {})
+  })
   it('finds conditional cards and sends canonical shared focus without opening a second Desk', () => {
     const { container } = render(<Decisions />)
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Roadmap' } })
@@ -123,7 +150,7 @@ describe('Decisions', () => {
     queue.items = [{ ...queue.items[0]!, id: 'hold:unlinked', title: `fm-hold-v1:${btoa('Choose a recovery path')}`, cardIds: [], evidence: [] }]
     workspace.value.queue = queue
     const view = render(<Decisions />)
-    fireEvent.click(screen.getByText('Choose a recovery path'))
+    fireEvent.click(document.querySelector('.decisions-row')!)
     expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'hold:unlinked')
     expect(workspace.value.send).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-card-id]')).toBeNull()
@@ -229,7 +256,7 @@ it('keeps coordination bundles in diagnostics rather than presenting one omnibus
   expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(0)
   const note = screen.getByText(/Owner calls via main/)
   expect(note.closest('details')).not.toHaveAttribute('open')
-  expect(screen.getByText(/Some requests need verification/)).toBeVisible()
+  expect(screen.getByText(/Some sources need verification/)).toBeVisible()
 })
 
 it('preserves recommendation verbs as questions and hides workflow protocol metadata', async () => {
@@ -240,12 +267,13 @@ it('preserves recommendation verbs as questions and hides workflow protocol meta
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'note', text: original }] } }))))
   render(<Decisions />)
   fireEvent.click(document.querySelector('.decisions-row')!)
+  fireEvent.click(screen.getByText('Evidence and delivery details'))
   const evidence = await screen.findByText('Question: Keep 1 replica or move to 3?', { selector: 'p' })
   expect(evidence).toBeVisible()
   for (const marker of ['private-request', 'private-decision', 'private-operation']) expect(evidence).not.toHaveTextContent(marker)
   const detail = screen.getByLabelText('Selected decision')
   expect(detail).toHaveTextContent('Should we recommend 3 replicas or keep 1?')
-  expect(detail).not.toHaveTextContent('First Mate recommends')
+  expect(detail).toHaveTextContent('Recommendation not yet published')
   expect(within(detail).queryByLabelText('Operation')).toBeNull()
   expect(within(detail).queryByText('Edit / note')).toBeNull()
   expect(within(detail).getByLabelText('Answer')).toBeInTheDocument()
@@ -275,6 +303,7 @@ it('exposes every supporting card context in one canonical request', async () =>
   vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'source', text: url.includes(fixtureId(1)) ? 'First supporting question' : 'Second supporting question' }] } }))))
   const view = render(<Decisions />)
   fireEvent.click(view.container.querySelector('.decisions-row')!)
+  fireEvent.click(screen.getByText('Evidence and delivery details'))
   expect(await screen.findByText('First supporting question', { selector: 'p' })).toBeVisible()
   expect(await screen.findByText('Second supporting question', { selector: 'p' })).toBeVisible()
   expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(1)
@@ -299,6 +328,7 @@ it('labels merged PR response controls with their own questions and routes each 
   fireEvent.click(view.container.querySelector('.decisions-row')!)
   expect(view.container.querySelectorAll('.decisions-row')).toHaveLength(1)
   expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', 'merged-pr-request')
+  fireEvent.click(screen.getByText('Evidence and delivery details'))
   for (const [index, question] of questions.entries()) {
     const section = screen.getByText(question).closest('section')!
     expect(section).toBeVisible()
@@ -374,6 +404,7 @@ it.each(['item', 'card'] as const)('focus supersedes a prior %s queue target in 
   view.rerender(<Decisions />)
   const detail = screen.getByLabelText('Selected decision')
   expect(detail).toHaveAttribute('data-decision-id', 'request-b')
+  fireEvent.click(within(detail).getByText('Evidence and delivery details'))
   expect(within(detail).getByText('Approve the second request?')).toBeVisible()
   expect(within(detail).queryByText('Approve the first request?')).toBeNull()
   expect(within(detail).getByRole('slider', { name: 'Slide to dismiss' })).toBeVisible()
@@ -512,4 +543,188 @@ describe('complete Decisions reveal delivery', () => {
       expect(view.container.querySelector(`[data-card-id="${b.id}"]`)).toBeNull()
     }
   })
+})
+
+it('previews the first request without setting shared focus and navigates with the active search intact', () => {
+  const view = render(<Decisions />)
+  expect(screen.getByLabelText('Selected decision')).toBeInTheDocument()
+  expect(workspace.value.send).not.toHaveBeenCalled()
+  expect(view.container.querySelectorAll('.decisions-row.selected')).toHaveLength(0)
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Roadmap' } })
+  fireEvent.click(view.container.querySelector('.decisions-row')!)
+  fireEvent.click(screen.getByRole('button', { name: /All decisions/ }))
+  expect(screen.getByRole('searchbox')).toHaveValue('Roadmap')
+  expect(view.container.querySelector('.decisions')).not.toHaveClass('detail-open')
+})
+it('uses the existing text and voice composer for an exact request challenge, including an unlinked request', async () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, id: 'unlinked-a', cardIds: [], title: 'Unlinked fixture request', sources: [], evidence: [] }
+  queue.items = [item]
+  workspace.value.queue = queue
+  const calls: unknown[] = []
+  vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    if (init?.body) calls.push(JSON.parse(String(init.body)))
+    return new Response(JSON.stringify(init?.body ? { ok: false, error: { message: 'Fixture delivery unavailable' } } : { ok: true, data: [] }))
+  }))
+  render(<AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /></AskProvider>)
+  await act(async () => {})
+  expect(screen.getAllByRole('button', { name: 'Record voice question' })).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: /Something wrong/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Not my decision' }))
+  expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('Please verify who owns this exact decision')
+  expect(calls).toHaveLength(0)
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send question' })) })
+  expect(calls[0]).toMatchObject({ target: { kind: 'decision', id: 'unlinked-a' }, view: { scene: 'decisions', request_key: 'unlinked-a' } })
+})
+it('shows typed proposal choices only for their request, and disables a last-known proposal', async () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, id: 'exact-a', readiness: 'ready-now' as const, cardIds: [fixtureId(1)], sources: [{ kind: 'firstmate' as const, id: 'source', field: 'decision', status: 'stale' as const, coverage: 'complete' as const, observedAt: null, expiresAt: null }] }
+  queue.items = [{ ...item, proposal: { answer_id: '11111111-1111-4111-a111-111111111111', value: fixtureProposal(item.id, fixtureId(1)) } }, { ...item, id: 'exact-b' }]
+  workspace.value.queue = queue
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [] }))))
+  const view = render(<AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /></AskProvider>)
+  await act(async () => {})
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+  expect(screen.getByRole('button', { name: /^Not yet:/ })).toBeDisabled()
+  fireEvent.click(view.container.querySelectorAll('.decisions-row')[1]!)
+  expect(screen.queryByRole('button', { name: /^Proceed:/ })).toBeNull()
+  expect(screen.getByText('Recommendation not yet published')).toBeVisible()
+})
+
+
+it('keeps legacy published options read-only while their retained source is stale', () => {
+  const queue = fixtureQueue(), item = { ...queue.items[0]!, readiness: 'needs-readiness-verification' as const }
+  queue.needsWill = [{ ...item, requestSince: null, ageBasis: 'unknown', pulls: [], requests: [{ cardId: item.cardIds[0]!, id: 'legacy-published', action: 'Decision', preserveAction: false, requestedFrom: 'Will', question: 'Choose a route?', since: null, sourceId: 'legacy-source', answered: false, options: [{ id: 'proceed', label: 'Legacy published route' }] }] }]
+  workspace.value.queue = queue
+  render(<Decisions />)
+  expect(screen.getByRole('button', { name: 'Legacy published route' })).toBeDisabled()
+})
+
+
+it('keeps an Ask publication read-only until its source snapshot matches the refreshed request', async () => {
+  vi.useFakeTimers()
+  const queue = fixtureQueue(), item = queue.items[0]!, id = '11111111-1111-4111-a111-111111111111'
+  item.readiness = 'ready-now'
+  item.sources = [{ kind: 'firstmate', id: 'source', field: 'question', status: 'fresh', coverage: 'complete', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+  const proposal = { ...fixtureProposal(item.id, item.cardIds[0]), source: { kind: 'ask-reply', id, revision: 'reply-one' } }
+  const context = { anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Current request', url: null, observed_at: null }, target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' }, decision: { request_key: item.id, revision: 'old-source-snapshot' } }
+  const record = { request_id: id, conversation_id: id, question: 'Recommend a route', input_mode: 'text', context, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'Published route', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }, error: null, read_at: null, dismissed_at: null }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record] }))))
+  workspace.value.queue = queue
+  render(<AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /></AskProvider>)
+  await act(async () => {})
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeDisabled()
+  record.context.decision.revision = decisionRequestRevision(item)
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  const explanation = { ...record, request_id: '22222222-2222-4222-a222-222222222222', question: 'Why this option?', reply: { summary: 'An explanation', detail: '', references: [], suggested_actions: [] } }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record, explanation] }))))
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  const selection = { ...explanation, request_id: '33333333-3333-4333-a333-333333333333', outcome: 'completed', action_selection: { selection_id: '44444444-4444-4444-a444-444444444444', answer_id: id, action_id: 'proceed', instruction: 'Proceed', label: 'Proceed', actor: 'owner', selected_at: new Date().toISOString() } }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record, explanation, selection] }))))
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+  expect(screen.queryByText('Awaiting your choice')).toBeNull()
+  expect(screen.getAllByText('Completed')).toHaveLength(2)
+})
+
+
+it('returns to the exact request and shared card focus over an earlier MCP queue target', () => {
+  const queue = fixtureQueue(), scene = fixtureScene(), first = queue.items[0]!, next = queue.items.find(item => item.cardIds.includes(fixtureId(5)))!
+  state = { ...state, queueOpen: true, queueItemId: first.id, queueCardId: null, selection: { kind: 'card', id: first.cardIds[0]! } }
+  workspace.value.state = state
+  workspace.value.origin = { section: 'decisions', target: { kind: 'decision', id: next.id }, view: { scene: 'decisions', query: 'Roadmap' } }
+  workspace.value.send = vi.fn((action: Parameters<typeof applyPresentationAction>[1]) => {
+    const result = applyPresentationAction(state, action, scene, Date.now(), queue)
+    state = result.state; workspace.value.state = state
+    return result
+  })
+  render(<Decisions />)
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', next.id)
+  expect(state.queueOpen).toBe(false)
+  expect(state.selection).toEqual({ kind: 'card', id: fixtureId(5) })
+  expect(screen.getByRole('searchbox')).toHaveValue('Roadmap')
+})
+it('does not substitute another request when a retained conversation returns to an absent request', () => {
+  workspace.value.origin = { section: 'decisions', target: { kind: 'decision', id: 'no-longer-present' } }
+  render(<Decisions />)
+  expect(screen.getByLabelText('Request unavailable')).toBeVisible()
+  expect(screen.queryByLabelText('Selected decision')).toBeNull()
+})
+
+
+it('shows an unavailable queue instead of a blank mobile detail when no source data was retained', () => {
+  sessionStorage.setItem('tinstar-decision-request', 'retained-request')
+  workspace.value.queue = null
+  workspace.value.queueError = 'Unavailable source'
+  const view = render(<Decisions />)
+  expect(screen.getByText('Decision sources are unavailable.')).toBeVisible()
+  expect(view.container.querySelector('.decisions')).not.toHaveClass('detail-open')
+})
+
+it('collapses another request thread when selection changes and sends through one exact composer', async () => {
+  const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }, second = { ...queue.items[0]!, id: 'request-b', title: 'Second request' }
+  queue.items = [first, second]; queue.needsWill = undefined
+  workspace.value.queue = queue; workspace.value.openDesk = vi.fn()
+  const id = '11111111-1111-4111-a111-111111111111'
+  const record = { request_id: id, conversation_id: id, question: 'Explain request A', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: first.cardIds[0]!, label: 'Request A', url: null, observed_at: null }, target: { kind: 'decision', id: first.id }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'A relevant answer', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null }
+  const bodies: Array<{ target?: { id: string } }> = []
+  vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    if (init?.body) bodies.push(JSON.parse(String(init.body)))
+    return new Response(JSON.stringify(init?.body ? { ok: false, error: { message: 'Fixture delivery unavailable' } } : { ok: true, data: [record] }))
+  }))
+  const view = render(<AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>)
+  await act(async () => {})
+  fireEvent.click(screen.getByRole('button', { name: /Full conversation/ }))
+  expect(view.container.querySelectorAll('.ask-composer textarea')).toHaveLength(1)
+  fireEvent.click(view.container.querySelectorAll('.decisions-row')[1]!)
+  expect(screen.queryByRole('button', { name: 'Collapse answer' })).toBeNull()
+  expect(view.container.querySelectorAll('.ask-composer textarea')).toHaveLength(1)
+  fireEvent.change(view.container.querySelector('.ask-composer textarea')!, { target: { value: 'Explain request B' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send question' })) })
+  expect(bodies.at(-1)?.target?.id).toBe(second.id)
+})
+
+it('keeps an unrelated conversation opened in global Desk while the decision selection stays unchanged', async () => {
+  const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }
+  queue.items = [first]; queue.needsWill = undefined; workspace.value.queue = queue
+  const id = '22222222-2222-4222-a222-222222222222'
+  const record = { request_id: id, conversation_id: id, question: 'Explain request B', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: first.cardIds[0]!, label: 'Request B', url: null, observed_at: null }, target: { kind: 'decision', id: 'request-b' }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'Answer for unrelated request B', detail: '', references: [], suggested_actions: [] }, error: null, read_at: new Date().toISOString(), dismissed_at: null }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record] }))))
+  function OpenConversation() {
+    const controls = useAskControls()
+    return <button onClick={() => { controls!.setDeskVisible(true); controls!.showThread(controls!.items[0]!) }}>Open unrelated conversation</button>
+  }
+  const app = () => <AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><OpenConversation /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const view = render(app())
+  await act(async () => {})
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', first.id)
+  fireEvent.click(screen.getByRole('button', { name: 'Open unrelated conversation' }))
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toBeVisible()
+  expect(within(view.container.querySelector<HTMLElement>('.ask-messages')!).getByText('Answer for unrelated request B')).toBeVisible()
+  expect(view.container.querySelectorAll('.ask-composer textarea')).toHaveLength(1)
+  view.rerender(app())
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toBeVisible()
+  expect(view.container.querySelectorAll('.ask-composer textarea')).toHaveLength(1)
+})
+
+it('keeps a visible work choice read-only in Decisions and Desk when another owner has the current proposal', async () => {
+  const queue = fixtureQueue(), id = '11111111-1111-4111-a111-111111111111'
+  const item = { ...queue.items[0]!, id: 'shared-request', readiness: 'ready-now' as const, currentProposalAnswerId: id, sources: [{ kind: 'firstmate' as const, id: 'source', field: 'question', status: 'fresh' as const, coverage: 'complete' as const, observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }] }
+  const proposal = { answer_id: id, value: fixtureProposal(item.id, item.cardIds[0]) }
+  const projected = { ...item, proposal, proposals: [proposal] }
+  queue.items = [projected]; queue.needsWill = undefined
+  workspace.value.queue = queue; workspace.value.openDesk = vi.fn()
+  const record = { request_id: id, conversation_id: id, published_proposal: true, question: 'Public work recommendation', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Shared request', url: null, observed_at: null }, target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: proposal.value.question, detail: proposal.value.rationale, references: [], suggested_actions: proposal.value.actions, decision_proposal: proposal.value }, error: null, read_at: new Date().toISOString(), dismissed_at: null }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record] }))))
+  const app = () => <AskProvider decisionItems={queue.items} scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const view = render(app())
+  await act(async () => {})
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: /Full conversation/ }))
+  expect(screen.getAllByRole('button', { name: /^Proceed:/ })).toHaveLength(2)
+  for (const button of screen.getAllByRole('button', { name: /^Proceed:/ })) expect(button).toBeEnabled()
+  projected.currentProposalAnswerId = '22222222-2222-4222-a222-222222222222'
+  view.rerender(app())
+  for (const button of screen.getAllByRole('button', { name: /^Proceed:/ })) expect(button).toBeDisabled()
+  expect(screen.queryByText('PRIVATE_OWNER_RATIONALE')).toBeNull()
+  expect(screen.queryByText('PRIVATE_OWNER_MESSAGE')).toBeNull()
 })

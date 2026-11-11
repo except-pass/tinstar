@@ -3,6 +3,9 @@ import { ReviewDeploymentAudit } from './reviewDeployment'
 import { AssociationStore } from '../releases/associations'
 import { reviewView } from './reviews'
 import type { ReviewQueueRead } from '../../shared/reviews'
+import { AskStore } from '../ask/store'
+import { ProposalSource } from './proposalSource'
+import { WorkflowContent } from './workflowContent'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
 import { resolveCorsHeaders } from '../api/cors'
@@ -49,6 +52,8 @@ export class ReconciliationSources {
   private associations: AssociationStore
   private fleet
   private workReader
+  readonly askStore
+  readonly proposalSource
   readonly workflow
   readonly notionApi
   private context
@@ -59,8 +64,11 @@ export class ReconciliationSources {
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi)
-    this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot)
     this.associations = new AssociationStore(receiptRoot)
+    this.askStore = new AskStore(receiptRoot)
+    const content = new WorkflowContent(this.workReader)
+    this.proposalSource = new ProposalSource(this.askStore, async id => [...await content.notes(id), ...await content.sections(id)])
+    this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.fetch)
@@ -235,15 +243,15 @@ export class ReconciliationSources {
     return workReadback({ reviews, warnings })
   }
 
-  async queue(req?: IncomingMessage) {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false) {
     let reviewWarning: string | null = null
     const reviewRecoveries = await this.workflow.reconcileReviews().catch(() => null)
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
-    const urls = candidates.items.filter(item => item.kind === 'merge')
+    const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
     const readableUrls = urls.filter(url => !pullRead || inventoryPullState(url, pullRead) === 'open')
     const states = authorized ? await (this.readPullReadiness?.(readableUrls) ?? this.queuePulls.get(readableUrls)) : new Map<string, PullReadiness>()
@@ -256,11 +264,14 @@ export class ReconciliationSources {
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
       for (const readiness of Object.keys(queue.counts)) queue.counts[readiness] = queue.items.filter(item => item.readiness === readiness).length
     }
+    // Ask resolves one exact queue request through this same projection. Avoid
+    // rereading unrelated histories while the owner waits for a single turn.
+    if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
     queue.readOnly = false // Refresh can finish delivery of an already-recorded owner answer.
     // Detail reads are demand-only for this view, share the normal cache/limiter,
     // and are bounded independently of the property census. Unknown history is
     // disclosed; it never becomes a fabricated request age or answer.
-    const deliveries = await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []
+    const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
     const resolutions = new Map<string, DecisionResolution>()
     const resolutionIds = new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.filter(item => item.sources.some(source => source.kind === 'firstmate')).flatMap(item => item.cardIds)])
@@ -285,13 +296,13 @@ export class ReconciliationSources {
         decisionResolution: resolutions.get(resolution.cardId)?.requests?.find(result => result.request_id === resolution.requestId) ?? resolutions.get(resolution.cardId) ?? { state: 'pending', message: 'Decision recorded · First Mate not yet updated' },
         evidence: [{ kind: 'card', url: `https://www.notion.so/${resolution.cardId}` }], sources: [] })
     }
+    if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
     const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-      contexts.set(id, await this.context.commentDetails(id))
+      contexts.set(id, await this.context.commentDetails(id, force))
     }))
     if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
-    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
     for (const item of queue.reviews.items.slice(0, 20)) {
@@ -303,7 +314,12 @@ export class ReconciliationSources {
     if (!reviewRecoveries || reviewRecoveries.some(row => row.result.outcome !== 'saved')) queue.warnings.push('Some recorded review writes remain unconfirmed; inspect the existing review receipts before claiming acceptance or handoff completion.')
     queue.reviewRecoveries = reviewRecoveries ?? []
     if (reviewWarning) queue.warnings.push(reviewWarning)
-    queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized)
+    const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
+    const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
+    queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
+    const projected = new Map(queue.needsWill.map(item => [item.id, item]))
+    queue.items = queue.items.map(item => projected.get(item.id) ?? item)
+    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     queue.operationalExceptions = executionWarnings(scene)
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
     else if (!authorized) queue.warnings.push('PR details require owner authorization')

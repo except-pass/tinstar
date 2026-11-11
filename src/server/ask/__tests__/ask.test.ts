@@ -1,3 +1,4 @@
+import { ProposalSource } from '../../reconciliation/proposalSource'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,11 +12,13 @@ import type { AskArtifactSources } from '../artifacts'
 import { releaseAssociations } from '../../../shared/releases'
 import type { PullsRead } from '../../../shared/pulls'
 import { AskApi } from '../routes'
+import { proposalAnswerId, decisionRevision } from '../decision'
+import type { DecisionProposal } from '../../../shared/decisionProposal'
 import { AskStore } from '../store'
 import { askContextSchema, askBody, bridgeUpdateSchema, inboxRequestId, publicAsk } from '../../../shared/ask'
 import { deskConversations } from '../../../ask/deskInbox'
 import type { AskAction } from '../../../shared/ask-actions'
-import { fixtureId, fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
+import { fixtureId, fixtureScene, fixtureQueue } from '../../../../test-fixtures/reconciliation/scenes'
 import { boundSearchDocuments, sceneSearchDocuments } from '../../../shared/searchDocuments'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 
@@ -27,9 +30,11 @@ const view = { scene: 'overview' as const }
 const context = () => askContextSchema.parse({ anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: `https://www.notion.so/${fixtureId(1)}`, observed_at: null }, view })
 const note = (id: string, noteId = 'note-1', announced = true) => ({ schema: 'fm-inbox-note.v1' as const, outcome: 'created' as const, id: noteId, request_id: inboxRequestId(id), saved: true as const, announced, acknowledged: false })
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined }; if (root) await rm(root, { recursive: true, force: true }); resetOriginAllowlistForTests() })
-async function setup(artifacts?: AskArtifactSources) {
+async function setup(artifacts?: AskArtifactSources, decisions?: ReturnType<typeof fixtureQueue>, sharedProposals = false) {
   root = await mkdtemp(join(tmpdir(), 'tinstar-ask-'))
-  const sources = { scene: async () => {
+  const decisionKeys: Array<string | undefined> = [], decisionAuthorization: boolean[] = []
+  const askStore = sharedProposals ? new AskStore(root) : undefined
+  const sources = { ...(askStore ? { askStore, proposalSource: new ProposalSource(askStore, async () => []) } : {}), ...(decisions ? { queue: async (_req?: unknown, key?: string) => { decisionKeys.push(key); decisionAuthorization.push(!!_req); return decisions } } : {}), scene: async () => {
     const scene = fixtureScene()
     return { ...scene, searchIndex: boundSearchDocuments(sceneSearchDocuments(scene)) }
   } }
@@ -46,7 +51,7 @@ async function setup(artifacts?: AskArtifactSources) {
   }
   const bridge = (body?: unknown) => call('bridge', body, { Authorization: `Bearer ${token}` })
   const reload = () => { api = new AskApi(sources, root, async () => ({ ownerLogins: [owner, other], bridgeToken: token }), artifacts) }
-  return { call, bridge, reload, base }
+  return { call, bridge, reload, base, decisionKeys, decisionAuthorization }
 }
 const input = (clientKey = randomUUID()) => ({ client_key: clientKey, card_id: fixtureId(1), question: 'Why is this waiting?', view })
 
@@ -872,7 +877,7 @@ describe('actual conversation history delivered through the existing bridge', ()
   it('bounds escaped Unicode history, large view state and pending batches for the installed Mac puller', async () => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-bounded-thread-'))
     const store = new AskStore(root)
-    const large = context(); large.view.collapsed = Array.from({ length: 500 }, () => '漢'.repeat(2048))
+    const large = context(); large.decision = { request_key: 'long-published-source', revision: 'Published source question '.repeat(2500) }; large.view.collapsed = Array.from({ length: 500 }, () => '漢'.repeat(2048))
     const first = await store.create(owner, randomUUID(), '\u0000'.repeat(4000), large)
     const rows = [first, ...Array.from({ length: 54 }, () => {
       const id = randomUUID()
@@ -885,6 +890,8 @@ describe('actual conversation history delivered through the existing bridge', ()
     const payload = envelope(work.pending[0]!.body)
     expect(payload.context.anchor).toEqual(large.anchor)
     expect(payload.context_omitted).toContain('view.collapsed')
+    expect(payload.context_omitted).toContain('decision')
+    expect((await new AskStore(root).find(owner, first.request_id))?.context.decision).toEqual(large.decision)
     expect(payload.question).toBe('\u0000'.repeat(4000))
     expect(Buffer.byteLength(work.pending[0]!.body)).toBeLessThan(96 * 1024)
   })
@@ -997,4 +1004,247 @@ it.each([false, true])('preserves a completed answers read state on restore afte
   const rows = (await call('requests')).data.data
   expect(rows[0]).toMatchObject({ dismissed_at: null, read_at: readAt })
   expect(deskConversations(rows)[0]).toMatchObject({ view: 'needs-you', unread: false, attention: false })
+})
+
+
+describe('request-bound decision workbench', () => {
+  function publishedQueue() {
+    const queue = fixtureQueue(), item = queue.items[0]!
+    item.id = 'exact-request-a'; item.readiness = 'ready-now'; item.cardIds = [fixtureId(1)]
+    item.sources = [{ kind: 'firstmate', id: 'source-a', field: 'decision', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), status: 'fresh', coverage: 'complete' }]
+    const proposal: DecisionProposal = { schema: 'tinstar.decision-proposal.v1', proposal_id: 'published-a', request_key: item.id, card_id: fixtureId(1), question: 'Choose the route?', rationale: 'The source recommends this route.', recommended_action_id: 'proceed',
+      actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the recommended route' }, { id: 'defer', label: 'Not yet', instruction: 'Defer this decision' }], references: [], source: { kind: 'firstmate-request', id: 'source-a', revision: '1' }, published_at: new Date().toISOString(), supersedes: null }
+    item.proposal = { answer_id: proposalAnswerId(proposal), value: proposal }
+    queue.needsWill = [{ ...item, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }, { ...item, id: 'exact-request-b', proposal: undefined, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }]
+    return queue
+  }
+  it.each([0, 1, 2])('selects an Ask recommendation for a request with %s card links', async count => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!
+    item.cardIds = [fixtureId(1), fixtureId(5)].slice(0, count)
+    item.proposal = undefined
+    const { call, bridge } = await setup(undefined, queue, true)
+    const turn = (await call('requests', { target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' }, question: 'Recommend a route', client_key: randomUUID() })).data.data
+    const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+    const proposal = { ...fixtureProposal(item.id), source: { kind: 'ask-reply', id: turn.request_id, revision: '1' } }
+    await bridge({ request_id: turn.request_id, note: note(turn.request_id) })
+    expect((await bridge({ request_id: turn.request_id, reply: { id: 'note-1', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Published recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })).status).toBe(200)
+    item.proposalHistoryComplete = false
+    const input = { answer_id: turn.request_id, action_id: 'proceed', client_key: randomUUID() }
+    expect((await call('selections', input)).status).toBe(409)
+    item.proposalHistoryComplete = true
+    expect((await call('selections', { ...input, client_key: randomUUID() }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+    expect((await call('selections', input)).status).toBe(200)
+    expect((await call('requests')).data.data.filter((row: { action_selection?: unknown }) => row.action_selection)).toHaveLength(1)
+  })
+  it('reuses an implicit owner/request thread across row questions, reloads and retries', async () => {
+    const { call, reload } = await setup(undefined, publishedQueue())
+    const body = { target: { kind: 'decision', id: 'exact-request-a' }, view: { scene: 'decisions' }, question: 'Why this route?', client_key: randomUUID() }
+    const first = (await call('requests', body)).data.data
+    reload()
+    const nextInput = { ...body, question: 'Please explain the tradeoff', client_key: randomUUID() }
+    const next = (await call('requests', nextInput)).data.data
+    expect(next).toMatchObject({ conversation_id: first.conversation_id, follow_up_to: first.request_id })
+    reload()
+    expect((await call('requests', nextInput)).data.data.request_id).toBe(next.request_id)
+    const foreign = (await call('requests', { ...body, client_key: randomUUID() }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).data.data
+    expect(foreign.conversation_id).not.toBe(first.conversation_id)
+    const sibling = (await call('requests', { ...body, client_key: randomUUID(), target: { kind: 'decision', id: 'exact-request-b' } })).data.data
+    expect(sibling.conversation_id).not.toBe(first.conversation_id)
+    expect((await call('requests', { ...body, client_key: randomUUID(), follow_up_to: sibling.request_id })).status).toBe(409)
+  })
+
+  it.each(['work', 'ask'])('retains the %s proposal after an explanatory reply', async source => {
+    const queue = publishedQueue(), { call, bridge } = await setup(undefined, queue)
+    const item = queue.needsWill![0]!
+    const body = { target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' }, question: 'Recommend a route', client_key: randomUUID() }
+    let answerId = item.proposal!.answer_id
+    if (source === 'ask') {
+      answerId = (await call('requests', body)).data.data.request_id
+      await bridge({ request_id: answerId, note: { ...note(answerId), id: 'proposal-note' } })
+      const proposal = { ...item.proposal!.value, proposal_id: answerId, source: { kind: 'ask-reply', id: answerId, revision: '1' }, supersedes: item.proposal!.value.proposal_id }
+      await bridge({ request_id: answerId, reply: { id: 'proposal-note', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: answerId, summary: 'Recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })
+    }
+    const explanation = (await call('requests', { ...body, question: 'Why this option?', client_key: randomUUID() })).data.data
+    await bridge({ request_id: explanation.request_id, note: { ...note(explanation.request_id), id: 'explanation-note' } })
+    await bridge({ request_id: explanation.request_id, reply: { id: 'explanation-note', cursor: '2', at: new Date().toISOString(), body: 'It reduces the operational burden.' } })
+    const choice = await call('selections', { answer_id: answerId, action_id: 'proceed', client_key: randomUUID() })
+    expect(choice.status).toBe(200)
+    expect(choice.data.data).toMatchObject({ conversation_id: explanation.conversation_id, action_selection: { answer_id: answerId } })
+  })
+
+  it.each(['acting', 'completed', 'blocked', 'failed', undefined])('persists only a structured execution outcome: %s', async outcome => {
+    const queue = publishedQueue(), { call, bridge, reload } = await setup(undefined, queue)
+    const selected = (await call('selections', { answer_id: queue.needsWill![0]!.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() })).data.data
+    await bridge({ request_id: selected.request_id, note: note(selected.request_id) })
+    const body = outcome ? JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: selected.request_id, summary: 'Execution receipt', detail: '', references: [], suggested_actions: [], outcome }) : 'Completed. Acting. Blocked. Failed.'
+    expect((await bridge({ request_id: selected.request_id, reply: { id: 'note-1', cursor: '1', at: new Date().toISOString(), body } })).status).toBe(200)
+    reload()
+    const saved = (await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === selected.request_id)
+    expect(saved.status).toBe('answered')
+    expect(saved.outcome).toBe(outcome)
+  })
+
+  it.each(['proceed', 'defer'])('releases a definite merge refusal for a fresh %s choice', async actionId => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17'
+    item.proposal!.value.actions[0]!.merge = { pr_url: pr }
+    let head = 'a'.repeat(40)
+    const origin = vi.fn(async () => ({ id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: pr, state: 'open' as const, title: 'Ready', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }))
+    const sendMerge = vi.fn<NonNullable<AskArtifactSources['sendMerge']>>().mockImplementationOnce(async input => ({ outcome: 'not-saved', code: 'merge-refused', message: 'PR head changed; refresh and select it again', operation_id: input.operation_id, saved_fields: [] })).mockImplementation(async input => ({ outcome: 'saved', code: 'saved', message: 'Sent', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }))
+    const { call, reload, bridge } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()), pullOrigin: origin, sendMerge }, queue)
+    const input = { answer_id: item.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    const refused = await call('selections', input)
+    expect(refused.status).toBe(200)
+    expect(refused.data.data).toMatchObject({ status: 'failed', outcome: 'blocked', error: 'PR head changed; refresh and select it again' })
+    reload()
+    expect((await call('selections', input)).data.data.request_id).toBe(refused.data.data.request_id)
+    expect(sendMerge).toHaveBeenCalledTimes(1)
+    head = 'b'.repeat(40)
+    const fresh = { ...input, action_id: actionId, client_key: randomUUID() }
+    item.readiness = 'needs-readiness-verification'
+    expect((await call('selections', fresh)).status).toBe(409)
+    item.readiness = 'ready-now'
+    const recovered = await call('selections', fresh)
+    expect(recovered.status).toBe(200)
+    expect(recovered.data.data.request_id).not.toBe(refused.data.data.request_id)
+    expect(recovered.data.data.action_selection.action_id).toBe(actionId)
+    if (actionId === 'proceed') {
+      expect(sendMerge.mock.calls[1]![0].targets).toEqual([{ url: pr, head }])
+      expect(sendMerge.mock.calls[1]![0].operation_id).not.toBe(sendMerge.mock.calls[0]![0].operation_id)
+      expect(recovered.data.data.status).toBe('delivered')
+    } else {
+      expect(sendMerge).toHaveBeenCalledTimes(1)
+      expect((await bridge()).data.data.pending).toMatchObject([{ request_id: recovered.data.data.request_id }])
+    }
+    expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === refused.data.data.request_id).outcome).toBe('blocked')
+  })
+
+  it.each(['bridge', 'http'])('records merge membership and recovers the same operation through %s after closure', async recovery => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17', head = 'b'.repeat(40)
+    item.proposal!.value.actions[0]!.merge = { pr_url: pr }
+    const origin = vi.fn(async () => ({ id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: pr, state: 'open' as const, title: 'Ready', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }))
+    const sendMerge = vi.fn<NonNullable<AskArtifactSources['sendMerge']>>().mockRejectedValueOnce(new Error('Lost acknowledgement')).mockImplementation(async input => ({ outcome: 'saved', code: 'already-saved', message: 'Recovered', operation_id: input.operation_id, saved_fields: ['card'], card: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } }))
+    const { call, bridge, reload } = await setup({ pulls: async () => ({ pulls: [], repositories: [], warnings: [], associationsComplete: true }), releases: async () => releaseAssociations(fixtureScene()), pullOrigin: origin, sendMerge }, queue)
+    const input = { answer_id: item.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    expect((await call('selections', { ...input, action_id: 'forged' })).status).toBe(404)
+    expect(sendMerge).not.toHaveBeenCalled()
+    item.readiness = 'needs-readiness-verification'
+    expect((await call('selections', input)).status).toBe(409)
+    expect(origin).not.toHaveBeenCalled()
+    item.readiness = 'ready-now'
+    expect((await call('selections', input, {})).status).toBe(403)
+    expect((await call('selections', input)).status).toBe(503)
+    const saved = (await call('requests')).data.data.find((row: { action_selection?: unknown }) => row.action_selection)
+    expect(saved).toMatchObject({ status: 'sent', merge_selection: { input: { operation_id: saved.action_selection.selection_id, targets: [{ url: pr, head }] } } })
+    queue.needsWill = []; queue.items = []
+    reload()
+    if (recovery === 'bridge') {
+      expect((await bridge()).data.data.pending).toHaveLength(0)
+      expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === saved.request_id).status).toBe('delivered')
+      expect(sendMerge).toHaveBeenCalledTimes(2)
+    }
+    const recovered = await call('selections', { ...input, client_key: randomUUID() })
+    expect(recovered.status).toBe(200)
+    expect(recovered.data.data).toMatchObject({ request_id: saved.request_id, status: 'delivered', merge_selection: { receipt: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } } })
+    expect(sendMerge.mock.calls[1]).toEqual(sendMerge.mock.calls[0])
+    expect(origin).toHaveBeenCalledTimes(1)
+    reload()
+    await call('selections', input)
+    expect(sendMerge).toHaveBeenCalledTimes(2)
+    expect((await call('selections', { ...input, action_id: 'defer', client_key: randomUUID() })).status).toBe(409)
+  })
+
+  it('captures the publication into the same Ask thread and converges authenticated retries without closing the queue', async () => {
+    const queue = publishedQueue(), { call, bridge, decisionKeys, decisionAuthorization } = await setup(undefined, queue)
+    const target = { kind: 'decision', id: 'exact-request-a' }, view = { scene: 'decisions', request_key: target.id, query: 'route' }
+    const question = (await call('requests', { target, view, question: 'Why this route?', client_key: randomUUID() })).data.data
+    expect(question.context.return_to).toMatchObject({ section: 'decisions', target, view })
+    expect(decisionKeys).toEqual(['exact-request-a'])
+    expect(decisionAuthorization).toEqual([false])
+    const selected = { answer_id: queue.needsWill![0]!.proposal!.answer_id, action_id: 'defer', client_key: randomUUID() }
+    expect((await call('selections', selected, {})).status).toBe(403)
+    expect((await call('selections', { ...selected, instruction: 'forged' })).status).toBe(400)
+    const response = await call('selections', selected)
+    expect(response.status).toBe(200)
+    expect(decisionAuthorization.slice(1).every(Boolean)).toBe(true)
+    expect(response.data.data).toMatchObject({ conversation_id: question.conversation_id, context: { target }, action_selection: { action_id: 'defer', instruction: 'Defer this decision', actor: owner } })
+    const retry = await call('selections', { ...selected, client_key: randomUUID() })
+    expect(retry.data.data.request_id).toBe(response.data.data.request_id)
+    const turns = (await call(`conversations/${question.conversation_id}`)).data.data.turns
+    expect(turns.map((turn: { role: string }) => turn.role).sort()).toEqual(['action_selection', 'assistant', 'user'])
+    const pending = (await bridge()).data.data.pending
+    expect(pending.filter((row: { request_id: string }) => row.request_id === selected.answer_id)).toHaveLength(0)
+    expect(pending.filter((row: { request_id: string }) => row.request_id === response.data.data.request_id)).toHaveLength(1)
+    expect(queue.needsWill).toHaveLength(2)
+    const sibling = (await call('requests', { target: { kind: 'decision', id: 'exact-request-b' }, view, question: 'Different ask', client_key: randomUUID() })).data.data
+    expect(sibling.conversation_id).not.toBe(question.conversation_id)
+  })
+  it('refreshes a revised source in the same conversation without changing historical turns', async () => {
+    const queue = publishedQueue(), { call } = await setup(undefined, queue)
+    const target = { kind: 'decision', id: 'exact-request-a' }, view = { scene: 'decisions' }
+    const first = (await call('requests', { target, view, question: 'Initial context', client_key: randomUUID() })).data.data
+    queue.needsWill![0]!.action = 'Revised source question'
+    const next = (await call('requests', { target, view, follow_up_to: first.request_id, question: 'Please refresh your recommendation', client_key: randomUUID() })).data.data
+    expect(next.conversation_id).toBe(first.conversation_id)
+    expect(next.context.decision.revision).not.toBe(first.context.decision.revision)
+    const history = (await call(`conversations/${first.conversation_id}`)).data.data
+    expect(history.turns).toHaveLength(2)
+    const rows = (await call('requests')).data.data
+    expect(rows.find((row: { request_id: string }) => row.request_id === first.request_id).context.decision).toEqual(first.context.decision)
+  })
+  it('selects a fresh typed Ask publication by its unchanged answer ID after refreshing a revised source', async () => {
+    const queue = publishedQueue(), { call, bridge } = await setup(undefined, queue)
+    const item = queue.needsWill![0]!, target = { kind: 'decision', id: item.id }, view = { scene: 'decisions' }
+    const first = (await call('requests', { target, view, question: 'Recommend a route', client_key: randomUUID() })).data.data
+    const publish = async (id: string, noteId: string, supersedes: string | null) => {
+      await bridge({ request_id: id, note: note(id, noteId) })
+      const proposal = { ...item.proposal!.value, proposal_id: id, source: { kind: 'ask-reply', id, revision: noteId }, published_at: new Date().toISOString(), supersedes }
+      expect((await bridge({ request_id: id, reply: { id: noteId, cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: id, summary: 'A typed publication', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })).status).toBe(200)
+    }
+    await publish(first.request_id, 'ask-publication-one', item.proposal!.value.proposal_id)
+    item.action = 'Revised source question'
+    expect((await call('selections', { answer_id: first.request_id, action_id: 'proceed', client_key: randomUUID() })).status).toBe(409)
+    const next = (await call('requests', { target, view, follow_up_to: first.request_id, question: 'Refresh the proposal', client_key: randomUUID() })).data.data
+    await publish(next.request_id, 'ask-publication-two', first.request_id)
+    const selected = await call('selections', { answer_id: next.request_id, action_id: 'proceed', client_key: randomUUID() })
+    expect(selected.status).toBe(200)
+    expect(selected.data.data).toMatchObject({ conversation_id: first.conversation_id, action_selection: { answer_id: next.request_id, instruction: 'Proceed with the recommended route' } })
+    expect((await bridge()).data.data.pending).toHaveLength(1)
+  })
+  it('keeps two authorized owners in distinct threads for the same published source', async () => {
+    const queue = publishedQueue(), { call } = await setup(undefined, queue)
+    const input = { answer_id: queue.needsWill![0]!.proposal!.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    const first = (await call('selections', input)).data.data
+    const second = (await call('selections', { ...input, client_key: randomUUID() }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).data.data
+    expect(first.conversation_id).not.toBe(second.conversation_id)
+    expect((await call(`conversations/${second.conversation_id}`)).status).toBe(404)
+  })
+  it('rejects stale, superseded, unknown and foreign request proposals before dispatch', async () => {
+    const queue = publishedQueue(), { call, bridge } = await setup(undefined, queue)
+    const item = queue.needsWill![0]!, proposal = item.proposal!
+    const selected = { answer_id: proposal.answer_id, action_id: 'proceed', client_key: randomUUID() }
+    item.sources[0]!.status = 'stale'
+    expect((await call('selections', selected)).status).toBe(409)
+    item.sources[0]!.status = 'fresh'
+    const current = { ...proposal.value, source: { ...proposal.value.source, revision: '2' }, supersedes: proposal.value.proposal_id, proposal_id: 'published-b' }
+    item.proposal = { answer_id: proposalAnswerId(current), value: current }
+    expect((await call('selections', selected)).status).toBe(404)
+    expect((await call('requests', { target: { kind: 'decision', id: 'unknown' }, view: { scene: 'decisions' }, question: 'Unknown?', client_key: randomUUID() })).status).toBe(404)
+    expect((await bridge()).data.data.pending).toEqual([])
+    expect((await call('requests')).data.data).toEqual([])
+  })
+})
+
+
+it('compares decision source meaning without depending on collector or card ordering', () => {
+  const item = fixtureQueue().items[0]!
+  item.cardIds = [fixtureId(1), fixtureId(5)]
+  item.sources = [{ ...item.sources[0]!, id: 'first-source', question: 'First question?' }, { ...item.sources[0]!, id: 'second-source', question: 'Second question?' }]
+  const revision = decisionRevision(item)
+  item.cardIds.reverse(); item.sources.reverse()
+  expect(decisionRevision(item)).toBe(revision)
+  item.sources[0]!.question = 'Changed question?'
+  expect(decisionRevision(item)).not.toBe(revision)
+  const changed = decisionRevision(item)
+  item.sources.push({ ...item.sources[0]!, kind: 'github', id: 'pull-readiness', request: undefined, question: undefined, action: undefined })
+  expect(decisionRevision(item)).toBe(changed)
 })

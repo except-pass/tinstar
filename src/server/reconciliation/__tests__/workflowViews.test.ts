@@ -165,3 +165,28 @@ it('keeps asks with authorization placeholders until the PR Operations owner che
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('projects typed publications only onto their exact open source, preserving generation and supersession', async () => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const scene = fixtureScene({ now }), card = scene.cards[0]!
+  card.source.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  const sourceRequest = { home: '/fixture-home', taskId: 'task-a', kind: 'decision' as const, id: 'fixture-source' }
+  const base = buildQueue(fixtureSources({ now }), new Map(), now)
+  const item = { ...base.items[0]!, id: 'request-a', readiness: 'ready-now' as const, cardIds: [card.id], sources: [{ kind: 'firstmate' as const, id: 'source', field: 'decision', action: 'Choose a route?', request: sourceRequest, responseAnchor: 'fixture-anchor', generation: 'gen-1', status: 'fresh' as const, coverage: 'complete' as const, observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString() }] }
+  base.items = [item, { ...item, id: 'request-b' }]
+  const old = fixtureProposal(item.id, card.id), current = { ...old, proposal_id: 'new-proposal', supersedes: old.proposal_id, source: { ...old.source, revision: '2' } }
+  const contexts = new Map([[card.id, { outcome: 'available' as const, blocks: [old, current].map((proposal, index) => ({ id: `note-${index}`, type: 'comment', text: `Requested from: Will\nQuestion: Choose a route?\nTin Star request: ${JSON.stringify({ id: `request-note-${index}`, action: 'Decision', proposal, source_request: sourceRequest, source_question: 'Choose a route?', source_spawn_gen: 'gen-1' })}` })) }]])
+  let projected = needsWill(base, scene, contexts, null, new Map())
+  expect(projected[0]!.proposal?.value.proposal_id).toBe(current.proposal_id)
+  expect(projected[1]!.proposal).toBeUndefined()
+  const { decisionFresh } = await import('../../../shared/decisionProposal')
+  const partial = new Map<string, CardContextRead>([[card.id, { ...contexts.get(card.id)!, outcome: 'partial', blocks: contexts.get(card.id)!.blocks.slice(0, 1) }]])
+  const retained = needsWill(base, scene, partial, null, new Map())[0]!
+  expect(retained.proposal?.value.proposal_id).toBe(old.proposal_id)
+  expect(retained.readiness).toBe('needs-readiness-verification')
+  expect(decisionFresh(retained, now)).toBe(false)
+  expect(decisionFresh(needsWill(base, scene, contexts, null, new Map())[0]!, now)).toBe(true)
+  item.sources[0]!.generation = 'gen-2'
+  projected = needsWill(base, scene, contexts, null, new Map())
+  expect(projected[0]!.proposal).toBeUndefined()
+})

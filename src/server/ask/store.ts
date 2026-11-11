@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import { releasedMergeSelection, askRecordSchema, askActionSelectionSchema, askSelectionInputSchema, conversationTurns, jsonBytes, askBody, inboxRequestId, type AskCapturedSelection, type AskRecord, type AskContext, type BridgeUpdate, type AskActionSelection, type AskSelectionInput } from '../../shared/ask'
+import type { DecisionProposal } from '../../shared/decisionProposal'
+import type { AskAction } from '../../shared/ask-actions'
+import type { ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { normalizeAskReply } from './reply'
 
 export class AskConflict extends Error {}
@@ -26,10 +29,10 @@ export class AskStore {
     }
     return this.rows
   }
-  private change<T>(operation: (rows: AskRecord[]) => T): Promise<T> {
+  private change<T>(operation: (rows: AskRecord[]) => T | Promise<T>): Promise<T> {
     const task = this.writing.then(async () => {
       const rows = structuredClone(await this.load())
-      const before = JSON.stringify(rows), result = operation(rows)
+      const before = JSON.stringify(rows), result = await operation(rows)
       if (before === JSON.stringify(rows)) return result
       await mkdir(this.root, { recursive: true })
       const path = join(this.root, 'ask-requests.json'), temp = `${path}.${randomUUID()}.tmp`
@@ -40,6 +43,9 @@ export class AskStore {
     })
     this.writing = task.catch(() => undefined)
     return task
+  }
+  async proposalRecords() {
+    return structuredClone((await this.load()).filter(row => !row.synthetic_id && !row.voice_outage && !row.published_proposal && row.reply?.decision_proposal))
   }
   async list(owner: string, syntheticId?: string) {
     await this.writing
@@ -52,12 +58,13 @@ export class AskStore {
       if (previous) {
         if (previous.synthetic_id !== syntheticId || JSON.stringify(previous.captured_selection) !== JSON.stringify(capturedSelection) || previous.action_selection || previous.question !== question || previous.context.anchor.page_id !== context.anchor.page_id || previous.context.anchor.kind !== context.anchor.kind ||
           JSON.stringify(previous.context.target) !== JSON.stringify(context.target) ||
-          (previous.follow_up_to !== undefined ? previous.follow_up_to !== (followUpTo ?? null) : followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
+          (previous.follow_up_to !== undefined ? (followUpTo !== undefined || context.target?.kind !== 'decision') && previous.follow_up_to !== (followUpTo ?? null) : followUpTo && rows.find(row => row.request_id === followUpTo && row.owner === owner)?.conversation_id !== previous.conversation_id)) throw new AskConflict('Retry key belongs to another question')
         return previous
       }
-      const parent = followUpTo ? rows.find(row => row.request_id === followUpTo && row.owner === owner) : null
+      const parent = followUpTo ? rows.find(row => row.request_id === followUpTo && row.owner === owner && row.synthetic_id === syntheticId) : context.target?.kind === 'decision' ? rows.filter(row => row.owner === owner && row.synthetic_id === syntheticId && row.context.target?.kind === 'decision' && row.context.target.id === context.target!.id).at(-1) : null
       if (followUpTo && !parent) throw new AskNotFound('Original question unavailable')
-      const row = this.appendRequest(rows, owner, clientKey, question, parent?.context ?? context, parent, undefined, capturedSelection)
+      if (parent?.context.target?.kind === 'decision' && JSON.stringify(context.target) !== JSON.stringify(parent.context.target)) throw new AskConflict('Follow-up belongs to another decision request')
+      const row = this.appendRequest(rows, owner, clientKey, question, parent?.context.target?.kind === 'decision' ? context : parent?.context ?? context, parent, undefined, capturedSelection)
       if (syntheticId) row.synthetic_id = syntheticId
       return row
     })
@@ -87,7 +94,7 @@ export class AskStore {
           turn.updated_at = at
         }
       }
-      if (action === 'retry' && !row.reply) { row.status = row.note_id ? 'delivered' : 'sent'; row.error = null }
+      if (action === 'retry' && !row.reply && !row.merge_selection) { row.status = row.note_id ? 'delivered' : 'sent'; row.error = null }
       row.updated_at = this.now()
       return row
     })
@@ -102,32 +109,72 @@ export class AskStore {
   /** Chunk 2 supplies canonical membership lookup from its typed reply actions.
    * The callback runs inside the writer lock; no browser instruction is trusted.
    * A selection is a new bridge request, never an action executed by Tin Star. */
-  createActionSelection(owner: string, input: AskSelectionInput, lookupAction: (answer: AskRecord, actionId: string) => { id: string; label: string; instruction: string } | undefined) {
+  createActionSelection(owner: string, input: AskSelectionInput, lookupAction: (answer: AskRecord, actionId: string, proposals: Array<{ answer_id: string; value: DecisionProposal }>) => AskAction | undefined | Promise<AskAction | undefined>, published?: (answerId: string) => Promise<{ context: AskContext; proposal: DecisionProposal } | undefined>, captureMerge?: (action: AskAction, operationId: string) => Promise<ClawsonMergeInput>) {
     const selectionInput = askSelectionInputSchema.parse(input)
-    return this.change(rows => {
+    return this.change(async rows => {
       const { answer_id: answerId, action_id: actionId, client_key: clientKey } = selectionInput
       const previous = rows.find(row => row.owner === owner && (row.client_key === clientKey || row.client_key_aliases?.includes(clientKey)))
       if (previous) {
         if (previous.action_selection?.answer_id !== answerId || previous.action_selection.action_id !== actionId) throw new AskConflict('Retry key belongs to another selection')
         return previous
       }
-      const answer = rows.find(row => row.owner === owner && row.request_id === answerId && !row.synthetic_id)
+      let answer = rows.find(row => row.owner === owner && row.request_id === answerId && !row.synthetic_id)
+      if (!answer && published) {
+        const source = await published(answerId)
+        if (source) {
+          // Import the verified publication as an assistant answer in this exact
+          // request's existing thread. It never creates a fictional owner turn.
+          const parent = rows.filter(row => row.owner === owner && !row.synthetic_id && row.context.target?.kind === 'decision' && row.context.target.id === source.context.target!.id).at(-1)
+          answer = this.appendRequest(rows, owner, randomUUID(), source.proposal.question, source.context, parent)
+          answer.request_id = answerId
+          if (!parent) answer.conversation_id = randomUUID()
+          answer.published_proposal = true
+          answer.status = 'answered'; answer.answered_at = source.proposal.published_at
+          answer.reply = { summary: source.proposal.question, detail: source.proposal.rationale, references: source.proposal.references,
+            suggested_actions: source.proposal.actions, decision_proposal: source.proposal }
+          answer.dispatch_body = undefined
+        }
+      }
       if (!answer?.reply) throw new AskNotFound('Original answer unavailable')
       // Both same-key retries and another device's same-action retry recover the
       // original request even after its answer is superseded by a later reply.
-      const consumed = rows.find(row => row.owner === owner && row.action_selection?.answer_id === answerId)
+      const consumed = rows.find(row => row.owner === owner && row.action_selection?.answer_id === answerId && !releasedMergeSelection(row))
       if (consumed) {
         if (consumed.action_selection!.action_id !== actionId) throw new AskConflict('Another action was already selected for this answer')
         ;(consumed.client_key_aliases ??= []).push(clientKey)
         return consumed
       }
-      const replies = conversationTurns(rows.filter(row => row.owner === owner && row.conversation_id === answer.conversation_id)).filter(turn => turn.role === 'assistant')
-      if (replies.at(-1)?.request_id !== answerId) throw new AskConflict('Answer has been superseded')
-      const action = lookupAction(structuredClone(answer), actionId)
+      const proposals = rows.filter(row => row.owner === owner && row.synthetic_id === answer.synthetic_id && row.context.target?.kind === 'decision' && row.context.target.id === answer.context.target?.id && row.reply?.decision_proposal?.request_key === answer.context.target?.id).map(row => ({ answer_id: row.request_id, value: row.reply!.decision_proposal! }))
+      if (answer.context.target?.kind !== 'decision') {
+        const replies = conversationTurns(rows.filter(row => row.owner === owner && row.conversation_id === answer.conversation_id)).filter(turn => turn.role === 'assistant')
+        if (replies.at(-1)?.request_id !== answerId) throw new AskConflict('Answer has been superseded')
+      }
+      const action = await lookupAction(structuredClone(answer), actionId, proposals)
       if (!action || action.id !== actionId) throw new AskNotFound('Action unavailable in the saved answer')
       const selection = askActionSelectionSchema.parse({ selection_id: randomUUID(), answer_id: answerId, action_id: action.id,
         instruction: action.instruction, label: action.label, actor: owner, selected_at: this.now() })
-      return this.appendRequest(rows, owner, clientKey, selection.instruction, answer.context, answer, selection)
+      const mergeInput = action.merge ? await captureMerge?.(action, selection.selection_id) : undefined
+      if (action.merge && !mergeInput) throw new AskConflict('Merge handoff unavailable')
+      const row = this.appendRequest(rows, owner, clientKey, selection.instruction, answer.context, answer, selection)
+      if (mergeInput) row.merge_selection = { input: mergeInput }
+      return row
+    })
+  }
+  deliverMerge(owner: string, requestId: string, send: (input: ClawsonMergeInput) => Promise<{ url: string; message: string } | { blocked: string }>) {
+    return this.change(async rows => {
+      const row = rows.find(row => row.owner === owner && row.request_id === requestId)
+      if (!row?.merge_selection) throw new AskNotFound('Merge selection unavailable')
+      if (!row.merge_selection.receipt && !releasedMergeSelection(row)) {
+        const result = await send(row.merge_selection.input)
+        if ('blocked' in result) {
+          row.status = 'failed'; row.outcome = 'blocked'; row.error = result.blocked
+        } else {
+          row.merge_selection.receipt = result
+          row.status = 'delivered'
+        }
+        row.updated_at = this.now()
+      }
+      return row
     })
   }
   /** Request-time availability drives one durable notice per outage. Replies
@@ -147,11 +194,11 @@ export class AskStore {
       }
     })
   }
-  async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true) {
+  async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true, recoverMerge?: (input: ClawsonMergeInput, owner: string) => Promise<{ url: string; message: string } | { blocked: string }>) {
     // Persist legacy payloads on first dispatch too. Capturing under the writer
     // lock freezes each note body before a puller can save it and lose its ack.
     const eligible = (row: AskRecord) => {
-      if (row.synthetic_id !== syntheticId) return false
+      if (row.synthetic_id !== syntheticId || row.merge_selection) return false
       // System notices have no owner Retry button. Reoffer failed capture/wake
       // on the normal bridge poll with the same idempotent inbox request ID.
       if (row.voice_outage) return systemDeliveryEnabled && row.voice_outage.resolved_at === null && !row.reply && row.announced !== true
@@ -170,6 +217,11 @@ export class AskStore {
       return { pending, tracked: rows.filter(row => row.synthetic_id === syntheticId && (!row.voice_outage || systemDeliveryEnabled && row.voice_outage.resolved_at === null) && row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
     }
     await this.writing
+    if (recoverMerge) for (const row of await this.load()) {
+      if (row.synthetic_id === syntheticId && row.merge_selection && !row.merge_selection.receipt && !releasedMergeSelection(row)) {
+        await this.deliverMerge(row.owner, row.request_id, input => recoverMerge(input, row.owner)).catch(() => undefined)
+      }
+    }
     const rows = await this.load()
     return rows.some(row => eligible(row) && row.dispatch_body === undefined) ? this.change(collect) : collect(rows)
   }
@@ -204,6 +256,7 @@ export class AskStore {
         } else {
           row.reply = { summary: update.reply.body.slice(0, 240), detail: update.reply.body, references: [], suggested_actions: [] }
         }
+        if (row.action_selection && row.reply.outcome) row.outcome = row.reply.outcome
         row.reply_cursor = update.reply.cursor
         row.status = 'answered'; row.answered_at = update.reply.at; row.read_at = null; row.dismissed_at = null; row.error = null
       }

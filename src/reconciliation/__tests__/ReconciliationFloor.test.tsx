@@ -241,7 +241,8 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
     const body = JSON.parse(String(init?.body ?? '{}'))
     if (body.type === 'register') return new Response(JSON.stringify({ ok: true, data: { scene_id: 'test-ui', key: 'test-key' } }))
     for (const ack of body.acknowledgments ?? []) {
-      expect(screen.queryByText('Source health')).toBeNull()
+      const health = screen.queryByText('Source health')
+      if (health) expect(health).not.toBeVisible()
       if (type === 'focus') expect(screen.getByLabelText('Inspector')).toBeTruthy()
       else expect(screen.getByLabelText('Selected decision')).toBeVisible()
       acknowledgments.push(ack)

@@ -16,6 +16,8 @@ import { requestText, isCoordinationRequest, displayRequestText } from '../../sh
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
 export interface QueueSource {
+  question?: string
+  generation?: string | null
   actions?: string[]
   request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
   /** Readiness and response belong to this source, never inherited from another source. */
@@ -32,6 +34,10 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  currentProposalAnswerId?: string | null
+  proposalHistoryComplete?: boolean
+  proposals?: Array<{ answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }>
+  proposal?: { answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }
   decisionResolution?: import('../../shared/workflow').StartWorkResult['decision_resolution']
   identities?: string[]
   id: string
@@ -219,7 +225,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (requestId && call.type !== 'blocked') item.decisionKeys.push(requestId)
-      item.sources.push({ ...source('firstmate', call.key, request.kind === 'decision' ? 'hints.open_decisions' : 'backlog.hold', observation), request,
+      item.sources.push({ question: call.headline, generation: task?.identity.spawn_gen ?? null, ...source('firstmate', call.key, request.kind === 'decision' ? 'hints.open_decisions' : 'backlog.hold', observation), request,
         ...(entry.ownerReady && request.id ? { responseAnchor: requestAnchor(request) } : {}) })
       // Readiness also depends on the Notion feed staying fresh enough to
       // verify that this request has not already been answered in its context.
@@ -349,4 +355,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     reviewExceptions: [] as import('./reviewDeployment').HandoffException[],
     items, counts: Object.fromEntries(Object.keys(rank).map(readiness => [readiness, items.filter(item => item.readiness === readiness).length])),
   }
+}
+
+export function queueRequestKey(card: import('./workReader').WorkCard, fleet: SourceSnapshot['fleet'], request: FirstMateRequest) {
+  const observedAt = new Date().toISOString()
+  const queue = buildQueue({ generatedAt: observedAt, scope: 'configured-homes-only', warnings: [], fleet,
+    intentions: { status: 'fresh', coverage: 'complete', observedAt, attemptedAt: observedAt, expiresAt: null, error: null,
+      data: { dataSourceId: 'bound-request', schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'bound-request' } } })
+  return queue.items.find(item => item.sources.some(source => source.request && source.request.kind !== 'notion-card' && requestAnchor(source.request) === requestAnchor(request)))?.id
 }

@@ -4,13 +4,13 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-Decisions shows the existing canonical requests, with verification and conditional states kept visible. Default Next navigation includes only verified ready requests. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor: an owner-actionable hold whose ID exactly equals the decision key is required. If multiple tasks share that key, the hold must explicitly name the matching origin task. Task IDs, legacy aliases, matching text and card ownership never supply this routing.
+Decisions shows the existing canonical requests, with verification and conditional states kept visible. See [Decisions navigation](#decisions-tab) for the visible-list controls and their distinction from MCP navigation. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor: an owner-actionable hold whose ID exactly equals the decision key is required. If multiple tasks share that key, the hold must explicitly name the matching origin task. Task IDs, legacy aliases, matching text and card ownership never supply this routing.
 
 Each First Mate source shows its own sanitized question beside its Answer/Dismiss controls. Controls appear only while both the item and that source are ready and current. Each source retains its existing worker terminal link. The link is emitted only when the existing resolver returns that exact full home/task identity. Unavailable or ambiguous targets offer no terminal link. Notion sources open their own card and never acquire First Mate response controls.
 
 Answer uses the existing `/api/fleet/messages` inbox/receipt path, with a source anchor resolved against the current explicit request inventory. Dismiss uses the existing `/api/fleet/dismiss` route, resolving either one worker decision key or one captain hold. Neither uses the legacy attention title/key fallback. A failed fleet read removes response routes while retaining last-known display data. Outbox records retain the exact source anchor, and both initial submission and retry include it in the First Mate inbox note, preserving home, task, request ID and source kind even when a decision and hold share an ID and summary. Receipts track that request rather than another request sharing a key; pending/saved responses remain visible on returning to the source. Reading and Next never choose a response; delivery of recorded answers follows the [decision reconciliation contract](workflow.md#first-mate-decision-reconciliation).
 
-Expand **Response delivery details** in the decision detail to inspect the retained response receipt. Failed saves and confirmed wake failures offer **Retry delivery** with the existing request ID; a successfully delivered response awaiting an answer does not.
+Expand **Evidence and delivery details** in the decision detail to inspect the retained response receipt. Failed saves and confirmed wake failures offer **Retry delivery** with the existing request ID; a successfully delivered response awaiting an answer does not.
 
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
@@ -56,8 +56,43 @@ readiness categories, including future/conditional requests. Operational coordin
 bundles appear only under diagnostics rather than as one answerable decision. See the
 [workflow view contract](workflow.md#slice-3-shared-operational-views-and-normal-use)
 for ask inclusion, PR evidence, request age and advisory execution warnings.
-Search by title, card ID or next action. Rows expand to show source-specific
-questions and controls, supporting card context, evidence and technical details.
+Legacy encoded text is decoded before readiness checks, so “After the next prod
+release” remains conditional. Source warnings and retained worker notes remain
+available on demand near the footer.
+Search by title, question, card ID or readiness. Selecting a compact row opens
+its action workbench beside the queue on desktop; mobile shows the queue or detail
+one pane at a time, with **All decisions** returning to the list. The persistent
+**Previous** and **Next decision** footer traverses the visible filtered list,
+including verification and conditional requests, and shows the current position.
+This differs from the ready-only MCP queue navigation.
+
+The detail shows one recommended action, its rationale and up to two alternatives;
+**More options** appears only for additional published actions. The
+[typed proposal contract](workflow.md#decisions-workbench-proposals) owns publication,
+currentness and selection checks. Stale or unknown evidence keeps the last-known
+recommendation visible with disabled choices. With no typed proposal, it shows
+**Recommendation not yet published** and **Ask for a recommendation**, which seeds
+an editable Ask turn. Legacy published workflow options retain their existing
+controls; freeform prose never becomes executable suggestions.
+
+**Something wrong?** opens **Already resolved**, **Not my decision** and **Need
+more information**. Each seeds a verification question for the exact request;
+it does not dismiss the request or mutate source status.
+
+**Discussion** previews the latest relevant First Mate answer and embeds the
+existing Ask text/voice composer. Context and return navigation retain the exact
+request key even without a linked card. **Full conversation** opens the same
+persistent Discuss thread. **Return to source** restores Decisions and its search,
+closing the mobile Discuss sheet. An expanded visible Discuss conversation replaces
+the inline composer so only one complete composer is shown. Switching selected
+requests collapses an unrelated expanded conversation; a conversation opened in
+Discuss afterwards stays open.
+
+Small source links and owner/status remain visible. **Evidence and delivery
+details** holds source-specific response controls, terminal links, card context,
+receipts and technical data. Selecting an action retains the request until actual
+source reconciliation; delivery and observed outcomes follow the
+[Ask selection contract](ask.md#discuss-and-decisions-presentation).
 Opening a row retains its canonical request identity and shares linked-card focus,
 visible through `get_scene`; persistence follows the [presentation preference rules](overview.md).
 Unlinked requests expose their details and evidence without offering card focus.

@@ -99,7 +99,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
   const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
-    <AskProvider scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
+    <AskProvider decisionUnavailable={!!queueError || !!floor.error} decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
       if (destination.section === 'overview') search.remember()
       if (onNavigate) onNavigate(destination)
       else if (destination.section === 'overview') {
@@ -131,9 +131,8 @@ function WorkspaceRail({ closeRequest, openRequest }: {
     if (followExpanded) setSelectedView(expandedGroup.view)
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
-  useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
   const attention = groups.filter(group => group.attention && !group.unread).length
-  return <DeskRail closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
+  return <DeskRail onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
     <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
     <AskDesk now={now} view={view} />
   </DeskRail>
