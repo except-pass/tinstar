@@ -47,7 +47,10 @@ main ──●────●────●────●────●──
 - **Body**: what changed and why, plus how you verified it. Link any issue or
   roborev finding it closes.
 - **Keep it green before asking for review.** Run the gate locally (below); CI
-  (`typecheck-and-test`) re-runs it on the PR and a red check blocks merge.
+  (`typecheck-and-test` and `browser-suite`) re-runs it on the PR and a red
+  check blocks merge. An admin can pass a stuck required check with
+  `gh pr merge <number> --admin --squash --body 'admin override: <reason>'`.
+  GitHub keeps that reason on the squash commit.
 - Address review feedback on the branch; force-push is fine on your own feature
   branch (no one else builds on it).
 
@@ -62,7 +65,9 @@ npx vitest run --exclude='e2e/**'      # unit/integration tests
 ```
 
 Also run the [published puller contract](../test-fixtures/published-puller/README.md),
-which CI enforces in a separate job on every PR.
+which CI enforces in a separate job on every PR. The browser suite
+(`npm run test:e2e`) is the required `browser-suite` check; see
+[testing.md](testing.md#browser-regression-playwright).
 
 Two traps worth restating (both have bitten releases):
 

@@ -6,5 +6,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   timeout: 120_000,
+  // CI writes the HTML report the browser-suite job uploads with failure traces.
+  // open: 'never' so a local run with CI set does not start a report server.
+  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: { trace: 'retain-on-failure' },
 })
