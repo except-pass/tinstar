@@ -34,11 +34,16 @@ async function fixture() {
       'Last touched by': { type: 'rich_text', rich_text: [] }, 'Waiting For': { type: 'rich_text', rich_text: [] },
       'Sub-item': { type: 'relation', relation: [] }, Link: { type: 'url', url: pr } } as Record<string, any> }
   const comments: any[] = [], patches: any[] = []
+  const children: Record<string, typeof raw> = {}
+  let rejectPatch = false
   let patchLoss = false, noteLoss = false, rejectNote = false, readFailure = false
   const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(url)).pathname, method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : null
     if (readFailure) return new Response('{}', { status: 429 })
+    const child = children[path.split('/').at(-1)!]
+    if (child) return Response.json(child)
     if (path.endsWith(`/pages/${id}`)) {
+      if (method === 'PATCH' && rejectPatch) { rejectPatch = false; return new Response('{}', { status: 429 }) }
       if (method === 'PATCH') { patches.push(body); for (const [field, value] of Object.entries(body.properties)) Object.assign(raw.properties[field], value); if (patchLoss) { patchLoss = false; throw new Error('Response lost after applying PATCH') } }
       return Response.json(raw)
     }
@@ -58,7 +63,7 @@ async function fixture() {
     operations.validateReview = vi.fn(async () => {})
     return operations
   }
-  return { root, raw, comments, patches, restart, failPatch: () => { patchLoss = true }, failNote: () => { noteLoss = true }, rejectNote: () => { rejectNote = true }, failRead: () => { readFailure = true } }
+  return { root, raw, comments, patches, restart, children, rejectPatch: () => { rejectPatch = true }, failPatch: () => { patchLoss = true }, failNote: () => { noteLoss = true }, rejectNote: () => { rejectNote = true }, failRead: () => { readFailure = true } }
 }
 const submit = (operation_id = 'submit-one') => ({ kind: 'submit_for_review' as const, card_id: id, operation_id, review })
 
@@ -193,6 +198,15 @@ it('automatically submits a green explicitly associated deployment once through 
   expect(f.comments).toHaveLength(1)
   await new ReviewDeploymentReconciler(new ReviewDeploymentAudit(f.root), { scene: async () => scene(), associations, update: f.restart().update.bind(f.restart()), deliver }).run(true)
   expect(f.comments).toHaveLength(1); expect(deliver).not.toHaveBeenCalled()
+  await workflow.update({ kind: 'accept_review', operation_id: 'accept', card_id: id, submission_key: review.submission_key, feedback: 'Accepted', remaining_scope: [], scope_complete: true }, 'Tin Star UI')
+  const completed = await audit.read()
+  source.intentions.data!.cards = []
+  const absent = { ...reconcileScene(source), claimHistory: [], historyScope: 'current' }
+  const update = vi.fn(workflow.update.bind(workflow))
+  await new ReviewDeploymentReconciler(new ReviewDeploymentAudit(f.root), { scene: async () => absent, associations, update, deliver }).run(true)
+  expect(await audit.read()).toEqual(completed)
+  expect(await audit.exceptions()).toEqual([])
+  expect(update).not.toHaveBeenCalled(); expect(deliver).not.toHaveBeenCalled()
 })
 
 it('keeps a failed live UI proof or absent screenshot as a specific durable exception', async () => {
@@ -206,4 +220,59 @@ it('keeps a failed live UI proof or absent screenshot as a specific durable exce
   expect((await audit.exceptions())[0]?.missing.join(' ')).toContain('proof.passed')
   expect((await audit.exceptions())[0]?.missing.join(' ')).toContain('proof.screenshots')
   expect(f.comments).toHaveLength(0)
+})
+
+
+it.each(['deployment', 'sha', 'proof', 'head', 'extra-pull'])('rejects stale %s evidence before an idempotent deployment success', async field => {
+  const f = await fixture(), audit = new ReviewDeploymentAudit(f.root), associations = new AssociationStore(f.root)
+  await f.restart().update(submit(), 'Firstmate')
+  const evidence = structuredClone(review)
+  if (field === 'deployment') evidence.deployment_id = 'floor:previous'
+  if (field === 'sha') evidence.deployed_sha = 'e'.repeat(40)
+  if (field === 'proof') evidence.proof.tested_sha = 'e'.repeat(40)
+  if (field === 'head') evidence.pulls[0]!.head = 'e'.repeat(40)
+  if (field === 'extra-pull') evidence.pulls.push({ url: pr.replace('999', '998'), head })
+  const source = fixtureSources(); source.fleet = []; source.intentions.data!.cards = [notionCard(f.raw)]
+  const scene = { ...reconcileScene(source), claimHistory: [], historyScope: 'current' }
+  const deployment: FloorDeployment = { action: 'floor-deployment', id: review.deployment_id, time: new Date().toISOString(), oldSha: 'e'.repeat(40), newSha: sha,
+    membershipComplete: true, pulls: [{ url: pr, head, mergeSha: sha }], ownerHome: '/fixture', evidence: [{ card_id: id, review: evidence }], nonReviewable: [], warnings: [] }
+  await writeFile(audit.path, [deployment, { action: 'floor-smoke', deploymentId: review.deployment_id, newSha: sha, time: new Date().toISOString(), passed: true, receipt: 'Fixture smoke' }].map(row => JSON.stringify(row)).join('\n') + '\n')
+  const workflow = f.restart(); workflow.validateReview = input => audit.validate(input, scene, associations)
+  const update = vi.fn(workflow.update.bind(workflow))
+  await new ReviewDeploymentReconciler(audit, { scene: async () => scene, associations, update, deliver: async () => ({ saved: true }) }).run(true)
+  expect(update).not.toHaveBeenCalled()
+  expect(await audit.exceptions()).toHaveLength(1)
+  expect((await workflow.update({ ...submit(), review: evidence }, 'Firstmate')).outcome).toBe('not-saved')
+  expect(f.comments).toHaveLength(1); expect(f.patches).toHaveLength(1)
+})
+
+it.each(['reopened', 'added', 'partial', 'waiting', 'remaining', 'complete'])('reconciles %s child scope before recovering acceptance', async scenario => {
+  const f = await fixture(); await f.restart().update(submit(), 'Firstmate')
+  const childId = 'f'.repeat(32)
+  f.children[childId] = structuredClone(f.raw)
+  f.children[childId]!.id = childId
+  f.children[childId]!.properties.Status.status.name = 'Done'
+  f.raw.properties['Sub-item'].relation = [{ id: childId }]
+  const accept = { kind: 'accept_review' as const, operation_id: 'accept', card_id: id, submission_key: review.submission_key,
+    feedback: 'UI accepted', remaining_scope: scenario === 'remaining' ? ['Provisioning'] : [], scope_complete: true }
+  f.rejectPatch()
+  expect(await f.restart().update(accept, 'Tin Star UI')).toMatchObject({ outcome: 'partially-saved' })
+  if (scenario === 'reopened') f.children[childId]!.properties.Status.status.name = 'In Progress'
+  if (scenario === 'added') {
+    const addedId = 'e'.repeat(32)
+    f.children[addedId] = structuredClone(f.children[childId]!)
+    f.children[addedId]!.id = addedId
+    f.children[addedId]!.properties.Status.status.name = 'Queued'
+    f.raw.properties['Sub-item'].relation.push({ id: addedId })
+  }
+  if (scenario === 'waiting') f.raw.properties['Waiting For'].rich_text = [{ text: { content: 'Provisioning' } }]
+  if (scenario === 'partial') f.raw.properties['Sub-item'].has_more = true
+  const results = await f.restart().reconcileReviews()
+  expect(results[0]?.result.outcome).toBe('saved')
+  const status = scenario === 'complete' ? 'Done' : 'Queued'
+  expect(f.raw.properties.Status.status.name).toBe(status)
+  expect(f.comments).toHaveLength(2)
+  const text = f.comments[1].rich_text.map((part: { text: { content: string } }) => part.text.content).join('')
+  expect(text).toContain(`"next_status":"${status}"`)
+  expect(text).toContain(JSON.stringify(accept.remaining_scope))
 })

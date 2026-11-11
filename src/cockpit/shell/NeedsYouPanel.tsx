@@ -182,7 +182,7 @@ export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismiss
   return <div className="cockpit-attention-list" aria-label="Needs You">
     {errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {errors.join('; ')}</p>}
     {reviews?.warning && <p role="status">{reviews.warning}</p>}
-    {reviews?.items.map(item => <DeliverableReview key={item.submissionKey} item={item} onOpen={onCardOpen} />)}
+    {reviews?.items.map(item => <DeliverableReview key={JSON.stringify([item.cardId, item.submissionKey])} item={item} onOpen={onCardOpen} />)}
     {cards.length ? cards.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => onOpen(card)} submit={submit} dismissing={dismissing(card)} dismissed={dismissed(card)} dismissError={dismissError(card)} onDismiss={onDismiss} />)
       : errors.length > 0 || reviews?.items.length || reviews && !reviews.complete ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
   </div>

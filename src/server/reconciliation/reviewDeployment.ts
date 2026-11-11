@@ -2,7 +2,7 @@ import { appendFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { reviewEvidenceSchema, reviewSha } from '../../shared/reviews'
+import { reviewEvidenceSchema, reviewSha, type ReviewEvidence } from '../../shared/reviews'
 import { releaseAssociations } from '../../shared/releases'
 import { updateWorkSchema, type StartWorkResult } from '../../shared/workflow'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
@@ -25,6 +25,14 @@ export interface HandoffException { id: string; deploymentId: string; deployedSh
 type HandoffEvent = { action: 'review-handoff'; time: string; exception: HandoffException; deliverySaved?: boolean }
 type AuditEvent = FloorDeployment | z.infer<typeof smokeSchema> | HandoffEvent
 const stable = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+
+function validateDeploymentEvidence(deployment: FloorDeployment, evidence: ReviewEvidence) {
+  if (evidence.deployment_id !== deployment.id || evidence.deployed_sha !== deployment.newSha) throw new ReviewWriteError('deployment-mismatch', 'Review evidence must identify this guarded deployment and SHA')
+  if (evidence.proof.tested_sha !== deployment.newSha) throw new ReviewWriteError('review-proof-mismatch', 'Live proof must identify the actual deployed SHA')
+  for (const pr of evidence.pulls) {
+    if (!deployment.pulls.some(member => member.url === pr.url && member.head === pr.head)) throw new ReviewWriteError('deployment-pr-mismatch', 'Declared PR/head is absent from the deployed receipt')
+  }
+}
 
 /** Additive records in the existing deployment audit, never a second journal. */
 export class ReviewDeploymentAudit {
@@ -55,12 +63,12 @@ export class ReviewDeploymentAudit {
     const events = await this.read(), evidence = input.review
     const deployment = events.filter((event): event is FloorDeployment => event.action === 'floor-deployment' && event.id === evidence.deployment_id).at(-1)
     if (!deployment || deployment.newSha !== evidence.deployed_sha) throw new ReviewWriteError('deployment-missing', 'No matching guarded deployment receipt for this SHA')
+    validateDeploymentEvidence(deployment, evidence)
     if (!events.some(event => event.action === 'floor-smoke' && event.deploymentId === deployment.id && event.newSha === deployment.newSha)) throw new ReviewWriteError('smoke-missing', 'Guarded deployment has no verified successful smoke receipt')
     if (!deployment.membershipComplete) throw new ReviewWriteError('deployment-membership-incomplete', 'Deployed PR membership is incomplete; reconcile the deployment audit')
     const links = releaseAssociations(scene, await associations.read())
     if (!links.associationsComplete) throw new ReviewWriteError('association-source-stale', 'Fresh complete shared PR/card association evidence is required')
     for (const pr of evidence.pulls) {
-      if (!deployment.pulls.some(member => member.url === pr.url && member.head === pr.head)) throw new ReviewWriteError('deployment-pr-mismatch', 'Declared PR/head is absent from the deployed receipt')
       if (!links.pulls.some(member => member.url === pr.url && member.links.some(link => link.cardId === input.card_id && link.active))) throw new ReviewWriteError('card-association-missing', 'An explicit canonical PR/card association is missing')
     }
   }
@@ -90,6 +98,9 @@ export class ReviewDeploymentReconciler {
     const scene = await this.deps.scene(), links = releaseAssociations(scene, await this.deps.associations.read())
     const jobs = deployments.flatMap(deployment => (deployment.pulls.length ? deployment.pulls : [null]).flatMap(pr => {
       const cards = pr ? links.pulls.find(row => row.url === pr.url)?.links.filter(link => link.active).map(link => link.cardId) ?? [] : []
+      if (pr) for (const { exception } of latest.values()) {
+        if (exception.resolved && exception.deployedSha === deployment.newSha && exception.pull === pr.url && exception.cardId && !cards.includes(exception.cardId)) cards.push(exception.cardId)
+      }
       return (cards.length ? cards : [null]).map(cardId => ({ deployment, pr, cardId, id: stable([deployment.newSha, pr?.url ?? null, cardId]) }))
     }))
     // Persist all work before the bounded mutation pass. A crash or the next
@@ -126,6 +137,10 @@ export class ReviewDeploymentReconciler {
           const declared = deployment.evidence.find(row => row.card_id === cardId)
           if (declared) { const parsed = reviewEvidenceSchema.safeParse(declared.review); if (!parsed.success) missing.push(...parsed.error.issues.map(issue => `Review evidence ${issue.path.join('.')}: ${issue.message}`)) }
           const evidence = deployment.evidence.flatMap(row => { const parsed = reviewEvidenceSchema.safeParse(row.review); return parsed.success ? [{ card_id: row.card_id, review: parsed.data }] : [] }).find(row => row.card_id === cardId && row.review.pulls.some(member => member.url === pr?.url))
+          if (evidence) {
+            try { validateDeploymentEvidence(deployment, evidence.review) }
+            catch (error) { missing.push(error instanceof Error ? error.message : 'Deployment evidence mismatch') }
+          }
           if (!classification && !evidence) missing.push('Review classification, live proof, screenshots (or non-UI alternative), and acceptance instructions')
           if (!missing.length && evidence && !classification) {
             const parsed = updateWorkSchema.safeParse({ kind: 'submit_for_review', card_id: cardId, operation_id: `deploy-review-${id.slice(0, 40)}`, review: evidence.review })

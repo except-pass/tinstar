@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { NeedsYouPanel } from './NeedsYouPanel'
 import { apiFetch } from '../../apiClient'
@@ -35,4 +35,25 @@ it('requires feedback and queues the same canonical submission through request c
   fireEvent.click(screen.getByRole('button', { name: 'Request changes' }))
   await waitFor(() => expect(apiFetch).toHaveBeenCalled())
   expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[0]![1]!.body)).input).toMatchObject({ kind: 'request_review_changes', feedback: 'The mobile list clips', submission_key: 'one' })
+})
+
+it('keeps feedback, scope and loaded evidence with their card when submission keys collide', async () => {
+  const first = { ...view.items[0]!, evidenceWarning: 'Load evidence' }
+  const second = { ...first, id: 'review:two', cardId: 'b'.repeat(32), title: 'Second deliverable' }
+  vi.mocked(apiFetch).mockResolvedValueOnce(Response.json({ ok: true, data: { outcome: 'available', review: { ...first, title: 'Loaded first deliverable', evidenceWarning: null } } }))
+  const props = { cards: [], workers: [], errors: [], waiting: false, submit: vi.fn(), dismissing: () => false, dismissed: () => false, dismissError: () => null, onOpen: vi.fn(), onDismiss: vi.fn() }
+  const rendered = render(<NeedsYouPanel {...props} reviews={{ ...view, items: [first, second] }} />)
+  const firstRow = within(screen.getByRole('article', { name: first.title }))
+  fireEvent.change(firstRow.getByLabelText('Feedback'), { target: { value: 'First card feedback' } })
+  fireEvent.click(firstRow.getByRole('checkbox'))
+  fireEvent.click(firstRow.getByRole('button', { name: 'Load current review evidence' }))
+  await screen.findByRole('article', { name: 'Loaded first deliverable' })
+  rendered.rerender(<NeedsYouPanel {...props} reviews={{ ...view, items: [second] }} />)
+  const row = within(screen.getByRole('article', { name: second.title }))
+  expect(row.getByLabelText('Feedback')).toHaveValue('')
+  expect(row.getByRole('checkbox')).not.toBeChecked()
+  vi.mocked(apiFetch).mockResolvedValueOnce(Response.json({ ok: true, data: { outcome: 'saved', message: 'Accepted', saved_fields: ['note'] } }))
+  fireEvent.click(row.getByRole('button', { name: 'Approve deliverable' }))
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
+  expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[1]![1]!.body)).input).toMatchObject({ card_id: second.cardId, scope_complete: false })
 })

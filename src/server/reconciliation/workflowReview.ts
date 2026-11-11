@@ -27,6 +27,10 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
   try {
     if (!actor.trim()) throw new ReviewWriteError('unauthenticated', 'Authenticated caller required')
     card = await deps.reader.card(input.card_id, true)
+    if (input.kind === 'submit_for_review') {
+      if (input.review.proof.tested_sha !== input.review.deployed_sha) throw new ReviewWriteError('review-proof-mismatch', 'Live proof must identify the actual deployed SHA')
+      await deps.validate(input)
+    }
     const before = card, notes = await deps.content.notes(card.id)
     const submissions = reviewSubmissions(notes)
     const submission = input.kind === 'submit_for_review' ? input.review : submissions.find(row => row.submission_key === input.submission_key)
@@ -67,21 +71,10 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
       const desired: Record<string, unknown> = { 'Last touched by': actor }
       if (input.kind === 'submit_for_review') {
         if (submissions.some(row => row.submission_key === input.review.submission_key)) throw new ReviewWriteError('review-key-conflict', 'Submission key already belongs to a different deliverable/revision')
-        if (input.review.proof.tested_sha !== input.review.deployed_sha) throw new ReviewWriteError('review-proof-mismatch', 'Live proof must identify the actual deployed SHA')
-        await deps.validate(input)
         Object.assign(desired, { Owner: 'Will', Status: card.properties.Status?.value === 'In review' ? 'In review' : 'Ready for Review' })
       } else {
         if (!isReviewStatus(card.properties.Status?.value) || (legacy ? input.submission_key !== legacyReviewKey(card.id, card.last_edited_time) : submissions.at(-1)?.submission_key !== submissionKey)) throw new ReviewWriteError('review-changed', 'This is not the currently active review; refresh the card')
-        // An explicit remaining-scope attestation is required, but never
-        // overrides current dependencies or unfinished child scope.
-        let unfinished = !input.scope_complete || input.remaining_scope.length > 0 || !!String(card.properties['Waiting For']?.value ?? '').trim()
-        const children = card.properties['Sub-item']
-        if (children?.hasMore) unfinished = true
-        for (const child of input.kind === 'accept_review' && Array.isArray(children?.value) ? children.value : []) {
-          const value = await deps.reader.card(String(child), true)
-          if (!value.archived && !value.in_trash && !['Done', 'Archived'].includes(String(value.properties.Status?.value))) unfinished = true
-        }
-        Object.assign(desired, input.kind === 'accept_review' && !unfinished ? { Owner: 'Will', Status: 'Done' } : { Owner: 'Firstmate', Status: 'Queued' })
+        Object.assign(desired, { Owner: 'Firstmate', Status: 'Queued' })
       }
       if (!card.properties.Area?.value) throw new ReviewWriteError('required-fields', 'Review transition requires Area')
       // Validate property types before persisting or writing anything.
@@ -99,8 +92,22 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
     if (state.note_pending) return result('partially-saved', 'review-note-unconfirmed', 'A prior comment may have saved. Current complete history does not confirm it; inspect Notion and reconcile this exact operation. No duplicate comment was posted. After confirming absence in Notion, an operator can retry with retry_missing_note {confirmed_absent:true, reason}; that override is recorded.')
     card = await deps.reader.card(card.id, true)
     for (const [field, value] of Object.entries(state.original)) {
+      if (input.kind === 'accept_review' && ['Waiting For', 'Sub-item'].includes(field)) continue
       const actual = card.properties[field]?.value ?? null
       if (!same(actual, value) && !(field in state.desired && same(actual, state.desired[field]))) throw new ReviewWriteError('review-card-changed', `${field} changed during review handoff; the newer card state was preserved`)
+    }
+    if (input.kind === 'accept_review') {
+      const children = card.properties['Sub-item']
+      let unfinished = !input.scope_complete || input.remaining_scope.length > 0 || !!String(card.properties['Waiting For']?.value ?? '').trim() || !!children?.hasMore
+      for (const child of Array.isArray(children?.value) ? children.value : []) {
+        const value = await deps.reader.card(String(child), true)
+        if (!value.archived && !value.in_trash && !['Done', 'Archived'].includes(String(value.properties.Status?.value))) unfinished = true
+      }
+      const desired = { ...state.desired, ...(unfinished ? { Owner: 'Firstmate', Status: 'Queued' } : { Owner: 'Will', Status: 'Done' }) }
+      const note = `${reviewResponsePrefix}${JSON.stringify({ submission_key: submissionKey, action: input.kind, accepted_by: 'Will', recorded_by: state.actor, feedback: input.feedback, remaining_scope: input.remaining_scope, next_status: desired.Status })}`
+      state = { ...state, desired, note: `Date: ${new Date().toISOString()}\nBy: ${state.actor}\n${note}`,
+        original: Object.fromEntries(Object.keys(state.original).map(field => [field, card!.properties[field]?.value ?? null])) }
+      await deps.receipts.putReview(receiptKey, signature, card.id, state)
     }
     const missing = Object.fromEntries(Object.entries(state.desired).filter(([field, value]) => !same(card!.properties[field]?.value ?? null, value)).map(([field, value]) => [field, deps.property(card!, field, value)]))
     if (Object.keys(missing).length) {
