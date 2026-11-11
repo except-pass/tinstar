@@ -103,7 +103,7 @@ describe('authoritative coordinator release objects', () => {
     }
     evidence.repositories.set(receipt.repository, 'github')
     const memberships = new ReleaseMembershipReader()
-    vi.spyOn(memberships, 'get').mockResolvedValue({ membership: { status: 'complete', baseline: 'v1.23.0', baselineSha: 'b'.repeat(40), observedAt: null, reason: null }, pulls: new Map([[member.id, member]]), commits: [], cursor: 0, page: 1, total: 1, retryAt: 0 })
+    vi.spyOn(memberships, 'get').mockResolvedValue({ membership: { status: 'complete', baseline: 'v1.23.0', baselineSha: 'b'.repeat(40), observedAt: null, reason: null }, pulls: new Map([[member.id, member]]), files: [], commits: [], cursor: 0, page: 1, total: 1, retryAt: 0 })
     const reader = new ReleaseObjectReader(memberships, new ReleaseReconciler(vi.fn().mockResolvedValue({ state: 'ancestor' })))
     const records = await reader.get(evidence, data, scene)
     const production = records.find(record => record.kind === 'production')!

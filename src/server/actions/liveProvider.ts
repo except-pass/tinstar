@@ -57,7 +57,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   if (!suffix) { /* Repository numeric ID/owner verification. */ }
   else if (/^\/pulls(?:\/[1-9]\d*(?:\/(?:files|reviews|commits))?)?$/.test(suffix)) permissions.pull_requests = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/pulls$/.test(suffix)) permissions.pull_requests = 'read'
-  else if (suffix === '/tags' || /^\/compare\/[a-f0-9]{40,64}\.\.\.[a-f0-9]{40,64}$/.test(suffix) || /^\/commits\/[a-f0-9]{40,64}$/.test(suffix)) permissions.contents = 'read'
+  else if (suffix === '/tags' || suffix === '/releases' || /^\/compare\/[a-f0-9]{40,64}\.\.\.[a-f0-9]{40,64}$/.test(suffix) || /^\/commits\/[a-f0-9]{40,64}$/.test(suffix)) permissions.contents = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/check-runs$/.test(suffix)) permissions.checks = 'read'
   else if (/^\/commits\/[a-f0-9]{40,64}\/(?:status|statuses)$/.test(suffix)) permissions.statuses = 'read'
   else if (/^\/actions\/(?:runs(?:\/[1-9]\d*(?:\/jobs)?)?|jobs\/[1-9]\d*|workflows\/[1-9]\d*)$/.test(suffix)) permissions.actions = 'read'
@@ -67,6 +67,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   for (const [key, value] of parsed.searchParams) {
     if (key === 'page' && /^[1-9]\d{0,2}$/.test(value) || key === 'per_page' && /^(?:[1-9]\d?|100)$/.test(value) ||
       key === 'state' && ['open', 'closed', 'all'].includes(value) || key === 'filter' && value === 'latest' ||
+      key === 'event' && value === 'push' && suffix === '/actions/runs' ||
       key === 'head_sha' && /^[a-f0-9]{40,64}$/.test(value) || key === 'ref' && /^[a-f0-9]{40,64}$/.test(value)) continue
     throw new Error('Reader query outside PR evidence scope')
   }

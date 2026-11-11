@@ -88,7 +88,7 @@ it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls
 })
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
   expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
-  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
+  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], ['releases?per_page=100&page=1', 'contents'], [`actions/runs?head_sha=${head}&event=push&per_page=100&page=1`, 'actions'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
     expect(readerScope(`/repos/fortresspower/cmsandbox/${suffix}`).permissions).toEqual({ metadata: 'read', [permission!]: 'read' })
   }
 })

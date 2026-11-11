@@ -88,11 +88,8 @@ export function startServer(opts: ServerOptions) {
   const releases = new ReleasesApi(reconciliation)
   const releaseWriter = new ReleaseAutomationWriter(getConfigRoot(), reconciliation.releaseTransport(), () => releases.read(false, true))
   reconciliation.releaseDesk = () => releaseWriter.desk()
-  const reconcileProduction = () => { void releaseWriter.run().catch(() => log.warn('releases', 'Automatic reconciliation could not read its sources or durable receipts; inspect Releases configuration and writer-receipts.json.')) }
-  // This scheduled deterministic pass is independent of GET and custom actions.
-  // Missing/false automation.json returns before any board or evidence reads.
-  const productionTimer = setInterval(reconcileProduction, 60_000)
-  productionTimer.unref()
+  // The coordinator writer's completion policy is obsolete. Keep its audit/Desk
+  // history readable; no scheduled writes until a separate owner activation.
   const pulls = new PullsApi(reconciliation, releases.store)
   reconciliation.authorizePulls = req => pulls.authorized(req)
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
@@ -130,7 +127,6 @@ export function startServer(opts: ServerOptions) {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
   const shutdown = async () => {
-    clearInterval(productionTimer)
     quota.stop()
     telemetry.stopPolling()
     try { await observability.stop() } catch (err) { log.debug('shutdown', `observability: ${(err as Error).message}`) }

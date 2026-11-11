@@ -77,7 +77,11 @@ webhooks, including externally managed consumers) and confirm publishing will
 not trigger unauthorized deployment or other privileged actions. This task
 does not claim that review has occurred. Required access is `gh-axi` permission
 to read the tag/release and create a release in that exact repository, plus the
-configured coordinator/Notion read sources and matching D.3 acceptance records.
+GitHub/Notion read sources, exact deployed-target proof and matching D.3 acceptance records.
+The live native reader exposes component activity only: these entries stay
+unaccepted and excluded from Verify notes until production proof exists.
+Cmsandbox already creates its native Release record; this separate command
+never overwrites that record or publishes from a page read.
 
 Then set only `enabled` to `true` in that root's
 `releases/publication.json`, and explicitly invoke:

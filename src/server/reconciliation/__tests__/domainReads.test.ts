@@ -12,6 +12,7 @@ import { PullReader } from '../../pulls/reader'
 import { PullFilesReader } from '../../pulls/files'
 import { QueuePullReader } from '../queuePulls'
 import { ReleasesApi } from '../../releases/routes'
+import { GithubReleaseReader } from '../../releases/github'
 import { ReleasePullReader } from '../../releases/pulls'
 import { releaseFixture } from '../../../releases/__tests__/fixtures'
 import { buildWorkerLinkReport } from '../workerLinkReport'
@@ -30,7 +31,7 @@ async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'mcp-domain-')); roots.push(root)
   await writeFile(join(root, 'config.json'), JSON.stringify({ prOperations: { repositories: ['owner/repo'] }, ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
   const scene = { ...releaseFixture(), searchIndex: { documents: [], notes: [] } }
-  const releases = new ReleasesApi({ scene: async () => scene }, root, new ReleasePullReader(async () => ({ title: 'Merged change', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: head })))
+  const releases = new ReleasesApi({ scene: async () => scene }, root, new ReleasePullReader(async () => ({ title: 'Merged change', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: head })), undefined, new GithubReleaseReader(async () => []))
   return { root, scene, releases }
 }
 

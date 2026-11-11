@@ -33,3 +33,11 @@ describe('Git release membership', () => {
     expect(read).toHaveBeenCalledTimes(2)
   })
 })
+
+it('keeps consecutive equal-source tags as an empty range rather than reusing already shipped PRs', async () => {
+  const read = vi.fn(async (path: string) => path.includes('/tags?') ? [tag('v2.0.0', head), tag('v1.0.0', head), tag('v0.9.0', base)] : { status: 'identical', merge_base_commit: { sha: head }, total_commits: 0, commits: [], files: [] })
+  const range = await new ReleaseMembershipReader(read).get('owner/repo', head, 'v2.0.0')
+  expect(range.membership).toMatchObject({ status: 'complete', baseline: 'v1.0.0', baselineSha: head })
+  expect(range.pulls.size).toBe(0)
+  expect(read).toHaveBeenCalledTimes(2)
+})

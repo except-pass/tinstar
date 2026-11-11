@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -10,10 +10,11 @@ import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/ori
 import { ReleasesApi } from '../routes'
 import { acceptanceFixture } from '../../../../test-fixtures/releases/acceptance'
 import { ReleaseAcceptanceRunner, readAcceptanceRecords } from '../acceptance'
-import { ReleaseObjectReader } from '../objects'
+import { GithubReleaseReader } from '../github'
 import { releaseChanges } from '../../../shared/releaseChanges'
 import { ReleasePullReader } from '../pulls'
 
+beforeEach(() => { vi.spyOn(GithubReleaseReader.prototype, 'get').mockResolvedValue({ releases: [], status: 'fresh', observedAt: null, warnings: [] }) })
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); resetOriginAllowlistForTests(); vi.restoreAllMocks() })
 async function setup() {
@@ -36,7 +37,7 @@ describe('Releases HTTP boundary', () => {
     const fixture = acceptanceFixture('human')
     fixture.pull.links = fixture.pull.links.slice(0, 1)
     Object.assign(scene, fixture.scene)
-    vi.spyOn(ReleaseObjectReader.prototype, 'get').mockResolvedValue([fixture.release])
+    vi.mocked(GithubReleaseReader.prototype.get).mockResolvedValue({ releases: [fixture.release], status: 'fresh', observedAt: null, warnings: [] })
     const github = vi.fn()
     const runner = new ReleaseAcceptanceRunner(root, async () => ({ data: fixture.data, scene }), github)
     const key = releaseChanges(fixture.release, fixture.data, scene)[0]!.checks![0]!.key

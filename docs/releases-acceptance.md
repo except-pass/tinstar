@@ -61,7 +61,12 @@ there is no shell interpolation. Review the workflow/ref again when its safety
 or assertion semantics change. Workflow success must mean every required
 feature assertion succeeded, with unsafe/missing assertions failing the workflow.
 
-Owner prerequisites: current authoritative coordinator exports, complete exact
+The live GitHub-native source supplies release activity, not current deployed-target
+proof. Acceptance execution therefore remains held; existing contracts and prior
+records remain readable. The following operator path describes the historical
+receipt-backed integration and is not activated by the native source.
+
+Owner prerequisites for that integration: current authoritative deployment receipts, complete exact
 PR-to-card/target associations, an existing approved safe workflow and service
 credentials for `gh-axi` with Actions read/write access to that repository.
 Historical snapshots support review but cannot authorize dispatch or a new human

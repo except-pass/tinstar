@@ -2,13 +2,22 @@ import type { AcceptanceResult } from './releaseAcceptance'
 import type { DeploymentReceipt, RequiredTarget } from './releaseReconciliation'
 import type { ReleasePull } from './releases'
 
-/** Read-only release projection. Coordinator bindings, not version labels, identify releases. */
+/** Native GitHub observations are separate from verified deployment receipts. */
+export interface NativeReleaseEvidence {
+  record: 'available' | 'missing' | 'unknown'
+  url: string | null; body: string | null; publishedAt: string | null; snapshotAt: string | null
+  componentResults: Array<{ component: string; result: string; url: string }>
+  runsStatus: 'fresh' | 'unknown'
+  runs: Array<{ id: number; name: string; workflow: string; url: string; sha: string; status: string; conclusion: string | null; attempt: number; createdAt: string; updatedAt: string; startedAt: string | null }>
+}
+/** Read-only release projection; native releases are identified by repository/tag. */
 export interface ReleaseTarget extends RequiredTarget {
   readiness: string
   readinessEvidence: Array<{ name: string; status: string; url: string | null }>
   receipt: DeploymentReceipt | null
 }
 export interface ReleaseObject {
+  github?: NativeReleaseEvidence
   id: string; repository: string; version: string; sourceSha: string | null
   kind: 'candidate' | 'draft' | 'production'
   candidateId: string | null; planId: string | null; executionId: string | null

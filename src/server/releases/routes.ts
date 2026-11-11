@@ -11,12 +11,12 @@ import { releaseChanges } from '../../shared/releaseChanges'
 import { releaseAssociations } from '../../shared/releases'
 import { AssociationConflict, AssociationStore, associationInput } from './associations'
 import { ReleasePullReader } from './pulls'
-import { ReleaseEvidenceReader } from './evidence'
+import type { EvidenceRead } from './evidence'
 import { ReleaseReconciler } from './reconcile'
 import { readReleaseWriteRecords } from './writer'
-import { planReleaseAutomation, readAutomationSettings } from './automation'
+import { planReleaseAutomation } from './automation'
 import { readAcceptanceRecords, readAcceptanceSettings } from './acceptance'
-import { ReleaseObjectReader } from './objects'
+import { GithubReleaseReader } from './github'
 
 async function ownerLogins(root: string): Promise<string[]> {
   try {
@@ -27,12 +27,11 @@ async function ownerLogins(root: string): Promise<string[]> {
 /** GET produces observations/proposals only, never executes the scheduled writer. */
 export class ReleasesApi {
   readonly store: AssociationStore
-  private releaseObjects = new ReleaseObjectReader()
-  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private evidence = new ReleaseEvidenceReader(root), private reconciler = new ReleaseReconciler()) {
+  constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private releaseObjects = new GithubReleaseReader(), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
   }
   /** Shared authorized-source projection for Releases and contextual Ask. */
-  async read(writable = false, force = false) {
+  async read(writable = false, force = false, tag?: string) {
     const scene = await this.sources.scene(force, { history: true })
     let events: Awaited<ReturnType<AssociationStore['read']>> = [], warning: string | undefined
     try { events = await this.store.read() } catch { warning = 'Local association audit unavailable; manual associations cannot be verified' }
@@ -48,14 +47,18 @@ export class ReleasesApi {
     }
     const errors = [...new Set(data.pulls.flatMap(pull => pull.readError ? [pull.readError] : []))]
     data.githubSync = { status: errors.length ? 'error' : data.pulls.some(pull => pull.freshness !== 'fresh') ? 'pending' : 'ok', errors }
-    const evidence = await this.evidence.get()
+    const native = await this.releaseObjects.get(data, tag)
+    // Actions are activity evidence, not exact current-PROD deployment receipts.
+    // The obsolete coordinator configuration is never read by the live path.
+    const evidence: EvidenceRead = { status: 'unconfigured', collectedAt: null, receipts: [], repositories: new Map(), requirements: new Map(), warnings: ['Current deployed-target proof is unknown; GitHub tag runs do not certify production delivery.'] }
     const reconciled = await this.reconciler.get(data, scene, evidence, await readReleaseWriteRecords(this.root))
-    reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+    reconciled.automation = planReleaseAutomation(reconciled, scene, { requestedEnabled: false, configuration: 'default', warnings: [] })
     try { reconciled.acceptanceWorkflows = (await readAcceptanceSettings(this.root)).checks }
     catch { reconciled.acceptanceWorkflows = {} }
     try { reconciled.acceptanceRecords = await readAcceptanceRecords(this.root) }
     catch { reconciled.acceptanceRecords = []; reconciled.warnings.push('Acceptance receipt store is unreadable; no passing results can be established.') }
-    reconciled.releases = await this.releaseObjects.get(evidence, reconciled, scene)
+    reconciled.releases = native.releases
+    reconciled.releaseSource = { status: native.status, observedAt: native.observedAt, warnings: native.warnings }
     const visibleChecks = new Set(reconciled.releases.flatMap(release => releaseChanges(release, reconciled, scene).flatMap(change => (change.checks ?? []).map(check => check.key))))
     reconciled.acceptanceRecords = reconciled.acceptanceRecords.filter(record => visibleChecks.has(record.key))
     const acceptanceWarning = reconciled.warnings.find(message => message.startsWith('Acceptance receipt store'))
@@ -75,7 +78,7 @@ export class ReleasesApi {
     const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
     try {
       if (path !== '/api/releases/associations' && req.method === 'GET') {
-        const reconciled = await this.read(writable)
+        const reconciled = await this.read(writable, false, new URL(req.url ?? '/', 'http://localhost').searchParams.get('tag') ?? undefined)
         return ok(res, path === '/api/releases/automation' ? reconciled.automation : path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
       }
       if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
