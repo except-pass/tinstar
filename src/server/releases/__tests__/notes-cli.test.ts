@@ -39,6 +39,8 @@ it.each(['internal', 'customer'] as const)('retains Done and active accepted wor
   const create = vi.spyOn(publicationGithub, 'create').mockImplementation(async (_repository, _tag, _title, body) => {
     inspect.mockResolvedValue({ tagSha: f.release.sourceSha, release: { url: 'https://example.com/fake-release', isDraft: false, description: body } })
   })
+  const inspectMock = publicationGithub.inspect
+  const createMock = publicationGithub.create
   const log = vi.spyOn(console, 'log').mockImplementation(() => {})
   const args = ['node', 'scripts/releases-notes.ts', '--config-root', root, '--release-id', f.release.id, '--audience', audience]
   process.argv = args
@@ -59,8 +61,8 @@ it.each(['internal', 'customer'] as const)('retains Done and active accepted wor
   await writeFile(join(root, 'releases/publication.json'), JSON.stringify({ version: 1, enabled: true }))
   vi.resetModules()
   const enabledNotes = await import('../notes')
-  vi.spyOn(enabledNotes.publicationGithub, 'inspect').mockImplementation(inspect)
-  vi.spyOn(enabledNotes.publicationGithub, 'create').mockImplementation(create)
+  vi.spyOn(enabledNotes.publicationGithub, 'inspect').mockImplementation(inspectMock)
+  vi.spyOn(enabledNotes.publicationGithub, 'create').mockImplementation(createMock)
   await import('../../../../scripts/releases-notes')
   expect(JSON.parse(log.mock.calls.at(-1)![0]).status).toBe('published')
   expect(create).toHaveBeenCalledTimes(1)
