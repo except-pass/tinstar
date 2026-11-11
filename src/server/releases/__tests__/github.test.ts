@@ -88,3 +88,9 @@ it('prioritizes the selected historical tag without waiting for the background h
   await reader.get(data(), 'v1.21.0')
   expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${'e'.repeat(40)}`))).toBe(true)
 })
+
+
+it('shows an existing draft Release record rather than claiming it is missing', async () => {
+  const result = await new GithubReleaseReader(nativeFixtureRead({ records: [{ ...nativeRecord, draft: true, published_at: null }] }), () => now).get(data())
+  expect(result.releases[0]!.github).toMatchObject({ record: 'available', body: nativeBody, publishedAt: null })
+})

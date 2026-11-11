@@ -84,7 +84,7 @@ export class GithubReleaseReader {
     if (!tagRead.value.complete) warnings.push('GitHub tag history is partial; older releases may be missing.')
     let records: z.infer<typeof recordSchema>[] = [], recordsKnown = false
     if (recordRead.status === 'fulfilled') {
-      try { records = z.array(recordSchema).parse(recordRead.value.rows).filter(record => !record.draft); recordsKnown = recordRead.value.complete } catch { /* Unknown, not absent. */ }
+      try { records = z.array(recordSchema).parse(recordRead.value.rows); recordsKnown = recordRead.value.complete } catch { /* Unknown, not absent. */ }
     }
     if (!recordsKnown) warnings.push('GitHub Release records unavailable or incomplete; missing records are unknown.')
     // Always refresh the latest tag, then the least recently observed history.

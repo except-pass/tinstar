@@ -17,8 +17,8 @@ scoped to the selected release, with the existing contextual drawer and contract
 ## GitHub-native source and evidence boundaries
 
 `GET /api/releases` returns `releases` and `releaseSource` alongside existing
-PR associations and the legacy dry-run projection. It reads tags and published
-Release records with pagination. Missing Release records are distinct from failed
+PR associations and the legacy dry-run projection. It reads tags and GitHub
+Release records (including visible drafts) with pagination. Missing Release records are distinct from failed
 reads: **v1.24.0 has no GitHub Release record**, and appears from its tag and
 component runs. Surgical tags such as `deploy/v1.24.0-siteconfig-1` are not version
 releases. Runs must match the exact tag, tagged commit and `push` event; same-SHA
