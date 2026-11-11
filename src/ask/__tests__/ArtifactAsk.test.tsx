@@ -12,7 +12,7 @@ import { homeName } from '../../cockpit/overviewQuery'
 import type { PullSummary } from '../../shared/pulls'
 const fixture = vi.hoisted(() => ({ scene: null as unknown }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: fixture.scene, error: null, now: Date.now() }) }))
-vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: null, error: null }) }))
+vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: null, error: null }), useReviewQueue: () => ({ queue: null, error: null }) }))
 vi.mock('../../components/agentIcon', () => ({ AgentIcon: () => null }))
 const head = 'a'.repeat(40), date = '2026-11-08T12:00:00.000Z'
 const receipt = { id: 'receipt-17', repository: 'owner/repo', environment: 'production', target: 'production', component: 'web', deployedSha: head, artifactDigest: null, version: '6.0', deployedAt: date, workflowUrl: 'https://github.com/owner/repo/actions/runs/17', receiptUrl: 'https://github.com/owner/repo/releases/tag/v6', outcome: 'succeeded' as const, exceptions: [] }

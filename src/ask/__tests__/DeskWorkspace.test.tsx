@@ -12,7 +12,7 @@ import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/re
 import { askItemSchema } from '../../shared/ask'
 const source = vi.hoisted(() => ({ scene: null as unknown, queue: null as ReturnType<typeof fixtureQueue> | null, queueError: null as string | null }))
 vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: source.scene, error: null, now: Date.now() }) }))
-vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: source.queueError }) }))
+vi.mock('../../reconciliation/useDeskQueue', () => ({ useDeskQueue: () => ({ queue: source.queue, error: source.queueError }), useReviewQueue: () => ({ queue: source.queue, error: source.queueError }) }))
 const read = vi.fn()
 const record = () => askItemSchema.parse({ request_id: crypto.randomUUID(), conversation_id: crypto.randomUUID(), question: 'Where is the evidence?', input_mode: 'text', context: { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: null, observed_at: null }, view: { scene: 'overview' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'sent', reply: null, error: null, read_at: null, dismissed_at: null })
 let items: ReturnType<typeof record>[]
