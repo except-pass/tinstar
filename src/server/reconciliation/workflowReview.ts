@@ -112,7 +112,7 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
     const missing = Object.fromEntries(Object.entries(state.desired).filter(([field, value]) => !same(card!.properties[field]?.value ?? null, value)).map(([field, value]) => [field, deps.property(card!, field, value)]))
     if (Object.keys(missing).length) {
       attempted = true
-      await deps.content.request(`pages/${card.id}`, 'PATCH', { properties: missing })
+      await deps.content.patchProperties(card.id, missing)
       card = await deps.reader.card(card.id, true)
     }
     deps.reader.confirm(card)

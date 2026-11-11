@@ -67,7 +67,7 @@ export class ReconciliationSources {
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.notionApi = api ?? new NotionApi(fetcher)
-    this.workReader = new WorkReader(config.notion, this.notionApi)
+    this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.associations = new AssociationStore(receiptRoot)
     this.askStore = new AskStore(receiptRoot)
     const content = new WorkflowContent(this.workReader)
@@ -75,7 +75,7 @@ export class ReconciliationSources {
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.context = new CardContextReader(config.notion, this.notionApi.fetch)
+    this.context = new CardContextReader(config.notion, this.notionApi.fetch, this.workReader.jira)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
 
@@ -170,7 +170,7 @@ export class ReconciliationSources {
   async checkInSnapshot(force = false): Promise<CheckInSnapshot> {
     const [fleet, checkIns] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({ owner: 'Firstmate', statuses: ['In Progress', 'Waiting For'] }, force)])
     return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
-      fleet, intentions: ageObservation(this.workReader.declarations()), checkIns: ageObservation(checkIns) }
+      fleet, intentions: ageObservation(this.workReader.declarations()), checkIns: ageObservation({ ...checkIns, data: checkIns.data ? { ...checkIns.data, cards: checkIns.data.cards.filter(card => !card.source?.synthetic) } : null }) }
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
@@ -234,7 +234,7 @@ export class ReconciliationSources {
         await this.workflow.reconcileDecisions(card.id, fleet)
         card = await this.workReader.card(card.id, true)
       }
-      const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
+      const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: card.source?.collectionId ?? this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-source card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
       const context = args.details ? await this.context.details(card.id) : undefined

@@ -1,3 +1,4 @@
+import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
 import { SessionConnection } from './SessionConnection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
@@ -250,13 +251,13 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
         {controls?.deskVisible && controls.expanded ? <p className="rec-basis">Continue in the open Discuss conversation.</p> : <AskContextComposer key={draft?.key ?? item.id} compact subject={{ ...subject, ...(draft ? { question: draft.question } : {}) }} />}
       </section>
       <section className="evidence"><h3 className="small-cap">Sources and evidence</h3><div className="evidence-links">
-        {item.cardIds.map(id => <a key={id} href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗</a>)}
+        {item.cardIds.map(id => <a key={id} href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗</a>)}
         {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Related PR' : 'Evidence'} ↗</a>)}
         {proposal?.value.references.filter(ref => !item.evidence.some(e => e.url === ref.url)).map(ref => <a key={ref.url} href={ref.url} target="_blank" rel="noreferrer">{ref.label} ↗</a>)}
       </div><p className="source-basis">{sourceStatus}</p>
       <details className="decisions-evidence"><summary>Evidence and delivery details</summary>
-        {!item.sources.some(source => source.request && source.request.kind !== 'notion-card') && <p>{displayRequestText(item.action ?? item.title)}</p>}
-        {item.sources.filter(source => source.request && source.request.kind !== 'notion-card').map((source, index) => {
+        {!item.sources.some(source => source.request && source.request.home !== null) && <p>{displayRequestText(item.action ?? item.title)}</p>}
+        {item.sources.filter(source => source.request && source.request.home !== null).map((source, index) => {
           const pending = messages.find(message => message.kind === 'answer' && message.sourceAnchor === source.responseAnchor)
           const request = source.request!
           const matches = workers.filter(worker => worker.home === request.home && worker.id === request.taskId)
@@ -266,7 +267,7 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
           const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
           return <section key={`${source.id}:${index}`} className="decisions-response" aria-label="Decision response"><p>{displayRequestText(source.action ?? '', 'Read the source to verify this question.')}</p>
             {href && <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}
-            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</> : ready && request.kind !== 'notion-card' && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
+            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</> : ready && request.home !== null && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
           </section>
         })}
         {item.cardIds.map(id => <DecisionCardContext key={id} id={id} showLink={false} />)}
@@ -290,7 +291,7 @@ function DecisionCardContext({ id, showLink = true }: { id: string; showLink?: b
     return () => controller.abort()
   }, [id])
   return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
-    {showLink && <a href={`https://www.notion.so/${id}`} target="_blank" rel="noreferrer">Read Notion card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
+    {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
     {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
     {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
     {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
@@ -307,7 +308,7 @@ function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('
 function DecisionChoices({ entry, items, disabled }: { entry: DecisionEntry; items: QueueItem[]; disabled: boolean }) {
   const [saved, setSaved] = useState<{ items: QueueItem[]; requestId: string; result: import('../shared/workflow').StartWorkResult } | null>(null)
   const requests = (entry.item as Partial<NeedsWillItem>).requests ?? []
-  const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length && (!entry.item.sources.some(source => source.kind === 'firstmate') || !!request.sourceRequest && entry.item.sources.some(source => source.request && source.request.kind !== 'notion-card' && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null))))
+  const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length && (!entry.item.sources.some(source => source.kind === 'firstmate') || !!request.sourceRequest && entry.item.sources.some(source => source.request && source.request.home !== null && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null))))
   const localStatus = saved?.result.decision_resolution?.message ?? saved?.result.message
   const resolution = saved ? items.filter(item => item.cardIds.includes(entry.id!))
     .flatMap(item => item.decisionResolution?.requests ?? (item.decisionResolution ? [item.decisionResolution] : []))

@@ -1,3 +1,4 @@
+import { isJiraCard } from '../../shared/workIdentity'
 import { notionPageId } from './notion'
 
 export interface CardReference {
@@ -24,6 +25,7 @@ function textual(value: unknown): string | null {
 /** A work_item confirms a card only when the whole value is a page id or a Notion page URL. */
 function explicitWorkItem(value: unknown): string | null {
   if (typeof value !== 'string') return null
+  if (isJiraCard(value)) return value
   const bare = notionPageId(value)
   if (bare) return bare
   const match = new RegExp(NOTION_URL.source, 'i').exec(value)

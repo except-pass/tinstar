@@ -1,3 +1,4 @@
+import { isJiraCard } from '../shared/workIdentity'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { PresentationState } from './presentation'
 import { propertyDate, propertyText } from './recordFields'
@@ -10,7 +11,7 @@ export interface WaitingForGroup {
   target?: { kind: 'card'; id: string } | { kind: 'url'; url: string }
 }
 const normalize = (id: string) => id.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
-const pageId = (id: string) => /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(id) ? id.replaceAll('-', '').toLowerCase() : null
+const pageId = (id: string) => isJiraCard(id) ? id : /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(id) ? id.replaceAll('-', '').toLowerCase() : null
 export function waitingForActive(state: PresentationState) {
   const statuses = state.donutFilter?.cards.length ? state.donutFilter.cards : state.statusFilter?.preset === 'custom' ? state.statusFilter.statuses : []
   return statuses.length === 1 && statuses[0] === 'Waiting For'
@@ -42,7 +43,7 @@ export function waitingForIssue(card: SceneCard, known: readonly SceneCard[]): s
   if (!id) return 'Waiting For ID is missing.'
   if (type === 'Work') {
     const canonical = pageId(id)
-    if (!canonical) return 'Waiting For ID is not a valid Notion Work card identifier.'
+    if (!canonical) return `Waiting For ID is not a valid ${isJiraCard(card.id) ? 'Jira' : 'Notion'} Work card identifier.`
     if (canonical === pageId(card.id)) return 'Waiting For ID references this same Work card.'
     if (!known.some(card => pageId(card.id) === canonical && !card.source.in_trash && !card.source.archived)) return 'Waiting For ID does not resolve to a Work card in the loaded source. The reference needs verification.'
   }

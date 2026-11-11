@@ -1,5 +1,8 @@
 # Shared workflow operations
 
+The optional [isolated Jira adapter pilot](jira-adapter.md) reuses these operations for explicitly configured synthetic TSSPIKE records. Notion remains authoritative for existing work.
+
+
 Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
 **Update work** and **Start work** forms call the same backend operations as the
 authenticated MCP. `create_work` remains available through authenticated MCP;

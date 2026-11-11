@@ -20,13 +20,13 @@ export interface QueueSource {
   question?: string
   generation?: string | null
   actions?: string[]
-  request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' }
+  request?: FirstMateRequest | { home: null; taskId: null; id: string; kind: 'notion-card' | 'jira-card' }
   /** Readiness and response belong to this source, never inherited from another source. */
   readiness?: QueueReadiness
   action?: string | null
   reasons?: string[]
   responseAnchor?: string
-  kind: 'notion' | 'firstmate' | 'github'
+  kind: 'notion' | 'jira' | 'firstmate' | 'github'
   id: string
   field: string
   observedAt: string | null
@@ -173,8 +173,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     if (resolvedMerge) resolvedMerges.add(item)
     context(item, card, intentions, now)
     if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
-    item.sources.push({ ...source('notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
-      actions: tags, request: { home: null, taskId: null, id: card.id, kind: 'notion-card' } })
+    item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
+      actions: tags, request: { home: null, taskId: null, id: card.id, kind: card.id.startsWith('jira:') ? 'jira-card' : 'notion-card' } })
     identities.set(item, [item.id])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (owner !== 'will' || !action) {
@@ -363,5 +363,5 @@ export function queueRequestKey(card: import('./workReader').WorkCard, fleet: So
   const queue = buildQueue({ generatedAt: observedAt, scope: 'configured-homes-only', warnings: [], fleet,
     intentions: { status: 'fresh', coverage: 'complete', observedAt, attemptedAt: observedAt, expiresAt: null, error: null,
       data: { dataSourceId: 'bound-request', schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'bound-request' } } })
-  return queue.items.find(item => item.sources.some(source => source.request && source.request.kind !== 'notion-card' && requestAnchor(source.request) === requestAnchor(request)))?.id
+  return queue.items.find(item => item.sources.some(source => source.request && source.request.home !== null && requestAnchor(source.request) === requestAnchor(request)))?.id
 }

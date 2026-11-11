@@ -29,7 +29,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     for (const id of item.cardIds) {
       const card = cards.get(id)
       if (!card || card.source.archived || card.source.in_trash || ['Done', 'Archived'].includes(String(card.source.properties.Status?.value))) continue
-      const actionTags = item.sources.find(source => source.kind === 'notion' && source.request?.kind === 'notion-card' && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
+      const actionTags = item.sources.find(source => (source.kind === 'notion' || source.kind === 'jira') && source.request?.home === null && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id), history = decisionRequests(context?.blocks ?? [])
       const open = history.filter(request => !request.answered && request.requestedFrom?.trim().toLowerCase() === 'will' && actionTags.includes(request.action))
@@ -45,7 +45,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     })).values()]
     const published = requests.filter(request => !request.answered && request.proposal && request.proposal.request_key === item.id &&
       (!request.proposal.card_id || item.cardIds.includes(request.proposal.card_id)) && request.sourceRequest &&
-      item.sources.some(source => source.request?.kind !== 'notion-card' && source.request && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null)))
+      item.sources.some(source => source.request?.home !== null && source.request && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null)))
       .map(request => ({ answer_id: proposalAnswerId(request.proposal!), value: request.proposal! }))
     const current = currentDecisionProposal([...published, ...publications.filter(entry => entry.value.request_key === item.id)])
     const proposal = current?.value

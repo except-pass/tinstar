@@ -137,7 +137,7 @@ export class ImplementationContracts {
   }
   private async append(id: string, children: WorkflowCreateBlock[], state: HandoffReceiptState, save: () => Promise<void>, atStart = false) {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
-    try { await this.content.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) }) }
+    try { await this.content.appendBlocks(id, children, atStart) }
     catch (error) {
       if (error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
       throw error

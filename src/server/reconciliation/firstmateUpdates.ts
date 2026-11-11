@@ -15,7 +15,7 @@ import { workReadback } from './workReadback'
 import { receiptMarker } from './workflowContent'
 
 const scalar = (card: WorkCard, name: string) => String(card.properties[name]?.value ?? '')
-const owned = (card: WorkCard) => !card.archived && !card.in_trash && scalar(card, 'Owner').toLowerCase() === 'firstmate'
+const owned = (card: WorkCard) => !card.source?.synthetic && !card.archived && !card.in_trash && scalar(card, 'Owner').toLowerCase() === 'firstmate'
 const queued = (card: WorkCard) => owned(card) && scalar(card, 'Status') === 'Queued'
 const active = (card: WorkCard) => owned(card) && ['In Progress', 'Waiting For'].includes(scalar(card, 'Status'))
 const firstmateActor = (actor: string) => actor.trim().toLowerCase() === 'firstmate'
