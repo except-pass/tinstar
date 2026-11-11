@@ -41,3 +41,4 @@ export interface ReviewItem {
 export interface ReviewView {
   items: ReviewItem[]; complete: boolean; warning: string | null; observedAt: string | null
 }
+export interface ReviewQueueRead { reviews: ReviewView; warnings: string[] }

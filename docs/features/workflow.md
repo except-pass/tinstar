@@ -651,6 +651,14 @@ retain known cards with a coverage warning; an empty incomplete result is not an
 all-clear. The Review Ready button opens the existing context panel, including
 its mobile drawer and keyboard controls; it creates no new page or Discuss item.
 
+The drawer reads `GET /api/reconciliation/queue?view=reviews`: the same canonical
+card census and Review projection, without waiting for operational recovery, PR
+readiness or network comment reads. Cached comment evidence is included when
+available; **Load current review evidence** retrieves exact history on demand.
+Local pending-write and handoff warnings remain visible. Initial or failed source
+reads show unknown coverage and an unknown count, never an empty all-clear. The
+full queue and normal refresh retain operational reconciliation.
+
 The shared UI/MCP `update_work` path supports:
 
 - `submit_for_review`: canonical `card_id`, `operation_id`, and `review` containing

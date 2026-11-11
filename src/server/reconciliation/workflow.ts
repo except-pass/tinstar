@@ -207,6 +207,9 @@ export class WorkflowOperations {
       } : { message: 'Decision recorded · First Mate reconciled' }) }
     })
   }
+  async pendingReviewCount() {
+    return (await this.creations.list('review:')).filter(([, receipt]) => receipt.review && !receipt.review.done).length
+  }
   async reconcileReviews() {
     const pending = (await this.creations.list('review:')).filter(([, receipt]) => receipt.review && !receipt.review.done)
     const results: Array<{ cardId: string; result: StartWorkResult }> = []

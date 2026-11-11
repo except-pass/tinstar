@@ -1,6 +1,7 @@
 import { ReviewDeploymentAudit } from './reviewDeployment'
 import { AssociationStore } from '../releases/associations'
 import { reviewView } from './reviews'
+import type { ReviewQueueRead } from '../../shared/reviews'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
 import { resolveCorsHeaders } from '../api/cors'
@@ -197,6 +198,23 @@ export class ReconciliationSources {
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
+  /** Same canonical census/projection as get_work_views, without operational
+   * reconciliation, PR readiness or network history reads on the display path. */
+  async reviews(force = false): Promise<ReviewQueueRead> {
+    const intentions = await this.workReader.query({}, force)
+    const notes = new Map<string, Array<{ text: string }>>()
+    for (const item of reviewView(intentions).items) {
+      const context = this.context.cachedComments(item.cardId)
+      if (context?.outcome === 'available') notes.set(item.cardId, context.blocks)
+    }
+    const warnings: string[] = []
+    try {
+      if (await this.workflow.pendingReviewCount()) warnings.push('Some review writes remain unconfirmed; Firstmate must reconcile their saved receipts.')
+      if ((await this.reviewAudit.exceptions()).length) warnings.push('Deployment review handoffs remain unresolved; Firstmate must inspect the deployment audit.')
+    } catch { warnings.push('Review recovery evidence is unavailable; handoff completeness is unknown.') }
+    return workReadback({ reviews: reviewView(intentions, notes), warnings })
+  }
+
   async queue(req?: IncomingMessage) {
     let reviewWarning: string | null = null
     const reviewRecoveries = await this.workflow.reconcileReviews().catch(() => null)
@@ -282,6 +300,9 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   if (req.headers.origin && !allowlist.includes(req.headers.origin)) return fail(res, 'FORBIDDEN', 'Origin not allowed', { headers })
   if (req.method === 'OPTIONS') { res.writeHead(204, headers); res.end(); return true }
   if (req.method !== 'GET') return fail(res, 'BAD_REQUEST', 'Read-only endpoint; use GET', { headers })
+  if (path === '/api/reconciliation/queue' && new URL(req.url!, 'http://localhost').searchParams.get('view') === 'reviews') {
+    return ok(res, await sources.reviews(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1'), { headers })
+  }
   if (path === '/api/reconciliation/card-context') {
     const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
     if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })

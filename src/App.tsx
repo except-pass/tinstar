@@ -1,5 +1,5 @@
 import { NeedsYouPanel } from './cockpit/shell/NeedsYouPanel'
-import { useDeskQueue } from './reconciliation/useDeskQueue'
+import { useReviewQueue } from './reconciliation/useDeskQueue'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, apiUrl } from './apiClient'
 import { findLinkedWorker, homeName, linkLocation, readOverviewSearch, writeOverviewSearch, type OverviewLocation } from './cockpit/overviewQuery'
@@ -43,7 +43,8 @@ function displayTime(value: string | null): string {
 }
 
 export default function App() {
-  const reviewQueue = useDeskQueue()
+  const reviewQueue = useReviewQueue()
+  const reviews = reviewQueue.queue?.reviews ?? { items: [], complete: false, observedAt: null, warning: 'Review coverage is loading; an empty list does not establish that nothing needs review.' }
   const releases = useReleases()
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
@@ -303,10 +304,10 @@ export default function App() {
   return <div className="cockpit-shell">
     <ActivityBar reviewOpen={panelMode === 'needs'} onReview={() => selectPanel('needs')} reviewCount={reviewQueue.queue?.reviews?.complete && !reviewQueue.error ? reviewQueue.queue.reviews.items.length : null} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
-    <ContextPanel mode={panelMode} count={panelMode === 'needs' ? (reviewQueue.queue?.reviews?.items.length ?? 0) + attention.filter(card => card.type === 'review').length : workers.length} onCollapse={() => setPanelMode(null)}>
+    <ContextPanel mode={panelMode} count={panelMode === 'needs' ? reviews.complete && !reviewQueue.error ? reviews.items.length + attention.filter(card => card.type === 'review').length : null : workers.length} onCollapse={() => setPanelMode(null)}>
 
       {panelMode === 'needs' && <NeedsYouPanel cards={attention.filter(card => card.type === 'review' && (card.reviewStatus === 'open' || !reviewQueue.queue?.reviews?.items.some(item => item.submission?.pulls.some(pull => pull.url === card.prUrl))))} workers={workers}
-        reviews={reviewQueue.queue?.reviews} errors={[...fleet.errors, ...(reviewQueue.error ? [reviewQueue.error] : []), ...(reviewQueue.queue?.reviewRecoveries?.some(row => row.result.outcome !== 'saved') ? ['Some review writes remain unconfirmed; Firstmate must reconcile their saved receipts.'] : [])]} waiting={!reviewQueue.queue}
+        reviews={reviewQueue.error ? { ...reviews, complete: false, warning: 'Review coverage is unavailable; shown cards are last-known.' } : reviews} errors={[...fleet.errors, ...(reviewQueue.error ? [reviewQueue.error] : []), ...(reviewQueue.queue?.warnings ?? [])]} waiting={!reviewQueue.queue}
         submit={submit} dismissing={() => false} dismissed={() => false} dismissError={() => null} onDismiss={() => {}}
         onOpen={card => { if (card.workerKey) openWorker(card.workerKey) }}
         onCardOpen={card => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, card }, 'push') }} />}
