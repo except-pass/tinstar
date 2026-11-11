@@ -1537,6 +1537,30 @@ it('publishes a typed recommendation and accepts its authenticated choice using 
   expect((await f.reader.card(id, true)).properties['First Mate tasks']!.value).toBe(links.json)
 })
 
+it('shares one lazy fresh census across an answered fallback reconciliation pass', async () => {
+  const f = decisionFixture()
+  f.home.observation.data!.tasks = [f.task]
+  const hold = f.home.observation.data!.backlog![0]!
+  hold.cardReferences = []
+  hold.queue!.originTaskId = String(f.task.id)
+  const source = { ...f.source, taskId: String(f.task.id) }
+  const links = workerLinkRecord([{ fm_home: source.home, task_id: source.taskId, first_observed_spawn_gen: f.task.identity.spawn_gen! }])
+  f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...links.properties['First Mate tasks'] }
+  expect(await f.workflow.update({ ...f.request, source_request: source } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const query = vi.spyOn(f.reader, 'query')
+  const unanswered = f.workflow.decisionCensus()
+  await f.workflow.reconcileDecisions(id, f.fleet, true, unanswered)
+  await f.workflow.reconcileDecisions(id, f.fleet, true, unanswered)
+  expect(query).not.toHaveBeenCalled()
+  expect(await f.workflow.update(f.answer, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  query.mockClear()
+  const census = f.workflow.decisionCensus()
+  await f.workflow.reconcileDecisions(id, f.fleet, true, census)
+  await f.workflow.reconcileDecisions(id, f.fleet, true, census)
+  expect(query.mock.calls.filter(([, refresh]) => refresh)).toHaveLength(1)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+})
+
 it('durably binds the source and answers once across UI/MCP actors, retries and restart, preserving other asks', async () => {
   const f = decisionFixture()
   expect(await f.workflow.update(f.request, 'Publisher')).toMatchObject({ outcome: 'saved' })

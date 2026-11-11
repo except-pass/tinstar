@@ -243,7 +243,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (canonicalRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
-      if (refs.length > 0 && !canonicalRelationship) {
+      if (!canonicalRelationship) {
         lower(item, 'needs-readiness-verification', canonical.reason ?? 'Canonical card is outside the readable source; verify context')
       }
       if (!fresh(observation) || !fresh(intentions)) lower(item, 'needs-readiness-verification', 'Fleet/Notion context is stale or unavailable; absence of an answered action cannot be verified')

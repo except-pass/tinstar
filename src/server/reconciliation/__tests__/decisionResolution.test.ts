@@ -101,6 +101,34 @@ describe('canonical card binding from First Mate tasks', () => {
       expect(f.bind).toThrow(/unknown|stale or incomplete/)
       expect(f.bind).not.toThrow('0 matching cards')
     })
+  it.each(['no-match', 'ambiguous', 'unreadable', 'partial'] as const)('keeps %s fallback ownership out of actionable queue readiness', mode => {
+    const f = taskLinkFixture()
+    if (mode === 'no-match') f.snapshot.intentions.data!.cards = []
+    if (mode === 'ambiguous') f.snapshot.intentions.data!.cards.push({ ...structuredClone(f.card), id: 'b'.repeat(32) })
+    if (mode === 'unreadable') f.snapshot.intentions.data!.cards.push({ ...structuredClone(f.card), id: 'b'.repeat(32), properties: {} })
+    if (mode === 'partial') f.snapshot.intentions.coverage = 'partial'
+    const item = buildQueue(f.snapshot).items.find(item => item.sources.some(source => source.request?.id === f.request.id))!
+    expect(item.readiness).toBe('needs-readiness-verification')
+    expect(item.oneTouch).toBe(false)
+    expect(item.reasons.join(' ')).toContain(`fm_home=${JSON.stringify(f.request.home)} + task_id=${JSON.stringify(f.request.taskId)}`)
+  })
+  it('loads fresh card coverage only for an answered fallback request', async () => {
+    const f = taskLinkFixture(), census = vi.fn(async () => f.snapshot.intentions)
+    f.notes[0]!.text = `Tin Star request: ${JSON.stringify({ id: 'mailbox-proposal', action: 'Decision', ...f.bind() })}`
+    const reconcile = () => reconcileDecision(f.card, f.notes, f.snapshot.fleet, f.delivery, f.confirm, undefined, census)
+    const answer = f.notes.pop()!
+    expect(await reconcile()).toBeUndefined()
+    expect(census).not.toHaveBeenCalled()
+    f.notes.push(answer)
+    f.hold.cardReferences = [{ pageId: cardId, basis: 'explicit', source: 'notion_page_id' }]
+    expect(await reconcile()).toMatchObject({ state: 'pending' })
+    expect(census).not.toHaveBeenCalled()
+    f.hold.cardReferences = []
+    f.snapshot.intentions.data!.cards = []
+    expect(await reconcile()).toMatchObject({ state: 'verification-needed' })
+    expect(census).toHaveBeenCalledTimes(1)
+    expect(f.delivery.submit).toHaveBeenCalledTimes(1)
+  })
   it('revalidates task links before delivering an answer and retains receipt-plus-closure resolution', async () => {
     const f = taskLinkFixture()
     f.notes[0]!.text = `Tin Star request: ${JSON.stringify({ id: 'mailbox-proposal', action: 'Decision', ...f.bind() })}`
