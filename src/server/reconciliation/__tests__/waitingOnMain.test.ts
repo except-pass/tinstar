@@ -271,6 +271,30 @@ describe('Waiting on main', () => {
     publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     expect((await service.refresh(value)).items.some(row => row.key === 'approve-api')).toBe(false)
   })
+  it.each(['unknown', 'stale', 'failed', 'missing'] as const)('closes saved resolved asks with %s child coverage', async coverage => {
+    const directory = await root(), value = snapshot()
+    const asks = value.fleet[1]!.observation.data!.parent_asks!
+    const original = asks.items[0]!
+    asks.items.push(
+      { ...original, key: 'unrelated' },
+      { ...original, key: 'reopened', at: askAt + 1 },
+      { ...original, key: 'ageless', at: null },
+    )
+    const create = () => new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => false, () => now)
+    await create().sweep()
+    publishResolutions(value, ['approve-api', 'reopened', 'ageless'].map(key => ({ key, at: askAt })))
+    asks.items = [{ ...original, key: 'new-ageless', at: null }]
+    if (coverage === 'unknown') asks.status = 'unknown'
+    if (coverage === 'stale') value.fleet[1]!.observation.data!.generated = new Date(now - 300_000).toISOString()
+    if (coverage === 'failed') value.fleet[1]!.observation.error = 'Read failed'
+    if (coverage === 'missing') delete value.fleet[1]!.observation.data!.parent_asks
+    const result = await create().sweep()
+    expect(result.error).toBeUndefined()
+    expect(result.items.filter(row => row.kind === 'mate').map(row => row.key).sort()).toEqual(
+      (coverage === 'missing' ? ['ageless', 'reopened', 'unrelated'] : ['ageless', 'new-ageless', 'reopened', 'unrelated']).sort(),
+    )
+    expect((await create().sweep()).items.some(row => row.key === 'approve-api')).toBe(false)
+  })
   it('carries parent asks on the snapshot read path and treats malformed fields as unknown', async () => {
     const directory = await root(), file = join(directory, 'snapshot.json')
     const raw = { schema: 'fm-fleet-snapshot.v1', fm_home: directory, generated: new Date().toISOString(), tasks: [], backlog: { present: true, records: [] }, main_inventory: { valid: true }, parent_asks: { status: 'known', observed_at: new Date().toISOString(), items: [] } }
