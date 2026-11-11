@@ -7,7 +7,7 @@ import { defaultOrganizer, defaultStatusFilter, organizedGroups, type Organizer,
 import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
-export type FloorScene = ReturnType<SceneReconciler['reconcile']> & { searchIndex?: SearchIndexRead; searchReadFailed?: boolean }
+export type FloorScene = ReturnType<SceneReconciler['reconcile']> & { searchIndex?: SearchIndexRead; searchReadFailed?: boolean; waitingOnMain?: import('./waitingOnMain').MainWaitRead }
 export type Arrangement = keyof FloorScene['arrangements']
 export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 'you' | 'firstMate' | 'pull'
 export interface Target { kind: TargetKind; id: string }

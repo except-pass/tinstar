@@ -21,6 +21,7 @@ import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
 import { saveOverviewDensity } from './overviewDensity'
+import { WaitingOnMain } from './WaitingOnMain'
 import { WaitingForWork } from './WaitingForWork'
 import { waitingForActive, waitingForGroups, waitingForIssue, readWaitingForExpansion, saveWaitingForExpansion, type WaitingForType } from './waitingFor'
 import './overview.css'
@@ -442,6 +443,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
           send({ type: 'clear-selection' })
         }
       }} />
+      <WaitingOnMain data={scene.waitingOnMain} now={now} readFailed={!!error} />
       {state.assistantChangedView && <div className="ov-cue" role="status">Assistant changed this view <button type="button" onClick={() => send({ type: 'clear-transient' })}>×</button></div>}
       <div className="ov-workspace"><div ref={canvas} className={`ov-canvas${waiting ? ' ov-waiting-canvas' : ''}`}>{waiting ? <div className="ov-waiting-columns">
           <section className="ov-waiting-workers" aria-label="Workers"><header className="ov-waiting-worker-head">WORKERS · {workerCountNote === 'unknown' || workerCountNote === 'unavailable' ? workerCountNote : `${visibleWorkers}${workerCountNote ? ` ${workerCountNote}` : ''}`}</header>{[...new Set(waitingWorkers.map(group => group.outerId))].map(outerId => {

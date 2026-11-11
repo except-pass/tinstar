@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['releases-github.spec.ts', 'search-initiative-filter.spec.ts', 'review-routing.spec.ts', 'global-desk.spec.ts', 'pr-operations.spec.ts', 'reconciliation-mcp.spec.ts', 'reconciliation-floor.spec.ts', 'cockpit-regression.spec.ts', 'cockpit-filter-link.spec.ts', 'cockpit-desk.spec.ts', 'cockpit-mate-badge.spec.ts', 'cockpit-quota.spec.ts', 'cockpit-terminal-scroll.spec.ts', 'cockpit-shell.spec.ts', 'cockpit-composer.spec.ts'],
+  testMatch: ['releases-github.spec.ts', 'waiting-on-main.spec.ts', 'search-initiative-filter.spec.ts', 'review-routing.spec.ts', 'global-desk.spec.ts', 'pr-operations.spec.ts', 'reconciliation-mcp.spec.ts', 'reconciliation-floor.spec.ts', 'cockpit-regression.spec.ts', 'cockpit-filter-link.spec.ts', 'cockpit-desk.spec.ts', 'cockpit-mate-badge.spec.ts', 'cockpit-quota.spec.ts', 'cockpit-terminal-scroll.spec.ts', 'cockpit-shell.spec.ts', 'cockpit-composer.spec.ts'],
   workers: 1,
   retries: 0,
   timeout: 120_000,

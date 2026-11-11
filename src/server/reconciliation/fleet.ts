@@ -1,3 +1,5 @@
+import { z } from 'zod'
+import type { ParentAsks } from '../../shared/waitingOnMain'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readFleetSnapshot } from '../fleet/snapshot'
@@ -55,6 +57,15 @@ const codexFields = (task: Record<string, unknown>): { codex?: CodexActivity | n
   } : null, codex_reason: text(task.codex_reason) }
 }
 
+const parentAsksSchema = z.object({
+  status: z.enum(['known', 'unknown']), observed_at: z.string().datetime({ offset: true }),
+  items: z.array(z.object({ key: z.string().min(1), corr: z.string().nullable(), state: z.enum(['blocked', 'needs-decision']), at: z.number().int().nonnegative(), text: z.string() })),
+})
+function parentAsksField(value: unknown): { parent_asks?: ParentAsks } {
+  const parsed = parentAsksSchema.safeParse(value)
+  return parsed.success ? { parent_asks: parsed.data } : {}
+}
+
 export function fleetObservation(source: FleetSource) {
   // File publication includes snapshot generation and transport between homes.
   const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
@@ -101,6 +112,7 @@ export function fleetObservation(source: FleetSource) {
     return {
       observedAt: snapshot.generated, coverage: complete ? 'complete' as const : 'partial' as const,
       data: {
+        ...parentAsksField(snapshot.parent_asks),
         schema: snapshot.schema, fm_home: source.home, generated: snapshot.generated,
         coverageScope: 'home-task-metadata-and-backlog; child homes and runtime liveness are independent',
         main_inventory: fields(snapshot.main_inventory, ['valid', 'reason', 'unstructured_current_count']),

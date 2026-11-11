@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -93,6 +94,46 @@ def augment(snapshot, candidates, now):
     return snapshot
 
 
+def fold_parent_asks(lines):
+    """Only resolved closes a keyed ask; ordinary working/done lines do not."""
+    opened = {}
+    known = True
+    for line in lines.splitlines():
+        match = re.match(r'^(blocked|needs-decision|resolved)\b(.*?):\s*(.*)$', line)
+        if not match:
+            if re.match(r'^(blocked|needs-decision|resolved)\b', line):
+                known = False
+            continue
+        state, metadata, text = match.groups()
+        fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
+        key, corr = fields.get('key'), fields.get('corr')
+        if state == 'resolved':
+            for identity, ask in list(opened.items()):
+                if key and identity == key or corr and ask['corr'] == corr:
+                    del opened[identity]
+        elif key:
+            stamp = fields.get('at', '')
+            if not stamp.isdigit():
+                known = False
+                continue
+            opened[key] = {'key': key, 'corr': corr, 'state': state,
+                           'at': int(stamp), 'text': text}
+    return {'status': 'known' if known else 'unknown', 'items': list(opened.values())}
+
+
+def parent_asks(home, now):
+    try:
+        channel = (Path(home) / 'state/parent-replies.status').read_text()
+        result = fold_parent_asks(channel)
+        # An in-progress append cannot prove that an earlier ask is closed.
+        if channel and not channel.endswith('\n'):
+            result = fold_parent_asks(channel.rsplit('\n', 1)[0] if '\n' in channel else '')
+            result['status'] = 'unknown'
+    except (OSError, UnicodeError):
+        result = {'status': 'unknown', 'items': []}
+    return {**result, 'observed_at': iso(now.timestamp())}
+
+
 def atomic_write(output, snapshot):
     """A failed write leaves the last successful publication intact."""
     output = Path(output)
@@ -118,6 +159,7 @@ def collect(home, candidates, now):
     snapshot = json.loads(result.stdout)
     if snapshot.get('schema') != 'fm-fleet-snapshot.v1' or snapshot.get('fm_home') != home or not isinstance(snapshot.get('tasks'), list):
         raise ValueError('unexpected snapshot schema or home')
+    snapshot['parent_asks'] = parent_asks(home, now)
     return augment(snapshot, candidates, now)
 
 

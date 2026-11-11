@@ -12,6 +12,7 @@ import { authorizePrReadGrant } from './reconciliation/prReadGrant'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
 import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
+import { WaitingOnMain, mainWaitNotifier } from './reconciliation/waitingOnMain'
 import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
 import { ReleasesApi } from './releases/routes'
 import { ReleaseAutomationWriter } from './releases/writer'
@@ -78,6 +79,13 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const reconciliation = new ReconciliationSources()
+  const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi))
+  reconciliation.waitingOnMain = snapshot => mainWaits.refresh(snapshot)
+  let mainWaitSweep: Promise<unknown> | undefined
+  const sweepMainWaits = () => { mainWaitSweep ??= mainWaits.sweep().finally(() => { mainWaitSweep = undefined }) }
+  const mainWaitTimer = setInterval(sweepMainWaits, 60_000)
+  mainWaitTimer.unref()
+  sweepMainWaits()
   const checkIns = new CheckInWatchdog(reconciliation)
   const workUpdates = new FirstmateUpdates(reconciliation)
   reconciliation.onWorkRefresh = async cards => { for (const card of cards) await workUpdates.refreshComments(card) }
@@ -127,6 +135,7 @@ export function startServer(opts: ServerOptions) {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
   const shutdown = async () => {
+    clearInterval(mainWaitTimer)
     quota.stop()
     telemetry.stopPolling()
     try { await observability.stop() } catch (err) { log.debug('shutdown', `observability: ${(err as Error).message}`) }
