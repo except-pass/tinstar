@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { AskApi } from '../../src/server/ask/routes'
+import { ReviewDeploymentAudit, ReviewDeploymentReconciler } from '../../src/server/reconciliation/reviewDeployment'
+import { AssociationStore } from '../../src/server/releases/associations'
+import { fixtureScene } from '../../test-fixtures/reconciliation/scenes'
 import { compareCatalogs, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
 
 const exec = promisify(execFile)
@@ -16,7 +19,7 @@ const script = resolve('scripts/deploy/floor-deploy.sh')
 // A deploy runs this suite with its own exported configuration. Never let those
 // unit names, live paths/URLs or shell/Node startup hooks leak into fixtures.
 const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'FAIL_TYPECHECK', 'FAIL_VOICE', 'MISSING_UNIT', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
-const deploymentEnv = (key: string) => key.startsWith('TINSTAR_') || relatedEnv.has(key)
+const deploymentEnv = (key: string) => key.startsWith('TINSTAR_') || key.startsWith('DEPLOY_FIXTURE_') || relatedEnv.has(key)
 beforeEach(async () => {
   for (const key of Object.keys(process.env)) if (deploymentEnv(key)) vi.stubEnv(key, undefined)
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-env-')); roots.push(root)
@@ -27,7 +30,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
   vi.unstubAllEnvs()
 })
-async function fixture() {
+async function fixture(isolatedDeploy = false) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-')); roots.push(root)
   await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: token } }), { mode: 0o600 })
   await writeFile(join(root, 'caller'), caller, { mode: 0o600 })
@@ -36,6 +39,13 @@ async function fixture() {
   await writeFile(join(root, 'package-lock.json'), '{}')
   // The real deploy invokes Node with the service config. This executable CLI
   // double records that interface without downloading anything in unit tests.
+  let executable = script
+  if (isolatedDeploy) {
+    const deploy = join(root, 'deploy')
+    await mkdir(deploy)
+    for (const name of ['floor-deploy.sh', 'deploy-support.mjs', 'post-deploy-smoke.mjs', 'review-handoff.mjs']) await cp(resolve('scripts/deploy', name), join(deploy, name))
+    executable = join(deploy, 'floor-deploy.sh')
+  }
   await mkdir(join(root, 'bin'))
   await writeFile(join(root, 'bin/tinstar.js'), `
 const fs = require('node:fs');
@@ -45,6 +55,7 @@ if (process.env.FAIL_VOICE === '1') process.exit(43);
 `)
 
   let ready = true, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
+  let deployedSha: string | null = null
   const api = new AskApi({ scene: async () => { throw new Error('Smoke must not query First Mate') } }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   let base = ''
   const server = createServer(async (req, res) => {
@@ -54,6 +65,7 @@ if (process.env.FAIL_VOICE === '1') process.exit(43);
     }
     if (req.url === '/readyz') { res.writeHead(ready ? 200 : 503); res.end(ready ? 'ready' : 'startup catalog failed; polling disabled'); return }
     res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/deployment' && deployedSha) { res.end(JSON.stringify({ ok: true, data: { sha: deployedSha } })); return }
     if (req.url === '/api/status') { res.end(JSON.stringify({ started_at: started, channels: [{ name: 'main', enabled: true, probe_status: 'ok', details: [{ key: 'url', value: base + '/target' }] }] })); return }
     if (req.url === '/metrics') { res.end('commands_poll_last_successful_timestamp_seconds{} 1794247205\n'); return }
     if (req.url === '/mcp' || req.url === '/target') {
@@ -76,7 +88,13 @@ printf '%s %s\\n' "$name" "$*" >> "$COMMAND_LOG"
 if [[ "$name" == systemctl ]]; then
   if [[ "\${MISSING_UNIT:-}" == 1 ]]; then echo not-found; else echo loaded; fi
 fi
-if [[ "$name $*" == *'rev-parse HEAD' ]]; then echo fixture-head; fi
+if [[ "$name $*" == *'rev-parse HEAD' ]]; then echo "\${DEPLOY_FIXTURE_HEAD:-fixture-head}"; fi
+if [[ "$name $*" == 'npm ci --include=dev' && -n "\${DEPLOY_FIXTURE_ZOD:-}" ]]; then
+  [[ ! -e node_modules ]] || exit 44
+  printf 'old-sha=%s\\n' "$TINSTAR_PREVIOUS_DEPLOYED_SHA" >> "$COMMAND_LOG"
+  mkdir node_modules
+  cp -R "$DEPLOY_FIXTURE_ZOD" node_modules/zod
+fi
 if [[ "$name $*" == 'npm run typecheck' && "\${FAIL_TYPECHECK:-}" == 1 ]]; then exit 41; fi
 if [[ "$name $*" == 'npm run test:unit'* && "\${FAIL_TESTS:-}" != '' ]]; then
   for arg in "$@"; do
@@ -89,19 +107,51 @@ if [[ "$name $*" == 'npm run test:unit'* && "\${FAIL_TESTS:-}" != '' ]]; then
 fi
 `
   for (const name of ['git', 'npm', 'sudo', 'systemctl']) await writeFile(join(bin, name), command, { mode: 0o700 })
+  if (isolatedDeploy) await writeFile(join(bin, 'node'), `#!/bin/bash
+if [[ "$2" == old-sha && "\${DEPLOY_FIXTURE_FAIL_PROBE:-}" == 1 ]]; then exit 47; fi
+exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
+`, { mode: 0o700 })
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !deploymentEnv(key)))
   const env = { ...inherited, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: join(root, 'commands.log'), TINSTAR_DEPLOY_SOURCE: root,
+    ...(isolatedDeploy ? { DEPLOY_FIXTURE_HEAD: 'a'.repeat(40), DEPLOY_FIXTURE_ZOD: resolve('node_modules/zod') } : {}),
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
   const run = async (checkOnly = false, override: Record<string, string> = {}, args: string[] = []) => {
-    try { const result = await exec('bash', [script, ...(checkOnly ? ['--check-only'] : []), ...args], { env: { ...env, ...override } }); return { ...result, code: 0 } }
+    try { const result = await exec('bash', [executable, ...(checkOnly ? ['--check-only'] : []), ...args], { env: { ...env, ...override } }); return { ...result, code: 0 } }
     catch (error) { const result = error as { stdout: string; stderr: string; code: number }; return result }
   }
-  return { root, base, run, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
+  return { root, base, run, setDeployedSha: (value: string) => { deployedSha = value }, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
 }
 
 describe('floor deploy executable', () => {
+  it.each(['known', 'unavailable', 'process failure'])('deploys without node_modules when the old-SHA probe reports %s', async failure => {
+    const { root, run, setDeployedSha } = await fixture(true)
+    const previous = failure === 'known' ? 'b'.repeat(40) : null
+    if (previous) setDeployedSha(previous)
+    await expect(readFile(join(root, 'node_modules/zod/package.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    const result = await run(false, failure === 'process failure' ? { DEPLOY_FIXTURE_FAIL_PROBE: '1' } : {})
+    expect(result.code, result.stderr).toBe(0)
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands).toContain(`old-sha=${previous ?? 'unknown'}`)
+    expect(commands).toContain('npm ci --include=dev')
+    expect(commands).toContain('npm run build:all')
+    expect(commands).toContain('sudo -n systemctl restart tinstar-floor')
+    const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(entries.find(row => row.action === 'floor-deployment')).toMatchObject({ oldSha: previous, newSha: 'a'.repeat(40), membershipComplete: previous !== null,
+      ...(!previous ? { warnings: expect.arrayContaining([expect.stringContaining('Previous running revision is unknown')]) } : {}) })
+    if (!previous) {
+      const audit = new ReviewDeploymentAudit(root), update = vi.fn()
+      await new ReviewDeploymentReconciler(audit, { scene: async () => fixtureScene(), associations: new AssociationStore(root), update, deliver: async () => ({ saved: true }) }).run(true)
+      expect((await new ReviewDeploymentAudit(root).exceptions())[0]).toMatchObject({ resolved: false, deployedSha: 'a'.repeat(40), owner: 'Firstmate',
+        missing: expect.arrayContaining(['Complete deployed old/new SHA and PR membership evidence']) })
+      expect(update).not.toHaveBeenCalled()
+    }
+    expect(result.stderr).toContain('review handoff incomplete; healthy floor retained')
+    expect(result.stdout).toContain('Ask and MCP smoke passed')
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('gates all restarts on tests, then round trips Ask, removes its row and verifies MCP', async () => {
     const { root, run } = await fixture()
     const result = await run()

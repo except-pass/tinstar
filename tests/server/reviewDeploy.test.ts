@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { recordDeployment, recordSmoke, runningSha } from '../../scripts/deploy/review-handoff.mjs'
+import { recordDeployment, recordSmoke } from '../../scripts/deploy/review-handoff.mjs'
+import { runningSha } from '../../scripts/deploy/deploy-support.mjs'
 const roots: string[] = []
 afterEach(async () => { vi.unstubAllGlobals(); await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 const sha = 'a'.repeat(40), old = 'b'.repeat(40), head = 'c'.repeat(40)

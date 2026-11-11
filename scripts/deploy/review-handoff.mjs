@@ -4,18 +4,13 @@ import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { http } from './post-deploy-smoke.mjs'
+import { runningSha } from './deploy-support.mjs'
 
 const manifestSchema = z.object({ evidence: z.array(z.object({ card_id: z.string().regex(/^[a-f0-9]{32}$/), review: z.record(z.unknown()) })).max(100),
   nonReviewable: z.array(z.object({ pull: z.string(), reason: z.string().min(1).max(4000), evidence: z.string().min(1).max(4000) })).max(100).default([]) })
 const shaPattern = /^[a-f0-9]{40}$/
 const auditPath = e => `${e.TINSTAR_DEPLOY_BLOCK ?? join(e.TINSTAR_CONFIG_HOME, 'deploy.blocked')}.audit.jsonl`
 const base = e => e.TINSTAR_BRIDGE_URL ?? 'http://127.0.0.1:5281'
-export async function runningSha(e = process.env) {
-  try {
-    const body = await (await http(`${base(e)}/api/deployment`)).json()
-    return body.ok && shaPattern.test(body.data?.sha) ? body.data.sha : null
-  } catch { return null }
-}
 const append = (e, record) => appendFile(auditPath(e), JSON.stringify(record) + '\n', { mode: 0o600 })
 async function events(e) {
   try { return (await readFile(auditPath(e), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line)) }
@@ -88,8 +83,7 @@ export async function recordSmoke(e = process.env) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv[2] === 'old-sha') console.log(await runningSha() ?? 'unknown')
-    else if (process.argv[2] === 'record') await recordDeployment()
+    if (process.argv[2] === 'record') await recordDeployment()
     else if (process.argv[2] === 'smoke') await recordSmoke()
     else throw new Error('Unknown review handoff command')
   } catch { console.error('Review handoff unconfirmed; healthy deployment is retained. Inspect the existing deploy audit and retry normal reconciliation.'); process.exitCode = 1 }

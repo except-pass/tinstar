@@ -121,7 +121,9 @@ trap 'exit 143' TERM
 
 if ! $check_only; then
   export TINSTAR_PREVIOUS_DEPLOYED_SHA
-  TINSTAR_PREVIOUS_DEPLOYED_SHA=$(node "$script_dir/review-handoff.mjs" old-sha)
+  if ! TINSTAR_PREVIOUS_DEPLOYED_SHA=$(node "$support" old-sha); then
+    TINSTAR_PREVIOUS_DEPLOYED_SHA=unknown
+  fi
   cd -- "$source_dir"
   gate source-clean source_clean # A deploy we waited for may have changed the checkout.
   gate fetch git fetch origin main
