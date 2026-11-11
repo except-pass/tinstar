@@ -395,5 +395,5 @@ prerequisites.
 [Release notes](../releases-notes.md) documents release-scoped Internal/Customer
 drafts, optional wording in the D.3 contract, exclusion reasons, and the separate
 default-OFF GitHub publication command. Copy is read-only. Publication requires
-an existing exact coordinator tag and explicit owner activation after listener
+an existing tag matching the release source and explicit owner activation after listener
 review; it never creates a tag or enables the D.1 Notion writer.

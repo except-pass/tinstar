@@ -71,7 +71,7 @@ export class ReleaseNotesPublisher {
       ...(!settings.enabled ? ['Publication is OFF in releases/publication.json.'] : []),
       ...(release.kind !== 'production' ? ['Planning previews cannot be published.'] : []),
       ...(release.membership.status !== 'complete' || !data.associationsComplete ? ['Complete release membership and explicit work associations are required.'] : []),
-      ...(!release.sourceSha || !release.candidateId ? ['An exact coordinator tag/source binding is required.'] : []),
+      ...(!release.sourceSha ? ['An exact release tag/source binding is required.'] : []),
       ...(!draft.included.length ? ['No deployed, accepted changes are eligible for this audience.'] : []),
     ]
     return { zeroWrites: true, enabled: settings.enabled, releaseId, audience, repository: release.repository, tag: release.version,
@@ -85,7 +85,7 @@ export class ReleaseNotesPublisher {
     if (plan.holds.length) throw new Error(plan.holds.join(' '))
     if (!/^[\w.-]+\/[\w.-]+$/.test(plan.repository) || !plan.tag || plan.tag.startsWith('-')) throw new Error('Invalid repository/tag identity')
     const existing = await this.github.inspect(plan.repository, plan.tag)
-    if (existing.tagSha !== plan.sourceSha) throw new Error('Existing tag is missing or differs from the selected coordinator source. No tag will be created.')
+    if (existing.tagSha !== plan.sourceSha) throw new Error('Existing tag is missing or differs from the selected release source. No tag will be created.')
     const audit = new CreationReceipts(this.root), key = `release-notes:${randomUUID()}`
     const entry = { at: new Date().toISOString(), actor, reason, releaseId, audience, repository: plan.repository, tag: plan.tag, body: plan.body, status: 'intent', url: null as string | null }
     const save = async (status: string, url: string | null = null) => { await audit.put(key, JSON.stringify({ ...entry, status, url })); return { key, status, url } }

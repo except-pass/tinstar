@@ -85,7 +85,7 @@ PATH=/snap/node/current/bin:$PATH npx tsx scripts/releases-notes.ts \
 ```
 
 The command checks an existing lightweight/annotated tag's peeled commit
-against the exact coordinator source and checks for an existing release before
+against the exact selected release source and checks for an existing release before
 creation. Creation always uses
 [`--verify-tag`](https://cli.github.com/manual/gh_release_create), so a missing
 tag cannot be implicitly created. No `--target`, generated-note API or assets

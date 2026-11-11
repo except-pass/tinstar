@@ -49,6 +49,11 @@ describe('separate default-OFF GitHub publication', () => {
     await expect(f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved')).rejects.toThrow('No tag will be created')
     expect(f.create).not.toHaveBeenCalled()
   })
+  it('supports an accepted component release without inventing a coordinator candidate', async () => {
+    const f = await setup(); await f.enable(); f.release.candidateId = null; f.release.planId = null
+    expect((await f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved exact component release')).status).toBe('published')
+    expect(f.create).toHaveBeenCalledTimes(1)
+  })
   it.each([true, false])('leaves an existing draft/published record untouched (%s)', async isDraft => {
     const f = await setup(); await f.enable()
     f.inspect.mockResolvedValue({ tagSha: f.release.sourceSha, release: { url: 'https://example.com/existing', isDraft, description: 'Manually authored existing notes' } })
