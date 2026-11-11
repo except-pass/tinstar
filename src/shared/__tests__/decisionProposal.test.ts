@@ -48,3 +48,16 @@ it('resolves equal publication timestamps independently of input order', () => {
   expect(currentDecisionProposal([work, ask])).toEqual(ask)
   expect(currentDecisionProposal([ask, work])).toEqual(ask)
 })
+
+it('uses source identity to select one current proposal when IDs and publication timestamps tie', () => {
+  const work = { answer_id: 'work-answer', value: { ...fixtureProposal('request'), proposal_id: 'route-v1', published_at: '2026-11-10T00:00:00Z' } }
+  const ask = { answer_id: 'ask-answer', value: { ...work.value, source: { kind: 'ask-reply' as const, id: 'ask-answer', revision: '1' } } }
+  for (const candidates of [[work, ask], [ask, work]]) {
+    const winner = currentDecisionProposal(candidates)
+    expect(winner).toEqual(ask)
+    expect(candidates.filter(candidate => candidate.answer_id === winner?.answer_id)).toHaveLength(1)
+  }
+  const laterAnswer = { ...ask, answer_id: 'z-answer', value: { ...ask.value, source: { ...ask.value.source, id: 'z-answer' } } }
+  expect(currentDecisionProposal([laterAnswer, ask])).toEqual(laterAnswer)
+  expect(currentDecisionProposal([ask, laterAnswer])).toEqual(laterAnswer)
+})

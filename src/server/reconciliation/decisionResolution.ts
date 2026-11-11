@@ -54,7 +54,7 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export function decisionProposals(notes: WorkflowNote[], publications: import('./proposalSource').ProposalPublication[] = []) {
+export function decisionProposals(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
@@ -79,11 +79,15 @@ export function decisionProposals(notes: WorkflowNote[], publications: import('.
     bound.set(key, [...(bound.get(key) ?? []), row])
   }
   const current = [...bound.values()].map(group => {
-    const keys = new Set(group.flatMap(row => { const value = decisionProposalSchema.safeParse(row.proposal); return value.success ? [value.data.request_key] : [] }))
-    const current = currentDecisionProposal([...group.map(row => ({ value: row.proposal })), ...publications.filter(entry => keys.has(entry.value.request_key))])
+    const candidates = group.flatMap(row => {
+      const value = decisionProposalSchema.safeParse(row.proposal)
+      return value.success && value.data.source.kind === 'firstmate-request' && value.data.source.id === firstMateRequestSchema.parse(row.source_request).id && (publications === undefined || publications.some(entry => entry.source_request && requestKey(entry.source_request) === requestKey(firstMateRequestSchema.parse(row.source_request)) && JSON.stringify(entry.value) === JSON.stringify(value.data))) ? [{ value: value.data }] : []
+    })
+    const keys = new Set(candidates.map(entry => entry.value.request_key))
+    const current = currentDecisionProposal([...candidates, ...(publications ?? []).filter(entry => keys.has(entry.value.request_key))])
     return group.find(row => row.proposal && JSON.stringify(row.proposal) === JSON.stringify(current?.value))
   })
-  return history.filter(row => !row.source_request || !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
+  return history.filter(row => !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
 }
 export function decisionAnswer(note: WorkflowNote) {
   const data = rows([note], 'Tin Star answer data: ')[0]
@@ -97,7 +101,7 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
-  confirm?: (text: string, marker: string) => Promise<void>, publications: import('./proposalSource').ProposalPublication[] = []): Promise<DecisionResolution | undefined> {
+  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[]): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionProposals>
   try { requests = decisionProposals(notes, publications) } catch (error) { return verify((error as Error).message) }
   const bound = requests.filter(row => row && 'source_request' in row)

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { FirstMateRequest } from './deskSource'
 import { askActionSchema } from './ask-actions'
 
 export const decisionReferenceSchema = z.object({ label: z.string().min(1).max(512), url: z.string().url().refine(value => {
@@ -22,6 +23,11 @@ export const decisionProposalSchema = z.object({
 })
 export type DecisionProposal = z.infer<typeof decisionProposalSchema>
 
+export function workProposalMatchesRequest(proposal: DecisionProposal, request: FirstMateRequest, requestKey: string | undefined, cardId?: string) {
+  return proposal.source.kind === 'firstmate-request' && proposal.source.id === request.id && proposal.request_key === requestKey &&
+    (!cardId || !proposal.card_id || proposal.card_id === cardId)
+}
+
 /** Match source meaning across refreshes, independent of collector ordering. */
 export const decisionRequestRevision = (item: Pick<import('../server/reconciliation/queue').QueueItem, 'id' | 'action' | 'cardIds' | 'sources'>) => JSON.stringify([
   item.id, item.action, [...item.cardIds].sort(),
@@ -37,9 +43,13 @@ export function currentDecisionProposal<T extends { value: unknown }>(candidates
   })
   if (!parsed.length || new Set(parsed.map(entry => entry.value.request_key)).size !== 1) return undefined
   const replaced = new Set(parsed.map(entry => entry.value.supersedes))
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
+  const kindOrder = { 'firstmate-request': 0, 'ask-reply': 1 }
   return parsed.filter(entry => !replaced.has(entry.value.proposal_id))
     .sort((a, b) => Date.parse(a.value.published_at) - Date.parse(b.value.published_at) ||
-      (a.value.proposal_id < b.value.proposal_id ? -1 : a.value.proposal_id > b.value.proposal_id ? 1 : 0)).at(-1)?.candidate
+      compare(a.value.proposal_id, b.value.proposal_id) ||
+      kindOrder[a.value.source.kind] - kindOrder[b.value.source.kind] ||
+      compare(a.value.source.id, b.value.source.id) || compare(a.value.source.revision, b.value.source.revision)).at(-1)?.candidate
 }
 
 export function decisionFresh(item: import('../server/reconciliation/queue').QueueItem, now = Date.now()) {

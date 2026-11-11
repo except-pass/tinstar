@@ -1,4 +1,6 @@
 import { reviewSubmissions } from '../../shared/reviews'
+import { queueRequestKey } from './queue'
+import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
@@ -406,11 +408,12 @@ export class WorkflowOperations {
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
       if (input.kind === 'request_decision') {
         if (decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
-        if (input.proposal && (input.proposal.card_id && input.proposal.card_id !== card.id || input.proposal.source.kind !== 'firstmate-request' || !input.source_request || input.proposal.source.id !== input.source_request.id)) throw new WorkflowError('decision-conflict', 'Published proposal must identify its bound First Mate source request and card')
+        const fleet = input.source_request ? await this.fleet() : undefined
+        if (input.proposal && (!input.source_request || !workProposalMatchesRequest(input.proposal, input.source_request, queueRequestKey(card, fleet!, input.source_request), card.id))) throw new WorkflowError('decision-conflict', 'Published proposal request_key must match its bound First Mate source request and canonical card')
         const related = requests.filter(row => row.action === input.action && !answered.has(row.id))
         const preserve = related.length ? related.some(row => row.preserve_action) : tags.includes(input.action)
         set('Will action', [...new Set([...tags, input.action])])
-        const binding = input.source_request ? bindDecision(await this.fleet(), input.source_request, card.id) : {}
+        const binding = input.source_request ? bindDecision(fleet!, input.source_request, card.id) : {}
         note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\n${workflowMarkers.request} ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...(input.proposal ? { proposal: input.proposal } : {}), ...binding })}`
       } else {
         let request = requests.find(row => row.id === input.request_id)

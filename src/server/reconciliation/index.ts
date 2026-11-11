@@ -17,7 +17,7 @@ import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
 import { SceneReconciler } from './scene'
-import { buildQueue } from './queue'
+import { buildQueue, queueRequestKey } from './queue'
 import { QueuePullReader } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
 import { SearchDocumentCollector } from './searchIndex'
@@ -67,7 +67,7 @@ export class ReconciliationSources {
     this.associations = new AssociationStore(receiptRoot)
     this.askStore = new AskStore(receiptRoot)
     const content = new WorkflowContent(this.workReader)
-    this.proposalSource = new ProposalSource(this.askStore, async id => [...await content.notes(id), ...await content.sections(id)])
+    this.proposalSource = new ProposalSource(this.askStore, async id => [...await content.notes(id), ...await content.sections(id)], async (id, request) => queueRequestKey(await this.workReader.card(id), await this.fleetSnapshot(), request))
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)

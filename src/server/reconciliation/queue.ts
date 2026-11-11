@@ -356,3 +356,11 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     items, counts: Object.fromEntries(Object.keys(rank).map(readiness => [readiness, items.filter(item => item.readiness === readiness).length])),
   }
 }
+
+export function queueRequestKey(card: import('./workReader').WorkCard, fleet: SourceSnapshot['fleet'], request: FirstMateRequest) {
+  const observedAt = new Date().toISOString()
+  const queue = buildQueue({ generatedAt: observedAt, scope: 'configured-homes-only', warnings: [], fleet,
+    intentions: { status: 'fresh', coverage: 'complete', observedAt, attemptedAt: observedAt, expiresAt: null, error: null,
+      data: { dataSourceId: 'bound-request', schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'bound-request' } } })
+  return queue.items.find(item => item.sources.some(source => source.request && source.request.kind !== 'notion-card' && requestAnchor(source.request) === requestAnchor(request)))?.id
+}

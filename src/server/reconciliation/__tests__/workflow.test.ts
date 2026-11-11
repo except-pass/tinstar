@@ -2029,3 +2029,38 @@ it('shares unchanged reconciliation across windows and invalidates only for type
   expect(reads()).toBe(publishedReads)
   expect(await sources.updateWork({ ...f.answer, operation_id: 'superseded-cache-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
 })
+
+it('rejects cross-request work publications and excludes forged history on a shared card', async () => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const { proposalAnswerId } = await import('../../ask/decision')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-bound-request-')); roots.push(root)
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  const secondSource = { ...f.source, id: 'second-open-request' }
+  f.home.observation.data!.backlog!.push({ ...f.home.observation.data!.backlog![0]!, id: secondSource.id, hold_reason: 'Choose the second route?' })
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  const before = await sources.queue()
+  const firstItem = before.items.find(item => item.sources.some(source => source.request?.id === f.source.id))!
+  const secondItem = before.items.find(item => item.sources.some(source => source.request?.id === secondSource.id))!
+  const proposal = { ...fixtureProposal(secondItem.id, id), proposal_id: 'second-valid-proposal', source: { kind: 'firstmate-request' as const, id: secondSource.id, revision: '1' } }
+  expect(await sources.updateWork({ ...f.request, source_request: secondSource, question: 'Choose the second route?', request_id: 'second-publication', operation_id: 'publish-second', proposal } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const forged = { ...proposal, proposal_id: 'forged-proposal', question: 'Borrowed first-request recommendation', published_at: '2099-01-01T00:00:00Z', source: { ...proposal.source, id: f.source.id } }
+  const count = f.comments.length
+  const rejected = await sources.updateWork({ ...f.request, proposal: forged } as UpdateWorkInput, 'Publisher')
+  expect(rejected).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+  expect(rejected.message).toContain('request_key')
+  expect(f.comments).toHaveLength(count)
+  f.comments.push({ id: 'forged-existing-publication', rich_text: [{ plain_text: `Requested from: Will\nQuestion: Keep R1 or approve R3?\nTin Star request: ${JSON.stringify({ id: 'forged-record', action: 'Decision', proposal: forged, source_request: f.source, source_question: 'Keep R1 or approve R3?', source_spawn_gen: null })}` }] })
+  const admitted = await sources.proposalSource.read(id)
+  expect(admitted.map(entry => entry.value.proposal_id)).toEqual([proposal.proposal_id])
+  const queue = await sources.queue()
+  const first = queue.needsWill!.find(item => item.id === firstItem.id)!
+  const second = queue.needsWill!.find(item => item.id === secondItem.id)!
+  expect(first.proposal).toBeUndefined()
+  expect(first.proposals).toEqual([])
+  expect(second.proposal?.value.proposal_id).toBe(proposal.proposal_id)
+  expect(second.currentProposalAnswerId).toBe(proposalAnswerId(proposal))
+  expect(second.readiness).toBe('ready-now')
+  expect(JSON.stringify(queue.needsWill!.map(item => item.proposal))).not.toContain(forged.question)
+})
