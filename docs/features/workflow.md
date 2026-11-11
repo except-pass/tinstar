@@ -490,7 +490,9 @@ a newer proposal supersedes it or its source has closed. Currentness gates new
 answers, not delivery, acknowledgment, closure or recovery of recorded answers.
 There is no independent poller or request store.
 
-Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
+Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads.
+A fresh board census is loaded only when an answered request without an explicit
+source card reference needs binding validation, and is shared within that pass;
 `get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
 answer can use the same published proposal and this format:
 
