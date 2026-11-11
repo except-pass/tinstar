@@ -48,7 +48,7 @@ test('worker task-id links, switcher navigation and Overview return on a private
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "printf 'alpha> '; exec cat")
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-bravo', "printf 'bravo> '; exec cat")
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX

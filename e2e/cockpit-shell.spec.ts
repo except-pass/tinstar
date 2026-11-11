@@ -42,7 +42,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     tmux('new-session', '-d', '-s', 'firstmate', '-n', 'supervisor')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-alpha', "printf 'alpha> '; exec cat")
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX

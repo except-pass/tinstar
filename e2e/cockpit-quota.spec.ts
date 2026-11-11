@@ -37,7 +37,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
-      TINSTAR_CONFIG_HOME: config,
+      TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1',
       TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
@@ -223,7 +223,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
-      TINSTAR_CONFIG_HOME: config,
+      TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1',
       TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }

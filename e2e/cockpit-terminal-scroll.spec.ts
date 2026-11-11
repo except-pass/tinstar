@@ -69,7 +69,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-other', 'exec cat')
 
     const env: NodeJS.ProcessEnv = {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}`,
     }
     delete env.TMUX

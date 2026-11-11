@@ -204,7 +204,7 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
     const sizesBefore = windowSizes()
     writeFileSync(join(bin, 'quota-axi'), `#!/bin/sh\ncat <<'END_QUOTA'\n${readFileSync(join(repo, 'src/server/quota/__tests__/recorded-quota-axi.json'), 'utf8')}\nEND_QUOTA\n`)
     chmodSync(join(bin, 'quota-axi'), 0o755)
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config,
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_STATE_HOME: join(root, 'state'),
       TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
