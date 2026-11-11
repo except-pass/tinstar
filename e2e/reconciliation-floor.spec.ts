@@ -86,11 +86,18 @@ test.beforeEach(async () => {
   await mkdir(join(process.cwd(), '.test-runtime'), { recursive: true })
   root = await mkdtemp(join(process.cwd(), '.test-runtime', 'tinstar-floor-'))
   await mkdir(join(root, 'config'))
+  const bin = join(root, 'bin')
+  await mkdir(bin)
+  // Overview does not exercise provider quotas. The real quota probe can spawn
+  // Codex, whose first-run skill installation outlives the server's shutdown.
+  // Keep provider processes out of this disposable HOME, as in cockpit fixtures.
+  await writeFile(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   await writeFile(join(root, 'config', 'config.json'), JSON.stringify({ firstmate: { homes: [] }, reconciliation: { fleet: [] } }))
   const port = await freePort()
   base = `http://127.0.0.1:${port}`
-  server = spawn(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+  // Own the server process directly, rather than the tsx CLI's parent process.
+  server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })
@@ -103,8 +110,11 @@ test.beforeEach(async () => {
   throw new Error(`Floor server did not start; logs: ${root}/failed-start.log`)
 })
 test.afterEach(async () => {
-  server?.kill()
-  if (server && server.exitCode === null) await new Promise<void>(resolve => server.once('exit', () => resolve()))
+  if (server && server.exitCode === null && server.signalCode === null) {
+    const closed = new Promise<void>(resolve => server.once('close', () => resolve()))
+    server.kill()
+    await closed
+  }
   if (root) await rm(root, { recursive: true, force: true })
 })
 async function screenshot(page: Page, name: string) {
