@@ -239,6 +239,15 @@
         var win = termEl.contentWindow
         if (!win || !win.term || !win.term.attachCustomKeyEventHandler || typeof win.term.fit !== 'function') return false
         fitTerminal()
+        // ttyd 1.7.4's xterm reports mouseup even for a forced selection.
+        // That terminal input clears the selection. Let the document finish
+        // the selection without sending the release through xterm's screen.
+        win.term.element.addEventListener('mouseup', function(e) {
+          var isMac = /Mac/.test(win.navigator.platform)
+          if (!(isMac ? e.altKey : e.shiftKey)) return
+          e.stopImmediatePropagation()
+          win.document.dispatchEvent(new win.MouseEvent('mouseup', e))
+        }, true)
         win.term.attachCustomKeyEventHandler(function(e) {
           if (e.type !== 'keydown') return true
           if (notifyCycle(e)) return false
