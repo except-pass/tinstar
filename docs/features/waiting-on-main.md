@@ -57,14 +57,14 @@ when that mate's own channel already has a later resolved line for the key, or
 when a fresh `parent_resolutions` entry for the mate shows the key resolved at
 or after the ask's `[at=]`. The mate is the secondmate task on main's snapshot
 whose home path is the child's fleet home. A missing publication, a stale one,
-or an unknown entry for that mate closes nothing, and an ask with no timestamp
-stays open.
-Main's Mac has to run this collector after it is merged before those answers
-leave the backstop.
+or an unknown entry for that mate closes nothing. Main's resolution cannot close
+an ask with no timestamp or one reopened after the resolution.
 
 Unknown/stale reads retain last-known items and show an incomplete count (`N+`
-or `unknown`). Only a fresh complete source can remove an absent item. Unknown
-items are never used to send an overdue notification.
+or `unknown`). A fresh complete source can remove an absent item. A matching
+fresh main resolution also removes a saved mate ask, even when the child's
+parent-ask coverage is unknown, stale, failed or missing; unrelated saved asks
+remain. Unknown items are never used to send an overdue notification.
 
 ## Owner alerts
 
@@ -107,7 +107,9 @@ can disable comments without hiding the count.
 
 Firstmate owns merge, deployment and live proof. Update the Tin Star collector
 on each publishing machine using the existing [collector install](codex-activity.md),
-then confirm fresh `parent_asks` fields in the transported snapshots. No First
+then confirm fresh `parent_asks` fields in the transported child snapshots and
+`parent_resolutions` in main's snapshot. Main's publishing machine must also run
+the updated collector before its answers leave the backstop. No First
 Mate repository change is required. Confirm main's fleet label and child parent
 links before deploying the backend/client. Preserve alert state outside the
 release/config trees. The first live enabled sweep sends the single startup
