@@ -131,7 +131,6 @@ function WorkspaceRail({ closeRequest, openRequest }: {
     if (followExpanded) setSelectedView(expandedGroup.view)
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
-  useEffect(() => { if (openRequest) setSelectedView('needs-you') }, [openRequest])
   const attention = groups.filter(group => group.attention && !group.unread).length
   return <DeskRail onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
     <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>

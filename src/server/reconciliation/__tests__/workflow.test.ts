@@ -1905,6 +1905,9 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
   const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-revision-')); roots.push(root)
+  // Exercise an active request without the fixture's unrelated dependency.
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
   const sources = f.sources(root)
   vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
   const before = await sources.queue()

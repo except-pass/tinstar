@@ -351,6 +351,34 @@ test('Decisions shares conditional selection and visible MCP flashes on desktop 
   await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: fixtureId(1) })
 })
 
+test('Decisions header controls remain separate at workbench viewport sizes', async ({ page }) => {
+  await page.goto(`${base}/?view=decisions`)
+  await windowId(page)
+  for (const [width, height, pane] of [[1040, 900, 'desktop'], [1440, 900, 'desktop'], [390, 844, 'queue'], [390, 844, 'detail']] as const) {
+    await page.setViewportSize({ width, height })
+    if (pane === 'detail') await page.locator('.decisions-row').first().click()
+    const connection = page.locator('.decisions-top .session-connection > summary')
+    const source = page.locator('.decisions-source > summary')
+    const brand = page.getByRole('heading', { name: 'Decisions', exact: true })
+    const boxes = await Promise.all([brand.boundingBox(), connection.boundingBox(), source.boundingBox()])
+    for (const box of boxes) {
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width)
+    }
+    expect(boxes[0]!.x + boxes[0]!.width).toBeLessThanOrEqual(boxes[1]!.x)
+    expect(boxes[1]!.x + boxes[1]!.width).toBeLessThanOrEqual(boxes[2]!.x)
+    await source.click()
+    await expect(page.getByRole('heading', { name: 'Source health' })).toBeVisible()
+    await source.click()
+    await connection.click()
+    await expect(page.getByRole('button', { name: 'Copy session ID', exact: true })).toBeVisible()
+    await connection.click()
+    const directory = process.env.TINSTAR_MCP_PROOF
+    if (directory) await page.screenshot({ path: join(directory, `fixed-workbench-${width}-${pane}.png`) })
+  }
+})
+
 test('Decisions reports unavailable sources and never acknowledges a flash without a visible source row', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.addInitScript(() => sessionStorage.setItem('tinstar-decision-request', 'retained-request'))
