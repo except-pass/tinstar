@@ -12,7 +12,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { NotionApi } from '../notionApi'
 import { WorkReader } from '../workReader'
 import { WorkflowOperations } from '../workflow'
-import { NotionWriteError, receiptMarker, WorkflowContent } from '../workflowContent'
+import { NotionWriteError, receiptMarker, WorkflowContent, plainText } from '../workflowContent'
 import { FirstmateUpdates } from '../firstmateUpdates'
 import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
@@ -2063,4 +2063,50 @@ it('rejects cross-request work publications and excludes forged history on a sha
   expect(second.currentProposalAnswerId).toBe(proposalAnswerId(proposal))
   expect(second.readiness).toBe('ready-now')
   expect(JSON.stringify(queue.needsWill!.map(item => item.proposal))).not.toContain(forged.question)
+})
+
+it('retains a typed publication binding after closure and finalizes its acknowledged delivery across restart', async () => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const { decisionRecordRows } = await import('../../../shared/workflowRequests')
+  const { AskApi } = await import('../../ask/routes')
+  const { proposalAnswerId } = await import('../../ask/decision')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-finalization-')); roots.push(root)
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  sources.workflow.decisionDelivery = f.bridge
+  vi.mocked(f.bridge.completeDecision).mockImplementation(async requestId => {
+    const index = f.messages.findIndex(message => message.requestId === requestId)
+    if (index >= 0) f.messages.splice(index, 1)
+  })
+  const item = (await sources.queue()).items.find(row => row.sources.some(source => source.request?.id === f.source.id))!
+  const p = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
+  expect(await sources.updateWork({ ...f.request, proposal: p } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  const notes = f.comments.map(comment => ({ id: comment.id, text: plainText(comment.rich_text) }))
+  expect(decisionRecordRows(notes, 'Tin Star request: ').find(row => row.id === 'r3-proposal')).toMatchObject({ source_request: f.source, source_request_key: item.id })
+  expect(await sources.updateWork({ ...f.answer, resolve_wait: undefined } as UpdateWorkInput, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  expect(f.messages).toHaveLength(1)
+  const deliveryId = f.messages[0]!.requestId
+  f.messages[0]!.state = 'acknowledged'
+  expect(await sources.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'pending' })
+  f.home.observation.data!.backlog = []
+  const restarted = f.sources(root)
+  vi.spyOn(restarted, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  restarted.workflow.decisionDelivery = f.bridge
+  expect((await restarted.proposalSource.read(id)).map(entry => entry.value.proposal_id)).toContain(p.proposal_id)
+  expect(await restarted.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'resolved', delivery_id: deliveryId })
+  expect(f.bridge.completeDecision).toHaveBeenCalledWith(deliveryId)
+  expect(f.messages).toHaveLength(0)
+  expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  const queue = await restarted.queue()
+  expect(queue.items.some(row => row.decisionResolution && row.decisionResolution.state !== 'resolved')).toBe(false)
+  expect(queue.needsWill!.some(row => row.id === item.id)).toBe(false)
+  expect((await restarted.proposalSource.read(id)).map(entry => entry.value.proposal_id)).toContain(p.proposal_id)
+  const asks = new AskApi(restarted, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
+  const server = createServer(async (req, res) => { if (!await asks.handle(req, res)) { res.writeHead(404); res.end() } }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  seedOriginAllowlist(port)
+  expect((await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(p), action_id: 'proceed', client_key: crypto.randomUUID() }) })).status).toBe(404)
 })
