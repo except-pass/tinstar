@@ -21,7 +21,7 @@ export class ReleaseMembershipReader {
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
   async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag) {
-    const key = `${repository}:${source}:${tag}:${baseline?.commit.sha ?? ''}`
+    const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`
     const current = this.ranges.get(key)
     if (current && (current.membership.status === 'complete' || current.retryAt > this.now())) return current
     const existing = this.pending.get(key)
@@ -83,7 +83,7 @@ export class ReleaseMembershipReader {
       range.membership.reason = error instanceof Error ? error.message : 'Git release membership unavailable'
       range.retryAt = this.now() + 60_000
     }
-    this.ranges.set(`${repository}:${source}:${tag}:${baseline?.commit.sha ?? ''}`, range)
+    this.ranges.set(`${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`, range)
     // Retain only recently used immutable ranges, without a new on-disk release ledger.
     if (this.ranges.size > 32) this.ranges.delete(this.ranges.keys().next().value!)
     return range

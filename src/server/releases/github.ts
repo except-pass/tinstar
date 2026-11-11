@@ -114,7 +114,7 @@ export class GithubReleaseReader {
     const ranges = new Map<string, Awaited<ReturnType<ReleaseMembershipReader['get']>>>()
     // Publish identities before waiting for Actions, compare or per-commit PRs.
     const publish = () => {
-      const releases = recent.map((tag): ReleaseObject => {
+      const releases = tags.map((tag): ReleaseObject => {
         const detail = this.details.get(`${tag.name}:${tag.commit.sha}`), record = records.find(record => record.tag_name === tag.name)
         const previous = this.cached?.releases.find(release => release.version === tag.name && release.sourceSha === tag.commit.sha)
         const readable = !!detail?.known && detail.at >= this.now() - 60_000
@@ -140,7 +140,7 @@ export class GithubReleaseReader {
         }
       })
       if (tags[0] && mainSha !== tags[0].commit.sha) {
-        const previous = this.cached?.releases.find(release => release.id === `${repository}:draft:main` && release.sourceSha === mainSha)
+        const previous = this.cached?.releases.find(release => release.id === `${repository}:draft:main` && release.sourceSha === mainSha && release.membership.baseline === tags[0]!.name && release.membership.baselineSha === tags[0]!.commit.sha)
         const range = ranges.get('main'), baseline = tags[0]
         releases.push({ id: `${repository}:draft:main`, repository, version: 'main', sourceSha: mainSha,
           kind: 'draft', candidateId: null, planId: null, executionId: null, targets: [], state: mainSha ? 'Untagged work' : 'Unknown',

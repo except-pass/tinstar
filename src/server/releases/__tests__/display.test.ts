@@ -10,7 +10,7 @@ import { ReleasePullReader } from '../pulls'
 import * as acceptance from '../acceptance'
 import { releaseAssociations } from '../../../shared/releases'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
-import { nativeFixtureRead, nativeHead, nativeMain, nativeTime } from '../../../../test-fixtures/releases/github-native'
+import { nativeFixtureRead, nativeHead, nativeMain, nativeTime, nativeTags } from '../../../../test-fixtures/releases/github-native'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); vi.restoreAllMocks() })
@@ -99,12 +99,60 @@ describe('progressive Releases display', () => {
     expect(body.data.releases.find((release: { kind: string }) => release.kind === 'draft')).toMatchObject({ version: 'main', sourceSha: nativeMain, membership: { baseline: 'v1.24.0' } })
   })
 
-  it('sorts numeric version parts newest-first and bounds the default history to five tags', async () => {
+  it('lists every tag in numeric order and enriches an older selection on demand', async () => {
     const names = ['v1.15.0', 'v1.9.0', 'v1.24.0', 'v1.18.0', 'v1.21.0', 'v1.22.0', 'v1.20.0']
     const tags = names.map((name, index) => ({ name, commit: { sha: index.toString(16).repeat(40) } }))
-    const read = nativeFixtureRead({ tags })
-    const result = await new GithubReleaseReader(read, now).get(data())
-    expect(result.releases.filter(release => release.kind === 'production').map(release => release.version)).toEqual(['v1.24.0', 'v1.22.0', 'v1.21.0', 'v1.20.0', 'v1.18.0'])
+    const fixture = nativeFixtureRead({ tags })
+    const read = vi.fn(async (path: string) => {
+      if (path.includes('/compare/')) {
+        const [base, head] = path.split('/compare/')[1]!.split('?')[0]!.split('...')
+        return { status: 'ahead', total_commits: 1, merge_base_commit: { sha: base }, commits: [{ sha: head }], files: [{ filename: 'older-release.ts' }] }
+      }
+      return fixture(path)
+    })
+    const reader = new GithubReleaseReader(read, now)
+    const result = await reader.get(data())
+    expect(result.releases.filter(release => release.kind === 'production').map(release => release.version)).toEqual(['v1.24.0', 'v1.22.0', 'v1.21.0', 'v1.20.0', 'v1.18.0', 'v1.15.0', 'v1.9.0'])
+    const older = result.releases.find(release => release.version === 'v1.15.0')!
+    expect(older.github!.runsStatus).toBe('unknown')
+    expect(older.membership.status).toBe('pending')
+    const olderSha = tags.find(tag => tag.name === older.version)!.commit.sha
+    expect(read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))).toHaveLength(5)
+    expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${olderSha}`))).toBe(false)
+    read.mockClear()
+    const selected = (await reader.get(data(), older.version)).releases.find(release => release.id === older.id)!
+    expect(selected).toMatchObject({ scope: ['older-release.ts'], github: { runsStatus: 'fresh' }, membership: { status: 'complete', baseline: 'v1.9.0' } })
+    expect(read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))).toHaveLength(1)
+    expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${olderSha}`))).toBe(true)
+  })
+
+  it.each([nativeHead, 'e'.repeat(40)])('invalidates Plan when a new baseline tag points to %s behind unchanged main', async baselineSha => {
+    let clock = now(), tags = [...nativeTags], finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const fixture = nativeFixtureRead()
+    let changed = false, comparing = false
+    const reader = new GithubReleaseReader(async path => {
+      if (path.includes('/tags?')) return tags
+      if (changed && path.includes(`/compare/${baselineSha}...${nativeMain}`)) {
+        comparing = true
+        await gate
+        return { status: 'ahead', total_commits: 0, merge_base_commit: { sha: baselineSha }, commits: [], files: [] }
+      }
+      return fixture(path)
+    }, () => clock)
+    const initial = (await reader.get(data())).releases.find(release => release.kind === 'draft')!
+    expect(initial.membership.status).toBe('complete')
+    expect(initial.pulls.map(pull => pull.number)).toEqual([3401])
+    tags = [{ name: 'v1.25.0', commit: { sha: baselineSha } }, ...tags]
+    changed = true; clock += 61_000
+    const refreshing = reader.get(data())
+    try {
+      await vi.waitFor(() => expect(comparing).toBe(true))
+      const pending = reader.display(data()).releases.find(release => release.kind === 'draft')!
+      expect(pending).toMatchObject({ sourceSha: nativeMain, scope: [], pulls: [], membership: { status: 'pending', baseline: 'v1.25.0', baselineSha } })
+    } finally { finish() }
+    const updated = (await refreshing).releases.find(release => release.kind === 'draft')!
+    expect(updated).toMatchObject({ scope: [], pulls: [], membership: { status: 'complete', baseline: 'v1.25.0', baselineSha } })
   })
 
   it('puts tagged versions in history even with no runs, and derives Plan only from the latest-tag to main comparison', async () => {

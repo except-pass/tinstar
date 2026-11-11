@@ -29,6 +29,22 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 const mount = () => render(<Releases data={data} error={null} refresh={vi.fn()} />)
 
 describe('release-first V3 surfaces', () => {
+  it('keeps older native tags selectable and requests their details', () => {
+    data.releases = Array.from({ length: 7 }, (_, index) => ({
+      ...objectFixture('production'), id: `native-tag-${index}`, version: `v1.${24 - index}.0`,
+      github: { record: 'missing' as const, url: null, body: null, publishedAt: null, snapshotAt: null, componentResults: [], runs: [], runsStatus: 'unknown' as const },
+    }))
+    const refresh = vi.fn()
+    render(<Releases data={data} error={null} refresh={refresh} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Verify' }))
+    const older = screen.getByRole('button', { name: /^v1.18.0 / })
+    refresh.mockClear()
+    fireEvent.click(older)
+    expect(older).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('heading', { name: 'v1.18.0', exact: true })).toBeTruthy()
+    expect(refresh).toHaveBeenCalledWith('v1.18.0')
+  })
+
   it('changes the entire release atomically and keeps Draft distinct from RC', () => {
     mount()
     expect(screen.getByRole('heading', { name: 'RC v1.24.1' })).toBeTruthy()

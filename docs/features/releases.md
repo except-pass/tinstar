@@ -9,9 +9,9 @@ its old source evidence.
 
 Plan opens on Changes for **untagged main work since the latest version tag**.
 Already-tagged versions always belong to Verify/history, even when Actions data
-is missing, unreadable or expired. Verify opens on Acceptance and shows the latest
-five version tags in explicit numeric major/minor/patch order, newest first. An
-explicitly selected older tag can also be read. Tags and component activity do
+is missing, unreadable or expired. Verify opens on Acceptance and shows all discovered
+version tags in explicit numeric major/minor/patch order, newest first. Selecting
+an older tag loads its details. Tags and component activity do
 not prove current production delivery. The 238px desktop selector becomes
 horizontal tiles on phones. Changes, Acceptance and draft Release notes remain
 scoped to the selected identity, with the existing contextual drawer and contracts.
