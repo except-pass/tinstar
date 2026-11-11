@@ -275,6 +275,9 @@ Those entry controls clear temporary search focus and reveal while retaining
 the Search filters. An assistant flash outside Waiting For likewise uses
 the ordinary floor until expiry; within Waiting For it temporarily exposes the
 target's category and collapsed dependency group without saving that expansion.
+A persistent navigation reveal outside Waiting For keeps the ordinary floor
+visible after the flash expires, until the navigation reveal is cleared as
+described above.
 
 Click an affected card or press Enter/Space to open the existing Inspector and
 reveal its confirmed worker relationships. Dependency headings toggle only their
