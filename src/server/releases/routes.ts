@@ -7,6 +7,7 @@ import { getConfigRoot } from '../configRoot'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { fail, ok } from '../api/envelope'
+import { releaseChanges } from '../../shared/releaseChanges'
 import { releaseAssociations } from '../../shared/releases'
 import { AssociationConflict, AssociationStore, associationInput } from './associations'
 import { ReleasePullReader } from './pulls'
@@ -14,6 +15,7 @@ import { ReleaseEvidenceReader } from './evidence'
 import { ReleaseReconciler } from './reconcile'
 import { readReleaseWriteRecords } from './writer'
 import { planReleaseAutomation, readAutomationSettings } from './automation'
+import { readAcceptanceRecords, readAcceptanceSettings } from './acceptance'
 import { ReleaseObjectReader } from './objects'
 
 async function ownerLogins(root: string): Promise<string[]> {
@@ -49,7 +51,15 @@ export class ReleasesApi {
     const evidence = await this.evidence.get()
     const reconciled = await this.reconciler.get(data, scene, evidence, await readReleaseWriteRecords(this.root))
     reconciled.automation = planReleaseAutomation(reconciled, scene, await readAutomationSettings(this.root))
+    try { reconciled.acceptanceWorkflows = (await readAcceptanceSettings(this.root)).checks }
+    catch { reconciled.acceptanceWorkflows = {} }
+    try { reconciled.acceptanceRecords = await readAcceptanceRecords(this.root) }
+    catch { reconciled.acceptanceRecords = []; reconciled.warnings.push('Acceptance receipt store is unreadable; no passing results can be established.') }
     reconciled.releases = await this.releaseObjects.get(evidence, reconciled, scene)
+    const visibleChecks = new Set(reconciled.releases.flatMap(release => releaseChanges(release, reconciled, scene).flatMap(change => (change.checks ?? []).map(check => check.key))))
+    reconciled.acceptanceRecords = reconciled.acceptanceRecords.filter(record => visibleChecks.has(record.key))
+    const acceptanceWarning = reconciled.warnings.find(message => message.startsWith('Acceptance receipt store'))
+    if (acceptanceWarning) for (const release of reconciled.releases) release.gaps.push(acceptanceWarning)
     return reconciled
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {

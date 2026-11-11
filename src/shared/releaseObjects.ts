@@ -1,3 +1,4 @@
+import type { AcceptanceResult } from './releaseAcceptance'
 import type { DeploymentReceipt, RequiredTarget } from './releaseReconciliation'
 import type { ReleasePull } from './releases'
 
@@ -24,8 +25,9 @@ export interface ReleaseChange {
   id: string; cardId: string | null; title: string; product: string
   pulls: ReleasePull[]; requiredPulls: string[]; targets: ReleaseTarget[]
   delivery: 'Deployed' | 'Not deployed' | 'Unknown' | 'Awaiting delivery'
-  acceptance: 'Unknown' | 'Failed' | 'Running' | 'Human review' | 'Passed'
+  acceptance: 'Unknown' | 'Failed' | 'Running' | 'Human review' | 'Passed' | 'Missing' | 'Inconclusive' | 'Skipped'
   successCondition: string | null; method: string | null; checkRef: string | null
+  checks?: AcceptanceResult[]; acceptanceGap?: string | null
   acceptanceEvidence: string | null; note: string | null; audience: 'internal' | 'customer'
 }
 

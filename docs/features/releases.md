@@ -44,13 +44,19 @@ so its proven subset can show Deployed while the release remains Partial rollout
 Missing mapping, unknown sources, partial/skipped/reverted components or
 an incomplete required PR set cannot establish delivery or acceptance.
 
-Feature acceptance contracts do not exist yet: they belong to handoff step D.3.
-Real views show **No acceptance contract defined** per change. Component checks
-are explicitly **build/DEV readiness**, never production acceptance. No missing
-check passes. Real production notes are empty/ineligible until verified membership
-and linked accepted work exist. Internal/Customer audience selection and Copy draft
-operate only on the selected release; publication is a separate step. No D.3 check
-dispatch, D.4 publication or D.5 Notion policy/closure change is implemented here.
+Feature acceptance contracts are tagged `production-acceptance` JSON sections in
+existing card Evidence rich text. Checks reference existing safe workflows,
+telemetry queries or named human procedures; see [D.3 configuration and recovery](../releases-acceptance.md).
+The default-OFF operator runner dispatches only after fresh exact target proof,
+records exact run IDs/links and explicit outcomes in existing workflow receipts,
+and supports audited manual results, attachment, retry and skip. HTTP reads and
+page clicks never dispatch. Build/DEV readiness never establishes acceptance;
+missing, failed, skipped and inconclusive checks cannot pass. The drawer shows
+the latest result first with prior evidence retained in expandable history.
+
+Production notes remain ineligible until verified membership and linked accepted
+work exist. Internal/Customer selection and Copy draft operate on the selected
+release; D.4 publication and D.5 Notion closure/policy changes remain separate.
 
 Every V3 surface ships in D.2. Clearly labelled synthetic test-fixture screenshots
 cover the failed/manual acceptance drawer and populated eligible-notes compositions
