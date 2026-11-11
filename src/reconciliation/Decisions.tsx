@@ -197,6 +197,9 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
   const request = item as Partial<NeedsWillItem>
   const turns = (controls?.items ?? []).filter(turn => turn.context.target?.kind === 'decision' && turn.context.target.id === item.id)
   const latest = turns.at(-1), answer = mostRecentAnswer(turns)
+  useLayoutEffect(() => {
+    if (controls?.deskVisible && controls.expanded && !turns.some(turn => turn.conversation_id === controls.expanded)) controls.collapse()
+  })
   const replyProposals = turns.flatMap(turn => {
     const value = turn.reply?.decision_proposal
     return value && value.request_key === item.id && value.source.kind === 'ask-reply' && value.source.id === turn.request_id && (!value.card_id || item.cardIds.includes(value.card_id)) ? [{ answer_id: turn.request_id, value }] : []

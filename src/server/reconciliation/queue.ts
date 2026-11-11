@@ -34,6 +34,7 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  proposalHistoryComplete?: boolean
   proposals?: Array<{ answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }>
   proposal?: { answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }
   decisionResolution?: import('../../shared/workflow').StartWorkResult['decision_resolution']

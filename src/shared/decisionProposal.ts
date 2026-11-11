@@ -43,7 +43,7 @@ export function currentDecisionProposal<T extends { value: unknown }>(candidates
 }
 
 export function decisionFresh(item: import('../server/reconciliation/queue').QueueItem, now = Date.now()) {
-  return item.readiness === 'ready-now' && item.sources.length > 0 && item.sources.every(source =>
+  return item.proposalHistoryComplete !== false && item.readiness === 'ready-now' && item.sources.length > 0 && item.sources.every(source =>
     ['fresh', 'partial'].includes(source.status) && source.coverage === 'complete' && !!source.observedAt &&
     !!source.expiresAt && Date.parse(source.expiresAt) > now)
 }

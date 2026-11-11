@@ -1900,7 +1900,7 @@ it('never delivers a conflicting direct Notion answer over an incomplete intent'
   expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
 })
 
-it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask supersession'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
+it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask supersession', 'partial history'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
   const { AskApi } = await import('../../ask/routes')
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -1920,6 +1920,24 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   const port = (server.address() as { port: number }).port
   seedOriginAllowlist(port)
   const select = (proposal: typeof p) => fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
+  if (scenario === 'partial history') {
+    const { CardContextReader } = await import('../cardContext')
+    const original = CardContextReader.prototype.commentDetails
+    const partial = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockImplementation(async function (this: InstanceType<typeof CardContextReader>, cardId, force) {
+      return { ...await original.call(this, cardId, force), outcome: 'partial' }
+    })
+    const retained = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
+    expect(retained.proposal?.value.proposal_id).toBe(p.proposal_id)
+    expect(retained.proposalHistoryComplete).toBe(false)
+    expect(retained.readiness).toBe('needs-readiness-verification')
+    expect((await select(p)).status).toBe(409)
+    partial.mockRestore()
+    const complete = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
+    expect(complete.proposalHistoryComplete).toBe(true)
+    expect(complete.readiness).toBe('ready-now')
+    expect((await select(p)).status).toBe(200)
+    return
+  }
   if (scenario === 'ask supersession') {
     const { decisionContext } = await import('../../ask/decision')
     const { inboxRequestId } = await import('../../../shared/ask')
@@ -1965,4 +1983,35 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   expect(response.status).toBe(200)
   expect((await response.json()).data.action_selection.answer_id).toBe(proposalAnswerId(latest))
   expect((await asks.store.list('owner@example.test')).filter(row => row.action_selection)).toHaveLength(scenario === 'missing intermediate' ? 2 : 1)
+})
+
+it('shares unchanged reconciliation across windows and invalidates only for typed Ask publication changes', async () => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const { decisionContext } = await import('../../ask/decision')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-cache-')); roots.push(root)
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  const item = (await sources.queue()).items.find(row => row.sources.some(source => source.request?.id === f.source.id))!
+  const p = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
+  await sources.updateWork({ ...f.request, proposal: p } as UpdateWorkInput, 'Publisher')
+  const reads = () => f.requests.filter(request => request.method === 'GET' && new URL(request.url).pathname === '/v1/comments').length
+  const before = reads()
+  await Promise.all([sources.workflow.reconcileDecisions(id, f.fleet, false), sources.workflow.reconcileDecisions(id, f.fleet, false)])
+  const refreshed = reads()
+  expect(refreshed).toBeGreaterThan(before)
+  await sources.workflow.reconcileDecisions(id, f.fleet, false)
+  expect(reads()).toBe(refreshed)
+  const turn = await sources.askStore.create('owner@example.test', crypto.randomUUID(), 'Why this route?', decisionContext(item, { scene: 'decisions' }))
+  await sources.workflow.reconcileDecisions(id, f.fleet, false)
+  expect(reads()).toBe(refreshed)
+  const q = { ...p, proposal_id: turn.request_id, supersedes: p.proposal_id, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: 'ask-q' } }
+  await sources.askStore.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'ask-cache-q', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
+  await sources.askStore.ingest({ request_id: turn.request_id, reply: { id: 'ask-cache-q', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Revised recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: q }) } })
+  await Promise.all([sources.workflow.reconcileDecisions(id, f.fleet, false), sources.workflow.reconcileDecisions(id, f.fleet, false)])
+  expect(reads() - refreshed).toBe(refreshed - before)
+  const publishedReads = reads()
+  await sources.askStore.action('owner@example.test', turn.request_id, 'read')
+  await sources.workflow.reconcileDecisions(id, f.fleet, false)
+  expect(reads()).toBe(publishedReads)
+  expect(await sources.updateWork({ ...f.answer, operation_id: 'superseded-cache-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
 })

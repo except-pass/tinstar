@@ -303,7 +303,6 @@ export class ReconciliationSources {
     }))
     if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
-    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
     for (const item of queue.reviews.items.slice(0, 20)) {
@@ -315,8 +314,12 @@ export class ReconciliationSources {
     if (!reviewRecoveries || reviewRecoveries.some(row => row.result.outcome !== 'saved')) queue.warnings.push('Some recorded review writes remain unconfirmed; inspect the existing review receipts before claiming acceptance or handoff completion.')
     queue.reviewRecoveries = reviewRecoveries ?? []
     if (reviewWarning) queue.warnings.push(reviewWarning)
-    const publications = (await Promise.all(ids.slice(0, 20).map(id => this.proposalSource.read(id, contexts.get(id)?.blocks ?? [])))).flat()
+    const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
+    const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)
+    const projected = new Map(queue.needsWill.map(item => [item.id, item]))
+    queue.items = queue.items.map(item => projected.get(item.id) ?? item)
+    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     queue.operationalExceptions = executionWarnings(scene)
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }
     else if (!authorized) queue.warnings.push('PR details require owner authorization')

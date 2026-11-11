@@ -139,7 +139,7 @@ export class AskApi {
             if (answer.context.decision?.revision !== decisionRevision(item)) throw new AskConflict('Source request changed; refresh and request a current recommendation')
             if (!proposal || proposal.request_key !== item.id || proposal.card_id && !item.cardIds.includes(proposal.card_id)) throw new AskConflict('Proposal does not belong to this request')
             if (answer.published_proposal && !(item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === answer.request_id && JSON.stringify(published.value) === JSON.stringify(proposal))) throw new AskConflict('Published proposal changed; refresh before choosing')
-            const publications = this.sources.proposalSource ? (await Promise.all(item.cardIds.map(id => this.sources.proposalSource!.read(id)))).flat().filter(entry => entry.value.request_key === item.id) : [...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))]
+            const publications = this.sources.proposalSource ? await this.sources.proposalSource.forRequest(item.id, item.cardIds) : [...proposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))]
             if (currentDecisionProposal(publications)?.answer_id !== answer.request_id) throw new AskConflict('Proposal has been superseded')
             if (proposal.source.kind === 'ask-reply' && proposal.source.id !== answer.request_id) throw new AskConflict('Proposal source does not match its answer')
             return findSuggestedAction(proposal.actions, actionId)

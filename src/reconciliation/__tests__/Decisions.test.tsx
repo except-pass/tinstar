@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { fixtureProposal } from '../../../test-fixtures/reconciliation/decisionProposal'
-import { AskProvider } from '../../ask/Ask'
+import { AskProvider, AskDesk } from '../../ask/Ask'
 import { Decisions } from '../Decisions'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueSource } from '../../server/reconciliation/queue'
@@ -634,4 +634,27 @@ it('shows an unavailable queue instead of a blank mobile detail when no source d
   const view = render(<Decisions />)
   expect(screen.getByText('Decision sources are unavailable.')).toBeVisible()
   expect(view.container.querySelector('.decisions')).not.toHaveClass('detail-open')
+})
+
+it('collapses another request thread when selection changes and sends through one exact composer', async () => {
+  const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }, second = { ...queue.items[0]!, id: 'request-b', title: 'Second request' }
+  queue.items = [first, second]; queue.needsWill = undefined
+  workspace.value.queue = queue; workspace.value.openDesk = vi.fn()
+  const id = '11111111-1111-4111-a111-111111111111'
+  const record = { request_id: id, conversation_id: id, question: 'Explain request A', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: first.cardIds[0]!, label: 'Request A', url: null, observed_at: null }, target: { kind: 'decision', id: first.id }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'A relevant answer', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null }
+  const bodies: Array<{ target?: { id: string } }> = []
+  vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    if (init?.body) bodies.push(JSON.parse(String(init.body)))
+    return new Response(JSON.stringify(init?.body ? { ok: false, error: { message: 'Fixture delivery unavailable' } } : { ok: true, data: [record] }))
+  }))
+  const view = render(<AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>)
+  await act(async () => {})
+  fireEvent.click(screen.getByRole('button', { name: /Full conversation/ }))
+  expect(screen.getAllByRole('textbox')).toHaveLength(1)
+  fireEvent.click(view.container.querySelectorAll('.decisions-row')[1]!)
+  expect(screen.queryByRole('button', { name: 'Collapse answer' })).toBeNull()
+  expect(screen.getAllByRole('textbox')).toHaveLength(1)
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Explain request B' } })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send question' })) })
+  expect(bodies.at(-1)?.target?.id).toBe(second.id)
 })

@@ -228,10 +228,10 @@ export class WorkflowOperations {
     }
     return results
   }
-  reconcileDecisions(cardId: string, fleet?: SourceSnapshot['fleet'], force = true) {
-    const revision = JSON.stringify([this.reader.lastKnown(cardId)?.card.last_edited_time, fleet?.map(home => [home.source.home, home.observation.observedAt, home.observation.status])])
+  async reconcileDecisions(cardId: string, fleet?: SourceSnapshot['fleet'], force = true) {
+    const revision = JSON.stringify([this.reader.lastKnown(cardId)?.card.last_edited_time, fleet?.map(home => [home.source.home, home.observation.observedAt, home.observation.status]), await this.proposals?.revision()])
     const cached = this.decisionRefreshes.get(cardId)
-    if (!this.proposals && !force && cached && cached.until > Date.now() && cached.revision === revision) return cached.result
+    if (!force && cached && cached.until > Date.now() && cached.revision === revision) return cached.result
     const prior = this.locks.get(cardId) ?? Promise.resolve()
     const result = prior.catch(() => {}).then(() => this.performDecisionReconcile(cardId, fleet, true))
     this.locks.set(cardId, result)

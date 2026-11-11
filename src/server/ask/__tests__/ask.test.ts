@@ -1,3 +1,4 @@
+import { ProposalSource } from '../../reconciliation/proposalSource'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -29,10 +30,11 @@ const view = { scene: 'overview' as const }
 const context = () => askContextSchema.parse({ anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: `https://www.notion.so/${fixtureId(1)}`, observed_at: null }, view })
 const note = (id: string, noteId = 'note-1', announced = true) => ({ schema: 'fm-inbox-note.v1' as const, outcome: 'created' as const, id: noteId, request_id: inboxRequestId(id), saved: true as const, announced, acknowledged: false })
 afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined }; if (root) await rm(root, { recursive: true, force: true }); resetOriginAllowlistForTests() })
-async function setup(artifacts?: AskArtifactSources, decisions?: ReturnType<typeof fixtureQueue>) {
+async function setup(artifacts?: AskArtifactSources, decisions?: ReturnType<typeof fixtureQueue>, sharedProposals = false) {
   root = await mkdtemp(join(tmpdir(), 'tinstar-ask-'))
   const decisionKeys: Array<string | undefined> = [], decisionAuthorization: boolean[] = []
-  const sources = { ...(decisions ? { queue: async (_req?: unknown, key?: string) => { decisionKeys.push(key); decisionAuthorization.push(!!_req); return decisions } } : {}), scene: async () => {
+  const askStore = sharedProposals ? new AskStore(root) : undefined
+  const sources = { ...(askStore ? { askStore, proposalSource: new ProposalSource(askStore, async () => []) } : {}), ...(decisions ? { queue: async (_req?: unknown, key?: string) => { decisionKeys.push(key); decisionAuthorization.push(!!_req); return decisions } } : {}), scene: async () => {
     const scene = fixtureScene()
     return { ...scene, searchIndex: boundSearchDocuments(sceneSearchDocuments(scene)) }
   } }
@@ -1016,6 +1018,24 @@ describe('request-bound decision workbench', () => {
     queue.needsWill = [{ ...item, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }, { ...item, id: 'exact-request-b', proposal: undefined, requests: [], pulls: [], requestSince: null, ageBasis: 'unknown' }]
     return queue
   }
+  it.each([0, 1, 2])('selects an Ask recommendation for a request with %s card links', async count => {
+    const queue = publishedQueue(), item = queue.needsWill![0]!
+    item.cardIds = [fixtureId(1), fixtureId(5)].slice(0, count)
+    item.proposal = undefined
+    const { call, bridge } = await setup(undefined, queue, true)
+    const turn = (await call('requests', { target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' }, question: 'Recommend a route', client_key: randomUUID() })).data.data
+    const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+    const proposal = { ...fixtureProposal(item.id), source: { kind: 'ask-reply', id: turn.request_id, revision: '1' } }
+    await bridge({ request_id: turn.request_id, note: note(turn.request_id) })
+    expect((await bridge({ request_id: turn.request_id, reply: { id: 'note-1', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Published recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })).status).toBe(200)
+    item.proposalHistoryComplete = false
+    const input = { answer_id: turn.request_id, action_id: 'proceed', client_key: randomUUID() }
+    expect((await call('selections', input)).status).toBe(409)
+    item.proposalHistoryComplete = true
+    expect((await call('selections', { ...input, client_key: randomUUID() }, { 'Tailscale-User-Login': other, 'X-Tinstar-UI': '1' })).status).toBe(404)
+    expect((await call('selections', input)).status).toBe(200)
+    expect((await call('requests')).data.data.filter((row: { action_selection?: unknown }) => row.action_selection)).toHaveLength(1)
+  })
   it('reuses an implicit owner/request thread across row questions, reloads and retries', async () => {
     const { call, reload } = await setup(undefined, publishedQueue())
     const body = { target: { kind: 'decision', id: 'exact-request-a' }, view: { scene: 'decisions' }, question: 'Why this route?', client_key: randomUUID() }
