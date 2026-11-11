@@ -20,8 +20,9 @@ scoped to the selected release, with the existing contextual drawer and contract
 PR associations and the legacy dry-run projection. It reads tags and GitHub
 Release records (including visible drafts) with pagination. Missing Release records are distinct from failed
 reads: **v1.24.0 has no GitHub Release record**, and appears from its tag and
-component runs. Surgical tags such as `deploy/v1.24.0-siteconfig-1` are not version
-releases. Runs must match the exact tag, tagged commit and `push` event; same-SHA
+component runs when available. Only tags matching `vMAJOR.MINOR.PATCH` are
+version releases; prerelease/suffixed tags and surgical tags such as
+`deploy/v1.24.0-siteconfig-1` are ignored. Runs must match the exact tag, tagged commit and `push` event; same-SHA
 main/PR/surgical-dispatch runs and the record-only observer are excluded.
 
 The adapter reads cmsandbox's generated `native-production-release` block,
@@ -75,11 +76,10 @@ The optional trusted operator file
 { "version": 1, "enabled": false }
 ```
 
-Omitting the file defaults to OFF. Invalid/unreadable settings remain OFF with a
-visible warning. `enabled: true` enables a deterministic pass every 60 seconds in
-the existing backend. There is no browser activation/execute endpoint. GET still
-only reports legacy proposals. Do not enable this obsolete opt-in proposal under
-the controlling handoff. The [historical activation packet](../releases-activation.md)
+The historical writer settings reader defaults to OFF and rejects invalid or
+unreadable settings. The live API ignores this file and the backend no longer
+schedules the writer; `enabled: true` does not activate it. There is no browser
+activation/execute endpoint. GET only reports legacy proposals. The [historical activation packet](../releases-activation.md)
 records the previous implementation and evidence limits; D.5 owns replacement
 policy and a separate later owner activation decision.
 
@@ -221,7 +221,7 @@ Known flags/reverts/cherry-picks or other exceptions are explicit strings in
 
 ### Consume cmsandbox coordinator records
 
-The native adapter consumes the existing coordinator records; it does not rebuild
+The historical coordinator adapter consumes the existing coordinator records; it does not rebuild
 its approval or deployment machinery. Export current `control.json`, its committed
 journal chain, and referenced frozen objects from
 `s3://fortresspower-cmsandbox-release-prod-298117917676/coordinator/production/v1/`.
@@ -279,7 +279,7 @@ The directory contains `objects/<digest>.json` and, when production execution
 exists, `control.json` and `journal/<digest>.json`. Preserve journal S3 LastModified
 as file mtime. The reader follows the committed chain and loads all digest-named
 frozen objects in the same directory, verifying native content-addressed keys.
-Frozen candidate/plan pairs appear in Plan even before any production binding;
+The historical projection includes frozen candidate/plan pairs before any production binding;
 missing `control.json` means an empty journal. Include these pre-deployment objects
 in exports rather than exporting only journal references. Unfrozen plans never
 become RCs. Superseded bindings certify nothing. Reads are
@@ -287,7 +287,7 @@ bounded to 1,000 objects, 8 MiB per object and 32 MiB total so an accidentally
 unbounded export cannot exhaust the HTTP process. An incomplete export is visibly an error;
 provide a bounded current chain to continue.
 
-These directories are explicitly historical snapshots: the UI labels the exact
+These directories are explicitly historical snapshots: their legacy projection retains the exact
 as-of time, `sourceStatus` is `snapshot`, and no writer can execute their
 proposals even if enabled. The snapshot has no freshness extension pretending it
 is current PROD. A later current-state export can use the existing normalized

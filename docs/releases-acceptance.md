@@ -110,7 +110,7 @@ repository, event, ref and that the run began after target deployment.
 
 Execution records use `workflow-create-receipts.json`, the existing Tin Star
 workflow receipt store, under `release-acceptance:` keys. Contracts remain card
-owned; deployments remain coordinator owned. There is no new release ledger.
+owned; deployment evidence follows the [Releases source contract](features/releases.md#github-native-source-and-evidence-boundaries). There is no new release ledger.
 Each record binds the exact release attempt, required merge identities, exact
 target receipts, the check's assertion/reference/fixture and the approved resolved
 workflow repository, workflow, ref and input values. Source ordering, JSON
