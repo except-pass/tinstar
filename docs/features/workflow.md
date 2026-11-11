@@ -445,7 +445,12 @@ published Notion request retains the exact identity, question and task generatio
 a card ID, title or bare decision key never substitutes for request identity.
 
 Answer that proposal with the existing `answer_decision` operation. UI and MCP
-use the same function. Source approvals leave implementation queued; starting or
+use the same function. Before recording a new source-bound answer or changing
+properties, the shared writer verifies the exact source is still open and bound
+to this card, with the published question and generation unchanged. Typed
+proposals must also be current under the [shared resolver](#decisions-workbench-proposals).
+This applies to MCP answers, UI choices and direct-answer recovery without an
+existing recorded intent. Source approvals leave implementation queued; starting or
 completing implementation is a separate workflow operation. Only the selected
 request's action and caller-specified exact wait are removed. Other asks survive.
 The first durable answer intent is recorded in Notion before property writes.
@@ -472,6 +477,9 @@ different consumers converge on one delivery. A saved message or acknowledged
 receipt alone does not resolve Decisions: the acknowledgment and fresh, complete
 source closure must both be observed, then confirmed in Notion. Until then the
 shared projection reports **Decision recorded · First Mate not yet updated**.
+Finalization of an already-recorded answer uses its own durable binding, even if
+a newer proposal supersedes it or its source has closed. Currentness gates new
+answers, not delivery, acknowledgment, closure or recovery of recorded answers.
 There is no independent poller or request store.
 
 Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads;
@@ -518,13 +526,18 @@ queue `request_key`, optional canonical `card_id`, `question`, `rationale`,
 `references: [{label,url}]`, `source: {kind:"firstmate-request",id,revision}`,
 `published_at` and `supersedes` (null or the prior proposal ID). Use the existing
 `source_request` binding; the source ID identifies that request. Actions use the
-existing Ask action validation. A revision is a new publication with a new
+existing Ask action validation. Publication rejects a `request_key` that differs
+from the canonical queue request bound by `source_request`. That exact key is
+recorded with the publication and used for later admission, preserving history
+after source closure without admitting proposals from another request on the
+same card. A revision is a new publication with a new
 `request_id` and proposal ID; it supersedes the prior proposal for that exact ask.
 For the same open request, typed Ask and work publications are resolved together.
 Any proposal named by another publication’s `supersedes` is history; the newest
 remaining publication wins, even when intermediate revisions are absent or
-publications are unrelated. Equal publication times use the lexicographically
-greatest proposal ID, independent of input order. Legacy rows without typed
+publications are unrelated. Ties use, in order, the lexicographically greatest
+proposal ID, source kind (`ask-reply` wins over `firstmate-request`), source ID
+and source revision, independent of input order. Legacy rows without typed
 proposals are metadata.
 Legacy options and freeform text retain their existing behavior.
 
