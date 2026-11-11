@@ -7,7 +7,7 @@
 
 The implementation is default OFF. The request and replacement instructions below
 are historical records of the superseded proposal, not current activation guidance.
-The [Releases reference](features/releases.md#d2-read-model-and-evidence-boundaries)
+The [Releases reference](features/releases.md#github-native-source-and-evidence-boundaries)
 owns the current acceptance-policy boundary.
 
 ## Owner activation request (exact text)

@@ -11,9 +11,10 @@ import type { DeploymentReceipt } from '../../../shared/releaseReconciliation'
 import { buildQueue } from '../../reconciliation/queue'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 import { planReleaseAutomation, readAutomationSettings } from '../automation'
-import { ReleaseEvidenceReader, type EvidenceRead } from '../evidence'
+import { type EvidenceRead } from '../evidence'
 import { reconcileReleases, ReleaseReconciler } from '../reconcile'
 import { ReleasesApi } from '../routes'
+import { GithubReleaseReader } from '../github'
 import { ReleasePullReader } from '../pulls'
 
 const cleanups: Array<() => Promise<void>> = []
@@ -131,7 +132,7 @@ describe('default-OFF release transition and owner routing proposals', () => {
     await writeFile(snapshot, JSON.stringify({ schema: 'tinstar.deployment-receipts.v1', collectedAt: receipt.deployedAt, receipts: [receipt] }))
     await writeFile(join(config, 'releases', 'reconciliation.json'), JSON.stringify({ version: 1, repositories: [{ repository: 'owner/repo', checkout: config }], requirements: [{ pull, targets: [{ target: receipt.target, component: receipt.component }] }], receiptFiles: [snapshot] }))
     const files = await readdir(config, { recursive: true })
-    const api = new ReleasesApi({ scene: async () => ({ ...scene, searchIndex: { documents: [], notes: [] } }) }, config, new ReleasePullReader(async () => ({ title: 'Change', merged: true, state: 'closed', merge_commit_sha: merge, merged_at: receipt.deployedAt })), async () => [], new ReleaseEvidenceReader(config), new ReleaseReconciler(async () => ({ state: 'ancestor' })))
+    const api = new ReleasesApi({ scene: async () => ({ ...scene, searchIndex: { documents: [], notes: [] } }) }, config, new ReleasePullReader(async () => ({ title: 'Change', merged: true, state: 'closed', merge_commit_sha: merge, merged_at: receipt.deployedAt })), async () => [], new GithubReleaseReader(async () => []), new ReleaseReconciler(async () => ({ state: 'ancestor' })))
     const server = createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
     server.listen(0, '127.0.0.1'); await once(server, 'listening')
     cleanups.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
@@ -139,8 +140,8 @@ describe('default-OFF release transition and owner routing proposals', () => {
     const url = `http://127.0.0.1:${port}/api/releases/automation`
     const first = await (await fetch(url)).json(), replay = await (await fetch(url)).json()
     expect(first.data).toEqual(replay.data)
-    expect(first.data).toMatchObject({ mode: 'automatic', enabled: true, requestedEnabled: true, proposals: expect.any(Array) })
-    expect(first.data.proposals).toHaveLength(2)
+    expect(first.data).toMatchObject({ mode: 'review-only', enabled: false, requestedEnabled: false, proposals: [] })
+    expect(first.data.proposals).toHaveLength(0)
     for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) expect((await fetch(url, { method })).status).toBe(400)
     expect(JSON.stringify(scene)).toBe(before)
     expect(await readdir(config, { recursive: true })).toEqual(files)

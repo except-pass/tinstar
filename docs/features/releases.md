@@ -1,164 +1,73 @@
 # Releases
 
-Releases (`?view=releases`) presents selectable coordinator release objects. Plan
-opens on Changes for a frozen RC or an explicitly identified Draft. Verify opens
-on Production acceptance for an observed production release, including partial
-and superseded attempts. The 238px desktop release selector becomes horizontal
-release tiles on phones. Changes, Acceptance and Release notes always belong to
-the selected identity; a contextual drawer carries exact targets and provenance.
-There is no global PR table or permanent inspector on this surface.
+Releases (`?view=releases`) reads **fortresspower/cmsandbox version tags,
+GitHub Release records and component Actions runs**, through the same GitHub
+Reader transport as PRs. No coordinator export or repository configuration is
+needed. New version tags appear on refresh. Release identity is repository/tag;
+the current tagged commit is retained separately so a moved tag does not reuse
+its old source evidence.
 
-## D.2 read model and evidence boundaries
+Plan opens on Changes for a tag without observed component activity, explicitly
+labeled Draft. Verify opens on Acceptance for a tag with observed component push
+runs, including failed and incomplete attempts. A tag/run is release activity,
+not proof of current production delivery. The 238px desktop selector becomes
+horizontal tiles on phones. Changes, Acceptance and draft Release notes remain
+scoped to the selected release, with the existing contextual drawer and contracts.
 
-`GET /api/releases` adds `releases` alongside the existing PR association and
-legacy dry-run projections. It reads the same configurable coordinator sources
-below; it creates no release ledger, deployment control plane or writer. Candidate
-identity includes repository, manifest and frozen plan; production identity also
-includes its committed execution/receipt, so repeated same-tag attempts stay
-separate. Only coordinator attempts with observed target readback appear in Verify.
-Legacy normalized component receipts retain individual receipt/target identities
-when no shared coordinator binding is available; equal versions never fuse them. Snapshot
-as-of times are visible and never certify current production.
+## GitHub-native source and evidence boundaries
 
-Changes are deterministic Git membership: merged PRs whose effective merge commit
-is in the release-source range since the previous version tag with proven Git
-ancestry. Tags delimit Changes only; a tag never establishes production delivery.
-The reader checks the available first 100 tags, selects the preceding ancestral
-version tag, paginates comparison commits, and discovers associated PRs eight
-commits at a time (four concurrent reads). Known results remain visible with
-partial counts while the range is being read. Missing earlier history is a named
-source gap. CLI and live Reader use the existing authenticated transports; no
-workflow is dispatched. Immutable range membership is cached in memory.
+`GET /api/releases` returns `releases` and `releaseSource` alongside existing
+PR associations and the legacy dry-run projection. It reads tags and GitHub
+Release records (including visible drafts) with pagination. Missing Release records are distinct from failed
+reads: **v1.24.0 has no GitHub Release record**, and appears from its tag and
+component runs when available. Only tags matching `vMAJOR.MINOR.PATCH` are
+version releases; prerelease/suffixed tags and surgical tags such as
+`deploy/v1.24.0-siteconfig-1` are ignored. Runs must match the exact tag, tagged commit and `push` event; same-SHA
+main/PR/surgical-dispatch runs and the record-only observer are excluded.
 
-Changes group by explicit PR/card association, deduplicating each linked work
-outcome and preserving every required PR. Explicitly linked required PRs outside
-the selected Git range are reconciled against that release’s exact receipts as
-supporting evidence; they never become additional Changes members. Coordinator
-release reconciliation uses the selected source’s collection time for both member
-and supporting PRs, while the legacy writer retains the conservative aggregate
-evidence context. An unlinked member remains an unlinked
-PR with its actual title. Component names never become invented work items.
-Delivery uses the existing exact target mapping, source ancestry and receipt
-reader. A partial rollout retains independently verified target observations,
-so its proven subset can show Deployed while the release remains Partial rollout.
-Missing mapping, unknown sources, partial/skipped/reverted components or
-an incomplete required PR set cannot establish delivery or acceptance.
+The adapter reads cmsandbox's generated `native-production-release` block,
+preserving its intended-target/result/native-link rows, snapshot timestamp and
+full Release body. It also reads component workflow names, conclusions, attempts,
+start/update times and direct run links. The newest run per workflow determines
+the activity summary; earlier runs remain available for audit. Operator prose
+outside the generated block never becomes deployment proof.
 
-Feature acceptance contracts are tagged `production-acceptance` JSON sections in
-existing card Evidence rich text. Checks reference existing safe workflows,
-telemetry queries or named human procedures; see [D.3 configuration and recovery](../releases-acceptance.md).
-The default-OFF operator runner dispatches only after fresh exact target proof,
-records exact run IDs/links and explicit outcomes in existing workflow receipts,
-and supports audited manual results, attachment, retry and skip. HTTP reads and
-page clicks never dispatch. Build/DEV readiness never establishes acceptance;
-missing, failed, skipped and inconclusive checks cannot pass. The drawer shows
-the latest result first with prior evidence retained in expandable history.
+Changes and source-file scope come from the Git compare between consecutive
+version tags. Effective merged PR identities are read from those commits and
+joined to existing explicit many-to-many Notion associations. Membership advances
+in bounded batches, with partial counts and exact gaps until complete. A non-linear
+range remains unknown; equal-source consecutive tags have an empty range. GitHub's
+300-file compare limit is visible independently of paginated commit/PR membership.
 
-For selected-release drafts, audience eligibility, copying and separate
-publication, see [D.4 release notes](../releases-notes.md).
+To keep refresh latency and the shared GitHub budget bounded, observations cache
+for one minute. Each refresh advances the latest tag and the selected tag (or one historical tag);
+other tags remain selectable with explicit pending/unknown evidence. Catalogs
+paginate up to ten pages and report partial coverage at that limit. Source loss
+retains last-known observations with a visible unknown state. Missing or unreadable
+GitHub data never becomes an assertion that there are no releases.
 
-Every V3 surface ships in D.2. Clearly labelled synthetic test-fixture screenshots
-cover the failed/manual acceptance drawer and populated eligible-notes compositions
-that only D.3/D.4 can supply with real data. Fixtures are never mixed into normal
-reads. **The full real-data screenshot gate in controlling handoff section E
-remains the bar before the card is Done, after D.3/D.4.**
+A successful component workflow is **awaiting PROD verification**, exactly as the
+native Release body states. Neither a tag, published Release nor green Actions
+run supplies an exact deployed component/runtime identity or feature-specific
+acceptance. The reader creates no synthetic deployment receipts. Delivery and
+acceptance stay Unknown until those proofs exist; Customer notes omit them.
+Existing [D.3 contracts](../releases-acceptance.md) and [D.4 draft
+notes](../releases-notes.md) keep their acceptance and audience rules.
 
-For isolated composition proof, bundle `test-fixtures/releases/v3-preview.tsx`
-with esbuild into a scratch directory and open its standalone HTML wrapper. The
-fixture entry is never a production app route. Unit tests exercise release
-selection, many-to-many joins, incomplete evidence, note exclusion, drawer focus
-restoration, source loading and scoped search. Native modal dialogs supply focus
-containment and Escape; the browser comparison covers desktop and phone layouts.
+The live API does not read `releases/reconciliation.json` or coordinator exports.
+The old export reader remains for historical CLI fixtures/tests. The legacy
+Notion writer's scheduled pass is disabled and the API reports review-only.
+No GitHub/Notion writes, workflow dispatch, publication or production changes
+are performed by this source. The following export/activation contracts are
+**historical**, not instructions for configuring the live Releases view.
 
-The prior opt-in activation proposal is obsolete under the controlling handoff.
-The legacy default-OFF writer below remains untouched and must not be activated
-as part of D.2. Its implementation description is historical, not the new
-acceptance-completion policy or an activation recommendation.
+Native upstream contracts:
+[release workflow](https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/release-production.yml),
+[body generator](https://github.com/fortresspower/cmsandbox/blob/main/.github/scripts/releases/native-release.mjs),
+[non-deploying proof](https://github.com/fortresspower/cmsandbox/blob/main/docs/releases/github-native-release-proof.md),
+[current operator guide](https://github.com/fortresspower/cmsandbox/blob/main/docs/releases/github-native-release-guide.md).
 
-## Associations
-
-The reader imports explicit GitHub PR URLs in operational and Done cards' `Link`, `GitHub`,
-`GitHub PRs` and `Pull requests` properties. It does not guess links from titles,
-similar worker assignments or prose. The shared join also accepts confirmed, current, explicit Notion First Mate tasks claims for exact worker executions with registered PRs; unverified, conflicting and historical claims do not create active edges. PR Operations uses this same association projection (see `src/shared/releases.ts`). Done cards retain their explicit associations for release history; archived and trashed cards are excluded. This read does not backfill or modify cards.
-A missing declaration remains a named source gap; no work row or relationship is guessed.
-
-Additional many-to-many associations and local exclusions are audited in
-`<getConfigRoot()>/releases/associations.json`. The append-only event history
-records a retry ID, PR URL, card ID, link/unlink, authenticated owner, UTC time
-and reason. Unlink locally excludes that edge while retaining its Notion source
-and audit history; it does not edit Notion. A later link can restore it. These manual events apply after automatic associations. An
-unreadable/corrupt audit is reported visibly and never overwritten as an empty
-store. Local audit persistence uses atomic replacement under the existing single
-server/config-root boundary. There is no shared database or new service.
-
-The retained link/unlink API uses the same `ask.ownerLogins` and trusted local
-Tailscale Serve identity boundary as Ask: the backend must be loopback-only behind the tailnet proxy.
-The UI handshake and allowed browser origin are required for writes. Only cards
-in the authorized Notion source can be linked. Read-only operation remains
-available without configured owner logins. A directly exposed backend must never
-trust a client-supplied Tailscale identity header (see [Ask](ask.md)).
-
-## Evidence and current boundaries
-
-GitHub supplies PR title, captured head and base branch, merged state/time and effective merge commit. Reads
-use the shared scalar reader (gh-axi by default, or the live Reader broker described
-in the [installed PR actions guide](../pr-actions.md)), at most four PR reads per refresh and
-no repository crawl. Successful merged identities cache for ten minutes so a
-bounded reader can cover the queue; open/failed reads retry after one minute.
-Failures retain visibly stale facts. The navigation badge's legacy queue count
-are unknown (`?`) while any association's GitHub state is unresolved, the Notion
-association source or worker PR source is stale, partial or unavailable, or the local association
-audit is unreadable. Collection-level source warnings remain visible even when
-no PRs are known; an incomplete observation never becomes a complete zero.
-The eventual count is unique merged PRs awaiting
-production evidence, not cards or repeated group references.
-
-## Read-only reconciliation
-
-Releases now computes per-PR/component shipment and per-card **dry-run** eligibility.
-`GET /api/releases/reconciliation` returns the legacy aggregate report;
-the page uses the selected-release projection from `GET /api/releases`. GET never
-writes cards, comments, Discuss requests or GitHub. Replaying the
-same observations produces the same report ID and decisions. The separately scheduled writer remains OFF unless the operator enables it;
-this endpoint never invokes that writer.
-
-A PR is shipped only when every explicit required target has a successful current
-production receipt and GitHub's effective merge commit is an ancestor of that
-component's deployed source. A digest without source provenance stays unknown.
-A merged PR absent from deployed source remains In Queue. Wrong repository,
-environment, target/component, missing mapping, partial/skipped/failed deployment,
-rollback, known disabled flag, cherry-pick without provenance, or revert prevents
-fulfillment. Standard Git revert messages naming the effective merge or a commit
-introduced by that merge are detected in descendant history;
-other known release exceptions must be published by the evidence source or
-listed on the requirement. No title matching, LLM judgment or tag-only inference
-is used.
-
-A card is eligible to **would-complete** only in `Waiting for Prod Release`, with
-complete association sources and *all* linked PR/target requirements proven live.
-The optional existing Notion checkbox named exactly `Requires production
-verification`, when true, instead produces **would-verify**, including the owner.
-The legacy read-only proposal remains available in the API; generating it performs no Discuss or status action.
-Missing checkbox means no opt-in verification requirement; the reader does not
-create it. Other Notion statuses cannot be completed by this report; a confirmed
-unresolved verification route can remain visible after transition to In Progress.
-The writer requires the checkbox schema and fresh current production evidence;
-rollout requires coordinated board-guide/PM Bot updates.
-
-### Default-OFF transition and Decisions review
-
-`GET /api/releases/automation` and `automation` on the Releases collection return
-a pure, deterministic plan reporting the configured mode (`review-only` or
-`automatic`). Reading the plan never executes it. It proposes `Waiting for Prod Release`
-→ `Done` for eligible unflagged cards. An opted-in card instead proposes
-`Waiting for Prod Release` → `In Progress` with explicit production-check context
-and a draft for its current responsible owner. It never proposes completion of
-an opted-in card. Opening a drawer, navigating Discuss, sending Ask, or replaying the
-report does not record a successful check. Verification remains open until the
-owner explicitly records the result through the existing card workflow. Cards in
-other statuses, archived cards and unresolved requirements cannot be transitioned.
-A missing verification owner holds that card visibly without preventing a
-neighboring eligible unflagged card's Done proposal.
+## Historical coordinator reconciliation and writer (inactive)
 
 The optional trusted operator file
 `<getConfigRoot()>/releases/automation.json` is separate from deployment evidence:
@@ -167,11 +76,10 @@ The optional trusted operator file
 { "version": 1, "enabled": false }
 ```
 
-Omitting the file defaults to OFF. Invalid/unreadable settings remain OFF with a
-visible warning. `enabled: true` enables a deterministic pass every 60 seconds in
-the existing backend. There is no browser activation/execute endpoint. GET still
-only reports legacy proposals. Do not enable this obsolete opt-in proposal under
-the controlling handoff. The [historical activation packet](../releases-activation.md)
+The historical writer settings reader defaults to OFF and rejects invalid or
+unreadable settings. The live API ignores this file and the backend no longer
+schedules the writer; `enabled: true` does not activate it. There is no browser
+activation/execute endpoint. GET only reports legacy proposals. The [historical activation packet](../releases-activation.md)
 records the previous implementation and evidence limits; D.5 owns replacement
 policy and a separate later owner activation decision.
 
@@ -313,7 +221,7 @@ Known flags/reverts/cherry-picks or other exceptions are explicit strings in
 
 ### Consume cmsandbox coordinator records
 
-The native adapter consumes the existing coordinator records; it does not rebuild
+The historical coordinator adapter consumes the existing coordinator records; it does not rebuild
 its approval or deployment machinery. Export current `control.json`, its committed
 journal chain, and referenced frozen objects from
 `s3://fortresspower-cmsandbox-release-prod-298117917676/coordinator/production/v1/`.
@@ -371,7 +279,7 @@ The directory contains `objects/<digest>.json` and, when production execution
 exists, `control.json` and `journal/<digest>.json`. Preserve journal S3 LastModified
 as file mtime. The reader follows the committed chain and loads all digest-named
 frozen objects in the same directory, verifying native content-addressed keys.
-Frozen candidate/plan pairs appear in Plan even before any production binding;
+The historical projection includes frozen candidate/plan pairs before any production binding;
 missing `control.json` means an empty journal. Include these pre-deployment objects
 in exports rather than exporting only journal references. Unfrozen plans never
 become RCs. Superseded bindings certify nothing. Reads are
@@ -379,7 +287,7 @@ bounded to 1,000 objects, 8 MiB per object and 32 MiB total so an accidentally
 unbounded export cannot exhaust the HTTP process. An incomplete export is visibly an error;
 provide a bounded current chain to continue.
 
-These directories are explicitly historical snapshots: the UI labels the exact
+These directories are explicitly historical snapshots: their legacy projection retains the exact
 as-of time, `sourceStatus` is `snapshot`, and no writer can execute their
 proposals even if enabled. The snapshot has no freshness extension pretending it
 is current PROD. A later current-state export can use the existing normalized

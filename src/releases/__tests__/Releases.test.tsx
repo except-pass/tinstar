@@ -59,7 +59,7 @@ describe('release-first V3 surfaces', () => {
     expect(within(drawer).getByRole('link', { name: 'Open linked card ↗' })).toHaveAttribute('href', expect.stringContaining('?card='))
     const close = within(drawer).getByRole('button', { name: 'Close details' })
     close.focus(); fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
-    expect(within(drawer).getByText('Exact coordinator identities')).toHaveFocus()
+    expect(within(drawer).getByText('Exact source identities')).toHaveFocus()
     fireEvent.keyDown(document.activeElement!, { key: 'Tab' }); expect(close).toHaveFocus()
     fireEvent.click(close)
     expect(screen.queryByRole('dialog')).toBeNull(); expect(row).toHaveFocus()

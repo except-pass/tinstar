@@ -61,7 +61,12 @@ there is no shell interpolation. Review the workflow/ref again when its safety
 or assertion semantics change. Workflow success must mean every required
 feature assertion succeeded, with unsafe/missing assertions failing the workflow.
 
-Owner prerequisites: current authoritative coordinator exports, complete exact
+The live GitHub-native source supplies release activity, not current deployed-target
+proof. Acceptance execution therefore remains held; existing contracts and prior
+records remain readable. The following operator path describes the historical
+receipt-backed integration and is not activated by the native source.
+
+Owner prerequisites for that integration: current authoritative deployment receipts, complete exact
 PR-to-card/target associations, an existing approved safe workflow and service
 credentials for `gh-axi` with Actions read/write access to that repository.
 Historical snapshots support review but cannot authorize dispatch or a new human
@@ -105,7 +110,7 @@ repository, event, ref and that the run began after target deployment.
 
 Execution records use `workflow-create-receipts.json`, the existing Tin Star
 workflow receipt store, under `release-acceptance:` keys. Contracts remain card
-owned; deployments remain coordinator owned. There is no new release ledger.
+owned; deployment evidence follows the [Releases source contract](features/releases.md#github-native-source-and-evidence-boundaries). There is no new release ledger.
 Each record binds the exact release attempt, required merge identities, exact
 target receipts, the check's assertion/reference/fixture and the approved resolved
 workflow repository, workflow, ref and input values. Source ordering, JSON

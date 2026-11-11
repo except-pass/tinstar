@@ -19,7 +19,7 @@ For worker-to-card associations, see [Notion-owned worker links](docs/notion-wor
 
 Use **Search** in the Overview toolbar or **Cmd/Ctrl+K** to find names, IDs and text. Use the adjacent Pattern Dial for operational patterns. See [Smart Search](docs/features/overview.md#smart-search-core) for matching, coverage and restore behavior.
 
-Use the [Releases page](docs/features/releases.md) to select a frozen candidate in Plan or an observed production release in Verify, then inspect its Changes, Acceptance and Release notes. The reference covers source configuration, evidence limits and the legacy default-OFF writer.
+Use the [Releases page](docs/features/releases.md) to inspect Changes, Acceptance and draft Release notes. The reference explains Plan and Verify, the GitHub-native source and its evidence limits.
 
 For actions on selected PRs in PR Operations, see the [PR actions guide](docs/pr-actions.md).
 

@@ -1,27 +1,16 @@
 import type { ReleaseObject } from '../../shared/releaseObjects'
 import { releasePull, type ReleasePull } from '../../shared/releases'
-import { readGithubScalars } from '../reconciliation/queuePulls'
-import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
+import { githubJson } from '../pulls/github'
 
-/** Same authenticated read transport as Releases PR/ancestry observations. */
-export async function readReleaseRows(path: string, projection: string): Promise<unknown> {
-  try {
-    if (liveActionsEnabled()) return await liveReaderJson(path)
-    const response = await readGithubScalars(path, `{rows:(${projection}|tojson)}`)
-    if (typeof response.rows !== 'string') throw new Error('Incomplete response')
-    return JSON.parse(response.rows)
-  } catch {
-    // CLI/broker stderr is not presentation data and can contain private details.
-    throw new Error('GitHub release-history read unavailable; check service PATH, credentials and repository access')
-  }
-}
+/** Same broker/CLI JSON transport as the PR screen. */
+export const readReleaseRows = githubJson
 type Read = typeof readReleaseRows
 const sha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
-const version = (value: string) => /^v?(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number)
+const version = (value: string) => /^v(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number)
 const compareVersions = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!
 interface Range {
   membership: ReleaseObject['membership']; pulls: Map<string, ReleasePull>
-  commits: string[]; cursor: number; page: number; total: number; retryAt: number
+  files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number
 }
 /** Incremental history read: eight commits per range/refresh, four concurrent GETs.
  * Commit-associated PRs must have their effective merge in the exact Git range.
@@ -30,35 +19,36 @@ export class ReleaseMembershipReader {
   private ranges = new Map<string, Range>()
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
-  async get(repository: string, source: string | null, tag: string) {
+  async get(repository: string, source: string | null, tag: string, tags?: Array<{ name: string; commit: { sha: string } }>) {
     const key = `${repository}:${source}:${tag}`
     const current = this.ranges.get(key)
     if (current && (current.membership.status === 'complete' || current.retryAt > this.now())) return current
     const existing = this.pending.get(key)
     if (existing) return existing
-    const work = this.advance(repository, source, tag, current).finally(() => this.pending.delete(key))
+    const work = this.advance(repository, source, tag, current, tags).finally(() => this.pending.delete(key))
     this.pending.set(key, work)
     return work
   }
-  private async advance(repository: string, source: string | null, tag: string, previous?: Range) {
-    const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
+  private async advance(repository: string, source: string | null, tag: string, previous?: Range, tags?: Array<{ name: string; commit: { sha: string } }>) {
+    const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !sha(source)) throw new Error('Release source SHA is missing; Changes cannot be determined')
       if (!range.membership.baselineSha) {
-        const tags = await this.read(`/repos/${repository}/tags?per_page=100`, '.')
-        if (!Array.isArray(tags)) throw new Error('Previous release tags are unavailable')
+        const availableTags = tags ?? await this.read(`/repos/${repository}/tags?per_page=100`, '.')
+        if (!Array.isArray(availableTags)) throw new Error('Previous release tags are unavailable')
         const currentVersion = version(tag)
-        const candidates = tags.filter(row => row && typeof row.name === 'string' && version(row.name) && sha(row.commit?.sha) && row.commit.sha !== source && currentVersion && compareVersions(version(row.name)!, currentVersion) < 0)
+        const candidates = availableTags.filter(row => row && typeof row.name === 'string' && version(row.name) && sha(row.commit?.sha) && currentVersion && compareVersions(version(row.name)!, currentVersion) < 0)
           .sort((a, b) => compareVersions(version(b.name)!, version(a.name)!))
-        for (const candidate of candidates) {
-          const history = await this.read(`/repos/${repository}/compare/${candidate.commit.sha}...${source}?per_page=100&page=1`, '{status,total_commits,merge_base_commit:{sha:.merge_base_commit.sha},commits:[.commits[]|{sha}]}') as Record<string, any>
-          if (history.status !== 'ahead' || history.merge_base_commit?.sha !== candidate.commit.sha) continue
+        for (const candidate of candidates.slice(0, 1)) {
+          const history = await this.read(`/repos/${repository}/compare/${candidate.commit.sha}...${source}?per_page=100&page=1`, '{status,total_commits,merge_base_commit:{sha:.merge_base_commit.sha},commits:[.commits[]|{sha}],files:[.files[]?|{filename}]}') as Record<string, any>
+          if (!['ahead', 'identical'].includes(history.status) || history.merge_base_commit?.sha !== candidate.commit.sha) throw new Error('Consecutive release tags have no proven linear Git range; Changes remain unknown')
           if (!Number.isInteger(history.total_commits) || !Array.isArray(history.commits) || !history.commits.every((row: { sha: unknown }) => sha(row.sha))) throw new Error('Git release comparison is incomplete')
           range.membership.baseline = candidate.name; range.membership.baselineSha = candidate.commit.sha
+          range.files = (history.files ?? []).flatMap((file: { filename?: string }) => typeof file.filename === 'string' ? [file.filename] : [])
           range.commits = history.commits.map((row: { sha: string }) => row.sha); range.total = history.total_commits; range.page = 1
           break
         }
-        if (!range.membership.baselineSha) throw new Error('No previous version tag with proven Git ancestry was found in the available tag page; supply the missing release history')
+        if (!range.membership.baselineSha) throw new Error('No previous version tag was found in the available history; Changes remain unknown')
       }
       if (range.cursor >= range.commits.length && range.commits.length < range.total) {
         const page = await this.read(`/repos/${repository}/compare/${range.membership.baselineSha}...${source}?per_page=100&page=${range.page + 1}`, '{commits:[.commits[]|{sha}]}') as Record<string, any>
