@@ -2,7 +2,8 @@
 
 Acceptance is required for every release-bound change. This slice records
 contracts and execution evidence; the Notion writer remains OFF. Closure,
-backfill, editorial notes and publication remain later rollout steps.
+backfill and closure remain later rollout steps. Optional editorial notes and
+separate default-OFF publication are documented in [D.4 notes](releases-notes.md).
 
 ## Contract on existing work
 

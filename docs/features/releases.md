@@ -389,3 +389,11 @@ is current PROD. A later current-state export can use the existing normalized
 The [activation packet](../releases-activation.md#evidence-and-limits-of-this-slice)
 owns the captured v1.24.0 proof, exact component mapping and remaining activation
 prerequisites.
+
+### D.4 release notes
+
+[Release notes](../releases-notes.md) documents release-scoped Internal/Customer
+drafts, optional wording in the D.3 contract, exclusion reasons, and the separate
+default-OFF GitHub publication command. Copy is read-only. Publication requires
+an existing exact coordinator tag and explicit owner activation after listener
+review; it never creates a tag or enables the D.1 Notion writer.

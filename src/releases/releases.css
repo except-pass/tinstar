@@ -241,3 +241,9 @@
 .rel-v3 .acceptance-check{border-top:1px solid var(--border);margin-top:15px;padding-top:10px}
 .rel-v3 .check-evidence{border-left:2px solid var(--border);padding-left:10px;margin-top:12px}
 .rel-v3 .check-history{font-size:11px;color:var(--secondary);margin-top:12px}
+.rel-v3 .note-exclusions{margin-top:14px;font-size:11px;color:var(--secondary)}
+.rel-v3 .note-exclusions summary{cursor:pointer}
+.rel-v3 .note-exclusions ul{padding-left:18px}
+.rel-v3 .note-exclusions li{padding:5px 0}
+.rel-v3 .note-exclusions strong{color:var(--ink);font-weight:500}
+.rel-v3 .note-exclusions span{display:block;margin-top:3px}
