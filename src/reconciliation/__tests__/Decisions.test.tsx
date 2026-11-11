@@ -25,6 +25,30 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 describe('Decisions', () => {
+  it('retains the exact shared-card request across reload while the queue loads', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [] }))))
+    const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }, second = { ...queue.items[0]!, id: 'request-b' }
+    queue.items = [first, second]; queue.needsWill = undefined
+    workspace.value.queue = queue
+    state.selection = { kind: 'card', id: first.cardIds[0]! }
+    const view = render(<Decisions />)
+    fireEvent.click(view.container.querySelectorAll('.decisions-row')[1]!)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    view.unmount()
+
+    workspace.value.queue = null
+    const reloaded = render(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    workspace.value.queue = queue
+    reloaded.rerender(<Decisions />)
+    expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', second.id)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+
+    state.selection = { kind: 'card', id: fixtureId(5) }
+    reloaded.rerender(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBeNull()
+    await act(async () => {})
+  })
   it('finds conditional cards and sends canonical shared focus without opening a second Desk', () => {
     const { container } = render(<Decisions />)
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Roadmap' } })

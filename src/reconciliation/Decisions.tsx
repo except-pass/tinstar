@@ -59,8 +59,9 @@ export function Decisions() {
     return { key: item.id, item, id, ...decisionCopy(item, card ? cardTitle(card) : item.title) }
   })
   useEffect(() => {
+    if (!queue) return
     setOpenedId(current => !selectedId || entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId) ? current : null)
-  }, [selectedId])
+  }, [selectedId, queue])
   const queueCardId = state.queueOpen ? state.queueCardId : null
   const selected = state.queueOpen
     ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
