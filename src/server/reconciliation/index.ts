@@ -213,8 +213,15 @@ export class ReconciliationSources {
     const warnings: string[] = []
     const reviews = reviewView(intentions, notes)
     try {
-      const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet: [] })
+      void this.fleetSnapshot().catch(() => {})
+      const fleet = this.fleet.map(({ source, observation }) => ({
+        source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' },
+        observation: observation.peek() ?? { status: 'unknown' as const, coverage: 'unknown' as const, data: null,
+          observedAt: null, attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet association read pending' },
+      }))
+      const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
       const links = releaseAssociations(scene, await this.associations.read())
+      if (!links.associationsComplete) warnings.push('Review PR association coverage is incomplete or stale; linked worker duplicates may remain until fleet evidence is available.')
       const saved = await this.workflow.savedReviewAssociations()
       for (const item of reviews.items) item.linkedPulls = [...new Set([
         ...links.pulls.filter(pull => pull.links.some(link => link.active && link.cardId === item.cardId)).map(pull => pull.url),

@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ReconciliationSources, handleReconciliationRequest } from '../../server/reconciliation'
+import * as fleetSources from '../../server/reconciliation/fleet'
+import { CachedObservation, type ReadResult } from '../../server/reconciliation/observation'
 import { WorkReader } from '../../server/reconciliation/workReader'
 import { CreationReceipts } from '../../server/reconciliation/workflowReceipts'
 import { AssociationStore } from '../../server/releases/associations'
@@ -154,4 +156,68 @@ it('suppresses linked unknown PR actions through cold HTTP reads and restart whi
       }
     }
   } finally { query.mockRestore(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('projects verified worker-only PR associations without awaiting the full queue or another fleet home', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'review-worker-ui-'))
+  const fixture = fixtureSources()
+  const home = fixture.fleet[1]!
+  const card = fixture.intentions.data!.cards.find(row => row.id === '1'.padStart(32, '0'))!
+  card.properties.Status!.value = 'Ready for Review'
+  const worker = home.observation.data!.tasks[0]!
+  const pr = 'https://github.com/except-pass/tinstar/pull/45'
+  worker.pr.url = pr
+  fixture.intentions.data!.cards = [card]
+  const data = home.observation.data!
+  let finish!: (value: ReadResult<typeof data>) => void
+  const read = vi.fn(() => new Promise<ReadResult<typeof data>>(resolve => { finish = resolve }))
+  const available = new CachedObservation(read, 20_000, 60_000, 'Fixture unavailable')
+  const hung = new CachedObservation<typeof data>(() => new Promise(() => {}), 20_000, 60_000, 'Fixture pending')
+  const fleet = vi.spyOn(fleetSources, 'fleetObservation').mockImplementation(source => source.home === home.source.home ? available : hung)
+  const query = vi.spyOn(WorkReader.prototype, 'query').mockResolvedValue(fixture.intentions)
+  const network = vi.fn<typeof fetch>(() => { throw new Error('No evidence history needed') })
+  const sources = new ReconciliationSources({ fleet: [home.source, fixture.fleet[2]!.source], warnings: [] }, network, undefined, root)
+  const heavy = vi.spyOn(sources, 'queue').mockImplementation(() => new Promise(() => {}))
+  void sources.queue()
+  const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/queue?view=reviews`
+  const attention: AttentionCard = { key: 'worker-review', homeIndex: 0, home: home.source.home, taskId: String(worker.id), decisionKey: null,
+    holdId: null, dismissal: null, type: 'review', headline: 'Worker PR', detail: '', workerKey: null, workerId: String(worker.id),
+    ageDays: null, prUrl: pr, repository: 'except-pass/tinstar', prNumber: 45, reviewStatus: 'unknown', ci: 'unknown' }
+  try {
+    const cold = (await (await fetch(url)).json()).data
+    expect(cold.reviews.complete).toBe(true)
+    expect(cold.reviews.items.map((item: { cardId: string }) => item.cardId)).toEqual([card.id])
+    expect(cold.reviews.items[0].submission).toBeNull()
+    expect(cold.reviews.items[0].linkedPulls).toEqual([])
+    expect(cold.warnings).toContainEqual(expect.stringContaining('association coverage is incomplete'))
+    show(cold.reviews, [attention])
+    expect(screen.getByRole('article', { name: String(card.properties.Name!.value) })).toBeVisible()
+    cleanup()
+    finish({ data, observedAt: new Date().toISOString(), coverage: 'complete' })
+    await available.get()
+    const warm = (await (await fetch(url + '&refresh=1')).json()).data
+    expect(warm.reviews.items[0].linkedPulls).toEqual([pr])
+    expect(warm.warnings).toContainEqual(expect.stringContaining('association coverage is incomplete'))
+    show(warm.reviews, [attention, { ...attention, key: 'open', headline: 'Genuine open worker PR', reviewStatus: 'open' }])
+    expect(screen.queryByText('Worker PR')).toBeNull()
+    expect(screen.getByText('Genuine open worker PR')).toBeVisible()
+    expect(screen.getAllByRole('article')).toHaveLength(2)
+    cleanup()
+    const links = JSON.parse(String(card.properties['First Mate tasks']!.value))
+    links.tasks[0].first_observed_spawn_gen = 'different-generation'
+    card.properties['First Mate tasks']!.value = JSON.stringify(links)
+    const conflicting = (await (await fetch(url)).json()).data
+    expect(conflicting.reviews.items[0].linkedPulls).toEqual([])
+    show(conflicting.reviews, [attention])
+    expect(screen.getByText('Worker PR')).toBeVisible()
+    expect(heavy).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(network).not.toHaveBeenCalled()
+  } finally {
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    fleet.mockRestore(); query.mockRestore()
+    await rm(root, { recursive: true, force: true })
+  }
 })
