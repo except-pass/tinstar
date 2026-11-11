@@ -128,7 +128,7 @@ test.afterAll(async () => {
   await client?.close()
   await new Promise<void>(resolve => facadeServer?.close(() => resolve()))
   await new Promise<void>(resolve => server?.close(() => resolve()))
-  await rm(root, { recursive: true, force: true })
+  await rm(root, { recursive: true, force: true, maxRetries: 3 })
 })
 
 test('Smart Search drafts preserve MCP organizer-group selections and saved search on dismissal', async ({ page }) => {

@@ -233,7 +233,7 @@ test('real Ask HTTP service persists independent typed questions and enforces so
     expect((await call('requests')).body.data).toHaveLength(2)
     await page.screenshot({ path: testInfo.outputPath('independent-answers.png'), fullPage: true })
     await testInfo.attach('Live HTTP transcript', { body: JSON.stringify(transcript, null, 2), contentType: 'application/json' })
-  } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true }) }
+  } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true, maxRetries: 3 }) }
 })
 
 for (const width of [1440, 390]) {
@@ -459,7 +459,7 @@ test('live Desk archive survives polling, immediate Undo, unseen follow-up, rest
     expect((await call('requests')).every((row: { conversation_id: string }) => row.conversation_id === first.conversation_id)).toBe(true)
     writeFileSync(testInfo.outputPath('archive-read-http.json'), JSON.stringify(transcript, null, 2))
     await testInfo.attach('Archive and read HTTP transcript', { path: testInfo.outputPath('archive-read-http.json'), contentType: 'application/json' })
-  } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true }) }
+  } finally { liveAsk = undefined; rmSync(root, { recursive: true, force: true, maxRetries: 3 }) }
 })
 
 test('retained worker note exposes targeted retry and reply after its worker leaves the fleet', async ({ page }, testInfo) => {
@@ -629,7 +629,7 @@ else:
     }
   } finally {
     if (process.env.REJECTION_EVIDENCE_DIR) writeFileSync(resolve(process.env.REJECTION_EVIDENCE_DIR, `${process.env.REJECTION_CAPTURE_PREFIX ?? 'after'}-http.json`), JSON.stringify(transcript, null, 2))
-    liveAsk = undefined; rmSync(root, { recursive: true, force: true })
+    liveAsk = undefined; rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
 

@@ -53,7 +53,7 @@ async function startCockpit(request: APIRequestContext, names: string[], kind: D
     // macOS rmSync throws ENOTEMPTY while the signaled server still has this temp home open.
     for (let attempt = 0; ; attempt += 1) {
       try {
-        rmSync(root, { recursive: true, force: true })
+        rmSync(root, { recursive: true, force: true, maxRetries: 3 })
         return
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code

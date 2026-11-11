@@ -115,7 +115,7 @@ test.afterEach(async () => {
     server.kill()
     await closed
   }
-  if (root) await rm(root, { recursive: true, force: true })
+  if (root) await rm(root, { recursive: true, force: true, maxRetries: 3 })
 })
 async function screenshot(page: Page, name: string) {
   const directory = process.env.TINSTAR_FLOOR_SCREENSHOTS

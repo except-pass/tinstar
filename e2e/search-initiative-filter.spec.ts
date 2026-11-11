@@ -32,7 +32,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   server?.kill()
   if (server && server.exitCode === null) await new Promise<void>(resolve => server.once('exit', () => resolve()))
-  if (root) await rm(root, { recursive: true, force: true })
+  if (root) await rm(root, { recursive: true, force: true, maxRetries: 3 })
 })
 
 const ids = (page: Page) => page.locator('.ov-card').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute('data-entity-id')))].sort())

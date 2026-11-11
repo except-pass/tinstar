@@ -185,6 +185,6 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

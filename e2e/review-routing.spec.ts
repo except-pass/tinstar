@@ -31,7 +31,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   server?.kill()
   if (server && server.exitCode === null) await new Promise<void>(resolve => server.once('exit', () => resolve()))
-  if (root) await rm(root, { recursive: true, force: true })
+  if (root) await rm(root, { recursive: true, force: true, maxRetries: 3 })
 })
 
 for (const mobile of [false, true]) test(`existing review drawer supports ${mobile ? 'touch' : 'keyboard'} acceptance and truthful coverage`, async ({ page }) => {

@@ -111,6 +111,6 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
   } finally {
     server?.kill('SIGTERM')
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server'], { stdio: 'ignore' }) } catch { /* private server absent */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

@@ -156,7 +156,14 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
   } finally {
     server?.kill('SIGTERM')
+    if (server && server.exitCode === null) {
+      await Promise.race([
+        new Promise<void>(resolve => server?.once('exit', () => resolve())),
+        new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+      ])
+    }
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server'], { stdio: 'ignore' }) } catch { /* private server absent */ }
-    rmSync(root, { recursive: true, force: true })
+    // Node's recursive rm throws ENOTEMPTY when a file appears mid-delete.
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

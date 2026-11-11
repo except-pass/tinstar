@@ -377,6 +377,6 @@ test('regression: private First Mate fleet, terminal input, cycling and window s
   } finally {
     server?.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* private server already gone */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
