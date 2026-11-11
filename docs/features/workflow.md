@@ -545,9 +545,11 @@ Ask replies may carry the same `decision_proposal` object with
 `source.kind: "ask-reply"` and `source.id` equal to their existing request/answer
 ID. Ask's selection input remains `{answer_id,action_id,client_key}`. Publications
 in work history resolve to a durable source-derived answer ID. At selection time
-the server verifies current queue membership, source binding/generation, proposal
-revision, freshness and owner authorization, then imports the publication into
-the same request's Ask thread and records the ordinary idempotent selection.
+the shared selection writer forces a fresh, non-cached source read and verifies
+current queue membership, exact source binding/generation, proposal revision,
+freshness and owner authorization before recording any new choice. It imports
+the publication into the same request's Ask thread and records the ordinary
+idempotent selection.
 Importing a publication never invents an owner message or sends it to First Mate.
 For ordinary actions, the selection is the only new outbound turn. Merge actions
 use the [Clawson handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge)
