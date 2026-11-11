@@ -34,6 +34,7 @@ export interface QueueSource {
   coverage: Observation<unknown>['coverage']
 }
 export interface QueueItem {
+  currentProposalAnswerId?: string | null
   proposalHistoryComplete?: boolean
   proposals?: Array<{ answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }>
   proposal?: { answer_id: string; value: import('../../shared/decisionProposal').DecisionProposal }

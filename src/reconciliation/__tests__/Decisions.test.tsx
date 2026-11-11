@@ -681,3 +681,26 @@ it('keeps an unrelated conversation opened in global Desk while the decision sel
   expect(screen.getByRole('button', { name: 'Collapse answer' })).toBeVisible()
   expect(screen.getAllByRole('textbox')).toHaveLength(1)
 })
+
+it('keeps a visible work choice read-only in Decisions and Desk when another owner has the current proposal', async () => {
+  const queue = fixtureQueue(), id = '11111111-1111-4111-a111-111111111111'
+  const item = { ...queue.items[0]!, id: 'shared-request', readiness: 'ready-now' as const, currentProposalAnswerId: id, sources: [{ kind: 'firstmate' as const, id: 'source', field: 'question', status: 'fresh' as const, coverage: 'complete' as const, observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }] }
+  const proposal = { answer_id: id, value: fixtureProposal(item.id, item.cardIds[0]) }
+  const projected = { ...item, proposal, proposals: [proposal] }
+  queue.items = [projected]; queue.needsWill = undefined
+  workspace.value.queue = queue; workspace.value.openDesk = vi.fn()
+  const record = { request_id: id, conversation_id: id, published_proposal: true, question: 'Public work recommendation', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Shared request', url: null, observed_at: null }, target: { kind: 'decision', id: item.id }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: proposal.value.question, detail: proposal.value.rationale, references: [], suggested_actions: proposal.value.actions, decision_proposal: proposal.value }, error: null, read_at: new Date().toISOString(), dismissed_at: null }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record] }))))
+  const app = () => <AskProvider decisionItems={queue.items} scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const view = render(app())
+  await act(async () => {})
+  expect(screen.getByRole('button', { name: /^Proceed:/ })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: /Full conversation/ }))
+  expect(screen.getAllByRole('button', { name: /^Proceed:/ })).toHaveLength(2)
+  for (const button of screen.getAllByRole('button', { name: /^Proceed:/ })) expect(button).toBeEnabled()
+  projected.currentProposalAnswerId = '22222222-2222-4222-a222-222222222222'
+  view.rerender(app())
+  for (const button of screen.getAllByRole('button', { name: /^Proceed:/ })) expect(button).toBeDisabled()
+  expect(screen.queryByText('PRIVATE_OWNER_RATIONALE')).toBeNull()
+  expect(screen.queryByText('PRIVATE_OWNER_MESSAGE')).toBeNull()
+})

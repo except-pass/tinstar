@@ -50,6 +50,7 @@ export function decisionFresh(item: import('../server/reconciliation/queue').Que
 
 export function decisionProposalReady(item: import('../server/reconciliation/queue').QueueItem | undefined, proposal: { answer_id: string; value: DecisionProposal } | undefined, answer: Pick<import('./ask').AskItem, 'context'> | undefined, now: number) {
   if (!item || !proposal || !decisionFresh(item, now) || proposal.value.request_key !== item.id || proposal.value.card_id && !item.cardIds.includes(proposal.value.card_id)) return false
+  if (item.currentProposalAnswerId !== undefined && item.currentProposalAnswerId !== proposal.answer_id) return false
   if (proposal.value.source.kind === 'ask-reply') return proposal.value.source.id === proposal.answer_id && answer?.context.target?.kind === 'decision' && answer.context.target.id === item.id && answer.context.decision?.revision === decisionRequestRevision(item)
   return (item.proposals ?? (item.proposal ? [item.proposal] : [])).some(published => published.answer_id === proposal.answer_id && JSON.stringify(published.value) === JSON.stringify(proposal.value))
 }

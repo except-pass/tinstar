@@ -1900,7 +1900,7 @@ it('never delivers a conflicting direct Notion answer over an incomplete intent'
   expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Preserve another request')
 })
 
-it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask supersession', 'partial history'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
+it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask supersession', 'partial history', 'other-owner supersession'])('reconciles %s publications through queue projection and authenticated selection', async scenario => {
   const { AskApi } = await import('../../ask/routes')
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -1914,7 +1914,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   const q = { ...p, proposal_id: 'revision-q', published_at: '2026-11-11T00:00:00Z', source: { ...p.source, revision: '2' }, supersedes: scenario === 'unrelated' || scenario === 'legacy' ? null : p.proposal_id }
   const r = { ...q, proposal_id: 'revision-r', published_at: '2026-11-12T00:00:00Z', source: { ...p.source, revision: '3' }, supersedes: q.proposal_id }
   expect(await sources.updateWork({ ...f.request, ...(scenario === 'legacy' ? {} : { proposal: p }) } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
-  const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
+  const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test', 'second@example.test'], bridgeToken: 'x'.repeat(32) }))
   const server = createServer(async (req, res) => { if (!await asks.handle(req, res)) { res.writeHead(404); res.end() } }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as { port: number }).port
@@ -1938,18 +1938,29 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
     expect((await select(p)).status).toBe(200)
     return
   }
-  if (scenario === 'ask supersession') {
+  if (scenario === 'ask supersession' || scenario === 'other-owner supersession') {
     const { decisionContext } = await import('../../ask/decision')
     const { inboxRequestId } = await import('../../../shared/ask')
     sources.workflow.decisionDelivery = f.bridge
-    const turn = await asks.store.create('owner@example.test', crypto.randomUUID(), 'Revise this recommendation', decisionContext(item, { scene: 'decisions' }))
-    const askProposal = { ...q, proposal_id: turn.request_id, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: 'ask-q' }, supersedes: p.proposal_id }
+    const producer = scenario === 'other-owner supersession' ? 'second@example.test' : 'owner@example.test'
+    const turn = await asks.store.create(producer, crypto.randomUUID(), 'PRIVATE_OWNER_QUESTION', decisionContext(item, { scene: 'decisions' }))
+    const askProposal = { ...q, rationale: 'PRIVATE_OWNER_RATIONALE', proposal_id: turn.request_id, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: 'ask-q' }, supersedes: p.proposal_id }
     await asks.store.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'ask-q', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
-    await asks.store.ingest({ request_id: turn.request_id, reply: { id: 'ask-q', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Choose the revised route', detail: '', references: [], suggested_actions: [], decision_proposal: askProposal }) } })
+    await asks.store.ingest({ request_id: turn.request_id, reply: { id: 'ask-q', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'PRIVATE_OWNER_MESSAGE', detail: '', references: [], suggested_actions: [], decision_proposal: askProposal }) } })
     expect((await sources.proposalSource.read(id)).map(entry => entry.value.proposal_id)).toEqual(expect.arrayContaining([p.proposal_id, askProposal.proposal_id]))
     const projected = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
     expect(projected.readiness).toBe('ready-now')
     expect(projected.proposal).toBeUndefined()
+    expect(projected.currentProposalAnswerId).toBe(turn.request_id)
+    const { decisionProposalReady } = await import('../../../shared/decisionProposal')
+    expect(decisionProposalReady(projected, projected.proposals!.find(entry => entry.value.proposal_id === p.proposal_id), undefined, Date.now())).toBe(false)
+    if (scenario === 'other-owner supersession') {
+      const headers = { 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }
+      const visible = await fetch(`http://127.0.0.1:${port}/api/ask/requests`, { headers }).then(response => response.json())
+      expect(visible.data).toEqual([])
+      expect((await fetch(`http://127.0.0.1:${port}/api/ask/conversations/${turn.conversation_id}`, { headers })).status).toBe(404)
+      for (const privateText of ['PRIVATE_OWNER_QUESTION', 'PRIVATE_OWNER_RATIONALE', 'PRIVATE_OWNER_MESSAGE']) expect(JSON.stringify({ projected, visible })).not.toContain(privateText)
+    }
     expect((await select(p)).status).toBe(409)
     expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
     f.comments.push({ id: 'obsolete-direct-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued' }] })
@@ -1958,7 +1969,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
     const newerWork = { ...r, supersedes: askProposal.proposal_id }
     expect(await sources.updateWork({ ...f.request, request_id: 'publication-r', operation_id: 'publish-r', proposal: newerWork } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
     const response = await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: turn.request_id, action_id: 'proceed', client_key: crypto.randomUUID() }) })
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(scenario === 'other-owner supersession' ? 404 : 409)
     expect((await select(newerWork)).status).toBe(200)
     expect((await sources.queue()).needsWill!.find(row => row.id === item.id)?.proposal?.value.proposal_id).toBe(newerWork.proposal_id)
     return
