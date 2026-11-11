@@ -95,6 +95,7 @@ through the existing separately authorized release process, then rerun.
 
 Existing published notes or drafts are returned with their URL, never silently
 overwritten or published. Identical published content reports `already-published`.
+Line endings and surrounding whitespace are cosmetic on readback/replay.
 A differing existing record reports `existing-release; review in GitHub`; a
 draft reports `existing-draft; review in GitHub`. The owner can review/edit/close
 that record through GitHub's existing audited workflow, then rerun this command

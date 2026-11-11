@@ -49,6 +49,15 @@ describe('separate default-OFF GitHub publication', () => {
     await expect(f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved')).rejects.toThrow('No tag will be created')
     expect(f.create).not.toHaveBeenCalled()
   })
+  it('ignores provider line endings and surrounding whitespace on readback and replay', async () => {
+    const f = await setup(); await f.enable()
+    f.create.mockImplementationOnce(async (_repository, _tag, _title, body: string) => {
+      f.inspect.mockResolvedValue({ tagSha: f.release.sourceSha, release: { url: 'https://example.com/normalized', isDraft: false, description: body.trim().replace(/\n/g, '\r\n') } })
+    })
+    expect((await f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved')).status).toBe('published')
+    expect((await f.publisher.publish(f.release.id, 'customer', 'owner', 'Inspect replay')).status).toBe('already-published')
+    expect(f.create).toHaveBeenCalledTimes(1)
+  })
   it('supports an accepted component release without inventing a coordinator candidate', async () => {
     const f = await setup(); await f.enable(); f.release.candidateId = null; f.release.planId = null
     expect((await f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved exact component release')).status).toBe('published')

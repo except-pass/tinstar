@@ -20,6 +20,8 @@ export async function readPublicationSettings(root: string) {
   }
 }
 interface PublishedRelease { url: string; isDraft: boolean; description: string }
+// Provider newline normalization is cosmetic; compare the authored note content.
+const sameNotes = (actual: string, expected: string) => actual.replace(/\r\n/g, '\n').trim() === expected.replace(/\r\n/g, '\n').trim()
 export interface PublicationGithub {
   inspect(repository: string, tag: string): Promise<{ tagSha: string | null; release: PublishedRelease | null }>
   create(repository: string, tag: string, title: string, body: string): Promise<void>
@@ -91,13 +93,13 @@ export class ReleaseNotesPublisher {
     const save = async (status: string, url: string | null = null) => { await audit.put(key, JSON.stringify({ ...entry, status, url })); return { key, status, url } }
     if (existing.release) {
       // A replay or a lost create response is recovered by reading GitHub itself.
-      return save(existing.release.isDraft ? 'existing-draft; review in GitHub' : existing.release.description === plan.body ? 'already-published' : 'existing-release; review in GitHub', existing.release.url)
+      return save(existing.release.isDraft ? 'existing-draft; review in GitHub' : sameNotes(existing.release.description, plan.body) ? 'already-published' : 'existing-release; review in GitHub', existing.release.url)
     }
     await save('intent')
     try {
       await this.github.create(plan.repository, plan.tag, plan.title, plan.body)
       const confirmed = await this.github.inspect(plan.repository, plan.tag)
-      if (confirmed.tagSha !== plan.sourceSha || !confirmed.release || confirmed.release.isDraft || confirmed.release.description !== plan.body) throw new Error('Publication readback is not confirmed')
+      if (confirmed.tagSha !== plan.sourceSha || !confirmed.release || confirmed.release.isDraft || !sameNotes(confirmed.release.description, plan.body)) throw new Error('Publication readback is not confirmed')
       return await save('published', confirmed.release.url)
     } catch {
       await save('inconclusive')
