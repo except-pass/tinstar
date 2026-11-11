@@ -18,7 +18,7 @@ const readOnlyFetch: typeof fetch = (input, init) => {
 }
 const sources = new ReconciliationSources(loadReconciliationConfig(root), readOnlyFetch, undefined, root)
 const api = new ReleasesApi(sources, root)
-const publisher = new ReleaseNotesPublisher(root, async () => ({ data: await api.read(false, true), scene: await sources.scene() }))
+const publisher = new ReleaseNotesPublisher(root, async () => ({ data: await api.read(false, true), scene: await sources.scene(false, { history: true }) }))
 const audience = values.audience as 'internal' | 'customer'
 console.log(JSON.stringify(values.execute
   ? await publisher.publish(values['release-id'], audience, values.actor ?? '', values.reason ?? '')
