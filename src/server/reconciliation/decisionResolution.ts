@@ -9,6 +9,7 @@ import type { SourceSnapshot } from './index'
 import type { WorkCard } from './workReader'
 import type { WorkflowNote } from './workflowContent'
 import { ageObservation } from './observation'
+import { decisionCard } from './decisionCard'
 
 export interface DecisionDelivery {
   submit(input: { requestId: string; anchorKey: string; kind: 'answer'; text: string }, resolution: NonNullable<OutboxMessage['decisionResolution']>): Promise<SubmitResult | null>
@@ -27,7 +28,7 @@ export const requestKey = (request: FirstMateRequest) => requestAnchor(request)
 
 export class DecisionSourceError extends Error {}
 
-function sourceState(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string) {
+function sourceState(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string, intentions?: SourceSnapshot['intentions']) {
   const homes = fleet.filter(home => home.source.home === request.home)
   if (homes.length !== 1) throw new DecisionSourceError('originating home is missing or ambiguous')
   const observation = ageObservation(homes[0]!.observation)
@@ -43,12 +44,13 @@ function sourceState(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, 
   if (matches.length !== 1 || !matches[0]!.ownerReady) throw new DecisionSourceError('request is ambiguous or has no authorized answer route')
   const entry = matches[0]!, task = tasks.find(task => task.id === request.taskId), hold = backlog.find(row => row.id === entry.matchedHoldId)
   const refs = [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])]
+  const canonical = decisionCard(request, refs, intentions)
   // This prevents answering a similarly named request or a second card's ask.
-  if (new Set(refs.map(ref => ref.pageId)).size !== 1 || !refs.some(ref => ref.pageId === cardId && ref.basis === 'explicit')) throw new DecisionSourceError('request lacks one explicit canonical card link')
+  if (canonical.cardId !== cardId) throw new DecisionSourceError(canonical.reason ?? `request is bound to canonical card ${canonical.cardId}, not ${cardId}`)
   return { source_request: request, source_question: entry.card.headline, source_spawn_gen: task?.identity.spawn_gen ?? null } satisfies DecisionBinding
 }
-export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string): DecisionBinding {
-  const binding = sourceState(fleet, request, cardId)
+export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string, intentions?: SourceSnapshot['intentions']): DecisionBinding {
+  const binding = sourceState(fleet, request, cardId, intentions)
   if (!binding) throw new DecisionSourceError('request is no longer open')
   return binding
 }
@@ -109,7 +111,7 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
-  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[]): Promise<DecisionResolution | undefined> {
+  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions']): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
   const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success || rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) || rows(notes, 'Tin Star answer data: ').some(answer => answer.request_id === row.id)))
@@ -137,7 +139,7 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
     const deliveryId = `tinstar-${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20)}`
     const marker = `Tin Star reconciled: ${JSON.stringify([requestKey(request), row.id, answer])}`
     try {
-      const current = sourceState(fleet, request, card.id)
+      const current = sourceState(fleet, request, card.id, intentions)
       if (current && (current.source_question !== row.source_question || current.source_spawn_gen !== row.source_spawn_gen)) return verify('source request changed since the proposal was published')
       if (notes.some(note => workflowNoteHasMarker(note, marker))) {
         if (current) return verify('a previously reconciled request is open again')
@@ -176,4 +178,3 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
   const summary = results.find(result => result.state === 'verification-needed') ?? results.find(result => result.state === 'pending') ?? results[0]!
   return { ...summary, requests: results }
 }
-
