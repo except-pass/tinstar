@@ -34,9 +34,9 @@ export function reviewSubmissions(notes: Array<{ text: string }>): ReviewEvidenc
   }))
 }
 export interface ReviewItem {
-  id: string; cardId: string; revision?: string; submissionKey: string; title: string; status: string; cardUrl: string
+  id: string; cardId: string; submissionKey: string; title: string; status: string; cardUrl: string
   liveUrl: string | null; evidenceUrls: string[]; instructions: string | null
-  submission: ReviewEvidence | null; evidenceWarning: string | null
+  linkedPulls?: string[]; submission: ReviewEvidence | null; evidenceWarning: string | null
 }
 export interface ReviewView {
   items: ReviewItem[]; complete: boolean; warning: string | null; observedAt: string | null
@@ -45,9 +45,9 @@ export interface ReviewQueueRead { reviews: ReviewView; warnings: string[] }
 
 export function retainReviewEvidence(next: ReviewQueueRead, previous: ReviewQueueRead | null): ReviewQueueRead {
   return { ...next, reviews: { ...next.reviews, items: next.reviews.items.map(item => {
-    const known = previous?.reviews.items.find(old => old.cardId === item.cardId && old.revision === item.revision && (item.revision !== undefined || old.submissionKey === item.submissionKey))
+    const known = previous?.reviews.items.find(old => old.cardId === item.cardId)
     return !item.submission && known?.submission ? { ...item, submissionKey: known.submissionKey, submission: known.submission } : item
   }) } }
 export function separatePullReview(prUrl: string | null | undefined, status: string | null | undefined, reviews: ReviewView): boolean {
-  return status === 'open' || !reviews.items.some(item => item.submission?.pulls.some(pull => pull.url === prUrl))
+  return status === 'open' || !reviews.items.some(item => item.linkedPulls?.some(url => url === prUrl) || item.submission?.pulls.some(pull => pull.url === prUrl))
 }

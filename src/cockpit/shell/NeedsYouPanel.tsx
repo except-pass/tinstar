@@ -1,28 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { Composer, Face } from './present'
 import type { AttentionCard, Draft, OutboxMessage, SubmitResult, Worker } from './types'
-import type { ReviewItem, ReviewView } from '../../shared/reviews'
+import { reviewIdentity, separatePullReview, type ReviewItem, type ReviewView } from '../../shared/reviews'
 import { apiFetch } from '../../apiClient'
 import { useWorkSave } from '../../reconciliation/WorkActions'
 
 function DeliverableReview({ item: initial, onOpen }: { item: ReviewItem; onOpen?: (id: string) => void }) {
-  const [detail, setDetail] = useState<ReviewItem | null>(null), [loadError, setLoadError] = useState<string | null>(null)
-  const item = initial.submission && detail?.submission && initial.submissionKey !== detail.submissionKey ? initial : detail ?? initial
+  const [detail, setDetail] = useState<{ review: ReviewItem; sourceIdentity: string | null } | null>(null), [loadError, setLoadError] = useState<string | null>(null)
+  const sourceIdentity = initial.submission ? reviewIdentity(initial.cardId, initial.submission) : null
+  const item = detail && (sourceIdentity === detail.sourceIdentity || sourceIdentity === null || detail.review.submission && sourceIdentity === reviewIdentity(detail.review.cardId, detail.review.submission)) ? detail.review : initial
   async function loadEvidence() {
     try {
       const response = await apiFetch('/api/reconciliation/workflow', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'get', input: { card_id: item.cardId, details: true, refresh: true } }) })
       const body = await response.json()
       if (!response.ok || !body.ok || body.data?.outcome !== 'available' || !body.data.review) throw new Error('Current review unavailable')
-      setDetail(body.data.review); setLoadError(null)
+      setDetail({ review: body.data.review, sourceIdentity }); setLoadError(null)
     } catch { setLoadError('Review evidence unavailable; open the canonical card and refresh before acting.') }
   }
   const [feedback, setFeedback] = useState(''), [remaining, setRemaining] = useState(''), [complete, setComplete] = useState(false)
   const knownSubmission = useRef<string | null>(null)
   useEffect(() => {
     if (!item.submission) return
-    if (knownSubmission.current && knownSubmission.current !== item.submissionKey) { setFeedback(''); setRemaining(''); setComplete(false) }
-    knownSubmission.current = item.submissionKey
-  }, [item.submission, item.submissionKey])
+    const identity = reviewIdentity(item.cardId, item.submission)
+    if (knownSubmission.current && knownSubmission.current !== identity) { setFeedback(''); setRemaining(''); setComplete(false) }
+    knownSubmission.current = identity
+  }, [item.cardId, item.submission, item.submissionKey])
   const { save, busy, result } = useWorkSave(async () => {})
   const respond = (kind: 'accept_review' | 'request_review_changes') => save({ kind, card_id: item.cardId, submission_key: item.submissionKey,
     feedback: feedback.trim() || 'Will explicitly accepted this deliverable in Review.', remaining_scope: remaining.split('\n').map(line => line.trim()).filter(Boolean), scope_complete: complete })
@@ -185,10 +187,11 @@ export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismiss
   onOpen: (card: AttentionCard) => void
   onDismiss: (card: AttentionCard) => void
 }) {
+  cards = cards.filter(card => card.type !== 'review' || !reviews || separatePullReview(card.prUrl, card.reviewStatus, reviews))
   return <div className="cockpit-attention-list" aria-label="Needs You">
     {errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {errors.join('; ')}</p>}
     {reviews?.warning && <p role="status">{reviews.warning}</p>}
-    {reviews?.items.map(item => <DeliverableReview key={JSON.stringify([item.cardId, item.revision ?? item.submissionKey])} item={item} onOpen={onCardOpen} />)}
+    {reviews?.items.map(item => <DeliverableReview key={item.cardId} item={item} onOpen={onCardOpen} />)}
     {cards.length ? cards.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => onOpen(card)} submit={submit} dismissing={dismissing(card)} dismissed={dismissed(card)} dismissError={dismissError(card)} onDismiss={onDismiss} />)
       : errors.length > 0 || reviews?.items.length || reviews && !reviews.complete ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
   </div>

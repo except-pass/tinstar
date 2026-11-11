@@ -15,7 +15,7 @@ export function reviewView(source: SourceSnapshot['intentions'], notes = new Map
       .filter(card => !card.archived && !card.in_trash && isReviewStatus(card.properties.Status?.value))
       .map(card => {
         const submission = reviewSubmissions(notes.get(card.id) ?? []).at(-1) ?? null
-        return { id: `review:${card.id}`, cardId: card.id, revision: card.last_edited_time, submissionKey: submission?.submission_key ?? legacyReviewKey(card.id, card.last_edited_time), title: String(card.properties.Name?.value ?? card.id),
+        return { id: `review:${card.id}`, cardId: card.id, submissionKey: submission?.submission_key ?? legacyReviewKey(card.id, card.last_edited_time), title: String(card.properties.Name?.value ?? card.id),
           status: String(card.properties.Status?.value), cardUrl: card.url ?? `https://www.notion.so/${card.id}`,
           liveUrl: submission?.live_url ?? safeUrl(card.properties.Link?.value),
           evidenceUrls: submission ? [submission.proof.receipt, ...(submission.proof.kind === 'ui' ? submission.proof.screenshots : [])] : [safeUrl(card.properties.Evidence?.value)].filter((url): url is string => !!url),

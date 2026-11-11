@@ -1,3 +1,4 @@
+import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
 import { AssociationStore } from '../releases/associations'
 import { reviewView } from './reviews'
@@ -45,6 +46,7 @@ export class ReconciliationSources {
   readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
+  private associations: AssociationStore
   private fleet
   private workReader
   readonly workflow
@@ -58,8 +60,9 @@ export class ReconciliationSources {
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi)
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot)
+    this.associations = new AssociationStore(receiptRoot)
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
-    this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), new AssociationStore(receiptRoot))
+    this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.fetch)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -208,11 +211,21 @@ export class ReconciliationSources {
       if (context?.outcome === 'available') notes.set(item.cardId, context.blocks)
     }
     const warnings: string[] = []
+    const reviews = reviewView(intentions, notes)
+    try {
+      const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet: [] })
+      const links = releaseAssociations(scene, await this.associations.read())
+      const saved = await this.workflow.savedReviewAssociations()
+      for (const item of reviews.items) item.linkedPulls = [...new Set([
+        ...links.pulls.filter(pull => pull.links.some(link => link.active && link.cardId === item.cardId)).map(pull => pull.url),
+        ...saved.filter(link => link.cardId === item.cardId).map(link => link.pull),
+      ])]
+    } catch { warnings.push('Review PR associations are unavailable; duplicate coverage is unknown.') }
     try {
       if (await this.workflow.pendingReviewCount()) warnings.push('Some review writes remain unconfirmed; Firstmate must reconcile their saved receipts.')
       if ((await this.reviewAudit.exceptions()).length) warnings.push('Deployment review handoffs remain unresolved; Firstmate must inspect the deployment audit.')
     } catch { warnings.push('Review recovery evidence is unavailable; handoff completeness is unknown.') }
-    return workReadback({ reviews: reviewView(intentions, notes), warnings })
+    return workReadback({ reviews, warnings })
   }
 
   async queue(req?: IncomingMessage) {
