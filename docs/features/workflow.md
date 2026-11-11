@@ -132,6 +132,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 
 | kind | Inputs / changes |
 | --- | --- |
+| `submit_for_review`, `accept_review`, `request_review_changes` | See [deployed feature review](#deployed-feature-review) for evidence, response and recovery contracts. |
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
@@ -170,7 +171,7 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Except for [source-bound decision answers](#first-mate-decision-reconciliation), updates confirm properties and managed sections before writing the history note.
+The following repair rules apply to ordinary updates; [source-bound decision answers](#first-mate-decision-reconciliation) and [review operations](#deployed-feature-review) have their own recovery contracts. Ordinary updates confirm properties and managed sections before writing the history note.
 If only the note fails, the same process can repair it once, provided the card's
 last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
