@@ -722,11 +722,14 @@ export class WorkflowOperations {
         Status: input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status, 'Last touched by': actor, ...handoff?.properties }
       const properties = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, this.property(template, name, value)]))
       const children = [paragraph(`Created by: ${actor}\n${marker}`), ...(handoff?.children ?? Object.entries(input.content ?? {}).map(([name, value]) => paragraph(sectionText(name, value))))]
-      await this.creations.put(key, signature)
-      attempted = true
+      const beforeWrite = async () => {
+        await this.creations.put(key, signature)
+        attempted = true
+      }
+      if (input.provider !== 'jira') await beforeWrite()
       let created: Awaited<ReturnType<WorkflowContent['request']>>
       try {
-        created = input.provider === 'jira' ? await this.reader.jira!.create(properties, children.map(child => ({ type: child.type, text: createBlockText(child) }))) : await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config!.dataSourceId }, properties, children })
+        created = input.provider === 'jira' ? await this.reader.jira!.create(properties, children.map(child => ({ type: child.type, text: createBlockText(child) })), beforeWrite) : await this.content.request('pages', 'POST', { parent: { type: 'data_source_id', data_source_id: config!.dataSourceId }, properties, children })
       } catch (error) {
         if (error instanceof NotionWriteError && error.status < 500) {
           await this.creations.remove(key)
@@ -746,6 +749,7 @@ export class WorkflowOperations {
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
+      if (error instanceof JiraMappingError && !attempted) return result('not-saved', 'jira-incompatible', error.message)
       return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'create-unconfirmed' : 'source-unavailable', saved.length ? 'Card created; only listed steps confirmed saved. Current verification failed; retry identical input to retrieve the existing card.' : attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
     }
   }

@@ -186,10 +186,11 @@ export class JiraAdapter {
     if (candidates.length !== 1) throw new JiraMappingError(`Jira status ${name} has no unique available native transition`)
     return String(candidates[0].id)
   }
-  async create(properties: Record<string, unknown>, sections: Array<{ type: string; text: string }>) {
+  async create(properties: Record<string, unknown>, sections: Array<{ type: string; text: string }>, beforeWrite?: () => Promise<void>) {
     const payload = this.payload(properties)
     if (payload.status && !(await this.statuses()).some(status => status.name === payload.status)) throw new JiraMappingError(`TSSPIKE Task lacks native status ${payload.status}`)
     await this.project() // exact scope evidence immediately before issue creation
+    await beforeWrite?.()
     const created = await this.request('issue', 'POST', { fields: { ...payload.fields, project: { id: '10638' }, issuetype: { id: '10582' },
       labels: [JIRA_SYNTHETIC_LABEL], description: { type: 'doc', version: 1, content: sections.map(section => this.sectionNode(section)) } }, properties: payload.properties })
     const id = jiraCardPrefix + created.id
