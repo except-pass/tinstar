@@ -1,4 +1,8 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+import { Ajv2020 } from 'ajv/dist/2020'
+import addFormats from 'ajv-formats'
+import type { Tool } from '@modelcontextprotocol/sdk/types.js'
+import { updateWorkSchema } from '../../../shared/workflow'
 import { createServer, request, type Server } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -26,7 +30,8 @@ async function setup(allowView = true) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-tunnel-')); roots.push(root)
   const scene = fixtureScene()
   scene.coverage.intentions.status = 'stale'
-  const mcp = new ReconciliationMcp({ scene: async () => scene, card: async () => ({ outcome: 'unavailable' }),
+  const updateWork = vi.fn(async () => ({ outcome: 'saved' }))
+  const mcp = new ReconciliationMcp({ updateWork, scene: async () => scene, card: async () => ({ outcome: 'unavailable' }),
     queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Source unavailable' }),
     workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
   }, root)
@@ -39,7 +44,7 @@ async function setup(allowView = true) {
   const url = new URL(`http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`)
   const client = new Client({ name: 'tunnel-test', version: '1' }); clients.push(client)
   await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${callerToken}` } } }))
-  return { mcp, scene, url, client, options }
+  return { mcp, scene, url, client, options, updateWork }
 }
 async function post(url: URL, method: string, version = '2026-07-28', params: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
   return fetch(url, { method: 'POST', headers: {
@@ -73,6 +78,66 @@ it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with th
   if (version === '2026-07-28') expect(call.result.resultType).toBe('complete')
   const denied = await post(url, 'tools/call', version, { name: 'present_view', arguments: {} })
   expect((await denied.json()).result).toMatchObject({ isError: true })
+})
+// Exercise the actual HTTP catalog, including SDK parsing and facade filtering.
+it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained draft 2020-12 tool schemas for %s', async version => {
+  const { url } = await setup()
+  if (version !== '2026-07-28') {
+    const initialized = await post(url, 'initialize', version, { protocolVersion: version, capabilities: {}, clientInfo: { name: 'schema-test', version: '1' } })
+    expect((await initialized.json()).result.protocolVersion).toBe(version)
+  }
+  const response = await post(url, 'tools/list', version)
+  expect(response.status).toBe(200)
+  const text = await response.text()
+  const tools: Tool[] = JSON.parse(text).result.tools
+  expect(tools).toHaveLength(20)
+  // 45 KiB today, including all eleven operations that the old 29 KiB catalog
+  // omitted. Catch accidental catalog expansion without an exact byte snapshot.
+  expect(Buffer.byteLength(text)).toBeLessThan(64 * 1024)
+  const ajv = new Ajv2020({ strict: false })
+  addFormats(ajv)
+  const assertNoRefs = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return
+    expect(value).not.toHaveProperty('$ref')
+    Object.values(value).forEach(assertNoRefs)
+  }
+  assertNoRefs(tools)
+  for (const tool of tools) {
+    // Common fields of the negotiated revisions. execution was removed in
+    // 2026-07-28; these synchronous tools need no optional task metadata at all.
+    expect(Object.keys(tool).sort()).toEqual(['annotations', 'description', 'inputSchema', 'name'])
+    expect(tool.inputSchema.type).toBe('object')
+    expect(ajv.validateSchema(tool.inputSchema), tool.name).toBe(true)
+    expect(() => ajv.compile(tool.inputSchema), tool.name).not.toThrow()
+  }
+  for (const name of ['get_work_views', 'get_workflow_rules', 'list_ui_sessions', 'get_worker_link_report']) {
+    expect(tools.find(tool => tool.name === name)!.inputSchema).toEqual({ type: 'object', properties: {}, additionalProperties: false })
+  }
+  const update = tools.find(tool => tool.name === 'update_work')!.inputSchema
+  const kinds = updateWorkSchema.options.map(option => option.shape.kind.value)
+  expect(kinds).toHaveLength(11)
+  expect(update.properties!.kind).toEqual({ type: 'string', enum: kinds })
+  expect(update.oneOf).toHaveLength(kinds.length)
+  expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
+  const validate = ajv.compile(update)
+  const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
+  expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
+  expect(validate({ ...base, kind: 'wait', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate' })).toBe(true)
+  expect(validate({ ...base, kind: 'wait' })).toBe(false)
+  expect(validate({ ...base, kind: 'unknown' })).toBe(false)
+  expect(validate({ ...base, kind: 'edit', worker: {} })).toBe(false)
+})
+it('keeps original Zod validation and defaults for update_work calls', async () => {
+  const { url, updateWork } = await setup()
+  const base = { card_id: 'a'.repeat(32), operation_id: 'validation-proof' }
+  for (const input of [{ ...base, kind: 'wait' }, { ...base, kind: 'edit', worker: {} }, { ...base, kind: 'unknown' }]) {
+    const response = await post(url, 'tools/call', '2026-07-28', { name: 'update_work', arguments: input })
+    expect((await response.json()).result.isError).toBe(true)
+  }
+  expect(updateWork).not.toHaveBeenCalled()
+  const response = await post(url, 'tools/call', '2026-07-28', { name: 'update_work', arguments: { ...base, kind: 'assign', owner: 'Firstmate' } })
+  expect(parse((await response.json()).result)).toEqual({ outcome: 'saved' })
+  expect(updateWork).toHaveBeenCalledWith({ ...base, kind: 'assign', owner: 'Firstmate', status: 'Queued' }, 'owner-chatgpt')
 })
 it('discovers facade capabilities and supported versions without initialization', async () => {
   const { url } = await setup()
