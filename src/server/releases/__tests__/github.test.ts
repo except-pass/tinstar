@@ -100,3 +100,39 @@ it('shows an existing draft Release record rather than claiming it is missing', 
   const result = await new GithubReleaseReader(nativeFixtureRead({ records: [{ ...nativeRecord, draft: true, published_at: null }] }), () => now).get(data())
   expect(result.releases[0]!.github).toMatchObject({ record: 'available', body: nativeBody, publishedAt: null })
 })
+
+
+it.each([undefined, 'v1.22.0'])('reads a concurrent historical selection before caching it after %s', async firstTag => {
+  const historicalSha = 'e'.repeat(40)
+  const tags = [...nativeTags, { name: 'v1.21.0', commit: { sha: historicalSha } }]
+  let releaseFirst!: () => void, releaseSecond!: () => void, secondStarted!: () => void
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+  const secondGate = new Promise<void>(resolve => { releaseSecond = resolve })
+  const started = new Promise<void>(resolve => { secondStarted = resolve })
+  const fixture = nativeFixtureRead({ tags })
+  const read = vi.fn(async (path: string) => {
+    if (path.includes(`/actions/runs?head_sha=${nativeHead}`)) await firstGate
+    if (path.includes(`/actions/runs?head_sha=${historicalSha}`)) {
+      secondStarted()
+      await secondGate
+    }
+    return fixture(path)
+  })
+  const reader = new GithubReleaseReader(read, () => now)
+  const first = reader.get(data(), firstTag)
+  let resolved = false
+  const second = reader.get(data(), 'v1.21.0').then(result => { resolved = true; return result })
+  const sameSelection = reader.get(data(), 'v1.21.0')
+  releaseFirst()
+  await first
+  await Promise.race([started, second])
+  expect(resolved).toBe(false)
+  releaseSecond()
+  const [result, shared] = await Promise.all([second, sameSelection])
+  expect(result.releases.find(release => release.version === 'v1.21.0')?.github?.runsStatus).toBe('fresh')
+  expect(shared).toEqual(result)
+  expect(read.mock.calls.filter(([path]) => path.includes(`/actions/runs?head_sha=${historicalSha}`))).toHaveLength(1)
+  const count = read.mock.calls.length
+  await reader.get(data(), 'v1.21.0')
+  expect(read).toHaveBeenCalledTimes(count)
+})

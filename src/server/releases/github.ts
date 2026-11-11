@@ -45,11 +45,14 @@ export class GithubReleaseReader {
   constructor(private read: Read = githubJson, private now = Date.now) { this.memberships = new ReleaseMembershipReader(read, now) }
 
   async get(data: ReleasesRead, tag?: string): Promise<GithubReleaseRead> {
-    if (!this.cached || this.until <= this.now() || tag !== this.selectedTag) {
-      this.pending ??= this.refresh(tag).finally(() => { this.pending = null })
-      this.cached = await this.pending
-      this.selectedTag = tag
-      this.until = this.now() + 60_000
+    while (!this.cached || this.until <= this.now() || tag !== this.selectedTag) {
+      this.pending ??= this.refresh(tag).then(result => {
+        this.cached = result
+        this.selectedTag = tag
+        this.until = this.now() + 60_000
+        return result
+      }).finally(() => { this.pending = null })
+      await this.pending
     }
     // Associations can change independently of immutable tag membership.
     return { ...this.cached, releases: this.cached.releases.map(release => {
