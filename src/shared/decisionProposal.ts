@@ -38,7 +38,8 @@ export function currentDecisionProposal<T extends { value: unknown }>(candidates
   if (!parsed.length || new Set(parsed.map(entry => entry.value.request_key)).size !== 1) return undefined
   const replaced = new Set(parsed.map(entry => entry.value.supersedes))
   return parsed.filter(entry => !replaced.has(entry.value.proposal_id))
-    .sort((a, b) => Date.parse(a.value.published_at) - Date.parse(b.value.published_at)).at(-1)?.candidate
+    .sort((a, b) => Date.parse(a.value.published_at) - Date.parse(b.value.published_at) ||
+      (a.value.proposal_id < b.value.proposal_id ? -1 : a.value.proposal_id > b.value.proposal_id ? 1 : 0)).at(-1)?.candidate
 }
 
 export function decisionFresh(item: import('../server/reconciliation/queue').QueueItem, now = Date.now()) {

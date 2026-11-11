@@ -41,3 +41,10 @@ it('resolves the newest remaining typed publication with incomplete or unrelated
   expect(currentDecisionProposal([candidate({ ...p, supersedes: 'q' }), candidate(q)])).toBeUndefined()
   expect(currentDecisionProposal([candidate(p), candidate({ ...q, request_key: 'another' })])).toBeUndefined()
 })
+
+it('resolves equal publication timestamps independently of input order', () => {
+  const work = { value: { ...fixtureProposal('request'), proposal_id: 'proposal-p', published_at: '2026-11-10T00:00:00Z' } }
+  const ask = { value: { ...work.value, proposal_id: 'proposal-q', source: { kind: 'ask-reply' as const, id: 'answer-q', revision: '1' } } }
+  expect(currentDecisionProposal([work, ask])).toEqual(ask)
+  expect(currentDecisionProposal([ask, work])).toEqual(ask)
+})
