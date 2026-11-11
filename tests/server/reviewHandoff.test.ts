@@ -1,16 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer, type Server } from 'node:http'
 import { recordDeployment, recordLateEvidence, recordSmoke } from '../../scripts/deploy/review-handoff.mjs'
+import { CockpitFleet } from '../../src/server/fleet/cockpit'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  vi.unstubAllEnvs()
 })
 const sha = 'a'.repeat(40), current = 'b'.repeat(40), head = 'c'.repeat(40), card = 'd'.repeat(32)
 const pull = 'https://github.com/except-pass/tinstar/pull/999'
@@ -31,6 +33,72 @@ async function fixture() {
 }
 
 describe('late evidence operator command', () => {
+  it.each(['path', 'label', 'single', 'legacy', 'both'])('records the configured %s home in both deploy and late-evidence receipts', async mode => {
+    const f = await fixture()
+    const home = join(f.root, 'hulk')
+    const config = { firstmate: { homes: mode === 'legacy' || mode === 'both' ? [home] : [] },
+      reconciliation: { fleet: mode === 'legacy' ? [] : [{ home, label: 'hulk' }] } }
+    await writeFile(join(f.root, 'config.json'), JSON.stringify(config))
+    const selector = mode === 'label' ? 'hulk' : mode === 'single' || mode === 'both' ? undefined : home
+    const env = { ...f.env, ...(selector ? { TINSTAR_REVIEW_FIRSTMATE_HOME: selector } : {}) }
+    expect(await recordDeployment(env, () => sha)).toMatchObject({ ownerHome: home })
+    // A changed instruction ensures late-evidence adds a real event too.
+    f.review.instructions = 'Inspect the delivered panel with the keyboard'
+    await writeFile(f.manifest, JSON.stringify({ evidence: [{ card_id: card, review: f.review }] }))
+    expect(await recordLateEvidence(f.deployment.id, env)).toMatchObject({ ownerHome: home })
+    const records = (await readFile(f.audit, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(records.at(-1)).toMatchObject({ action: 'floor-review-evidence', ownerHome: home })
+    expect(JSON.parse(await readFile(join(f.root, 'config.json'), 'utf8'))).toEqual(config)
+  })
+
+  it.each(['typo', 'unknown-path', 'ambiguous', 'unspecified', 'relative'])('rejects %s fleet selections before writing late evidence', async scenario => {
+    const f = await fixture()
+    const home = join(f.root, 'hulk')
+    await writeFile(join(f.root, 'config.json'), JSON.stringify({ firstmate: { homes: [] }, reconciliation: { fleet: [
+      { home: scenario === 'relative' ? 'relative/home' : home, label: 'hulk' },
+      { home: join(f.root, 'main'), label: scenario === 'ambiguous' ? 'hulk' : 'main' },
+    ] } }))
+    const selector = scenario === 'typo' ? 'hulkk' : scenario === 'unknown-path' ? home + '-typo' : scenario === 'unspecified' ? undefined : 'hulk'
+    const env = { ...f.env, ...(selector ? { TINSTAR_REVIEW_FIRSTMATE_HOME: selector } : {}) }
+    const original = await readFile(f.audit, 'utf8')
+    await expect(recordLateEvidence(f.deployment.id, env)).rejects.toThrow('configured Firstmate home')
+    expect(await readFile(f.audit, 'utf8')).toBe(original)
+    expect(await recordDeployment(env, () => sha)).toMatchObject({ ownerHome: null, warnings: expect.arrayContaining([expect.stringContaining('configured Firstmate home')]) })
+  })
+
+  it('delivers fleet-only homes through the existing outbox and inbox without adding legacy workers', async () => {
+    const f = await fixture(), home = join(f.root, 'hulk')
+    vi.stubEnv('TINSTAR_CONFIG_HOME', f.root)
+    const config = { firstmate: { homes: [] }, reconciliation: { fleet: [{ home, label: 'hulk' }] } }
+    await writeFile(join(f.root, 'config.json'), JSON.stringify(config))
+    await mkdir(join(home, 'bin'), { recursive: true })
+    await writeFile(join(home, 'bin/fm-inbox.sh'), `#!/usr/bin/env python3
+import json, os, pathlib, sys
+home = pathlib.Path(os.environ['FM_HOME'])
+path = home / 'receipt.json'
+if sys.argv[1] == 'note':
+    request = sys.argv[sys.argv.index('--request-id') + 1]
+    body = sys.stdin.read()
+    if not path.exists(): path.write_text(json.dumps({'request_id': request, 'body': body, 'acknowledged': False}))
+    print(json.dumps({'saved': True}))
+elif sys.argv[1] == 'ready': print(json.dumps({'can_receive': True}))
+elif sys.argv[1] == 'receipts': print(json.dumps({'pending': [json.loads(path.read_text())] if path.exists() else [], 'handled': []}))
+`, { mode: 0o700 })
+    const fleet = new CockpitFleet()
+    await fleet.refresh()
+    const before = fleet.list()
+    expect(before).toMatchObject({ workers: [], attention: [] })
+    expect(await fleet.deliverReviewException('hulk', sha, 'Missing historical screenshot')).toMatchObject({ saved: true })
+    const saved = await readFile(join(home, 'receipt.json'), 'utf8')
+    expect(await new CockpitFleet().deliverReviewException(home, sha, 'Missing historical screenshot')).toMatchObject({ saved: true })
+    expect(await readFile(join(home, 'receipt.json'), 'utf8')).toBe(saved)
+    expect(await fleet.messages()).toMatchObject([{ home, state: 'saved', text: 'Missing historical screenshot' }])
+    expect(await fleet.deliverReviewException('hulkk', current, 'Wrong home')).toMatchObject({ saved: false })
+    expect(JSON.parse(await readFile(join(f.root, 'fleet-outbox.json'), 'utf8'))).toHaveLength(1)
+    expect(JSON.parse(await readFile(join(f.root, 'config.json'), 'utf8'))).toEqual(config)
+    expect(fleet.list()).toEqual(before)
+  })
+
   it('runs through plain Node without consulting the advanced checkout and skips reordered retries', async () => {
     const f = await fixture()
     const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('TINSTAR_') && key !== 'NODE_OPTIONS'))

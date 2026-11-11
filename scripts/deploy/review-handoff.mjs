@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
 import { handoffManifestSchema, lateEvidenceSchema, validateHandoffManifest, handoffMeaning, deploymentsWithEvidence } from '../../src/shared/reviewHandoff.mjs'
+import { configuredReviewHomes, resolveReviewHome } from '../../src/server/fleet/reviewHomes.mjs'
 import { http } from './post-deploy-smoke.mjs'
 import { runningSha } from './deploy-support.mjs'
 
@@ -28,10 +29,9 @@ export async function recordLateEvidence(deploymentId, e = process.env) {
   const manifest = handoffManifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
   validateHandoffManifest(manifest, deployment)
   const config = JSON.parse(await readFile(join(e.TINSTAR_CONFIG_HOME, 'config.json'), 'utf8'))
-  const homes = config.firstmate?.homes ?? []
-  const ownerHome = e.TINSTAR_REVIEW_FIRSTMATE_HOME ?? (homes.length === 1 ? homes[0] : null)
+  const ownerHome = resolveReviewHome(configuredReviewHomes(config), e.TINSTAR_REVIEW_FIRSTMATE_HOME)
   // A typo here would strand the durable exception without a usable delivery path.
-  if (!ownerHome || !homes.includes(ownerHome)) throw new Error('Select a configured Firstmate home with TINSTAR_REVIEW_FIRSTMATE_HOME')
+  if (!ownerHome) throw new Error('Select a configured Firstmate home path or unique reconciliation.fleet label with TINSTAR_REVIEW_FIRSTMATE_HOME')
   const event = lateEvidenceSchema.parse({ action: 'floor-review-evidence', deploymentId, time: new Date().toISOString(), operator: userInfo().username, ownerHome, ...manifest })
   const meaning = row => handoffMeaning({ ownerHome: row.ownerHome, evidence: row.evidence, nonReviewable: row.nonReviewable })
   if (meaning(deployment) !== meaning(event)) await append(e, event)
@@ -46,9 +46,8 @@ export async function recordDeployment(e = process.env, execute = run) {
   const record = { action: 'floor-deployment', id, time: new Date().toISOString(), oldSha, newSha, pulls: [], membershipComplete: false, ownerHome: null, evidence: [], nonReviewable: [], warnings: [] }
   try {
     const config = JSON.parse(await readFile(join(e.TINSTAR_CONFIG_HOME, 'config.json'), 'utf8'))
-    const homes = config.firstmate?.homes ?? []
-    record.ownerHome = e.TINSTAR_REVIEW_FIRSTMATE_HOME ?? (homes.length === 1 ? homes[0] : null)
-    if (!homes.includes(record.ownerHome)) { record.ownerHome = null; record.warnings.push('Select a configured Firstmate home for review handoff delivery') }
+    record.ownerHome = resolveReviewHome(configuredReviewHomes(config), e.TINSTAR_REVIEW_FIRSTMATE_HOME)
+    if (!record.ownerHome) record.warnings.push('Select a configured Firstmate home path or unique reconciliation.fleet label for review handoff delivery')
   } catch { record.warnings.push('Firstmate delivery configuration unreadable') }
   if (previous && (oldSha === newSha || !oldSha)) {
     Object.assign(record, { oldSha: previous.oldSha, pulls: previous.pulls, membershipComplete: previous.membershipComplete, evidence: previous.evidence, nonReviewable: previous.nonReviewable })
