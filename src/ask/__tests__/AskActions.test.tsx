@@ -112,13 +112,15 @@ describe('Ask recommendation buttons', () => {
     expect(onSelect).not.toHaveBeenCalled()
   })
 
-  it('suppresses uncertain retries after supersession and uses refreshed persisted delivery', async () => {
+  it('retains uncertain retries after supersession and uses refreshed persisted delivery', async () => {
     const options = props({ onSelect: vi.fn().mockRejectedValue(new Error('network')) })
     const view = render(<AskActions {...options} />)
     fireEvent.click(screen.getByRole('button', { name: closeName }))
     await screen.findByRole('button', { name: 'Retry same selection' })
     view.rerender(<AskActions {...options} superseded />)
-    expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry same selection' }))
+    await waitFor(() => expect(options.onSelect).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(options.onSelect).mock.calls[1]).toEqual(vi.mocked(options.onSelect).mock.calls[0])
     view.rerender(<AskActions {...options} superseded selection={{ action_id: close.id, status: 'answered' }} />)
     expect(screen.getByRole('status')).toHaveTextContent('Result received')
   })
@@ -262,4 +264,17 @@ it('shows a definite merge refusal and allows a fresh choice while preserving un
   fireEvent.click(await screen.findByRole('button', { name: 'Retry same selection' }))
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Delivered'))
   expect(onSelect.mock.calls[1]![0]).toEqual(onSelect.mock.calls[0]![0])
+})
+
+it.each([{ disabled: true, superseded: false }, { disabled: false, superseded: true }])('recovers a recorded unconfirmed merge when eligibility is %j', async eligibility => {
+  const merge = { ...close, merge: { pr_url: 'https://github.com/owner/repo/pull/17' } }
+  const input = { operation_id: crypto.randomUUID(), targets: [{ url: merge.merge.pr_url, head: 'a'.repeat(40) }] }
+  const onSelect = vi.fn<AskActionsProps['onSelect']>().mockResolvedValue({ status: 'delivered', merge_selection: { input, receipt: { url: 'https://www.notion.so/' + 'c'.repeat(32), message: 'Recovered' } } })
+  render(<AskActions {...props({ ...eligibility, decision: true, suggestions: [merge, keep], selection: { action_id: merge.id, status: 'sent', merge_selection: { input } }, onSelect })} />)
+  expect(screen.getByRole('button', { name: closeName })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry same selection' }))
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Delivered'))
+  expect(onSelect).toHaveBeenCalledTimes(1)
+  expect(onSelect.mock.calls[0]![0]).toMatchObject({ answer_id: answerId, action_id: merge.id })
+  expect(screen.queryByRole('button', { name: 'Retry same selection' })).toBeNull()
 })

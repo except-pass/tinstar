@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
 import { currentDecisionProposal } from '../../shared/decisionProposal'
-import { clawsonMergeSchema } from '../../shared/clawsonMerge'
+import { clawsonMergeSchema, type ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { decisionContext, decisionFresh, decisionRevision } from './decision'
 import { findSuggestedAction } from '../../shared/ask-actions'
 import { getConfigRoot } from '../configRoot'
@@ -54,6 +54,13 @@ export class AskApi {
   constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue' | 'askStore' | 'proposalSource'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
     this.store = sources.askStore ?? new AskStore(root)
   }
+  private async sendMerge(input: ClawsonMergeInput, login: string) {
+    if (!this.artifacts?.sendMerge) throw new AskConflict('Merge handoff unavailable')
+    const result = await this.artifacts.sendMerge(input, login)
+    if (result.outcome === 'not-saved' && result.code !== 'operation-conflict') return { blocked: result.message }
+    if (!result.card) throw new Error(result.message)
+    return { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }
+  }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]!
     if (!path.startsWith('/api/ask/')) return false
@@ -80,7 +87,7 @@ export class AskApi {
         if (req.method === 'GET') {
           const conversation = new URL(req.url!, 'http://localhost').searchParams.get('conversation_id')
           if (conversation) return ok(res, await this.store.conversation(z.string().uuid().parse(conversation), undefined, syntheticId), { headers })
-          const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled)
+          const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled, (input, owner) => this.sendMerge(input, owner))
           const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
           const work = !syntheticId && this.workUpdates ? await this.workUpdates.bridgeWork() : { pending: [], tracked: [] }
           return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
@@ -127,7 +134,7 @@ export class AskApi {
       if (path === '/api/ask/selections' && req.method === 'POST') {
         const input = askSelectionInputSchema.parse(await readBody(req))
         const current = async (key: string) => {
-          const queue = await this.sources.queue?.(req, key)
+          const queue = await this.sources.queue?.(req, key, true)
           const item = (queue?.needsWill ?? queue?.items ?? []).find(item => item.id === key)
           if (!item || !decisionFresh(item)) throw new AskConflict('Request freshness is unverified; refresh before choosing')
           return item
@@ -157,13 +164,7 @@ export class AskApi {
           const pull = await this.artifacts.pullOrigin(action.merge!.pr_url)
           return clawsonMergeSchema.parse({ operation_id: operationId, targets: [{ url: action.merge!.pr_url, head: pull.head }] })
         })
-        const delivered = selected.merge_selection ? await this.store.deliverMerge(login, selected.request_id, async input => {
-          if (!this.artifacts?.sendMerge) throw new AskConflict('Merge handoff unavailable')
-          const result = await this.artifacts.sendMerge(input, login)
-          if (result.outcome === 'not-saved' && result.code !== 'operation-conflict') return { blocked: result.message }
-          if (!result.card) throw new Error(result.message)
-          return { url: z.object({ url: z.string().url() }).parse(result.card).url, message: result.outcome === 'saved' ? 'Sent to Clawson for admin merge.' : result.message }
-        }) : selected
+        const delivered = selected.merge_selection ? await this.store.deliverMerge(login, selected.request_id, input => this.sendMerge(input, login)) : selected
         return ok(res, publicAsk(delivered), { headers })
       }
       if (path === '/api/ask/requests' && req.method === 'POST') {

@@ -243,13 +243,13 @@ export class ReconciliationSources {
     return workReadback({ reviews, warnings })
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string) {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false) {
     let reviewWarning: string | null = null
     const reviewRecoveries = await this.workflow.reconcileReviews().catch(() => null)
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
@@ -299,7 +299,7 @@ export class ReconciliationSources {
     if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
     const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-      contexts.set(id, await this.context.commentDetails(id))
+      contexts.set(id, await this.context.commentDetails(id, force))
     }))
     if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')

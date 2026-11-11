@@ -1118,7 +1118,7 @@ describe('request-bound decision workbench', () => {
     expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === refused.data.data.request_id).outcome).toBe('blocked')
   })
 
-  it('records merge membership and head before dispatch and recovers the same operation after restart', async () => {
+  it.each(['bridge', 'http'])('records merge membership and recovers the same operation through %s after closure', async recovery => {
     const queue = publishedQueue(), item = queue.needsWill![0]!, pr = 'https://github.com/owner/repo/pull/17', head = 'b'.repeat(40)
     item.proposal!.value.actions[0]!.merge = { pr_url: pr }
     const origin = vi.fn(async () => ({ id: 'owner/repo#17', repository: 'owner/repo', number: 17, url: pr, state: 'open' as const, title: 'Ready', author: 'owner', draft: false, head, base: 'main', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-08T12:00:00Z', observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }))
@@ -1135,8 +1135,13 @@ describe('request-bound decision workbench', () => {
     expect((await call('selections', input)).status).toBe(503)
     const saved = (await call('requests')).data.data.find((row: { action_selection?: unknown }) => row.action_selection)
     expect(saved).toMatchObject({ status: 'sent', merge_selection: { input: { operation_id: saved.action_selection.selection_id, targets: [{ url: pr, head }] } } })
-    expect((await bridge()).data.data.pending).toHaveLength(0)
+    queue.needsWill = []; queue.items = []
     reload()
+    if (recovery === 'bridge') {
+      expect((await bridge()).data.data.pending).toHaveLength(0)
+      expect((await call('requests')).data.data.find((row: { request_id: string }) => row.request_id === saved.request_id).status).toBe('delivered')
+      expect(sendMerge).toHaveBeenCalledTimes(2)
+    }
     const recovered = await call('selections', { ...input, client_key: randomUUID() })
     expect(recovered.status).toBe(200)
     expect(recovered.data.data).toMatchObject({ request_id: saved.request_id, status: 'delivered', merge_selection: { receipt: { url: 'https://www.notion.so/cccccccccccccccccccccccccccccccc' } } })

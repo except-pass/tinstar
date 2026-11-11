@@ -194,7 +194,7 @@ export class AskStore {
       }
     })
   }
-  async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true) {
+  async bridgeWork(syntheticId?: string, systemDeliveryEnabled = true, recoverMerge?: (input: ClawsonMergeInput, owner: string) => Promise<{ url: string; message: string } | { blocked: string }>) {
     // Persist legacy payloads on first dispatch too. Capturing under the writer
     // lock freezes each note body before a puller can save it and lose its ack.
     const eligible = (row: AskRecord) => {
@@ -217,6 +217,11 @@ export class AskStore {
       return { pending, tracked: rows.filter(row => row.synthetic_id === syntheticId && (!row.voice_outage || systemDeliveryEnabled && row.voice_outage.resolved_at === null) && row.note_id && !row.reply).map(row => ({ request_id: row.request_id, note_id: row.note_id })) }
     }
     await this.writing
+    if (recoverMerge) for (const row of await this.load()) {
+      if (row.synthetic_id === syntheticId && row.merge_selection && !row.merge_selection.receipt && !releasedMergeSelection(row)) {
+        await this.deliverMerge(row.owner, row.request_id, input => recoverMerge(input, row.owner)).catch(() => undefined)
+      }
+    }
     const rows = await this.load()
     return rows.some(row => eligible(row) && row.dispatch_body === undefined) ? this.change(collect) : collect(rows)
   }

@@ -50,13 +50,13 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
   const selected = actions.find(action => action.id === selectedId)
   const delivery = attempt ? attempt.delivery : selection
   const released = !!delivery && releasedMergeSelection(delivery)
-  const uncertain = !released && (attempt ? attempt.uncertain : selection?.merge_selection && !selection.merge_selection.receipt)
+  const uncertain = !released && (attempt?.uncertain || delivery?.merge_selection && !delivery.merge_selection.receipt)
   const unavailable = disabled || superseded || !!selectedId && !released || !!merge?.sent || !!merge?.sending
 
   async function select(action: AskAction) {
     // The ref closes the same-event double-click window before React rerenders.
     // Unknown acknowledgements keep the key and chosen action for reconciliation.
-    if (disabled || locked.current || superseded || !attempt && selection && !uncertain && !released || merge?.sent || merge?.sending) return
+    if ((disabled || superseded) && !(uncertain && action.id === selectedId) || locked.current || !attempt && selection && !uncertain && !released || merge?.sent || merge?.sending) return
     if (action.merge && !decision) {
       locked.current = true
       const mergeAttempt = mergeOps.current.get(action.id) ?? { operationId: crypto.randomUUID() }
@@ -110,7 +110,7 @@ function ActionChoices({ answerId, suggestions, superseded, selection, onSelect,
       {(attempt?.rejection || delivery?.error) && <details className="ask-delivery-diagnostics"><summary>Technical details</summary><p>{attempt?.rejection ?? delivery?.error}</p></details>}
       {delivery?.merge_selection?.receipt && <p><a href={delivery.merge_selection.receipt.url} target="_blank" rel="noreferrer">Open Clawson card ↗</a></p>}
       {!delivery?.outcome && delivery?.status === 'answered' && <p className="ask-action-explanation">First Mate replied in this conversation. Read the reply for the outcome.</p>}
-      {uncertain && !superseded && <button type="button" className="ask-action-choice" onClick={() => { void select(selected) }}>Retry same selection</button>}
+      {uncertain && <button type="button" className="ask-action-choice" onClick={() => { void select(selected) }}>Retry same selection</button>}
     </div>}
   </div>
 }

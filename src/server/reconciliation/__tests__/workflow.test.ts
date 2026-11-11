@@ -2191,3 +2191,46 @@ it.each(['mcp', 'ui', 'direct', 'selection'].flatMap(entry => ['closed', 'reboun
   expect(mutations()).toBe(writesBefore)
   expect(f.bridge.submit).not.toHaveBeenCalled()
 })
+
+it.each(['closed', 'rebound'].flatMap(change => ['work', 'ask'].map(producer => ({ change, producer }))))('refuses a new $producer selection after a cached source is $change', async ({ change, producer }) => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const { proposalAnswerId } = await import('../../ask/decision')
+  const { AskApi } = await import('../../ask/routes')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-cached-source-')); roots.push(root)
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  const snapshotFile = join(root, 'snapshot.json')
+  const backlog = [{ id: f.source.id, title: 'Mailbox choice', state: 'held', captain_actionable: true, hold_kind: 'captain', hold_reason: 'Keep R1 or approve R3?', notion_page_id: id }]
+  const snapshot = { schema: 'fm-fleet-snapshot.v1', generated: new Date().toISOString(), fm_home: f.source.home, tasks: [], main_inventory: { valid: true }, backlog: { present: true, records: backlog } }
+  await writeFile(snapshotFile, JSON.stringify(snapshot))
+  const sources = new ReconciliationSources({ fleet: [{ home: f.source.home, snapshotFile }], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, f.fetcher, f.api, root)
+  const item = (await sources.queue()).items.find(row => row.sources.some(source => source.request?.id === f.source.id))!
+  expect(item).toBeDefined()
+  const p = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
+  expect(await sources.updateWork({ ...f.request, proposal: p } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  let answerId = proposalAnswerId(p)
+  if (producer === 'ask') {
+    const { decisionContext } = await import('../../ask/decision')
+    const turn = await sources.askStore.create('owner@example.test', crypto.randomUUID(), 'Recommend?', decisionContext(item, { scene: 'decisions' }))
+    const q = { ...p, proposal_id: 'ask-current', supersedes: p.proposal_id, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: '2' } }
+    await sources.askStore.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'cache-note', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
+    await sources.askStore.ingest({ request_id: turn.request_id, reply: { id: 'cache-note', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Current', detail: '', references: [], suggested_actions: [], decision_proposal: q }) } })
+    answerId = turn.request_id
+  }
+  await sources.queue()
+  if (change === 'closed') snapshot.backlog.records = []
+  else snapshot.backlog.records[0]!.notion_page_id = 'b'.repeat(32)
+  await writeFile(snapshotFile, JSON.stringify(snapshot))
+  expect((await sources.queue()).items.some(row => row.id === item.id)).toBe(true)
+  const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
+  const server = createServer(async (req, res) => { await asks.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  seedOriginAllowlist(port)
+  const before = structuredClone(f.raw), comments = f.comments.length
+  const response = await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: answerId, action_id: 'proceed', client_key: crypto.randomUUID() }) })
+  expect(response.status).toBe(409)
+  expect((await asks.store.list('owner@example.test')).some(row => row.action_selection)).toBe(false)
+  expect(f.raw).toEqual(before)
+  expect(f.comments).toHaveLength(comments)
+})
