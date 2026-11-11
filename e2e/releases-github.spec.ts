@@ -10,9 +10,13 @@ test.afterAll(async () => {
 
 test('v1.24.0 is visible from tag/runs without a GitHub Release; Plan/Verify, notes and narrow layout remain release-scoped', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
+  const requestedTags: string[] = []
+  page.on('request', request => { const tag = new URL(request.url()).searchParams.get('tag'); if (tag) requestedTags.push(tag) })
   await page.goto(`${preview.base}/?view=releases`)
   await page.getByRole('tab', { name: 'Verify', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'v1.24.0', exact: true })).toBeVisible()
+  await expect.poll(() => requestedTags.includes('v1.24.0')).toBe(true)
+  await expect(page.getByText(/0 targets lack verified deployment/)).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Production acceptance', exact: true })).toBeVisible()
   await expect(page.getByText('No GitHub Release record', { exact: true })).toBeVisible()
   await expect(page.getByText('Production deployment proof unknown', { exact: true })).toBeVisible()
