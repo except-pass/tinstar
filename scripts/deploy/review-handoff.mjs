@@ -2,7 +2,9 @@ import { appendFile, readFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { userInfo } from 'node:os'
 import { z } from 'zod'
+import { handoffManifestSchema, lateEvidenceSchema, validateHandoffManifest, handoffMeaning } from '../../src/shared/reviewHandoff.mjs'
 import { http } from './post-deploy-smoke.mjs'
 import { runningSha } from './deploy-support.mjs'
 
@@ -17,6 +19,25 @@ async function events(e) {
   catch (error) { if (error.code === 'ENOENT') return []; throw error }
 }
 const run = (command, args, options = {}) => execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, ...options }).trim()
+/** Attach a complete evidence manifest to an existing receipt; never probe HEAD
+ * or rewrite deployment/smoke provenance to repair a review-only failure. */
+export async function recordLateEvidence(deploymentId, e = process.env) {
+  const history = await events(e)
+  const deployment = history.filter(row => row.action === 'floor-deployment' && row.id === deploymentId).at(-1)
+  if (!deployment) throw new Error('No existing guarded deployment receipt for the selected ID')
+  const manifest = handoffManifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
+  validateHandoffManifest(manifest, deployment)
+  const config = JSON.parse(await readFile(join(e.TINSTAR_CONFIG_HOME, 'config.json'), 'utf8'))
+  const homes = config.firstmate?.homes ?? []
+  const ownerHome = e.TINSTAR_REVIEW_FIRSTMATE_HOME ?? (homes.length === 1 ? homes[0] : null)
+  // A typo here would strand the durable exception without a usable delivery path.
+  if (!ownerHome || !homes.includes(ownerHome)) throw new Error('Select a configured Firstmate home with TINSTAR_REVIEW_FIRSTMATE_HOME')
+  const event = lateEvidenceSchema.parse({ action: 'floor-review-evidence', deploymentId, time: new Date().toISOString(), operator: userInfo().username, ownerHome, ...manifest })
+  const previous = history.filter(row => row.action === 'floor-review-evidence' && row.deploymentId === deploymentId).at(-1) ?? deployment
+  const meaning = row => handoffMeaning({ ownerHome: row.ownerHome, evidence: row.evidence, nonReviewable: row.nonReviewable })
+  if (meaning(previous) !== meaning(event)) await append(e, event)
+  return event
+}
 export async function recordDeployment(e = process.env, execute = run) {
   const source = e.TINSTAR_DEPLOY_SOURCE
   const newSha = execute('git', ['-C', source, 'rev-parse', 'HEAD'])
@@ -71,7 +92,8 @@ export async function recordSmoke(e = process.env) {
   // (also on --check-only), without a new deploy or another membership crawl.
   if (e.TINSTAR_REVIEW_EVIDENCE_FILE) {
     try {
-      const manifest = manifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
+      const manifest = handoffManifestSchema.parse(JSON.parse(await readFile(e.TINSTAR_REVIEW_EVIDENCE_FILE, 'utf8')))
+      validateHandoffManifest(manifest, deployment)
       deployment = { ...deployment, evidence: manifest.evidence, nonReviewable: manifest.nonReviewable ?? [], time: new Date().toISOString() }
       await append(e, deployment)
     } catch { throw new Error('Live evidence manifest unreadable; handoff remains unconfirmed') }
@@ -83,8 +105,10 @@ export async function recordSmoke(e = process.env) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv[2] === 'record') await recordDeployment()
-    else if (process.argv[2] === 'smoke') await recordSmoke()
-    else throw new Error('Unknown review handoff command')
-  } catch { console.error('Review handoff unconfirmed; healthy deployment is retained. Inspect the existing deploy audit and retry normal reconciliation.'); process.exitCode = 1 }
+    const args = process.argv.slice(2)
+    if (args.length === 1 && args[0] === 'record') await recordDeployment()
+    else if (args.length === 3 && args[0] === 'record' && args[1] === '--deployment') await recordLateEvidence(args[2])
+    else if (args.length === 1 && args[0] === 'smoke') await recordSmoke()
+    else throw new Error('Usage: review-handoff.mjs record [--deployment floor:<sha>] | smoke')
+  } catch (error) { console.error(`Review handoff unconfirmed: ${error.message}. Healthy deployment is retained; correct the evidence and retry normal reconciliation.`); process.exitCode = 1 }
 }

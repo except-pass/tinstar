@@ -18,6 +18,7 @@ import { reviewIdentity, type ReviewEvidence } from '../../../shared/reviews'
 import { ReviewDeploymentAudit, ReviewDeploymentReconciler, type FloorDeployment } from '../reviewDeployment'
 import { AssociationStore } from '../../releases/associations'
 import { reconcileScene } from '../scene'
+import { recordLateEvidence } from '../../../../scripts/deploy/review-handoff.mjs'
 
 const id = 'a'.repeat(32), board = 'b'.repeat(32), sha = 'c'.repeat(40), head = 'd'.repeat(40)
 const pr = 'https://github.com/except-pass/tinstar/pull/999'
@@ -144,6 +145,40 @@ describe('durable shared review operations', () => {
 })
 
 describe('deployment audit reconciliation', () => {
+  it('repairs an older handoff once after source advances, preserving receipt and smoke across restart', async () => {
+    const f = await fixture(), audit = new ReviewDeploymentAudit(f.root), associations = new AssociationStore(f.root)
+    const source = fixtureSources(); source.fleet = []; source.intentions.data!.cards = [notionCard(f.raw)]
+    const scene = () => ({ ...reconcileScene({ ...source, intentions: { ...source.intentions, data: { ...source.intentions.data!, cards: [notionCard(f.raw)] } } }), claimHistory: [], historyScope: 'current' })
+    const deployment: FloorDeployment = { action: 'floor-deployment', id: review.deployment_id, time: new Date().toISOString(), oldSha: 'e'.repeat(40), newSha: sha,
+      membershipComplete: true, pulls: [{ url: pr, head, mergeSha: sha }], ownerHome: null, evidence: [], nonReviewable: [], warnings: [] }
+    const newer = { ...deployment, id: `floor:${head}`, oldSha: sha, newSha: head, pulls: [] }
+    const receipts = [deployment, { action: 'floor-smoke', deploymentId: deployment.id, newSha: sha, time: new Date().toISOString(), passed: true, receipt: 'Historical guarded smoke' }, newer]
+    await writeFile(audit.path, receipts.map(row => JSON.stringify(row)).join('\n') + '\n')
+    const workflow = f.restart(); workflow.validateReview = input => audit.validate(input, scene(), associations)
+    const update = vi.fn(workflow.update.bind(workflow)), deliver = vi.fn(async () => ({ saved: true }))
+    const reconcile = () => new ReviewDeploymentReconciler(new ReviewDeploymentAudit(f.root), { scene: async () => scene(), associations, update, deliver }).run(true)
+    await reconcile()
+    const prior = (await audit.exceptions()).find(row => row.deploymentId === deployment.id)!
+    expect(prior.missing).toContain('Configured Firstmate home responsible for handoff delivery')
+    expect(update).not.toHaveBeenCalled()
+    await writeFile(join(f.root, 'config.json'), JSON.stringify({ firstmate: { homes: ['/fixture'] } }))
+    const manifest = join(f.root, 'evidence.json')
+    await writeFile(manifest, JSON.stringify({ evidence: [{ card_id: id, review }] }))
+    const env = { TINSTAR_CONFIG_HOME: f.root, TINSTAR_REVIEW_EVIDENCE_FILE: manifest }
+    await recordLateEvidence(deployment.id, env)
+    await reconcile()
+    expect((await audit.exceptions()).some(row => row.id === prior.id)).toBe(false)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(f.raw.properties.Status.status.name).toBe('Ready for Review')
+    expect(f.comments).toHaveLength(1)
+    const completed = await readFile(audit.path, 'utf8')
+    await recordLateEvidence(deployment.id, env)
+    await reconcile()
+    expect(await readFile(audit.path, 'utf8')).toBe(completed)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect((await audit.read()).filter(row => row.action === 'floor-deployment' || row.action === 'floor-smoke')).toEqual(receipts)
+  })
+
   it('validates actual receipt, PR/head and canonical association and retains missing proof across restart', async () => {
     const f = await fixture(), audit = new ReviewDeploymentAudit(f.root), store = new AssociationStore(f.root)
     const source = fixtureSources(); source.intentions.data!.cards = [notionCard(f.raw)]

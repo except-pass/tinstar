@@ -273,14 +273,48 @@ match the deployment ID, deployed SHA, tested SHA and every declared PR/head
 before an existing submission can satisfy that deployment's handoff.
 No new polling service or event stream is introduced.
 
-To supply missing evidence after a healthy deploy, prepare the manifest and run
-`node scripts/deploy/review-handoff.mjs record` with that deployment's source and
-config environment, then refresh the existing work views. Alternatively, `floor-deploy.sh --check-only` rereads the evidence manifest after green smoke and performs the handoff without replacing the running build. A repeated record for
-the current SHA preserves its original verified membership. Same-key partial
-Notion writes reconcile through `update_work`; unresolved records remain visible
-in `get_work_views.reviewExceptions`/`reviewRecoveries`. A previously unknown
-association is resolved only when fresh shared source supplies its canonical
-card identity. Do not restart or roll back healthy code to repair a review write.
+To supply missing evidence after a healthy deploy, including **after a newer
+revision has deployed**, prepare the complete evidence manifest for the original
+deployment and select its existing receipt explicitly:
+
+```sh
+TINSTAR_CONFIG_HOME=/home/farm/srv/tinstar-config \
+TINSTAR_REVIEW_FIRSTMATE_HOME=/home/farm/fm-home \
+TINSTAR_REVIEW_EVIDENCE_FILE=/path/to/original-deployment-evidence.json \
+node scripts/deploy/review-handoff.mjs record --deployment floor:<original-deployed-sha>
+```
+
+Then refresh the existing work views (or the existing
+`/api/reconciliation/queue?refresh=1` UI endpoint). The command only records
+validated evidence; it does not claim a saved Notion write or completed handoff.
+Read `get_work_views.reviewExceptions` and the canonical review submission
+readback to confirm reconciliation. A missing association, failed smoke, or
+partial Notion write remains an actionable exception; retry normal refresh after
+repairing the named gap, retaining the same submission key.
+
+The selected receipt must already exist. This appends a `floor-review-evidence`
+event with UTC time, OS operator and configured Firstmate home to the same audit.
+It never changes the original old/new SHA, PR/head membership or smoke. The
+manifest is a complete replacement of the selected deployment's handoff evidence
+and non-reviewable classifications; include all evidence that should remain
+available. Incorrect SHA, tested SHA, PR/head, malformed proof or an unconfigured
+home is refused before appending so it cannot falsely satisfy another deployment.
+Correct the input and rerun; no live build is stopped or blocked. Identical
+retries (including JSON key/collection reordering) append nothing. Normal refresh
+and restart use the latest late-evidence event and suppress already resolved
+submissions. Canonical PR/card association and policy checks still run through
+the shared writer before any Notion mutation.
+
+Without `--deployment`, `record` targets the **configured source checkout HEAD**,
+which may differ from the running server; do not use it for historical repair.
+`floor-deploy.sh --check-only` and `recordSmoke` still select only the latest
+`floor-deployment` and require its SHA to match the running build. Late-evidence
+events never become that selection or create smoke proof for an older build.
+Do not pass an older deployment's manifest to `--check-only`; it is rejected.
+A repeated record for the current SHA preserves its original verified membership.
+A previously unknown association is resolved only when fresh shared source
+supplies its canonical card identity. Do not restart or roll back healthy code
+to repair a review write.
 
 A review-only failure prints a warning and does not create `deploy.blocked` or
 turn an overridden failed smoke into a successful receipt. Existing deploy
