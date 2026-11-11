@@ -48,6 +48,7 @@ export function retainReviewEvidence(next: ReviewQueueRead, previous: ReviewQueu
     const known = previous?.reviews.items.find(old => old.cardId === item.cardId)
     return !item.submission && known?.submission ? { ...item, submissionKey: known.submissionKey, submission: known.submission } : item
   }) } }
+}
 export function separatePullReview(prUrl: string | null | undefined, status: string | null | undefined, reviews: ReviewView): boolean {
   return status === 'open' || !reviews.items.some(item => item.linkedPulls?.some(url => url === prUrl) || item.submission?.pulls.some(pull => pull.url === prUrl))
 }
