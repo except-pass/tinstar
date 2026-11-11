@@ -70,11 +70,24 @@ export class GithubReleaseReader {
 
   private project(data: ReleasesRead): GithubReleaseRead {
     const value = this.cached ?? { releases: [], status: 'unknown' as const, observedAt: null, warnings: ['Reading GitHub release sources.'] }
-    return { ...value, refreshing: !!this.pending, releases: value.releases.map(release => {
+    const releases = value.releases.map(release => {
       const pulls = release.pulls.map(pull => ({ ...pull, links: data.pulls.find(existing => existing.id === pull.id)?.links ?? [] }))
       const ids = new Set(pulls.map(pull => pull.id)), cards = new Set(pulls.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
-      return { ...release, gaps: [...release.gaps], pulls, supportingPulls: data.pulls.filter(pull => !ids.has(pull.id) && activeReleaseLinks(pull).some(link => cards.has(link.cardId))) }
-    }) }
+      const detail = this.details.get(`${release.version}:${release.sourceSha}`)
+      const readable = value.status !== 'unknown' && !!detail?.known && detail.at > this.now() - 60_000
+      const runs = release.github?.runs ?? []
+      const latest = [...new Map([...runs].sort((a, b) => a.id - b.id).map(run => [run.workflow, run] as const)).values()]
+      const actions = release.kind === 'production' && release.github ? {
+        state: !readable ? 'Unknown' : !runs.length ? 'Deployment unknown' : latest.some(run => run.status === 'completed' && run.conclusion !== 'success') ? 'Failed/unfinished components' : latest.some(run => run.status !== 'completed') ? 'Running' : 'Awaiting PROD verification',
+        provenance: { ...release.provenance, historical: !readable },
+        github: { ...release.github, runsStatus: readable ? 'fresh' as const : 'unknown' as const },
+      } : {}
+      const gaps = [...release.gaps]
+      if (release.kind === 'production' && !readable) gaps.push(detail ? 'Actions evidence is pending, stale or unreadable; retained runs are last known.' : 'Actions evidence pending; release activity is unknown until read.')
+      return { ...release, ...actions, gaps, pulls, supportingPulls: data.pulls.filter(pull => !ids.has(pull.id) && activeReleaseLinks(pull).some(link => cards.has(link.cardId))) }
+    })
+    const status = value.status === 'unknown' ? 'unknown' : value.warnings.length || releases.some(release => release.kind === 'production' && release.github?.runsStatus === 'unknown') ? 'partial' : 'fresh'
+    return { ...value, status, refreshing: !!this.pending, releases }
   }
 
   private async list(path: string) {
@@ -117,11 +130,8 @@ export class GithubReleaseReader {
       const releases = tags.map((tag): ReleaseObject => {
         const detail = this.details.get(`${tag.name}:${tag.commit.sha}`), record = records.find(record => record.tag_name === tag.name)
         const previous = this.cached?.releases.find(release => release.version === tag.name && release.sourceSha === tag.commit.sha)
-        const readable = !!detail?.known && detail.at >= this.now() - 60_000
-        const range = ranges.get(tag.name), runs = detail?.runs ?? [], activity = runs.length > 0
-        const latest = [...new Map([...runs].sort((a, b) => a.id - b.id).map(run => [run.workflow, run] as const)).values()]
+        const range = ranges.get(tag.name), runs = detail?.runs ?? []
         const gaps = ['Native Actions results do not establish current deployed component identities or feature acceptance.']
-        if (!readable) gaps.push(detail ? 'Actions evidence is pending, stale or unreadable; retained runs are last known.' : 'Actions evidence pending; release activity is unknown until read.')
         if (detail && !runs.length) gaps.push('No matching component tag runs observed; deployment remains unknown. Older Actions history may have expired.')
         if ((range?.files ?? previous?.scope ?? []).length >= 300) gaps.push('GitHub compare file scope may be truncated at 300 files; PR membership is read from paginated commits independently.')
         const summary = nativeReleaseSummary(record?.body ?? '')
@@ -130,13 +140,13 @@ export class GithubReleaseReader {
           id: `${repository}:tag:${tag.name}`, repository, version: tag.name, sourceSha: tag.commit.sha,
           kind: 'production', candidateId: null, planId: null, executionId: null,
           scope: range?.files ?? previous?.scope ?? [], targets: [],
-          state: !readable ? 'Unknown' : !activity ? 'Deployment unknown' : latest.some(run => run.status === 'completed' && run.conclusion !== 'success') ? 'Failed/unfinished components' : latest.some(run => run.status !== 'completed') ? 'Running' : 'Awaiting PROD verification',
+          state: 'Unknown',
           observedAt: runs.map(run => run.updatedAt).sort().at(-1) ?? record?.published_at ?? null,
-          provenance: { source: 'GitHub version tag, Release record and component Actions runs', asOf: detail?.observedAt ?? observedAt, historical: !readable },
+          provenance: { source: 'GitHub version tag, Release record and component Actions runs', asOf: detail?.observedAt ?? observedAt, historical: true },
           evidenceUrl: record?.html_url ?? `https://github.com/${repository}/tree/${tag.name}`,
           membership: range?.membership ?? previous?.membership ?? { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Git release comparison pending; Changes are unknown.' },
           pulls: range ? [...range.pulls.values()] : previous?.pulls ?? [], gaps,
-          github: { record: record ? 'available' : recordsKnown ? 'missing' : 'unknown', url: record?.html_url ?? null, body: record?.body ?? null, publishedAt: record?.published_at ?? null, ...summary, runs, runsStatus: readable ? 'fresh' : 'unknown' },
+          github: { record: record ? 'available' : recordsKnown ? 'missing' : 'unknown', url: record?.html_url ?? null, body: record?.body ?? null, publishedAt: record?.published_at ?? null, ...summary, runs, runsStatus: 'unknown' },
         }
       })
       if (tags[0] && mainSha !== tags[0].commit.sha) {
@@ -152,7 +162,7 @@ export class GithubReleaseReader {
           github: { record: 'missing', url: null, body: null, publishedAt: null, snapshotAt: null, componentResults: [], runs: [], runsStatus: 'unknown' },
         })
       }
-      return { releases, observedAt, status: warnings.length || releases.some(release => release.kind === 'production' && release.github?.runsStatus === 'unknown') ? 'partial' as const : 'fresh' as const, warnings: [...warnings] }
+      return { releases, observedAt, status: warnings.length ? 'partial' as const : 'fresh' as const, warnings: [...warnings] }
     }
     this.cached = publish()
     // Read the small recent window, never every historical tag. Each completed

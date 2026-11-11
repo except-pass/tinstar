@@ -10,7 +10,7 @@ import { ReleasePullReader } from '../pulls'
 import * as acceptance from '../acceptance'
 import { releaseAssociations } from '../../../shared/releases'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
-import { nativeFixtureRead, nativeHead, nativeMain, nativeTime, nativeTags } from '../../../../test-fixtures/releases/github-native'
+import { nativeFixtureRead, nativeHead, nativeMain, nativeTime, nativeTags, nativeRun } from '../../../../test-fixtures/releases/github-native'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); vi.restoreAllMocks() })
@@ -63,6 +63,43 @@ describe('progressive Releases display', () => {
     const displayed = api.display()
     expect(displayed.releases!.length).toBeGreaterThan(0)
     for (const release of displayed.releases!) expect(release.gaps).toContain(warning)
+  })
+
+  it.each([
+    { runs: [nativeRun], state: 'Awaiting PROD verification' },
+    { runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }], state: 'Running' },
+    { runs: [{ ...nativeRun, conclusion: 'failure' }], state: 'Failed/unfinished components' },
+    { runs: [], state: 'Deployment unknown' },
+  ])('expires cached Actions during a blocked catalog refresh and recovers $state', async ({ runs, state }) => {
+    let clock = now(), blocked = false, finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const fixture = nativeFixtureRead({ runs })
+    const reader = new GithubReleaseReader(async path => {
+      if (blocked && path.includes('/tags?')) await gate
+      return fixture(path)
+    }, () => clock)
+    const initial = await reader.get(data())
+    expect(initial.status).toBe('fresh')
+    expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
+    const retainedRuns = initial.releases[0]!.github!.runs
+    clock += 60_000; blocked = true
+    try {
+      const expired = reader.display(data())
+      expect(expired).toMatchObject({ refreshing: true, status: 'partial' })
+      expect(expired.releases[0]).toMatchObject({ state: 'Unknown', provenance: { historical: true }, github: { runsStatus: 'unknown', runs: retainedRuns } })
+      expect(expired.releases[0]!.provenance.asOf).toBe(initial.releases[0]!.provenance.asOf)
+      expect(expired.releases[0]!.gaps).toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')
+      clock += 120_000
+      const stillBlocked = reader.display(data())
+      expect(stillBlocked).toMatchObject({ refreshing: true, status: 'partial' })
+      expect(stillBlocked.releases[0]!.github!.runsStatus).toBe('unknown')
+      expect(initial.releases[0]!.github!.runsStatus).toBe('fresh')
+    } finally { blocked = false; finish() }
+    const recovered = await reader.get(data())
+    expect(recovered.status).toBe('fresh')
+    expect(recovered.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh', runs: retainedRuns } })
+    expect(recovered.releases[0]!.gaps).not.toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')
+    expect(reader.display(data()).releases[0]!.github!.runsStatus).toBe('fresh')
   })
 
   it('publishes tagged identities immediately while slow Actions reads remain pending', async () => {
