@@ -24,7 +24,7 @@ async function main() {
     const at = new Date().toISOString()
     await writeFile(snapshotFile, JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home, generated: at,
       main_inventory: { valid: true }, backlog: { present: true, records: [] }, tasks: [{ id: task, kind: 'crewmate', spawn_gen: generation,
-        title: 'SYNTHETIC Jira proof: no real worker', current_state: { state: 'working', source: 'synthetic-fixture', observed_at: at, freshness: 'fresh' },
+        title: 'SYNTHETIC Jira proof: no real worker', current_state: { state: 'working', source: 'pane', observed_at: at, freshness: 'fresh' },
         endpoint: { exists: true, agent_alive: true, status: 'alive', observed_at: at, freshness: 'fresh' }, paths: {} }] }), { mode: 0o600 })
   }
   if (values.prepare) {
