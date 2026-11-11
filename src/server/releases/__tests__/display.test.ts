@@ -6,16 +6,65 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GithubReleaseReader } from '../github'
 import { ReleasesApi } from '../routes'
+import { ReleasePullReader } from '../pulls'
+import * as acceptance from '../acceptance'
 import { releaseAssociations } from '../../../shared/releases'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { nativeFixtureRead, nativeHead, nativeMain, nativeTime } from '../../../../test-fixtures/releases/github-native'
 
 const cleanups: Array<() => Promise<void>> = []
-afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())) })
+afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); vi.restoreAllMocks() })
 const data = () => releaseAssociations(fixtureScene())
 const now = () => Date.parse(nativeTime)
 
 describe('progressive Releases display', () => {
+  it.each([false, true])('reports failed association refreshes and clears them after recovery (warm: %s)', async warm => {
+    const root = await mkdtemp(join(tmpdir(), 'release-display-failure-'))
+    cleanups.push(() => rm(root, { recursive: true, force: true }))
+    let clock = Date.parse(nativeTime)
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
+    const source = vi.fn().mockResolvedValue(scene)
+    const pulls = new ReleasePullReader()
+    vi.spyOn(pulls, 'get').mockResolvedValue(new Map())
+    const reader = new GithubReleaseReader(nativeFixtureRead(), now)
+    await reader.get(data())
+    const api = new ReleasesApi({ scene: source }, root, pulls, undefined, reader)
+    const retained = warm ? await api.read() : null
+    source.mockRejectedValue(new Error('private upstream credentials'))
+    api.display()
+    await vi.waitFor(() => expect(api.display().warnings.join(' ')).toContain('refresh failed'))
+    const failed = api.display()
+    expect(failed.associationsComplete).toBe(false)
+    expect(failed.pulls).toEqual(retained?.pulls ?? [])
+    expect(failed.warnings.join(' ')).toContain('last known')
+    expect(failed.warnings.join(' ')).not.toContain('still loading')
+    expect(JSON.stringify(failed)).not.toContain('private upstream credentials')
+    expect(failed.releases!.every(release => release.gaps.some(gap => gap.includes('refresh failed')))).toBe(true)
+    source.mockResolvedValue(scene)
+    clock += 20_001
+    api.display()
+    await vi.waitFor(() => expect(api.display().warnings.join(' ')).not.toContain('refresh failed'))
+    expect(api.display().associationsComplete).toBe(releaseAssociations(scene).associationsComplete)
+    expect(api.display().releases!.every(release => release.gaps.every(gap => !gap.includes('refresh failed')))).toBe(true)
+  })
+
+  it('retains acceptance receipt warnings when native releases overlay the enriched read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'release-display-acceptance-'))
+    cleanups.push(() => rm(root, { recursive: true, force: true }))
+    vi.spyOn(acceptance, 'readAcceptanceRecords').mockRejectedValue(new Error('unreadable'))
+    const pulls = new ReleasePullReader()
+    vi.spyOn(pulls, 'get').mockResolvedValue(new Map())
+    const reader = new GithubReleaseReader(nativeFixtureRead(), now)
+    const api = new ReleasesApi({ scene: async () => ({ ...fixtureScene(), searchIndex: { documents: [], notes: [] } }) }, root, pulls, undefined, reader)
+    const enriched = await api.read()
+    const warning = enriched.warnings.find(message => message.startsWith('Acceptance receipt store'))!
+    expect(warning).toBeTruthy()
+    const displayed = api.display()
+    expect(displayed.releases!.length).toBeGreaterThan(0)
+    for (const release of displayed.releases!) expect(release.gaps).toContain(warning)
+  })
+
   it('publishes tagged identities immediately while slow Actions reads remain pending', async () => {
     let finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve }), fixture = nativeFixtureRead()

@@ -33,20 +33,24 @@ export class ReleasesApi {
   private displayCache: ReleasesRead | null = null
   private displayPending: Promise<void> | null = null
   private displayUntil = 0
+  private displayFailed = false
 
   /** Fast list projection, like Decisions: serve known records while source,
    * associations and PR enrichment refresh independently in the background. */
   display(writable = false, tag?: string): ReleasesRead {
-    const data: ReleasesRead = this.displayCache ?? { generatedAt: new Date().toISOString(), pulls: [], unassociatedCards: [], warnings: ['Notion PR associations are still loading.'], associationsComplete: false, associationsWritable: false }
+    const cached: ReleasesRead = this.displayCache ?? { generatedAt: new Date().toISOString(), pulls: [], unassociatedCards: [], warnings: ['Notion PR associations are still loading.'], associationsComplete: false, associationsWritable: false }
     if (!this.displayPending && Date.now() >= this.displayUntil) {
-      this.displayPending = this.read(false, false, tag).then(value => { this.displayCache = value }, () => {}).finally(() => {
+      this.displayPending = this.read(false, false, tag).then(() => {}, () => { this.displayFailed = true }).finally(() => {
         this.displayPending = null
         this.displayUntil = Date.now() + 20_000
       })
     }
+    const failure = 'Release association refresh failed; retained associations are last known and may be stale or unavailable.'
+    const data = this.displayFailed ? { ...cached, associationsComplete: false, warnings: [...cached.warnings.filter(warning => warning !== 'Notion PR associations are still loading.'), failure] } : cached
     const native = this.releaseObjects.display(data, tag)
+    const gaps = data.warnings.filter(warning => warning.startsWith('Acceptance receipt store') || warning === failure)
     const refreshing = !!this.displayPending || !!native.refreshing
-    return { ...data, associationsWritable: writable && !!this.displayCache && !data.warnings.some(warning => warning.startsWith('Local association audit')), refreshing, releases: native.releases,
+    return { ...data, associationsWritable: writable && !!this.displayCache && !data.warnings.some(warning => warning.startsWith('Local association audit')), refreshing, releases: native.releases.map(release => ({ ...release, gaps: [...new Set([...release.gaps, ...gaps])] })),
       releaseSource: { status: native.status, observedAt: native.observedAt, warnings: native.warnings, refreshing: native.refreshing } }
   }
   /** Shared authorized-source projection for Releases and contextual Ask. */
@@ -82,6 +86,7 @@ export class ReleasesApi {
     reconciled.acceptanceRecords = reconciled.acceptanceRecords.filter(record => visibleChecks.has(record.key))
     const acceptanceWarning = reconciled.warnings.find(message => message.startsWith('Acceptance receipt store'))
     if (acceptanceWarning) for (const release of reconciled.releases) release.gaps.push(acceptanceWarning)
+    this.displayFailed = false
     this.displayCache = reconciled
     return reconciled
   }
