@@ -19,9 +19,9 @@ export async function readPublicationSettings(root: string) {
     throw new Error('Correct releases/publication.json or remove it to restore the OFF default.')
   }
 }
-interface PublishedRelease { url: string; isDraft: boolean; description: string }
+interface PublishedRelease { url: string; isDraft: boolean; description: string | null }
 // Provider newline normalization is cosmetic; compare the authored note content.
-const sameNotes = (actual: string, expected: string) => actual.replace(/\r\n/g, '\n').trim() === expected.replace(/\r\n/g, '\n').trim()
+const sameNotes = (actual: string | null, expected: string) => (actual ?? '').replace(/\r\n/g, '\n').trim() === expected.replace(/\r\n/g, '\n').trim()
 export interface PublicationGithub {
   inspect(repository: string, tag: string): Promise<{ tagSha: string | null; release: PublishedRelease | null }>
   create(repository: string, tag: string, title: string, body: string): Promise<void>

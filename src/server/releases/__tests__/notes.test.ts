@@ -63,9 +63,9 @@ describe('separate default-OFF GitHub publication', () => {
     expect((await f.publisher.publish(f.release.id, 'customer', 'owner', 'Approved exact component release')).status).toBe('published')
     expect(f.create).toHaveBeenCalledTimes(1)
   })
-  it.each([true, false])('leaves an existing draft/published record untouched (%s)', async isDraft => {
+  it.each([{ isDraft: true, description: 'Manually authored existing notes' }, { isDraft: false, description: 'Manually authored existing notes' }, { isDraft: false, description: null }])('leaves an existing draft/published record untouched (%s)', async ({ isDraft, description }) => {
     const f = await setup(); await f.enable()
-    f.inspect.mockResolvedValue({ tagSha: f.release.sourceSha, release: { url: 'https://example.com/existing', isDraft, description: 'Manually authored existing notes' } })
+    f.inspect.mockResolvedValue({ tagSha: f.release.sourceSha, release: { url: 'https://example.com/existing', isDraft, description } })
     const result = await f.publisher.publish(f.release.id, 'customer', 'owner', 'Inspect existing')
     expect(result.status).toBe(isDraft ? 'existing-draft; review in GitHub' : 'existing-release; review in GitHub')
     expect(f.create).not.toHaveBeenCalled()
