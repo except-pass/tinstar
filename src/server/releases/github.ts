@@ -9,7 +9,7 @@ const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
 const tagSchema = z.object({ name: z.string(), commit: z.object({ sha }) })
 const recordSchema = z.object({ tag_name: z.string(), html_url: z.string(), body: z.string().nullable(), published_at: z.string().nullable(), draft: z.boolean() })
 const runSchema = z.object({ id: z.number(), name: z.string(), path: z.string(), html_url: z.string(), head_sha: sha, head_branch: z.string().nullable(), event: z.string(), status: z.string(), conclusion: z.string().nullable(), run_attempt: z.number(), created_at: z.string(), updated_at: z.string(), run_started_at: z.string().nullable().optional() })
-const version = (name: string) => /^v\d+(?:\.\d+){2,}(?:-[\w.-]+)?$/.test(name)
+const version = (name: string) => /^v\d+\.\d+\.\d+$/.test(name)
 const compareTags = (a: { name: string }, b: { name: string }) => b.name.localeCompare(a.name, undefined, { numeric: true })
 type Read = typeof githubJson
 export interface GithubReleaseRead {

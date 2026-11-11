@@ -20,6 +20,12 @@ describe('GitHub-native releases', () => {
     expect(changes[0]).toMatchObject({ delivery: 'Unknown', acceptance: 'Unknown' })
     expect(read.mock.calls.every(([path]) => path.startsWith(`/repos/${nativeRepo}/`))).toBe(true)
   })
+  it('excludes prerelease, suffixed, unprefixed and extra-segment tags from release history', async () => {
+    const excluded = ['v1.25.0-rc1', 'v1.25.0+build', 'v1.25.0.1', '1.25.0']
+    const tags = [...nativeTags, ...excluded.map(name => ({ name, commit: { sha: 'd'.repeat(40) } }))]
+    const result = await new GithubReleaseReader(nativeFixtureRead({ tags }), () => now).get(data())
+    expect(result.releases.map(release => release.version)).toEqual(['v1.24.0', 'v1.22.0'])
+  })
   it('retains the GitHub Release body, component result table and snapshot without certifying deployment', async () => {
     const result = await new GithubReleaseReader(nativeFixtureRead({ records: [nativeRecord] }), () => now).get(data())
     expect(result.releases[0]!.github).toMatchObject({ record: 'available', body: nativeBody, publishedAt: nativeTime, snapshotAt: nativeTime, componentResults: [{ component: 'ra-command', result: 'completed — awaiting PROD verification', url: nativeRun.html_url }] })

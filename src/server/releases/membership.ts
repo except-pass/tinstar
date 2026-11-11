@@ -6,11 +6,8 @@ import { githubJson } from '../pulls/github'
 export const readReleaseRows = githubJson
 type Read = typeof readReleaseRows
 const sha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
-const version = (value: string) => /^v?\d+(?:\.\d+){2,}$/.test(value) ? value.replace(/^v/, '').split('.').map(Number) : undefined
-const compareVersions = (a: number[], b: number[]) => {
-  for (let index = 0; index < Math.max(a.length, b.length); index++) { const difference = (a[index] ?? 0) - (b[index] ?? 0); if (difference) return difference }
-  return 0
-}
+const version = (value: string) => /^v(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number)
+const compareVersions = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!
 interface Range {
   membership: ReleaseObject['membership']; pulls: Map<string, ReleasePull>
   files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number

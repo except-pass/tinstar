@@ -13,6 +13,18 @@ describe('Git release membership', () => {
     await reader.get('owner/repo', head, 'v2.0.0')
     expect(read).toHaveBeenCalledTimes(4)
   })
+  it.each([false, true])('ignores non-production baseline tags with supplied catalog: %s', async supplied => {
+    const tags = [tag('v1.24.0', base), ...['v1.25.0-rc1', 'v1.25.0+build', 'v1.25.0.1', '1.25.0'].map(name => tag(name, merge))]
+    const read = vi.fn(async (path: string) => path.includes('/tags?') ? tags : { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 0, commits: [] })
+    const range = await new ReleaseMembershipReader(read).get('owner/repo', head, 'v1.26.0', supplied ? tags : undefined)
+    expect(range.membership).toMatchObject({ status: 'complete', baseline: 'v1.24.0', baselineSha: base })
+  })
+  it.each(['v1.25.0-rc1', 'v1.25.0+build', 'v1.25.0.1', '1.25.0'])('does not compute membership for non-production tag %s', async name => {
+    const read = vi.fn()
+    const range = await new ReleaseMembershipReader(read).get('owner/repo', head, name, [tag('v1.24.0', base)])
+    expect(range.membership).toMatchObject({ status: 'unknown', baseline: null })
+    expect(read).not.toHaveBeenCalled()
+  })
   it('retains precise partial progress without inventing an empty release on a failed read', async () => {
     let now = 0
     const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
