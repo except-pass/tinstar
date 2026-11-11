@@ -80,7 +80,9 @@ test.beforeEach(async ({ page }, info) => {
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed'); if (!localStorage.getItem('tinstar.floor.preferences')) localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' } })) })
 })
 
-test.beforeAll(async () => {
+// Each browser test owns its UI sessions. Sharing one backend across the file
+// exhausts the retained-window limit when the suite finishes within ten minutes.
+test.beforeEach(async () => {
   await mkdir(join(process.cwd(), '.test-runtime'), { recursive: true })
   root = await mkdtemp(join(process.cwd(), '.test-runtime', 'tinstar-floor-'))
   await mkdir(join(root, 'config'))
@@ -100,7 +102,7 @@ test.beforeAll(async () => {
   await writeFile(join(root, 'failed-start.log'), output)
   throw new Error(`Floor server did not start; logs: ${root}/failed-start.log`)
 })
-test.afterAll(async () => {
+test.afterEach(async () => {
   server?.kill()
   if (server && server.exitCode === null) await new Promise<void>(resolve => server.once('exit', () => resolve()))
   if (root) await rm(root, { recursive: true, force: true })
