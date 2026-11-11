@@ -15,11 +15,11 @@ export function WaitingOnMain({ data, now, readFailed = false }: { data?: MainWa
     </button>
     {open && <div className="ov-main-waits-list">
       {unknown && <p role="status">{data?.error ?? 'Some sources are unknown or stale; this count may be incomplete.'} {data?.unknown.join(' · ')}</p>}
-      {items.map(item => <article key={item.id}>
+      {items.map(item => <article key={item.id} className={item.alert === 'plain-comment' ? 'ov-main-wait-undelivered' : undefined}>
         <strong>{item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.label} ↗</a> : item.label}</strong>
         <code>{item.key}</code><span>{item.ageBasis === 'at least' ? 'At least ' : ''}{waitAgeLabel(item.since, now)}{!item.fresh || readFailed ? ' · last known' : ''}</span>
         <p>{item.text}</p>
-        {item.alert === 'plain-comment' && <p role="status">Owner mention unavailable · plain Notion comment posted; push notification not confirmed.</p>}
+        {item.alert === 'plain-comment' && <p role="status">Owner alert not delivered (mention failed) · plain Notion comment posted; next attempt after the 4h throttle.</p>}
         {item.alert === 'mentioned' && <small>Owner mentioned in Notion</small>}
         {item.alert === 'unconfirmed' && <p role="status">Notion alert delivery unconfirmed · next attempt after the 4h throttle.</p>}
         {item.alert === 'failed' && <p role="status">Notion alert failed · next attempt after the 4h throttle.</p>}

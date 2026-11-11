@@ -200,3 +200,5 @@
 .ov-main-waits-list article p, .ov-main-waits-list article small { width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ov-main-waits-list code { overflow-wrap: anywhere; }
 .ov-main-waits-list a { text-decoration: underline; }
+
+.ov-main-waits-list article.ov-main-wait-undelivered { color: #fecaca; background: #451a1a; border-color: #ef4444; }

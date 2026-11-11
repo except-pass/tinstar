@@ -57,11 +57,10 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
 }
 
 export function mainWaitComment(item: MainWaitItem | MainWaitItem[], mention: boolean, now = Date.now()) {
-  const describe = (row: MainWaitItem) => `${row.label} [${row.key}] · ${row.ageBasis === 'at least' ? 'at least ' : ''}${waitAgeLabel(row.since, now)} · ${row.text}`
+  const excerpt = (text: string) => text.length > 200 ? `${text.slice(0, 199)}…` : text
+  const describe = (row: MainWaitItem) => `${row.label} [${row.key}] · ${row.ageBasis === 'at least' ? 'at least ' : ''}${waitAgeLabel(row.since, now)} · ${excerpt(row.text)}`
   const text = Array.isArray(item) ? `Waiting on First Mate: ${item.length} existing overdue items (4h+):\n${item.map(describe).join('\n')}`
-    : `Waiting on First Mate for ${item.ageBasis === 'at least' ? 'at least ' : ''}${waitAgeLabel(item.since, now)}: ${item.label} [${item.key}] · ${item.text}`
-  // Notion limits each rich-text segment to 2,000 characters. Preserve every
-  // item's text in a startup summary, rather than truncating the backlog.
+    : `Waiting on First Mate for ${item.ageBasis === 'at least' ? 'at least ' : ''}${waitAgeLabel(item.since, now)}: ${item.label} [${item.key}] · ${excerpt(item.text)}`
   const content = `${mention ? ' ' : ''}${text}`
   const chunks = Array.from({ length: Math.ceil(content.length / 2000) }, (_, index) => ({ type: 'text', text: { content: content.slice(index * 2000, (index + 1) * 2000) } }))
   return { parent: { page_id: !Array.isArray(item) && item.kind === 'card' ? item.key : MAIN_WAIT_CARD }, rich_text: [

@@ -7,6 +7,7 @@ control turns red. It is global, independent of Overview filters.
 Cards match `Waiting For` or `Waiting For ID`, case-insensitively: `First Mate`,
 `First Mate (main)`, `Main:`, `via main`, or `main firstmate`. Matching lives in
 `src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
+Card age is an at-least estimate until Tin Star observes the wait start.
 A card's age is a conservative **at least** value: its last edit when the wait
 was first observed. Unrelated later edits do not reset that saved age; changed
 wait text starts a new conservative age. Notion does not publish a property
@@ -57,12 +58,12 @@ service is involved.
 
 On the first alert sweep, already-overdue items produce **one summary comment**
 on the backstop card, listing every known overdue item with its key, age and
-text. All included items are recorded as alerted. Subsequent newly-overdue
+text (truncated to 200 characters per item). All included items record the delivery outcome and attempt time. Subsequent newly-overdue
 items and four-hour repeats use individual comments. An empty initial known
 census initializes normally. An entirely unknown census waits for readable data.
 
 User-read failure or a definite mention rejection falls back to a plain Notion
-comment, visibly labeled on Overview. A network timeout is ambiguous; it does
+comment, recorded as owner alert not delivered (mention failed) and shown red on the Overview item; the mentioned alert is retried at the normal once-per-four-hour cadence. A network timeout is ambiguous; it does
 not cause an immediate second write. Each attempt is durably reserved before
 posting and is eligible again four hours later, so crashes/restarts cannot spam
 already-alerted items. Failed/unconfirmed delivery is shown in the expanded

@@ -137,7 +137,9 @@ describe('Waiting on main', () => {
     const summary = mainWaitComment([item(), mate], true, now)
     expect(summary.parent.page_id).toBe(MAIN_WAIT_CARD)
     expect(JSON.stringify(summary)).toContain('2 existing overdue items')
-    expect(summary.rich_text.filter(row => row.type === 'text').map(row => 'text' in row ? row.text.content : '').join('')).toContain(mate.text)
+    expect(summary.rich_text.filter(row => row.type === 'text').map(row => 'text' in row ? row.text.content : '').join('')).toContain('x'.repeat(199) + '…')
+    expect(JSON.stringify(summary)).not.toContain('x'.repeat(201))
+    expect(JSON.stringify(mainWaitComment(mate, false, now))).toContain('x'.repeat(199) + '…')
   })
   it('uses the existing client and falls back to a plain comment on missing person capability', async () => {
     const bodies: unknown[] = []
@@ -161,6 +163,31 @@ describe('Waiting on main', () => {
     expect(await notify([item()], now)).toBe('plain-comment')
     expect(JSON.stringify(bodies[0])).toContain(MAIN_WAIT_OWNER)
     expect(JSON.stringify(bodies[1])).not.toContain('mention')
+  })
+  it.each(['lookup', 'rejection'])('persists %s fallback as undelivered and retries mentions after four hours', async failure => {
+    const directory = await root()
+    let time = now, available = false
+    const bodies: { rich_text: { type: string }[] }[] = []
+    const transport = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      if (init?.method !== 'POST') return !available && failure === 'lookup'
+        ? Response.json({}, { status: 403 }) : Response.json({ id: MAIN_WAIT_OWNER, type: 'person' })
+      const body = JSON.parse(String(init.body))
+      bodies.push(body)
+      return !available && body.rich_text.some((row: { type: string }) => row.type === 'mention')
+        ? Response.json({}, { status: 400 }) : Response.json({ id: 'comment' })
+    })
+    const notify = mainWaitNotifier({ token: 'test-only', dataSourceId: fixtureId(999) }, new NotionApi(transport as typeof fetch, 0))
+    const create = () => new WaitingOnMain(async () => snapshot(time), notify, directory, async () => true, () => time)
+    expect((await create().sweep()).items.every(row => row.alert === 'plain-comment')).toBe(true)
+    const attempts = bodies.length
+    available = true
+    time += FOUR_HOURS - 1
+    expect((await create().sweep()).items.every(row => row.alert === 'plain-comment')).toBe(true)
+    expect(bodies).toHaveLength(attempts)
+    time++
+    expect((await create().sweep()).items.every(row => row.alert === 'mentioned')).toBe(true)
+    expect(bodies).toHaveLength(attempts + 2)
+    expect(bodies.slice(attempts).every(body => body.rich_text.some(row => row.type === 'mention'))).toBe(true)
   })
   it('reports ambiguous transport failure without posting a duplicate fallback', async () => {
     const transport = vi.fn(async (_input: unknown, init?: RequestInit) => {
