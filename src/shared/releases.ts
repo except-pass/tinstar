@@ -36,7 +36,8 @@ export interface ReleasesRead {
   acceptanceWorkflows?: Record<string, import('./releaseAcceptance').AcceptanceWorkflow>
   acceptanceRecords?: AcceptanceRecord[]
   releases?: ReleaseObject[]
-  releaseSource?: { status: 'fresh' | 'partial' | 'unknown'; observedAt: string | null; warnings: string[] }
+  refreshing?: boolean
+  releaseSource?: { status: 'fresh' | 'partial' | 'unknown'; refreshing?: boolean; observedAt: string | null; warnings: string[] }
   generatedAt: string; pulls: ReleasePull[]
   unassociatedCards: Array<{ id: string; title: string; reason: string }>
   warnings: string[]

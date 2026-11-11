@@ -3,6 +3,7 @@
 export const nativeRepo = 'fortresspower/cmsandbox'
 export const nativeBase = '0a3feeef99394f476b7562fa4dd6780ab7b17b07'
 export const nativeHead = '466a3e27918a8f17a21546a6b4664d318f5fcc6a'
+export const nativeMain = 'd'.repeat(40)
 export const nativeTime = '2026-11-11T14:00:00Z'
 export const nativeTags = [
   { name: 'v1.24.0', commit: { sha: nativeHead } },
@@ -29,13 +30,18 @@ Snapshot: ${nativeTime} · [refresh run](https://github.com/${nativeRepo}/action
 export const nativeRecord = { tag_name: 'v1.24.0', html_url: `https://github.com/${nativeRepo}/releases/tag/v1.24.0`, body: nativeBody, published_at: nativeTime, draft: false }
 export function nativeFixtureRead(options: { tags?: typeof nativeTags; records?: unknown[]; runs?: unknown[] } = {}) {
   return async (path: string): Promise<unknown> => {
+    if (path.endsWith('/branches/main')) return { commit: { sha: nativeMain } }
     if (path.includes('/tags?')) return options.tags ?? nativeTags
     if (path.includes('/releases?')) return options.records ?? []
     if (path.includes('/actions/runs?')) {
       const runs = path.includes(nativeHead) ? options.runs ?? [nativeRun] : []
       return { total_count: runs.length, workflow_runs: runs }
     }
-    if (path.includes('/compare/')) return { status: 'ahead', total_commits: 1, merge_base_commit: { sha: nativeBase }, commits: [{ sha: nativeHead }], files: [{ filename: 'components/ra-command/app.ts' }] }
+    if (path.includes('/compare/')) {
+      const untagged = path.includes(`...${nativeMain}`)
+      return { status: 'ahead', total_commits: 1, merge_base_commit: { sha: untagged ? nativeHead : nativeBase }, commits: [{ sha: untagged ? nativeMain : nativeHead }], files: [{ filename: untagged ? 'components/ra-command/next.ts' : 'components/ra-command/app.ts' }] }
+    }
+    if (path.includes(`/commits/${nativeMain}/pulls?`)) return [{ number: 3401, title: 'Untagged command change', html_url: `https://github.com/${nativeRepo}/pull/3401`, merged_at: nativeTime, merge_commit_sha: nativeMain, head: { sha: nativeMain }, base: { ref: 'main' } }]
     if (path.includes('/pulls?')) return [{ number: 3267, title: 'Improve command delivery', html_url: `https://github.com/${nativeRepo}/pull/3267`, merged_at: '2026-11-06T11:00:00Z', merge_commit_sha: nativeHead, head: { sha: nativeHead }, base: { ref: 'main' } }]
     throw new Error(`Unexpected fixture GET ${path}`)
   }
