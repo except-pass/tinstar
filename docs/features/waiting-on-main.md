@@ -4,9 +4,12 @@ Overview shows an independent **Waiting on First Mate** count and oldest age.
 Click it to see each card or mate, key, age and request text. At four hours the
 control turns red. It is global, independent of Overview filters.
 
-Cards match `Waiting For` or `Waiting For ID`, case-insensitively: `First Mate`,
-`First Mate (main)`, `Main:`, `via main`, or `main firstmate`. Matching lives in
-`src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
+Cards match a trimmed, whole `Waiting For ID` of `First Mate`, `First Mate (main)`,
+`Main`, or `main firstmate`, case-insensitively. A populated different ID never
+matches. With an empty ID, `Waiting For` must start with one of those names
+followed by `:` or ` -`, or contain `via main`. A prose mention alone never
+matches; `Firstmate` and `firstmate maintainer` are different actors. Matching
+lives in `src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
 Card age is an at-least estimate until Tin Star observes the wait start.
 The initial estimate uses the card's last edit when the wait was first observed.
 Unrelated later edits do not reset that saved age; changed

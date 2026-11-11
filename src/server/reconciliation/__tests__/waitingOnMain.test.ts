@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fixtureSources, fixtureId } from '../../../../test-fixtures/reconciliation/scenes'
-import { namesMain, MAIN_WAIT_INTERVAL as FOUR_HOURS, waitAlertDue, type MainWaitItem } from '../../../shared/waitingOnMain'
+import { namesMain, mainWaitField, MAIN_WAIT_INTERVAL as FOUR_HOURS, waitAlertDue, type MainWaitItem } from '../../../shared/waitingOnMain'
 import { MAIN_WAIT_CARD, MAIN_WAIT_OWNER, mainWaitCandidates, mainWaitComment, mainWaitNotifier, WaitingOnMain } from '../waitingOnMain'
 import { NotionApi } from '../notionApi'
 import { fleetObservation } from '../fleet'
@@ -26,13 +26,29 @@ function snapshot(at = now) {
 const item = (key = fixtureId(4)): MainWaitItem => ({ id: 'card:' + key, source: 'board', kind: 'card', label: 'Rollout', key, text: 'First Mate: approve', since: new Date(now - FOUR_HOURS).toISOString(), ageBasis: 'at least', url: null, fresh: true })
 
 describe('Waiting on main', () => {
-  it.each(['First Mate', 'first mate (MAIN)', 'Main: approve', 'blocked via main', 'main firstmate: decide'])('matches %s case-insensitively', value => expect(namesMain(value)).toBe(true))
-  it.each(['mainly', 'domain:', 'First Mate (hulk)', 'Will', 'main firstmates', 'via mainframe'])('does not match %s', value => expect(namesMain(value)).toBe(false))
+  it.each(['First Mate', ' first mate (MAIN) ', 'Main', 'main firstmate'])('matches the whole main identity %s', value => expect(namesMain(value)).toBe(true))
+  it.each(['mainly', 'domain:', 'First Mate (hulk)', 'Will', 'main firstmates', 'via mainframe', 'firstmate maintainer', 'Firstmate', 'via main', 'First Mate: decide'])('does not match identity %s', value => expect(namesMain(value)).toBe(false))
+  it.each(['First Mate: review', 'First Mate (main): fix ...', 'Main - choose', 'main firstmate: decide', 'waiting via main for review'])('matches routed text only when ID is empty: %s', value => {
+    expect(mainWaitField(value, '  ')).toBe('Waiting For')
+    expect(mainWaitField(value, 'Will')).toBeNull()
+  })
+  it.each([
+    ['Will', 'Will: press refresh tools, then the ChatGPT -> Tin Star -> Notion -> First Mate handoff proof'],
+    ['firstmate maintainer', 'A First Mate decision cannot carry the proof'],
+    ['', 'Firstmate: fix the second mate'],
+    ['', 'The proof needs a First Mate decision'],
+  ])('excludes prose mentions and non-main actors (%s)', (id, text) => {
+    const value = snapshot(), card = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
+    card.properties['Waiting For']!.value = text
+    card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: id, hasMore: false }
+    expect(mainWaitCandidates(value, now).items.filter(item => item.kind === 'card')).toHaveLength(0)
+  })
   it('matches Waiting For ID and excludes completed cards and asks to a different parent', () => {
     const value = snapshot()
     const card = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
     card.properties['Waiting For']!.value = 'Review'
-    card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: 'via MAIN', hasMore: false }
+    card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: ' First Mate ', hasMore: false }
+    expect(mainWaitField('Review', ' First Mate ')).toBe('Waiting For ID')
     expect(mainWaitCandidates(value, now).items).toHaveLength(2)
     card.properties.Status!.value = 'Done'
     value.fleet[1]!.source.parentHome = value.fleet[2]!.source.home

@@ -1,7 +1,14 @@
 /** All supported textual names for the main First Mate live here. */
-export const MAIN_NAMES = /\bfirst\s+mate\b(?!\s*\((?!main\))[^)]*\))|\bmain\s*:|\bvia\s+main\b|\bmain\s+firstmate\b/i
-export const namesMain = (value: unknown): boolean => typeof value === 'string' && MAIN_NAMES.test(value)
-export const mainHomeLabel = (value: string | undefined): boolean => value?.toLowerCase() === 'main' || namesMain(value)
+const MAIN_NAME = String.raw`(?:first mate(?: \(main\))?|main|main firstmate)`
+export const MAIN_NAMES = new RegExp('^' + MAIN_NAME + '$', 'i')
+const MAIN_TEXT_PREFIX = new RegExp('^' + MAIN_NAME + '(?::| -)', 'i')
+export const namesMain = (value: unknown): boolean => typeof value === 'string' && MAIN_NAMES.test(value.trim())
+export const mainHomeLabel = namesMain
+/** A populated dependency ID is authoritative; prose mentions are not routing. */
+export function mainWaitField(waitingFor: string, waitingForId: string): 'Waiting For' | 'Waiting For ID' | null {
+  if (waitingForId.trim()) return namesMain(waitingForId) ? 'Waiting For ID' : null
+  return MAIN_TEXT_PREFIX.test(waitingFor.trim()) || /\bvia main\b/i.test(waitingFor) ? 'Waiting For' : null
+}
 export const MAIN_WAIT_INTERVAL = 4 * 3600_000
 export interface ParentAsk { key: string; corr: string | null; state: 'blocked' | 'needs-decision'; at: number | null; text: string }
 export interface ParentAsks { status: 'known' | 'unknown'; observed_at: string; items: ParentAsk[] }
