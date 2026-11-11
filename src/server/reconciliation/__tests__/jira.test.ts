@@ -33,8 +33,8 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'jira-workflow-')); roots.push(root)
   const issues = new Map<string, any>(), notes = new Map<string, any[]>(), attachments = new Map<string, any>()
   const requests: Array<{ path: string; method: string; body: any }> = []
-  const controls = { failReads: false, uncertainCreate: false, failEdit: false, failTransition: false, lostEdit: false, lostNote: false, failNote: false, lostAttachment: false, partialAttachment: false, omitField: '', missingStatus: '', truncatedSearch: false, foreign: false, unlabelled: false }
-  let tick = 0, attachmentId = 1000
+  const controls = { read429AfterWrite: -1, read429Count: 1, failReads: false, uncertainCreate: false, failEdit: false, failTransition: false, lostEdit: false, lostNote: false, failNote: false, lostAttachment: false, partialAttachment: false, omitField: '', missingStatus: '', truncatedSearch: false, foreign: false, unlabelled: false }
+  let tick = 0, attachmentId = 1000, mutated = false, postWriteReads = 0
   const updated = () => new Date(Date.now() + tick++).toISOString()
   const statuses = ['To Do', 'In Progress', 'In Review', 'Done', 'Queued', 'Waiting For', 'Ready for Review', 'Backlog', 'Archived']
   const make = (issueId: string, fields: Record<string, any> = {}, properties: Record<string, any> = {}) => ({ id: issueId, key: `TSSPIKE-${issues.size + 1}`,
@@ -62,6 +62,10 @@ async function fixture() {
     const match = /^issue\/(\d+)(?:\/(.*))?$/.exec(path), issueId = match?.[1]!, part = match?.[2], raw = issues.get(issueId)
     if (!raw) return json({}, 404)
     if (!part && method === 'GET') {
+      if (mutated && controls.read429AfterWrite >= 0 && postWriteReads++ >= controls.read429AfterWrite && controls.read429Count > 0) {
+        controls.read429Count--
+        return json({}, 429)
+      }
       const copy = structuredClone(raw)
       if (controls.foreign) copy.fields.project = { id: '1', key: 'OTHER' }
       if (controls.unlabelled) copy.fields.labels = []
@@ -71,14 +75,14 @@ async function fixture() {
       if (controls.failEdit) return json({}, 403)
       Object.assign(raw.fields, body.fields)
       for (const property of body.properties ?? []) if (property.key !== jiraPropertyKey(controls.omitField)) raw.properties[property.key] = property.value
-      raw.fields.updated = updated()
+      raw.fields.updated = updated(); mutated = true
       if (controls.lostEdit) { controls.lostEdit = false; throw new Error('lost update response') }
       return json({}, 204)
     }
     if (part === 'transitions' && method === 'GET') return json({ transitions: statuses.filter(name => name !== controls.missingStatus).map((name, index) => ({ id: String(index + 1), to: { id: String(index + 1), name } })) })
     if (part === 'transitions' && method === 'POST') {
       if (controls.failTransition) return json({}, 403)
-      raw.fields.status = { id: body.transition.id, name: statuses[Number(body.transition.id) - 1] }; raw.fields.updated = updated()
+      raw.fields.status = { id: body.transition.id, name: statuses[Number(body.transition.id) - 1] }; raw.fields.updated = updated(); mutated = true
       return json({}, 204)
     }
     if (part === 'comment' && method === 'GET') return json({ startAt: Number(parsed.searchParams.get('startAt')), total: notes.get(issueId)!.length, comments: notes.get(issueId) })
@@ -335,4 +339,50 @@ it('renders provider-aware parent references while preserving Notion contract by
   const jira = implementationContract({ ...input, parent_card_id: id }, 'Fixture')
   expect(jira.text).toBe(prefix + '\nParent card: https://fortresspower-jira.atlassian.net/secure/IssueNavigator.jspa?jql=id%20%3D%2060001\n')
   expect(jira.manifest.hash).toBe(digest(jira.text))
+})
+
+
+it.each([1, Infinity])('reports start readback HTTP 429 as unconfirmed after a successful PUT (%s failures)', async failures => {
+  const f = await fixture()
+  f.seed.fields.status.name = 'In Progress'
+  f.controls.read429AfterWrite = 0; f.controls.read429Count = failures
+  const result = await f.workflow.start({ card_id: id, operation_id: 'start-readback-429', worker: f.worker }, 'Fixture')
+  expect(result).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  if (failures === 1) expect(result.saved_fields).toEqual(expect.arrayContaining(['Status', 'First Mate tasks']))
+  expect(f.seed.properties[jiraPropertyKey('First Mate tasks')].value).toBe(workerLinkRecord([f.link]).json)
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(1)
+})
+
+it.each([
+  { read: 0, failures: 1 },
+  { read: 0, failures: Infinity },
+  { read: 1, failures: Infinity },
+])('retains update provenance and confirmed fields on HTTP 429: $read/$failures', async ({ read, failures }) => {
+  const f = await fixture()
+  f.controls.read429AfterWrite = read; f.controls.read429Count = failures
+  const result = await f.workflow.update({ card_id: id, kind: 'edit', operation_id: 'update-readback-429', properties: { Link: 'https://example.test/synthetic' } }, 'Fixture')
+  expect(result).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  if (read === 1 || failures === 1) expect(result.saved_fields).toContain('Link')
+  expect(f.seed.properties[jiraPropertyKey('Link')].value).toBe('https://example.test/synthetic')
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(1)
+})
+
+it('marks a transition-only readback HTTP 429 as partial and independently reads the changed status', async () => {
+  const f = await fixture()
+  f.controls.read429AfterWrite = 0
+  await expect(f.reader.jira!.patch(id, { Status: { status: { name: 'In Progress' } } })).rejects.toMatchObject({ status: 429, method: 'GET', partial: true })
+  expect((await f.reader.card(id, true)).properties.Status!.value).toBe('In Progress')
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(0)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))).toHaveLength(1)
+})
+
+it('retains partial fields when HTTP 429 interrupts the read before a transition', async () => {
+  const f = await fixture()
+  f.controls.read429AfterWrite = 0
+  const result = await f.workflow.start({ card_id: id, operation_id: 'interrupted-transition', worker: f.worker }, 'Fixture')
+  expect(result).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  expect(result.saved_fields).toContain('First Mate tasks')
+  expect(result.saved_fields).not.toContain('Status')
+  expect(f.seed.fields.status.name).toBe('To Do')
+  expect(f.requests.filter(request => request.path.endsWith('/transitions') && request.method === 'POST')).toHaveLength(0)
 })

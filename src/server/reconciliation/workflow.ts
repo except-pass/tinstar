@@ -172,8 +172,9 @@ export class WorkflowOperations {
       if (!same(relevant(current, input.worker.kind), initial)) return result('not-saved', 'conflict', 'Relevant card properties changed during validation; read and retry', current)
       if (fields.every(field => same(current.properties[field]?.value, desired[field]))) { this.reader.confirm(current); await this.changed({ before: card, card: current, actor, operationId: input.operation_id, properties: {} }); return result('saved', 'already-saved', 'Start work already saved', current, fields) }
       attempted = true
+      let saved: WorkCard
       if (card.source?.provider === 'jira') {
-        await this.content.patchProperties(input.card_id, Object.fromEntries(Object.entries(properties).filter(([field]) => !same(current.properties[field]?.value, desired[field]))))
+        saved = await this.content.patchProperties(input.card_id, Object.fromEntries(Object.entries(properties).filter(([field]) => !same(current.properties[field]?.value, desired[field])))) as WorkCard
       } else {
         const config = this.reader.config!
         const response = await this.reader.api.fetch(`https://api.notion.com/v1/pages/${input.card_id}`, { method: 'PATCH', redirect: 'error', signal: AbortSignal.timeout(15_000),
@@ -182,8 +183,8 @@ export class WorkflowOperations {
           await response.body?.cancel()
           if (response.status < 500) return result('not-saved', 'notion-rejected', `Notion rejected start work (HTTP ${response.status}); nothing confirmed saved`)
         } else await response.body?.cancel()
+        saved = await this.reader.card(input.card_id, true)
       }
-      const saved = await this.reader.card(input.card_id, true)
       this.reader.confirm(saved)
       await this.changed({ before: card, card: saved, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.filter(field => same(saved.properties[field]?.value, desired[field])).map(field => [field, desired[field]])) })
       const savedFields = fields.filter(field => same(saved.properties[field]?.value, desired[field]))
@@ -192,7 +193,7 @@ export class WorkflowOperations {
     } catch (error) {
       if (error instanceof WorkflowError && !attempted) return result('not-saved', error.code, error.message)
       if (error instanceof JiraMappingError) return result('not-saved', 'jira-incompatible', error.message)
-      if (error instanceof JiraWriteError && error.status < 500 && !error.partial) return result('not-saved', 'jira-rejected', `Jira rejected start work (HTTP ${error.status})`)
+      if (error instanceof JiraWriteError && error.method !== 'GET' && error.status < 500 && !error.partial) return result('not-saved', 'jira-rejected', `Jira rejected start work (HTTP ${error.status})`)
       if (input.card_id.startsWith('jira:') && attempted) {
         const current = await this.reader.card(input.card_id, true).catch(() => undefined)
         if (current) return result('partially-saved', 'save-unconfirmed', 'Only listed start fields confirmed after a Jira write failure; inspect current state before retrying.', current, fields.filter(field => same(current.properties[field]?.value, desired[field])))
@@ -609,8 +610,8 @@ export class WorkflowOperations {
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
         if (Object.keys(missing).length) {
           attempted = true
-          await this.content.patchProperties(card.id, missing)
-          card = await this.reader.card(card.id, true)
+          const patched = await this.content.patchProperties(card.id, missing)
+          card = card.source?.provider === 'jira' ? patched as WorkCard : await this.reader.card(card.id, true)
         }
         this.reader.confirm(card)
         saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan.desired[name])))
@@ -638,13 +639,13 @@ export class WorkflowOperations {
         const current = await this.reader.card(card.id, true).catch(() => undefined)
         if (current) {
           card = current; this.reader.confirm(current)
-          if (!(error instanceof JiraMappingError) && !(error instanceof JiraWriteError && error.status < 500 && !error.partial)) saved.push(...Object.keys(requested).filter(name => !saved.includes(name) && this.matches(current, name, requested[name])))
+          if (!(error instanceof JiraMappingError) && !(error instanceof JiraWriteError && error.method !== 'GET' && error.status < 500 && !error.partial)) saved.push(...Object.keys(requested).filter(name => !saved.includes(name) && this.matches(current, name, requested[name])))
         }
       }
       if (error instanceof DecisionSourceError) return result('not-saved', 'decision-verification-needed', error.message)
       if (error instanceof ManagedSectionConflict || error instanceof JiraConflictError) return { ...result(saved.length ? 'partially-saved' : 'not-saved', 'conflict', `${error.message}. Review current state and re-issue with a new operation_id.`), requires_new_operation_id: true }
       if (error instanceof JiraMappingError) return result('not-saved', 'jira-incompatible', error.message)
-      if (error instanceof JiraWriteError && error.status < 500 && !error.partial && !saved.length) return result('not-saved', 'jira-rejected', `Jira rejected the request (HTTP ${error.status})`)
+      if (error instanceof JiraWriteError && error.method !== 'GET' && error.status < 500 && !error.partial && !saved.length) return result('not-saved', 'jira-rejected', `Jira rejected the request (HTTP ${error.status})`)
       if (error instanceof NotionWriteError && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
       const partial = error instanceof WorkflowError ? { ...result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message), ...(error.requiresNewOperationId ? { requires_new_operation_id: true } : {}) }
         : result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'save-unconfirmed' : 'source-unavailable',

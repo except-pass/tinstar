@@ -22,7 +22,7 @@ export const jiraPropertyKey = (name: string) => `tinstar.workflow.${encodeURICo
 const logicalStatus = (name: string) => name === 'To Do' ? 'Todo' : name === 'In Review' ? 'In review' : name
 const nativeStatus = (name: string) => name === 'Todo' ? 'To Do' : name === 'In review' ? 'In Review' : name
 export class JiraWriteError extends Error {
-  constructor(readonly status: number, public partial = false) { super(`Jira HTTP ${status}`) }
+  constructor(readonly status: number, readonly method: string, public partial = false) { super(`Jira HTTP ${status}`) }
 }
 export class JiraMappingError extends Error {}
 export class JiraConflictError extends Error {}
@@ -62,7 +62,7 @@ export class JiraAdapter {
       redirect: 'error', signal: init.signal ?? AbortSignal.timeout(20_000), headers: { Accept: 'application/json',
         Authorization: `Basic ${Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64')}`,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
-    if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status) }
+    if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }
     return response
   }
   private async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<Record<string, any>> {
@@ -171,13 +171,13 @@ export class JiraAdapter {
       if (transition) {
         await this.issue(id)
         await this.request(`issue/${itemId}/transitions`, 'POST', { transition: { id: transition } })
+        mutated = true
       }
+      return await this.read(id)
     } catch (error) {
       if (error instanceof JiraWriteError) error.partial = mutated
       throw error
     }
-    // The shared workflow verifies each requested value, including partial saves.
-    return this.read(id)
   }
   private async transitionId(id: string, name: string) {
     const body = await this.request(`issue/${this.issueId(id)}/transitions`)
