@@ -56,7 +56,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
 
     await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     const rail = page.getByRole('region', { name: 'Provider quota' })
     await expect(rail.getByRole('button', { name: 'Claude, 64% remaining' })).toBeVisible()
@@ -207,7 +207,16 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home] } }))
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
-    writeFileSync(join(home, 'snapshot.json'), JSON.stringify({ schema: 'fm-fleet-snapshot.v1', tasks: [], backlog: { records: [] } }))
+    writeFileSync(join(home, 'snapshot.json'), JSON.stringify({
+      schema: 'fm-fleet-snapshot.v1',
+      tasks: [{
+        id: 'alpha', kind: 'ship', project: 'tinstar', branch: 'fm/alpha',
+        paths: { worktree: { path: '/private/worktrees/alpha' } },
+        current_state: { state: 'working', detail: 'editing the quota rail', observed_at: '2026-09-29T12:00:00Z', freshness: 'fresh' },
+        endpoint: { target: null }, pr: { url: null },
+      }],
+      backlog: { records: [{ id: 'alpha', title: 'Show provider quota' }] },
+    }))
     writeFileSync(join(bin, 'quota-axi'), `#!/bin/sh\ncat <<'END_QUOTA'\n${JSON.stringify(document)}\nEND_QUOTA\n`)
     chmodSync(join(bin, 'quota-axi'), 0o755)
     const env: NodeJS.ProcessEnv = {
@@ -233,7 +242,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
 
     await page.clock.setFixedTime(new Date('2026-09-29T12:00:00.000Z'))
     await page.setViewportSize({ width: 1440, height: 900 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     const rail = page.getByRole('region', { name: 'Provider quota' })
     // The Grok Bot week is its own strip; Cursor's meter stays on the all-models cycle.

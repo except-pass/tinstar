@@ -80,15 +80,24 @@ test.beforeEach(async ({ page }, info) => {
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed'); if (!localStorage.getItem('tinstar.floor.preferences')) localStorage.setItem('tinstar.floor.preferences', JSON.stringify({ organizer: { outer: 'initiative', inner: 'status', order: 'checkIn', direction: 'asc' } })) })
 })
 
-test.beforeAll(async () => {
+// Each browser test owns its UI sessions. Sharing one backend across the file
+// exhausts the retained-window limit when the suite finishes within ten minutes.
+test.beforeEach(async () => {
   await mkdir(join(process.cwd(), '.test-runtime'), { recursive: true })
   root = await mkdtemp(join(process.cwd(), '.test-runtime', 'tinstar-floor-'))
   await mkdir(join(root, 'config'))
+  const bin = join(root, 'bin')
+  await mkdir(bin)
+  // Overview does not exercise provider quotas. The real quota probe can spawn
+  // Codex, whose first-run skill installation outlives the server's shutdown.
+  // Keep provider processes out of this disposable HOME, as in cockpit fixtures.
+  await writeFile(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
   await writeFile(join(root, 'config', 'config.json'), JSON.stringify({ firstmate: { homes: [] }, reconciliation: { fleet: [] } }))
   const port = await freePort()
   base = `http://127.0.0.1:${port}`
-  server = spawn(join(process.cwd(), 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
-    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+  // Own the server process directly, rather than the tsx CLI's parent process.
+  server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root, XDG_CONFIG_HOME: join(root, 'config'), TINSTAR_CONFIG_HOME: join(root, 'config'), TINSTAR_NO_SESSIONS: '1', TINSTAR_TELEMETRY: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
   server.stdout?.on('data', data => { output += data.toString() })
@@ -100,9 +109,12 @@ test.beforeAll(async () => {
   await writeFile(join(root, 'failed-start.log'), output)
   throw new Error(`Floor server did not start; logs: ${root}/failed-start.log`)
 })
-test.afterAll(async () => {
-  server?.kill()
-  if (server && server.exitCode === null) await new Promise<void>(resolve => server.once('exit', () => resolve()))
+test.afterEach(async () => {
+  if (server && server.exitCode === null && server.signalCode === null) {
+    const closed = new Promise<void>(resolve => server.once('close', () => resolve()))
+    server.kill()
+    await closed
+  }
   if (root) await rm(root, { recursive: true, force: true })
 })
 async function screenshot(page: Page, name: string) {
@@ -586,6 +598,11 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
     await expect(page.locator(waiting ? '.ov-waiting-head' : '.ov-headings')).toContainText(waiting ? `Waiting For · ${cards}` : `NOTION TASKS · ${cards}`)
   }
   await counts(5, 5)
+  // The scrolling toolbar must leave its connection menu usable at every width.
+  await page.getByTitle('ChatGPT tab connection', { exact: true }).click()
+  await page.getByRole('button', { name: 'Copy session ID', exact: true }).click()
+  await expect(page.locator('.session-connection-menu')).toContainText(/Full session ID copied|Session ID:/)
+  await page.getByTitle('ChatGPT tab connection', { exact: true }).click()
   for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'manager']]) {
     await page.getByRole('button', { name: label!, exact: true }).click()
     await expect(page.locator('.ov')).toHaveAttribute('data-outer', outer!)
@@ -1157,7 +1174,7 @@ for (const width of [1440, 390]) test(`single-row toolbar live combined pattern 
     })
     return { fits: lines.every(Boolean), selectedVisible: !button.classList.contains('ov-pattern-selected') || bounds.left >= 0 && bounds.right <= innerWidth + 1 }
   }))
-  expect(geometry).toHaveLength(3)
+  expect(geometry).toHaveLength(4)
   expect(geometry.every(button => button.fits && button.selectedVisible)).toBe(true)
   await expect(page.locator('.ov-card')).toHaveCount(1)
   await center.click()

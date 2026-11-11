@@ -224,8 +224,8 @@
 .rel-v3 .ov-search-panel{z-index:5}
 .rel-v3 .copy-feedback{color:var(--aqua);font-size:11px}
 .rel-v3 .detail-pair{grid-template-columns:112px minmax(0,1fr)}
-/* The approved composition uses the existing global rail without a permanent Desk pane. */
-.cockpit-shell:has(.rel-v3) .desk-host{display:none}.cockpit-shell:has(.rel-v3) .cockpit-activity{width:54px;min-width:54px;flex-basis:54px;background:#060c10}.cockpit-shell:has(.rel-v3) .cockpit-activity-name,.cockpit-shell:has(.rel-v3) .cockpit-activity-label{display:none}.cockpit-shell:has(.rel-v3) .cockpit-activity-button.active{color:#83d4ce;background:#153139;border-color:#2e626b}.cockpit-shell:has(.rel-v3) .cockpit-main{background:#071116}
+/* Keep the global activity rail compact in the Releases composition. */
+.cockpit-shell:has(.rel-v3) .cockpit-activity{width:54px;min-width:54px;flex-basis:54px;background:#060c10}.cockpit-shell:has(.rel-v3) .cockpit-activity-name,.cockpit-shell:has(.rel-v3) .cockpit-activity-label{display:none}.cockpit-shell:has(.rel-v3) .cockpit-activity-button.active{color:#83d4ce;background:#153139;border-color:#2e626b}.cockpit-shell:has(.rel-v3) .cockpit-main{background:#071116}
 @media(max-width:770px){.cockpit-shell:has(.rel-v3) .cockpit-activity{width:42px;min-width:42px;flex-basis:42px}
 .rel-v3{margin:0}
 .rel-v3 .ov-search-trigger span{display:none}

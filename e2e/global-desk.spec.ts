@@ -10,6 +10,9 @@ import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { decideStaticServe } from '../src/server/staticServe'
 import { fixtureId, fixtureQueue, fixtureScene } from '../test-fixtures/reconciliation/scenes'
+import { objectFixture } from '../test-fixtures/releases/objects'
+import type { ReleasePull } from '../src/shared/releases'
+import type { ReleaseTarget } from '../src/shared/releaseObjects'
 
 // A real built client with isolated API fixtures; manual preview proof uses real sources.
 let server: ReturnType<typeof createServer>, base: string
@@ -143,28 +146,45 @@ test('typed CI Ask returns from Releases to its exact PR after an independent an
 for (const mode of ['release', 'receipt', 'removed-target', 'wrong-component', 'changed-head'] as const) {
   test(`release origin resolves exact identity: ${mode}`, async ({ page }, testInfo) => {
     const at = new Date().toISOString(), id = 'owner/repo#17'
-    const receipt = { id: 'receipt-1', version: 'v17', deployedSha: 'a'.repeat(40), deployedAt: at, receiptUrl: 'https://example.test/receipt', workflowUrl: 'https://example.test/workflow' }
-    const targets = [{ component: 'web', target: 'production', state: 'unknown', reason: 'Pending', ancestry: 'unknown', receipt }, { component: 'api', target: 'production', state: 'unknown', reason: 'Pending', ancestry: 'unknown', receipt: mode === 'wrong-component' ? receipt : null }]
+    const receipt = { id: 'receipt-1', repository: 'owner/repo', environment: 'production', component: 'web', target: 'production', version: 'v17', deployedSha: 'a'.repeat(40), artifactDigest: null, deployedAt: at, receiptUrl: 'https://example.test/receipt', workflowUrl: 'https://example.test/workflow', outcome: 'succeeded' as const, exceptions: [] }
+    const targets: ReleaseTarget[] = [{ component: 'web', target: 'production', readiness: 'Ready', readinessEvidence: [], receipt }, { component: 'api', target: 'production', readiness: 'Ready', readinessEvidence: [], receipt: mode === 'wrong-component' ? { ...receipt, component: 'api' } : null }]
     if (mode === 'removed-target' || mode === 'wrong-component') targets.shift()
     const target = mode === 'changed-head' ? { kind: 'pull', id, head: 'a'.repeat(40) } : { kind: mode === 'receipt' || mode === 'wrong-component' ? 'receipt' : 'release', id, component: 'web', target: 'production', ...(mode === 'receipt' || mode === 'wrong-component' ? { receipt_id: 'receipt-1' } : {}) }
-    await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { pulls: [{ id, repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', title: 'Release identity proof', head: 'b'.repeat(40), links: [], exceptions: [], state: 'open', mergedAt: null, mergeSha: null, observedAt: at, freshness: 'fresh', deployment: { state: 'in-queue', targets } }], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } } }))
-    await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [{ request_id: '20000000-0000-4000-8000-000000000017', conversation_id: '20000000-0000-4000-8000-000000000017', question: 'Explain deployment identity', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: id, label: id, url: 'https://github.com/owner/repo/pull/17', observed_at: at }, target, view: { scene: 'releases' }, return_to: { section: 'releases', target } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Deployment answer', detail: 'Captured deployment evidence', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null }] } }))
+    const pull: ReleasePull = { id, repository: 'owner/repo', number: 17, url: 'https://github.com/owner/repo/pull/17', title: 'Release identity proof', head: 'b'.repeat(40), links: [], exceptions: [], state: 'merged', mergedAt: at, mergeSha: 'b'.repeat(40), observedAt: at, freshness: 'fresh', deployment: { state: 'in-queue', targets: targets.map(item => ({ ...item, state: 'unknown', reason: 'Pending', ancestry: 'unknown' })) } }
+    const release = { ...objectFixture('production', 'origin-release'), version: 'v17', pulls: [pull], targets }
+    // Same version/PR in a different release must never substitute for the captured identity.
+    const decoy = { ...release, id: 'other-release' }
+    await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { releases: [decoy, release], pulls: [pull], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } } }))
+    await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [{ request_id: '20000000-0000-4000-8000-000000000017', conversation_id: '20000000-0000-4000-8000-000000000017', question: 'Explain deployment identity', input_mode: 'text', context: { schema_version: 2, anchor: { kind: target.kind, page_id: id, label: id, url: 'https://github.com/owner/repo/pull/17', observed_at: at }, target, view: { scene: 'releases', release_id: release.id }, return_to: { section: 'releases', target, view: { scene: 'releases', release_id: release.id } } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Deployment answer', detail: 'Captured deployment evidence', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null }] } }))
     await page.route('**/api/ask/requests/*/read', route => route.fulfill({ json: { ok: true, data: {} } }))
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.goto(`${base}/?view=pulls`)
     await page.getByRole('button', { name: /New answer.*Explain deployment identity/ }).click()
     await expect(page).toHaveURL(/view=releases/)
+    if (mode === 'removed-target' || mode === 'wrong-component') {
+      await expect(page.getByRole('status').filter({ hasText: 'Originating PR, target or receipt is unavailable' })).toBeVisible()
+      await expect(page.locator('.rel-v3 .ask-origin')).toHaveCount(0)
+      await expect(page.getByRole('dialog')).toHaveCount(0)
+    } else {
+      const drawer = page.getByRole('dialog', { name: 'Release identity proof' })
+      const origin = drawer.locator('.ask-origin')
+      await expect(drawer).toBeVisible()
+      await expect(origin).toHaveCount(1)
+      await expect(origin).toBeFocused()
+      if (mode === 'changed-head') await expect(origin).toHaveAttribute('data-ask-origin', id)
+      else {
+        await expect(origin).toHaveAttribute('data-receipt-id', receipt.id)
+        await expect(origin).toHaveAttribute('data-component', 'web')
+        await expect(origin).toHaveAttribute('data-target', 'production')
+      }
+      await drawer.getByRole('button', { name: 'Close details' }).click()
+      await expect(page.getByRole('tab', { name: 'Verify', exact: true })).toHaveAttribute('aria-selected', 'true')
+      await expect(page.getByRole('button', { name: /^v17 PROD/ }).nth(1)).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.getByRole('button', { name: /^v17 PROD/ }).nth(0)).toHaveAttribute('aria-pressed', 'false')
+      if (mode === 'changed-head') await expect(page.getByText(/PR head changed since this question/)).toBeVisible()
+    }
     await expect(page.getByRole('region', { name: /Answer thread/ })).toContainText('Deployment answer')
     await page.getByRole('button', { name: 'Collapse answer' }).click()
-    if (mode === 'removed-target' || mode === 'wrong-component') {
-      await expect(page.getByText(mode === 'removed-target' ? /original deployment target is missing/ : /original receipt is missing or has been superseded/)).toBeVisible()
-      await expect(page.locator('.rel-root .ask-origin')).toHaveCount(0)
-    } else {
-      await expect(page.getByText(mode === 'changed-head' ? /PR head changed since this question/ : /Showing originating release/)).toBeVisible()
-      const origin = page.locator('.rel-root .ask-origin')
-      await expect(origin).toHaveCount(1)
-      if (mode !== 'changed-head') await expect(origin).toHaveAttribute('data-origin-pull', id)
-    }
     await page.screenshot({ path: testInfo.outputPath(`${mode}.png`), fullPage: true })
   })
 }
@@ -251,17 +271,18 @@ for (const width of [1440, 390]) {
 }
 
 
-test('inline neighbors survive real browser Back to Releases filters and grouping', async ({ page }, testInfo) => {
+test('inline neighbors survive real browser Back to the selected release, tab and audience', async ({ page }, testInfo) => {
   const at = new Date().toISOString(), head = 'a'.repeat(40), scene = fixtureScene()
   const claim = scene.claims.find(link => link.verification === 'confirmed' && link.state === 'current')!
   const pulls = Array.from({ length: 80 }, (_, index) => ({ id: `owner/repo${Math.floor(index / 10)}#${index + 1}`, repository: `owner/repo${Math.floor(index / 10)}`, number: index + 1, url: `https://github.com/owner/repo${Math.floor(index / 10)}/pull/${index + 1}`, title: `Release ${index + 1}`, author: 'owner', draft: false, head, base: 'main', createdAt: at, updatedAt: at, observedAt: at, freshness: 'fresh', links: [], exceptions: [], state: 'merged', mergedAt: at, mergeSha: head, deployment: { state: 'shipped', targets: [] } }))
   const origin = pulls[24]!
+  const releases = [{ ...objectFixture('production', 'first-release'), version: 'v1.0.0', pulls: pulls.slice(0, 10) }, { ...objectFixture('production', 'selected-release'), version: 'v2.0.0', pulls: pulls.slice(20, 30) }]
   let records = askItemSchema.array().parse([
     { request_id: '30000000-0000-4000-8000-000000000001', conversation_id: '40000000-0000-4000-8000-000000000001', question: 'Inline PR investigation', input_mode: 'text', context: { target: { kind: 'pull', id: origin.id, head }, anchor: { kind: 'pull', page_id: origin.id, label: origin.id, url: origin.url, observed_at: at }, view: { scene: 'pulls' }, return_to: { section: 'pulls', target: { kind: 'pull', id: origin.id, head } } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Independent PR answer', detail: 'Detailed PR evidence stays inline.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null },
     { request_id: '30000000-0000-4000-8000-000000000002', conversation_id: '40000000-0000-4000-8000-000000000002', question: 'Independent link investigation', input_mode: 'text', context: { target: { kind: 'claim', id: claim.id }, anchor: { kind: 'link', page_id: claim.id, label: 'Verified relationship', url: null, observed_at: at }, view: { scene: 'overview' }, return_to: { section: 'overview', target: { kind: 'claim', id: claim.id } } }, created_at: at, updated_at: at, status: 'answered', reply: { summary: 'Independent link answer', detail: 'Both verified endpoints and their exact link.', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null },
   ])
   await page.route('**/api/pulls', route => route.fulfill({ json: { ok: true, data: { pulls, repositories: [], warnings: [], associationsComplete: true } } }))
-  await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { pulls, unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } } }))
+  await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { releases, pulls, unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false } } }))
   await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: records } }))
   await page.route('**/api/ask/requests/*/read', route => {
     records = records.map(record => route.request().url().includes(record.request_id) ? { ...record, read_at: at } : record)
@@ -269,8 +290,10 @@ test('inline neighbors survive real browser Back to Releases filters and groupin
   })
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto(`${base}/?view=releases`)
-  await page.getByRole('button', { name: 'Shipped', exact: true }).click()
-  await page.getByRole('button', { name: 'Repository', exact: true }).click()
+  await page.getByRole('tab', { name: 'Verify', exact: true }).click()
+  await page.getByRole('button', { name: /^v2\.0\.0 PROD/ }).click()
+  await page.getByRole('tab', { name: 'Release notes', exact: true }).click()
+  await page.getByRole('button', { name: 'Customer', exact: true }).click()
   await page.evaluate(() => document.fonts.ready)
   await page.getByRole('button', { name: /New answer.*Inline PR investigation/ }).click()
   await expect(page.locator('.pr-row.ask-origin')).toHaveAttribute('data-ask-origin', origin.id)
@@ -278,8 +301,10 @@ test('inline neighbors survive real browser Back to Releases filters and groupin
   await expect(page.getByRole('button', { name: /New answer.*Independent link investigation/ })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await page.goBack()
-  await expect(page.getByRole('button', { name: 'Shipped', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByRole('button', { name: 'Repository', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('tab', { name: 'Verify', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('button', { name: /^v2\.0\.0 PROD/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('tab', { name: 'Release notes', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('button', { name: 'Customer', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('region', { name: /Answer thread/ })).toBeVisible()
   await page.getByRole('button', { name: /New answer.*Independent link investigation/ }).click()
   await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()

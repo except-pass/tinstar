@@ -65,12 +65,12 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: /Receipts|Workers/ })).toHaveCount(0)
     await expect(page.getByRole('textbox', { name: 'Jump to worker' })).toHaveCount(0)
 
-    await page.getByRole('button', { name: 'Message receipts' }).click()
-    await expect(page.getByText('No messages yet.')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Message receipts' })).toHaveCount(0)
 
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     await expect(page.getByRole('textbox', { name: 'Jump to worker' })).toBeVisible()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(1)
@@ -93,6 +93,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     expect(new URL(page.url()).searchParams.get('worker')).toBeNull()
 
     await page.setViewportSize({ width: 1200, height: 800 })
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context')).toBeVisible()
     await expect(page.locator('.cockpit-worker-button')).toHaveCount(1)
@@ -111,12 +112,13 @@ test('activity strip switches panels, opens a worker, and restores overview on b
       const barBox = bar.getBoundingClientRect()
       const lines = Array.from(bar.querySelectorAll('.cockpit-activity-label'))
       const words = lines.map(line => line.textContent)
-      return words.join(' ') === 'Overview PRs Releases' && lines.every(line => {
+      return words.join(' ') === 'Overview Decisions PRs Releases Review Ready' && lines.every(line => {
         const box = line.getBoundingClientRect()
         return box.width > 8 && box.left >= barBox.left - 1 && box.right <= barBox.right + 1
       })
     })).toBe(true)
     await page.screenshot({ path: test.info().outputPath('shell-616-closed.png') })
+    await page.goto(`${base}/?worker=alpha`)
     await openWorkerSwitcher(page)
     await expect(page.locator('.cockpit-context')).toBeVisible()
     await expect(page.locator('.cockpit-context-backdrop')).toBeVisible()

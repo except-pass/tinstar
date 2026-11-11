@@ -27,12 +27,22 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
   const port = 39000 + Math.floor(Math.random() * 10000)
   const portStart = 49000 + Math.floor(Math.random() * 10000)
   let server: ChildProcess | null = null
+  const terminalInput: string[] = []
+  page.on('websocket', socket => {
+    if (!socket.url().includes('/s/cockpit-0-scroll/')) return
+    socket.on('framesent', ({ payload }) => {
+      const message = payload.toString()
+      // ttyd's input frames start with the ASCII command byte "0".
+      if (message.startsWith('0')) terminalInput.push(message.slice(1))
+    })
+  })
   const tmux = (...args: string[]) => execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   try {
     for (const path of [home, config, bin, join(home, 'bin'), join(home, 'state'), join(home, 'data', 'scroll')]) mkdirSync(path, { recursive: true })
     writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home], ports: { start: portStart, count: 20 } } }))
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
+    writeFileSync(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
     writeFileSync(join(home, 'data', 'scroll', 'brief.md'), '# Brief\n\n## Captain\'s intent\n\nScroll the worker terminal.\n')
@@ -52,8 +62,9 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       backlog: { records: [{ id: 'scroll', title: 'scroll objective' }, { id: 'other', title: 'other objective' }] },
     }))
     tmux('new-session', '-d', '-s', 'firstmate', '-x', '80', '-y', '24', '-n', 'supervisor')
+    // Leave the top row for tmux's copy-mode status, which overlays narrow terminals.
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-scroll',
-      'python3 -c \'print("SCROLL-EARLY"); print("\\n".join(f"FILL-{i:03d}" for i in range(1,150))); print("SCROLL-LATE")\'; exec cat')
+      'python3 -c \'print("\\nSCROLL-EARLY"); print("\\n".join(f"FILL-{i:03d}" for i in range(1,150))); print("SCROLL-LATE")\'; exec cat')
     tmux('new-window', '-d', '-t', 'firstmate:', '-n', 'fm-other', 'exec cat')
 
     const env: NodeJS.ProcessEnv = {
@@ -74,7 +85,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       await delay(200)
     }
     await page.setViewportSize({ width: 1280, height: 720 })
-    await page.goto(base)
+    await page.goto(`${base}/?worker=scroll`)
     await openWorkerSwitcher(page)
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     const term = page.frameLocator('iframe[title="scroll terminal"]').frameLocator('#term')
@@ -101,6 +112,8 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     expect(await visibleLines(page)).not.toContain('SCROLL-EARLY')
     await input.pressSequentially('WHEEL_BACK')
     await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('WHEEL_BACK')
+    // Wait for ttyd to paint the input echo before a repaint can clear the selection.
+    await expect.poll(() => visibleLines(page)).toContain('WHEEL_BACK')
 
     // Mouse reporting is on. xterm selects with Shift, or with Option on macOS
     // once macOptionClickForcesSelection is set. A wide drag keeps the selection.
@@ -120,6 +133,17 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       return (term?.getSelection?.() || '').trim().length
     }), { timeout: 3_000 }).toBeGreaterThan(0)
 
+    // An ordinary click must still send both SGR mouse reports to ttyd.
+    // In particular, the forced-selection workaround must not swallow release.
+    const inputStart = terminalInput.length
+    await input.evaluate(element => (element as HTMLElement).blur())
+    await page.mouse.click(live!.x + 24, y)
+    await expect(input).toBeFocused()
+    await expect.poll(() => terminalInput.slice(inputStart).join('')).toMatch(/\x1b\[<0;(\d+);(\d+)M\x1b\[<0;\1;\2m/)
+    // Type through the focus established by the click, without locator refocus.
+    await page.keyboard.type('PLAIN_CLICK')
+    await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('PLAIN_CLICK')
+
     // Switching workers hides this view without detaching it. The pane it
     // scrolled must not stay in copy mode behind it.
     const inMode = () => tmux('display', '-p', '-t', 'firstmate:fm-scroll', '#{pane_in_mode}')
@@ -137,7 +161,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     await expect(screen).toBeVisible()
     await input.pressSequentially('AFTER_SWITCH')
-    await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
+    await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
