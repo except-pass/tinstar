@@ -24,12 +24,22 @@ export function SmartSearch({ scene, state, now, open, focused, onOpen, onDismis
 }) {
   const input = useRef<HTMLInputElement>(null), trigger = useRef<HTMLButtonElement>(null), host = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState(''), [active, setActive] = useState(0)
+  // Clear during render, not in an effect. The effect ran after paint and
+  // discarded a query typed in that gap (the empty-palette status stayed up).
+  const [seenOpen, setSeenOpen] = useState(open)
+  if (open !== seenOpen) {
+    setSeenOpen(open)
+    if (open) {
+      setQuery('')
+      setActive(0)
+    }
+  }
   const index = useMemo(() => { if (!documents) return searchIndex(scene); const index = new SmartSearchIndex(); index.update(documents); return index }, [scene, documents])
   const hits = useMemo(() => open && query.trim() ? index.search(query, now).slice(0, 8) : [], [index, query, now, open])
   const base = useMemo(() => open ? statusProjection(scene, { ...state, searchReveal: null, searchFocus: undefined }, now) : { cards: [], workers: [] }, [scene, state, now, open])
   const baseKeys = new Set([...base.cards.map(card => `card:${card.id}`), ...base.workers.map(worker => `execution:${worker.id}`)])
   const activeIndex = Math.min(active, Math.max(0, hits.length - 1)), activeHit = hits[activeIndex]
-  useEffect(() => { if (open) { setQuery(''); setActive(0); input.current?.focus({ preventScroll: true }) } }, [open])
+  useEffect(() => { if (open) input.current?.focus({ preventScroll: true }) }, [open])
   useEffect(() => {
     if (!open) return
     const outside = (event: PointerEvent) => { if (!host.current?.contains(event.target as Node)) onDismiss() }

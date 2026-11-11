@@ -11,6 +11,8 @@ npm run build:all
 npm run test:e2e -- --workers=1
 ```
 
+CI runs `npm run test:e2e` in the `browser-suite` job on GitHub-hosted ubuntu-24.04 for every pull request. The job installs Playwright Chromium, ttyd, tmux and lsof, builds the client and server, and uploads the HTML report and traces when a test fails. That check is required to merge to `main`. The admin override for a stuck check is in [contributing.md](contributing.md#the-pre-merge-gate).
+
 Use the Node version in `.nvmrc`, plus tmux, ttyd >=1.7.4, lsof and Python 3 on PATH. Playwright's Chromium install includes the headless shell and FFmpeg used for video proof. The default config runs all cockpit, Discuss, PR, Overview and MCP browser specs with one worker and zero retries. Keep the single worker on memory-constrained hosts. Each backend test uses an isolated config and, where needed, a private tmux socket and First Mate test home. Never point these at a live home.
 
 The v8 Overview suites (`reconciliation-floor.spec.ts`, retaining its historical filename, and `reconciliation-mcp.spec.ts`) cover independent source stacks, many-to-many links across machines/managers, group/selection preservation, two-sided gaps, safe terminal routes, Discuss position, stale/failed reads, realistic volume, keyboard/mobile/reduced motion, and real targeted MCP acknowledgments/retries/expiry/user-click precedence. The old status/project grouping and fused-card browser suites were replaced by these tests plus the source-liveness and Overview model tests.

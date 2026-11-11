@@ -116,6 +116,6 @@ test('worker task-id links, switcher navigation and Overview return on a private
   } finally {
     server?.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* private server already gone */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

@@ -103,6 +103,6 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
   } finally {
     if (server && server.exitCode === null) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

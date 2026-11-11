@@ -174,7 +174,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     await page.screenshot({ path: test.info().outputPath('quota-rail-390x844.png') })
   } finally {
     server?.kill('SIGTERM')
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
 
@@ -286,6 +286,6 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     await page.screenshot({ path: test.info().outputPath('quota-grok-bot-stale-hover-1440x900.png') })
   } finally {
     server?.kill('SIGTERM')
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })

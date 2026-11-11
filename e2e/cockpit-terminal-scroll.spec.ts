@@ -147,24 +147,44 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     // Switching workers hides this view without detaching it. The pane it
     // scrolled must not stay in copy mode behind it.
     const inMode = () => tmux('display', '-p', '-t', 'firstmate:fm-scroll', '#{pane_in_mode}')
+    // tsview-scroll binds Any to "cancel copy mode and drop the key".
+    // pane_in_mode flips to 0 before leave() moves the client to
+    // tsview-passthrough, and a wheel still in flight puts the client back
+    // on the scroll table. Either one eats the first key after the switch.
+    const scrollViewTables = () => tmux('list-clients', '-F', '#{session_name} #{client_key_table}')
+      .split('\n')
+      .filter(line => line.startsWith('tsview-scroll-'))
+      .map(line => line.slice(line.lastIndexOf(' ') + 1))
+    const scrollLeft = () => {
+      const tables = scrollViewTables()
+      return inMode() === '0' && tables.length === 1 && tables[0] === 'tsview-passthrough'
+    }
     await page.mouse.move(live!.x + live!.width / 2, y)
     for (let i = 0; i < 20 && inMode() !== '1'; i++) {
       await page.mouse.wheel(0, -120)
       await delay(40)
     }
     expect(inMode()).toBe('1')
+    let scrollPos = tmux('display', '-p', '-t', 'firstmate:fm-scroll', '#{scroll_position}')
+    for (let i = 0; i < 8; i++) {
+      await delay(80)
+      const next = tmux('display', '-p', '-t', 'firstmate:fm-scroll', '#{scroll_position}')
+      if (next === scrollPos) break
+      scrollPos = next
+    }
     await page.getByRole('button', { name: /other .*WORKING/i }).click()
-    await expect.poll(inMode, { timeout: 8_000 }).toBe('0')
+    await expect.poll(scrollLeft, { timeout: 8_000 }).toBe(true)
     expect(tmux('list-sessions', '-F', '#{session_name}').split('\n').filter(name => name.startsWith('tsview-scroll-'))).toHaveLength(1)
 
     // Back on the worker, the first key reaches the pane instead of leaving a scroll that is gone.
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     await expect(screen).toBeVisible()
+    await expect.poll(scrollLeft, { timeout: 8_000 }).toBe(true)
     await input.pressSequentially('AFTER_SWITCH')
     await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
