@@ -64,6 +64,14 @@ SDK 1.x does not yet support this revision, so compatibility is confined to the
 facade's discovery/list/call requests; the private backend transport is unchanged.
 No version-rewriting proxy is needed in front of the facade.
 
+Tool input schemas are published directly from the registered Zod schemas, with
+shared schemas inlined and an object root for every tool. `update_work` exposes
+all operation kinds and their required fields as discriminated `oneOf` branches;
+no-argument tools publish a closed empty object. SDK/Zod validation of calls is
+unchanged. Tools omit optional task-execution metadata: these tools do not
+support task execution, and `execution` is absent from the `2026-07-28` Tool
+shape (it was optional in `2025-11-25`).
+
 For the facade command above, the tunnel runtime must target `http://127.0.0.1:5297/mcp`, for example:
 
 ```sh
