@@ -49,13 +49,20 @@ published first; component details and membership fill in as their reads finish.
 A `refreshing` response makes the browser poll after one second; settled views
 poll every 20 seconds. Canonical operational reads still await full enrichment.
 The in-memory last result stays available while refresh runs, with no release
-ledger or new configuration.
+ledger or new configuration. Failed association refreshes retain known links,
+mark association coverage incomplete and show a safe warning, including on a
+cold failure. Recovery clears that warning. Acceptance receipt store warnings
+remain visible in each release's source gaps during native-data refreshes.
 
 GitHub observations cache for one minute. Only the recent five tags (plus an
 explicit historical selection) receive Actions reads. Membership advances for
 the latest and selected releases and for untagged main. Catalogs paginate up to
 ten pages and report partial coverage at that limit. Source loss retains known
 observations with a visible unknown state; missing data never means no releases.
+Actions freshness is evaluated on every display from each detail read's cache
+timestamp. After one minute, retained runs remain visible as last-known evidence,
+with unknown activity and partial source coverage even while the next catalog
+read is pending. A successful complete Actions read restores fresh evidence.
 
 A successful component workflow is **awaiting PROD verification**, exactly as the
 native Release body states. Neither a tag, published Release nor green Actions
