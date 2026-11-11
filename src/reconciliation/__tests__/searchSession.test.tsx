@@ -52,10 +52,10 @@ describe('search session organizer selection restoration', () => {
     }
   })
 
-  it.each(['Escape', 'Back', 'Restore'] as const)('preserves both directions of Gaps-only edits through %s', exit => {
+  it.each(['Escape', 'Back', 'Restore'] as const)('preserves both directions of Gaps-only edits through %s', async exit => {
     for (const initiallyEnabled of [true, false]) {
       vi.stubGlobal('matchMedia', () => ({ matches: exit === 'Back' }))
-      vi.spyOn(window.history, 'go').mockImplementation(() => {})
+      vi.spyOn(window.history, 'go')
       window.history.replaceState(null, '', window.location.href)
       const scene = fixtureScene()
       const { result, unmount } = renderHook(() => {
@@ -75,7 +75,10 @@ describe('search session organizer selection restoration', () => {
       act(() => result.current.session.begin())
       act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }, undefined, 'Tin Star'))
       act(() => result.current.session.begin())
+      // Replacing the lens unwinds a history entry before the user's Back.
+      const replaced = exit === 'Back' ? new Promise<void>(resolve => window.addEventListener('popstate', () => resolve(), { once: true })) : null
       act(() => result.current.session.choose({ kind: 'card', id: scene.cards[0]!.id }))
+      if (replaced) await act(async () => { await replaced })
       act(() => result.current.send({ type: 'set-exceptions', enabled: !initiallyEnabled }))
       const filters = result.current.state.search
       act(() => {

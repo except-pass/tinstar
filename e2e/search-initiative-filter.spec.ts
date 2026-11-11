@@ -80,9 +80,9 @@ for (const width of [1366, 390]) test(`initiative search and explicit filter edi
   await expect.poll(() => ids(page)).toEqual([fixtureId(1), fixtureId(4)])
   // This exact reload/remove/select/remove/Clear sequence exposed a capture-
   // phase workspace restore overwriting the user's newer donut-filter action.
-  const beforeClearHistory = await page.evaluate(() => history.state?.tinstarSearch?.session)
+  // Explicit filter edits have already ended the initiative session.
+  await expect(page.getByRole('button', { name: 'Clear search focus' })).toHaveCount(0)
   await page.getByRole('button', { name: 'Clear all', exact: true }).click()
-  if (width === 390) await expect.poll(() => page.evaluate(() => history.state?.tinstarSearch?.session)).not.toBe(beforeClearHistory)
   await expect(count).toHaveText('0')
   expect((await preferences(page)).donutFilter).toEqual({ cards: [], workers: [] })
   expect((await preferences(page)).search.facets).toEqual([])
