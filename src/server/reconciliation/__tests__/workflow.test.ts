@@ -2065,7 +2065,7 @@ it('rejects cross-request work publications and excludes forged history on a sha
   expect(JSON.stringify(queue.needsWill!.map(item => item.proposal))).not.toContain(forged.question)
 })
 
-it('retains a typed publication binding after closure and finalizes its acknowledged delivery across restart', async () => {
+it.each(['none', 'work', 'ask', 'work recovery', 'ask recovery'])('retains an answered binding through %s supersession and finalizes acknowledgment plus closure across restart', async supersession => {
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
   const { decisionRecordRows } = await import('../../../shared/workflowRequests')
   const { AskApi } = await import('../../ask/routes')
@@ -2085,7 +2085,35 @@ it('retains a typed publication binding after closure and finalizes its acknowle
   expect(await sources.updateWork({ ...f.request, proposal: p } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
   const notes = f.comments.map(comment => ({ id: comment.id, text: plainText(comment.rich_text) }))
   expect(decisionRecordRows(notes, 'Tin Star request: ').find(row => row.id === 'r3-proposal')).toMatchObject({ source_request: f.source, source_request_key: item.id })
-  expect(await sources.updateWork({ ...f.answer, resolve_wait: undefined } as UpdateWorkInput, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+  if (supersession.endsWith('recovery')) f.controls.failPatch()
+  const answer = await sources.updateWork({ ...f.answer, resolve_wait: undefined } as UpdateWorkInput, 'Owner')
+  if (supersession.endsWith('recovery')) {
+    expect(answer).toMatchObject({ outcome: 'partially-saved', saved_fields: expect.arrayContaining(['decision-answer']) })
+    expect(f.messages).toHaveLength(0)
+    f.controls.failPatch(false)
+  } else {
+    expect(answer).toMatchObject({ decision_resolution: { state: 'pending' } })
+    expect(f.messages).toHaveLength(1)
+  }
+  if (supersession !== 'none') {
+    const q = { ...p, source: { ...p.source, revision: '2' }, proposal_id: 'replacement-q', supersedes: p.proposal_id, published_at: new Date(Date.parse(p.published_at) + 1000).toISOString() }
+    let answerId: string
+    if (supersession.startsWith('work')) {
+      expect(await sources.updateWork({ ...f.request, request_id: 'replacement-publication', operation_id: 'publish-replacement', proposal: q } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+      answerId = proposalAnswerId(q)
+    } else {
+      const { decisionContext } = await import('../../ask/decision')
+      const turn = await sources.askStore.create('owner@example.test', crypto.randomUUID(), 'Revise the recommendation', decisionContext(item, { scene: 'decisions' }))
+      const proposal = { ...q, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: '2' } }
+      await sources.askStore.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'replacement-note', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
+      await sources.askStore.ingest({ request_id: turn.request_id, reply: { id: 'replacement-note', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Revised recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })
+      answerId = turn.request_id
+    }
+    expect((await sources.queue()).needsWill!.find(row => row.id === item.id)?.currentProposalAnswerId).toBe(answerId)
+    expect(await sources.updateWork({ ...f.answer, operation_id: 'retry-recorded-answer', resolve_wait: undefined } as UpdateWorkInput, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })
+    expect(await sources.updateWork({ ...f.answer, operation_id: 'change-recorded-answer', resolve_wait: undefined, answer: 'A different answer' } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+    expect(f.bridge.submit).toHaveBeenCalledTimes(1)
+  }
   expect(f.messages).toHaveLength(1)
   const deliveryId = f.messages[0]!.requestId
   f.messages[0]!.state = 'acknowledged'

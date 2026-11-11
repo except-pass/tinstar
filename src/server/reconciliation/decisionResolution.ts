@@ -54,7 +54,7 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export function decisionProposals(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+export function decisionHistory(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
@@ -71,17 +71,25 @@ export function decisionProposals(notes: WorkflowNote[], publications?: import('
     if (original.source_request || !binding.source_request || original.action !== binding.action || original.preserve_action !== binding.preserve_action) throw new DecisionSourceError('proposal identity has conflicting binding metadata')
     return [{ ...original, source_request: binding.source_request, source_question: binding.source_question, source_spawn_gen: binding.source_spawn_gen }]
   })
-  const bound = new Map<string, typeof history>()
-  for (const row of history.filter(row => row.source_request)) {
+  return history.filter(row => {
+    if (!row.source_request) return !decisionProposalSchema.safeParse(row.proposal).success
     const request = firstMateRequestSchema.safeParse(row.source_request)
     if (!request.success) throw new DecisionSourceError('published source binding is incomplete')
-    const key = requestKey(request.data)
+    const value = decisionProposalSchema.safeParse(row.proposal)
+    return !value.success || value.data.source.kind === 'firstmate-request' && value.data.source.id === request.data.id && (publications === undefined || publications.some(entry => entry.source_request && requestKey(entry.source_request) === requestKey(request.data) && JSON.stringify(entry.value) === JSON.stringify(value.data)))
+  })
+}
+export function decisionProposals(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+  const history = decisionHistory(notes, publications)
+  const bound = new Map<string, typeof history>()
+  for (const row of history.filter(row => row.source_request)) {
+    const key = requestKey(firstMateRequestSchema.parse(row.source_request))
     bound.set(key, [...(bound.get(key) ?? []), row])
   }
   const current = [...bound.values()].map(group => {
     const candidates = group.flatMap(row => {
       const value = decisionProposalSchema.safeParse(row.proposal)
-      return value.success && value.data.source.kind === 'firstmate-request' && value.data.source.id === firstMateRequestSchema.parse(row.source_request).id && (publications === undefined || publications.some(entry => entry.source_request && requestKey(entry.source_request) === requestKey(firstMateRequestSchema.parse(row.source_request)) && JSON.stringify(entry.value) === JSON.stringify(value.data))) ? [{ value: value.data }] : []
+      return value.success ? [{ value: value.data }] : []
     })
     const keys = new Set(candidates.map(entry => entry.value.request_key))
     const current = currentDecisionProposal([...candidates, ...(publications ?? []).filter(entry => keys.has(entry.value.request_key))])
@@ -102,9 +110,9 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
   confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[]): Promise<DecisionResolution | undefined> {
-  let requests: ReturnType<typeof decisionProposals>
-  try { requests = decisionProposals(notes, publications) } catch (error) { return verify((error as Error).message) }
-  const bound = requests.filter(row => row && 'source_request' in row)
+  let requests: ReturnType<typeof decisionHistory>
+  try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
+  const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success || rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) || rows(notes, 'Tin Star answer data: ').some(answer => answer.request_id === row.id)))
   if (!bound.length) {
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
