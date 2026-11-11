@@ -1,3 +1,5 @@
+declare const __TINSTAR_BUILD_SHA__: string | null
+import { ReviewDeploymentReconciler } from './reconciliation/reviewDeployment'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -82,7 +84,7 @@ export function startServer(opts: ServerOptions) {
   reconciliation.workflow.onChange = change => workUpdates.confirmed(change)
   reconciliation.workflow.deliveryStatus = (id, operationId) => workUpdates.deliveryStatus(id, operationId)
   reconciliation.checkInIndicators = () => checkIns.indicators()
-  const fleet = new CockpitFleet(() => { void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
+  const fleet = new CockpitFleet(() => { void reconciliation.reconcileReviewHandoffs?.().catch(() => log.warn('review', 'Review handoff reconciliation unavailable; retained audit exceptions remain unresolved')); void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)
   const releaseWriter = new ReleaseAutomationWriter(getConfigRoot(), reconciliation.releaseTransport(), () => releases.read(false, true))
   reconciliation.releaseDesk = () => releaseWriter.desk()
@@ -95,6 +97,9 @@ export function startServer(opts: ServerOptions) {
   reconciliation.authorizePulls = req => pulls.authorized(req)
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
   reconciliation.readPullReadiness = urls => pulls.readiness(urls)
+  const reviewHandoffs = new ReviewDeploymentReconciler(reconciliation.reviewAudit, { scene: () => reconciliation.scene(true), associations: releases.store,
+    update: (input, actor) => reconciliation.updateWork(input, actor), deliver: (home, id, text) => fleet.deliverReviewException(home, id, text) })
+  reconciliation.reconcileReviewHandoffs = force => reviewHandoffs.run(force)
   const actions = new ActionsApi()
   const reconciliationMcp = new ReconciliationMcp(reconciliation, configDir, new DomainReadTools(pulls, releases, req => authorizePrReadGrant(req, configDir)))
   const asks = new AskApi(reconciliation, undefined, undefined, { actionReceipt: id => actions.receipt(id), pulls: () => pulls.read(), pullOrigin: url => pulls.origin(url), pullRelationships: id => pulls.relationships(id), releases: () => releases.read() }, checkIns, workUpdates)
@@ -161,6 +166,9 @@ export function startServer(opts: ServerOptions) {
 
   const requestHandler = async (req: IncomingMessage, res: ServerResponse) => {
     try {
+      if (req.url === '/api/deployment' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ok: true, data: { sha: typeof __TINSTAR_BUILD_SHA__ === 'undefined' ? null : __TINSTAR_BUILD_SHA__ } })); return
+      }
       if (sessionRequestHandler(req, res)) return
       if (await handleCockpitRequest(fleet, req, res)) return
       if (await actions.handle(req, res)) return

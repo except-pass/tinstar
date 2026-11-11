@@ -166,6 +166,14 @@ export class CockpitFleet {
     return this.outbox.submit(message, this.describe(message, card))
   }
 
+  /** Server-owned deployment handoffs reuse the existing durable inbox delivery. */
+  async deliverReviewException(home: string, identity: string, text: string): Promise<SubmitResult> {
+    if (!this.homes.includes(home)) return { saved: false, error: 'Firstmate home is not configured', canReceive: 'unknown' }
+    const requestId = `${identity.slice(0, 8)}-${identity.slice(8, 12)}-5${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`
+    const prior = await this.outbox.get(requestId)
+    return this.outbox.submit(prior ?? { requestId, home, kind: 'message', taskId: null, decisionKey: null, holdId: null, cardType: null, text }, 'Tin Star guarded deployment')
+  }
+
   /** Closes a classified decision here. An unclassified decision stays on the inbox-note path. */
   async dismiss(key: string): Promise<{ dismissed: true } | { dismissed: false; fallback: true } | { dismissed: false; error: string } | null> {
     if (key.startsWith('desk-source:') && !this.deskResponseKeys.has(key)) return null

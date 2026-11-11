@@ -1,9 +1,9 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { QuotaRail } from '../QuotaRail'
 import type { ContextPanelMode } from './types'
 
 const copy: Record<Exclude<ContextPanelMode, null>, { title: string; lede: string }> = {
-  needs: { title: 'Needs You', lede: 'Action required before workers can proceed.' },
+  needs: { title: 'Review Ready', lede: 'Inspect deployed deliverables and record your feedback.' },
   workers: { title: 'Workers', lede: 'Switch the worker on screen.' },
 }
 
@@ -13,8 +13,15 @@ export function ContextPanel({ mode, count, onCollapse, children }: {
   onCollapse: () => void
   children: ReactNode
 }) {
+  const panelRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!mode) return
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panelRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    return () => { if (opener?.isConnected) opener.focus() }
+  }, [mode])
   const panel = mode ? copy[mode] : null
-  return <aside className="cockpit-context" aria-label={panel?.title} hidden={!panel}>
+  return <aside ref={panelRef} id="cockpit-context" className="cockpit-context" aria-label={panel?.title} hidden={!panel}>
     {panel && <header className="cockpit-context-header">
       <div>
         <div className="cockpit-context-title"><strong>{panel.title}</strong><span className={mode === 'needs' ? undefined : 'is-quiet'}>{count}</span></div>

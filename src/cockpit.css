@@ -184,3 +184,11 @@
   .cockpit-detail-rail .cockpit-worker-marks .cockpit-mate{display:none}
   .cockpit-detail-rail .cockpit-status-detail .cockpit-mate{display:inline-block}
 }
+
+/* Reuses the existing attention drawer for deployed feature acceptance. */
+.cockpit-attention-review label { display: grid; gap: 5px; font-size: 12px; }
+.cockpit-attention-review textarea { width: 100%; box-sizing: border-box; background: var(--panel-bg, #171b23); color: inherit; border: 1px solid #555; border-radius: 6px; padding: 8px; }
+.cockpit-review-links { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cockpit-review-links a, .cockpit-review-links button { min-height: 44px; display: inline-flex; align-items: center; }
+.cockpit-attention-review .cockpit-review-check { display: flex; align-items: center; min-height: 44px; }
+.cockpit-attention-review h3, .cockpit-attention-review p { overflow-wrap: anywhere; }

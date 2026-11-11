@@ -132,6 +132,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 
 | kind | Inputs / changes |
 | --- | --- |
+| `submit_for_review`, `accept_review`, `request_review_changes` | See [deployed feature review](#deployed-feature-review) for evidence, response and recovery contracts. |
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
@@ -170,7 +171,7 @@ also compare their read-before-write text. Set-valued properties and checkpoint
 readback compare meaning, including timezone rendering, rather than ordering or
 formatting. Direct Notion edits can still race a multi-request operation.
 
-Except for [source-bound decision answers](#first-mate-decision-reconciliation), updates confirm properties and managed sections before writing the history note.
+The following repair rules apply to ordinary updates; [source-bound decision answers](#first-mate-decision-reconciliation) and [review operations](#deployed-feature-review) have their own recovery contracts. Ordinary updates confirm properties and managed sections before writing the history note.
 If only the note fails, the same process can repair it once, provided the card's
 last-edited time and properties remain unchanged. A changed card returns the
 confirmed partial result without another write; review current state and re-issue
@@ -639,3 +640,60 @@ link in Tin Star, and put the evidence on card
 not complete this live acceptance. Keep the parent shared-workflow cutover
 dependency explicit and do not activate another pickup mechanism or real inbox
 delivery from a preview.
+
+## Deployed feature review
+
+`get_work_views.reviews` is a separate projection from `needsWill`/Decisions.
+Every current configured-board card with Status `Ready for Review` or `In review`
+appears once by canonical card ID, regardless of owner, action tags, waits or
+worker holds. Existing PR reviews remain separate. Partial/stale source reads
+retain known cards with a coverage warning; an empty incomplete result is not an
+all-clear. The Review Ready button opens the existing context panel, including
+its mobile drawer and keyboard controls; it creates no new page or Discuss item.
+
+The shared UI/MCP `update_work` path supports:
+
+- `submit_for_review`: canonical `card_id`, `operation_id`, and `review` containing
+  `submission_key`, `deliverable_id`, `summary`, `pulls: [{url,head}]`,
+  `deployment_id` (`floor:<deployed SHA>`), `deployed_sha`, `live_url`,
+  `instructions`, `remaining_scope`, and `proof`. UI proof requires
+  `{kind:"ui",tested_sha,passed:true,receipt,screenshots:[...]}`; non-UI proof uses
+  `{kind:"non-ui",tested_sha,passed:true,receipt,alternative}`. Proof is the
+  submitting operator's explicit live test evidence, never inferred from CI or
+  generic Ask/MCP smoke. The server checks its SHA against a guarded deployment
+  and smoke receipt and verifies each PR/head and canonical card association.
+- `accept_review` and `request_review_changes`: canonical `card_id`,
+  `operation_id`, `submission_key`, `feedback`, `remaining_scope`, and
+  `scope_complete` (false unless explicitly attested). Acceptance records Will's
+  explicit acceptance and its authenticated recorder. Only attested full scope
+  with no current wait or unfinished child and complete child relations becomes Done.
+  Pending acceptance rechecks current waits, child relations and child statuses
+  before applying the retained transition, including after restart. Otherwise the card
+  stays open with Firstmate. Request changes records feedback and queues it for
+  Firstmate; worker dispatch remains Firstmate's responsibility.
+
+Legacy review-status cards remain visible and actionable without inventing a
+new deployment receipt. Their response key binds the canonical card and its
+observed revision; the owner must inspect the linked card/evidence before
+accepting. Child acceptance changes only the child, preserving its parent's
+provisioning and other unfinished scope.
+
+A review property transition patches Owner/Status together. Its evidence comment
+is a separate confirmed step, so results explicitly report `saved`, `not-saved`
+or `partially-saved` with exact saved fields. Canonical submission identity is
+card + deliverable + deployed SHA. Different operation IDs, process restart and
+repeated deployment cannot republish the same completed submission or reset
+existing In review feedback. The submission key and review response remain in
+canonical Notion history. The existing `workflow-create-receipts.json` retains
+pending review recovery, and normal work-view refresh reconciles bounded pending
+operations against actual page/comment state before writing again.
+
+If a comment response is lost, its marker is looked up before retry. An absent
+marker after an ambiguous request is not permission to post another comment.
+The operation remains partial and visible in `reviewRecoveries`. After an
+operator confirms the original comment is absent in Notion, the same operation
+may include `retry_missing_note: {confirmed_absent:true, reason:"..."}`. This
+recovery reason is saved in its existing receipt before retry. A definite 4xx
+rejection can retry after a fresh read. Newer unrelated property edits are
+preserved; the source must be reconciled explicitly rather than replaying the
+original transition over them.

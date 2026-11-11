@@ -120,6 +120,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if ! $check_only; then
+  export TINSTAR_PREVIOUS_DEPLOYED_SHA
+  if ! TINSTAR_PREVIOUS_DEPLOYED_SHA=$(node "$support" old-sha); then
+    TINSTAR_PREVIOUS_DEPLOYED_SHA=unknown
+  fi
   cd -- "$source_dir"
   gate source-clean source_clean # A deploy we waited for may have changed the checkout.
   gate fetch git fetch origin main
@@ -136,12 +140,23 @@ if ! $check_only; then
   if ! node bin/tinstar.js voice status; then
     printf 'WARNING Tin Star deploy: voice model status failed; continuing deploy\n' >&2
   fi
+  # Persist pending handoff before replacement; a crash remains reconcilable.
+  if ! node "$script_dir/review-handoff.mjs" record; then
+    printf 'WARNING review handoff audit unavailable; deploy health checks continue\n' >&2
+  fi
   gate "restart:$floor_unit" sudo -n systemctl restart "$floor_unit"
   gate "restart:$facade_unit" sudo -n systemctl restart "$facade_unit"
   if [[ -n "$shim_unit" ]]; then gate "restart:$shim_unit" sudo -n systemctl restart "$shim_unit"; fi
   gate "restart:$tunnel_unit" sudo -n systemctl restart "$tunnel_unit"
 fi
-gate post-deploy-smoke node "$script_dir/post-deploy-smoke.mjs"
+phase=post-deploy-smoke
+if node "$script_dir/post-deploy-smoke.mjs"; then
+  if ! node "$script_dir/review-handoff.mjs" smoke; then
+    printf 'WARNING review handoff incomplete; healthy floor retained, inspect deploy audit\n' >&2
+  fi
+else
+  if ! allow_failure "$phase"; then exit 1; fi
+fi
 # Clear an old latch only after this invocation completed; failures reinstate it.
 if [[ -e "$block" ]]; then rm -- "$block"; fi
 if $overridden; then

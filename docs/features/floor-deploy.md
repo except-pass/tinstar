@@ -225,3 +225,65 @@ HTTP Ask routes in isolated temp configs. They verify restart ordering, isolated
 overrides, early prerequisite checks, no restart after persistent test failure, no credentials in output, smoke cleanup, durable
 blocking and refusal of the next deploy. Server tests prove partition isolation
 across reloads. CI also runs ShellCheck on the wrapper.
+
+## Tin Star review handoff
+
+A healthy guarded deployment and a completed review handoff are separate results.
+The wrapper captures the previous running `/api/deployment` build SHA, persists
+`floor-deployment` in the existing `${TINSTAR_DEPLOY_BLOCK}.audit.jsonl` before
+restarting, and records `floor-smoke` only after green smoke and a matching new
+running build SHA. The server build embeds its Git revision; an old build without
+that endpoint reports unknown rather than treating checkout HEAD as live proof.
+The pre-install SHA probe uses only Node built-ins; any probe failure falls back
+to unknown so dependency installation and healthy deployment can proceed. Unknown
+provenance remains an unresolved handoff exception in the deployment audit.
+
+Explicit commit-to-PR membership is read through `gh-axi` (at most 50 first-parent
+commits); a direct commit, unknown previous SHA or incomplete read becomes a
+specific evidence gap. Canonical card associations come from the existing
+shared Releases/PR association mechanism. No title matching is performed.
+
+Optional `TINSTAR_REVIEW_EVIDENCE_FILE` names a JSON input with:
+
+```json
+{
+  "evidence": [{ "card_id": "<canonical Notion ID>", "review": "<submit_for_review.review object>" }],
+  "nonReviewable": [{ "pull": "<canonical PR URL>", "reason": "<grounded classification>", "evidence": "<supporting reference>" }]
+}
+```
+
+The placeholder `review` above must be the full typed object documented in
+[workflow.md](workflow.md#deployed-feature-review), not a string. Capture live
+feature proof against the intended deployed SHA; a passed generic smoke is not
+UI acceptance evidence. Missing/malformed proof produces an exception, never a
+fabricated submission. With multiple configured Firstmate homes, set
+`TINSTAR_REVIEW_FIRSTMATE_HOME` to the responsible configured home; a single
+configured home is selected automatically.
+
+The existing post-deploy queue refresh and normal server/fleet refresh reconcile
+these records after restart. `review-handoff` records retain unresolved gaps,
+owner, worker (when confirmed), next action and delivery outcome. Firstmate
+receives them through the existing FleetOutbox and inbox request receipt. The
+outbox is only delivery transport: its normal pruning never erases the durable
+audit exception. A saved inbox receipt is not an acknowledgment or acceptance.
+Resolved handoffs and successful delivery receipts prevent duplicate submissions
+and repeated notices. A resolved handoff retains its canonical card association
+even after the completed card leaves the active source census. Evidence must
+match the deployment ID, deployed SHA, tested SHA and every declared PR/head
+before an existing submission can satisfy that deployment's handoff.
+No new polling service or event stream is introduced.
+
+To supply missing evidence after a healthy deploy, prepare the manifest and run
+`node scripts/deploy/review-handoff.mjs record` with that deployment's source and
+config environment, then refresh the existing work views. Alternatively, `floor-deploy.sh --check-only` rereads the evidence manifest after green smoke and performs the handoff without replacing the running build. A repeated record for
+the current SHA preserves its original verified membership. Same-key partial
+Notion writes reconcile through `update_work`; unresolved records remain visible
+in `get_work_views.reviewExceptions`/`reviewRecoveries`. A previously unknown
+association is resolved only when fresh shared source supplies its canonical
+card identity. Do not restart or roll back healthy code to repair a review write.
+
+A review-only failure prints a warning and does not create `deploy.blocked` or
+turn an overridden failed smoke into a successful receipt. Existing deploy
+`--override`/`--clear-block` privileges are unchanged. If the audit itself cannot
+be written, the warning explicitly says the handoff is unconfirmed; restart
+persistence cannot be claimed until storage is repaired.

@@ -12,7 +12,17 @@ export interface HandoffReceiptState {
   notified?: boolean
   original?: Record<string, unknown>
 }
-interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState }
+export interface ReviewReceiptState {
+  input?: unknown
+  recovery_reason?: string
+  original: Record<string, unknown>
+  desired: Record<string, unknown>
+  note: string
+  actor: string
+  note_pending?: boolean
+  done?: boolean
+}
+interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState }
 const writers = new Map<string, Promise<unknown>>()
 
 /** Creation latches and handoff reconciliation state share this receipt store.
@@ -31,6 +41,7 @@ export class CreationReceipts {
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error }
   }
   async get(key: string) { return (await this.read())[key] }
+  async list(prefix: string) { return Object.entries(await this.read()).filter(([key]) => key.startsWith(prefix)) }
   private change(edit: (values: Record<string, Receipt>) => void) {
     const key = this.root ? join(this.root, 'workflow-create-receipts.json') : undefined
     const result = (key ? writers.get(key) ?? Promise.resolve() : this.tail).catch(() => {}).then(async () => {
@@ -48,4 +59,7 @@ export class CreationReceipts {
     return this.change(values => { values[key] = { input, ...(cardId ? { cardId } : {}), ...(handoff ? { handoff } : {}) } })
   }
   remove(key: string) { return this.change(values => { delete values[key] }) }
+  putReview(key: string, input: string, cardId: string, review: ReviewReceiptState) {
+    return this.change(values => { values[key] = { input, cardId, review } })
+  }
 }

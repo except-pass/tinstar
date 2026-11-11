@@ -1,3 +1,4 @@
+import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
@@ -31,11 +32,13 @@ const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, c
 class WorkflowError extends Error { constructor(readonly code: string, message: string, readonly requiresNewOperationId = false) { super(message) } }
 export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; properties: Record<string, unknown>; notes?: string[]; sections?: string[]; sectionTexts?: string[] }
 export class WorkflowOperations {
+  validateReview?: (input: Extract<ReviewOperation, { kind: 'submit_for_review' }>) => Promise<void>
   decisionDelivery?: DecisionDelivery
   onChange?: (change: WorkflowChange) => Promise<void>
   deliveryStatus?: (cardId: string, operationId?: string) => Promise<unknown>
   private content: WorkflowContent
   private creations: CreationReceipts
+  private reviewCursor = 0
   private noteRepairs = new Map<string, { signature: string; version: string; note: string; result: StartWorkResult }>()
   private decisionRefreshes = new Map<string, { until: number; revision: string; result: Promise<Awaited<ReturnType<WorkflowOperations['performDecisionReconcile']>>> }>()
   private locks = new Map<string, Promise<unknown>>()
@@ -184,6 +187,13 @@ export class WorkflowOperations {
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     const parsed = updateWorkSchema.safeParse(input)
     if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
+    if (isReviewOperation(parsed.data)) {
+      const review = parsed.data
+      return this.exclusive(review.card_id, () => writeReview(review, actor, { reader: this.reader, content: this.content, receipts: this.creations,
+        property: (card, field, value) => this.property(card, field, value), changed: change => this.changed(change),
+        validate: input => this.validateReview ? this.validateReview(input) : Promise.reject(new ReviewWriteError('deployment-unavailable', 'Verified guarded deployment evidence is unavailable')),
+      }))
+    }
     this.decisionRefreshes.delete(parsed.data.card_id)
     return this.serialize(parsed.data.card_id, parsed.data, actor, async () => {
       const result = await this.performUpdate(parsed.data, actor)
@@ -196,6 +206,19 @@ export class WorkflowOperations {
         outcome: 'partially-saved' as const, code: 'firstmate-pending', message: resolution.message,
       } : { message: 'Decision recorded · First Mate reconciled' }) }
     })
+  }
+  async reconcileReviews() {
+    const pending = (await this.creations.list('review:')).filter(([, receipt]) => receipt.review && !receipt.review.done)
+    const results: Array<{ cardId: string; result: StartWorkResult }> = []
+    const start = this.reviewCursor % Math.max(pending.length, 1)
+    for (let offset = 0; offset < Math.min(pending.length, 8); offset++) {
+      const index = (start + offset) % pending.length
+      this.reviewCursor = index + 1
+      const [, receipt] = pending[index]!
+      const parsed = updateWorkSchema.safeParse(receipt.review?.input)
+      if (parsed.success && isReviewOperation(parsed.data)) results.push({ cardId: parsed.data.card_id, result: await this.update(parsed.data, receipt.review!.actor) })
+    }
+    return results
   }
   reconcileDecisions(cardId: string, fleet?: SourceSnapshot['fleet'], force = true) {
     const revision = JSON.stringify([this.reader.lastKnown(cardId)?.card.last_edited_time, fleet?.map(home => [home.source.home, home.observation.observedAt, home.observation.status])])

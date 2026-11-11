@@ -1,3 +1,6 @@
+import { ReviewDeploymentAudit } from './reviewDeployment'
+import { AssociationStore } from '../releases/associations'
+import { reviewView } from './reviews'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
 import { resolveCorsHeaders } from '../api/cors'
@@ -33,6 +36,8 @@ export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['inte
 
 /** Shared source collection, projection and policy-aware workflow operations. */
 export class ReconciliationSources {
+  reconcileReviewHandoffs?: (force?: boolean) => Promise<void>
+  readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
   readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
@@ -52,6 +57,8 @@ export class ReconciliationSources {
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi)
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot)
+    this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
+    this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), new AssociationStore(receiptRoot))
     this.context = new CardContextReader(config.notion, this.notionApi.fetch)
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -149,8 +156,10 @@ export class ReconciliationSources {
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-board card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
-      const result = workReadback({ outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
-        ...(args.details ? { context: await this.context.details(card.id) } : {}) })
+      const context = args.details ? await this.context.details(card.id) : undefined
+      const review = reviewView(intentions, new Map(context && (context.commentsOutcome ?? context.outcome) === 'available' ? [[card.id, context.blocks]] : [])).items[0] ?? null
+      const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
+        ...(context ? { context } : {}) })
       // Explicit full-contract retrieval preserves bytes; routine reads remain bounded.
       return { ...result, implementation_contract: args.implementation_contract
         ? await this.workflow.readImplementationContract(card.id, args.implementation_contract)
@@ -189,6 +198,10 @@ export class ReconciliationSources {
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
   async queue(req?: IncomingMessage) {
+    let reviewWarning: string | null = null
+    const reviewRecoveries = await this.workflow.reconcileReviews().catch(() => null)
+    for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
+    try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
     const [snapshot, pullRead] = await Promise.all([this.snapshot(), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
@@ -242,6 +255,16 @@ export class ReconciliationSources {
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
     queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     const scene = this.reconciler.project(snapshot)
+    const reviewNotes = new Map<string, Array<{ text: string }>>()
+    for (const item of queue.reviews.items.slice(0, 20)) {
+      const context = contexts.get(item.cardId) ?? await this.context.commentDetails(item.cardId)
+      if (context.outcome === 'available') reviewNotes.set(item.cardId, context.blocks)
+    }
+    queue.reviews = reviewView(snapshot.intentions, reviewNotes)
+    try { queue.reviewExceptions = await this.reviewAudit.exceptions() } catch { reviewWarning = 'Review handoff audit could not be read; exception coverage is unknown.' }
+    if (!reviewRecoveries || reviewRecoveries.some(row => row.result.outcome !== 'saved')) queue.warnings.push('Some recorded review writes remain unconfirmed; inspect the existing review receipts before claiming acceptance or handoff completion.')
+    queue.reviewRecoveries = reviewRecoveries ?? []
+    if (reviewWarning) queue.warnings.push(reviewWarning)
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized)
     queue.operationalExceptions = executionWarnings(scene)
     if (pullRead) queue.pullCoverage = { repositories: pullRead.repositories, warnings: pullRead.warnings, associationsComplete: pullRead.associationsComplete }

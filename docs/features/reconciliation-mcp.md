@@ -1,6 +1,6 @@
 # Conversational Overview
 
-Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers a selected Overview or Decisions tab. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware workflow operations](workflow.md), independent of any window. There are no shell execution, dispatch, approval, merge or domain-priority tools.
+Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextprotocol.io/server) endpoint at `POST /api/reconciliation/mcp` on the existing backend. It reads the configured reconciliation sources and steers a selected Overview or Decisions tab. The UI uses the same pure semantic reducer as clicks. It also exposes [shared work reads and policy-aware workflow operations](workflow.md), independent of any window, including [deployed feature review responses](workflow.md#deployed-feature-review). There are no shell execution, dispatch, merge or domain-priority tools.
 
 ## Start and connect
 

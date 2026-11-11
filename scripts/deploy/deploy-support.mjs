@@ -5,6 +5,14 @@ import { connect } from 'node:net'
 import { userInfo, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { http } from './post-deploy-smoke.mjs'
+
+export async function runningSha(e = process.env) {
+  try {
+    const body = await (await http(`${e.TINSTAR_BRIDGE_URL ?? 'http://127.0.0.1:5281'}/api/deployment`)).json()
+    return body.ok && /^[a-f0-9]{40}$/.test(body.data?.sha) ? body.data.sha : null
+  } catch { return null }
+}
 
 export async function audit(action, gate, reason) {
   const e = process.env
@@ -97,7 +105,8 @@ export async function unitTests() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [action, ...args] = process.argv.slice(2)
   try {
-    if (action === 'audit') await audit(...args)
+    if (action === 'old-sha') console.log(await runningSha() ?? 'unknown')
+    else if (action === 'audit') await audit(...args)
     else if (action === 'preflight') process.exitCode = await preflight()
     else if (action === 'unit-tests') process.exitCode = await unitTests()
     else throw Error('Unknown deploy helper command')
