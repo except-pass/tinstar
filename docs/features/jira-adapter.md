@@ -53,14 +53,15 @@ Tin Star writes; it does not delete the issue. No generic comment is a decision.
 | Next check-in | Date metadata including timezone, through existing checkpoint semantics. |
 | Parent item / Sub-item | Same-provider qualified IDs in issue metadata. Arbitrary multi-parent relations are not silently reduced to Jira's single native parent. |
 | History/comments | Native Jira comments using ADF and the existing receipt/decision markers, authenticated recorder and complete bounded history reads. |
-| Large approved contract | Native JSON attachment batches containing the existing ordered raw-text sections. Existing immutable version manifests, SHA-256/byte/length verification, completion marker, previous versions, durable uncertain-append latch and paginated exact reader are reused. No text is truncated into Description. |
+| Approved handoff, including executive brief and large contract | Native JSON attachment batches containing the existing ordered raw-text sections. Existing immutable version manifests, SHA-256/byte/length verification, completion marker, previous versions, durable uncertain-append latch and paginated exact reader are reused. No text is truncated into Description. |
 
 Actual gaps are native field exposure, date-only native dates and status setup.
 Issue properties are a minimal metadata compatibility seam, **not custom fields
 visible in Jira's ordinary field editor or independently indexed JQL fields**.
 Each property's Jira limit is 32 KiB of serialized JSON; oversize metadata reports
-the exact field and limit. Approved contracts use attachments, retain the existing
-1,500,000 UTF-8-byte contract bound, and are loaded only on explicit exact reads.
+the exact field and limit. Approved contracts use attachments, retain the
+[shared contract bounds](workflow.md#one-call-approved-implementation-handoffs), and are
+loaded only on explicit exact reads.
 Native attachment upload/download permission must be available for that path.
 Unsupported ADF or incomplete history cannot establish absence of a receipt.
 
@@ -69,8 +70,11 @@ Unsupported ADF or incomplete history cannot establish absence of a receipt.
 The existing `WorkflowOperations`, Inspector forms, UI endpoint and MCP tools
 share validation, serialization, decision scope and confirmed readback. Jira
 metadata editing and native transition are separate writes: a failure reports
-partial state and exact confirmed fields, never transactional success. There is
-no write retry loop. A creation receipt prevents duplicates after ambiguous
+partial state and exact confirmed fields, never transactional success. A failed
+post-write read, including HTTP 429, remains partial/unconfirmed and retains
+independently confirmed fields. There is no write retry loop. Creation validates
+property limits, native date mappings and status availability before recording
+an attempted creation. A creation receipt prevents duplicates after ambiguous
 responses; a found incomplete creation remains partial on retry.
 
 Synthetic Jira cards suppress Firstmate pickup/update notifications and source

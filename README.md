@@ -6,7 +6,7 @@
 
 Tinstar shows the workers First Mate is already running, the calls that need your attention, and provider quota in one view. First Mate remains responsible for dispatch, supervision, and worker lifecycle.
 
-Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in the compact toolbar, with relationships between the columns. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration.
+Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in the compact toolbar, with relationships between the columns. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration. The optional [Jira adapter pilot](docs/features/jira-adapter.md) supports isolated synthetic work.
 
 Use [Waiting on First Mate](docs/features/waiting-on-main.md) on Overview to inspect waits on main and their owner-alert delivery status.
 
