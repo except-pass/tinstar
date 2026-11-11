@@ -508,6 +508,14 @@ export class WorkflowOperations {
       const recorded = intents.length > 0 || input.kind === 'answer_decision' && notes.some(note => workflowReceipt(note) && decisionRecordRows([note], 'Tin Star answer data: ').some(row => row.request_id === input.request_id))
       const eligibleRequests = input.kind === 'answer_decision' ? recorded ? decisionHistory(notes, publications) : decisionProposals(notes, publications) : []
       if (input.kind === 'answer_decision' && decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id && row.proposal) && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This proposal is no longer current')
+      if (input.kind === 'answer_decision' && !recorded) {
+        const published = eligibleRequests.find(row => row.id === input.request_id)
+        const request = published?.source_request ?? input.source_request
+        if (request) {
+          const live = bindDecision(await this.fleet(), request, card.id)
+          if (published?.source_request && (published.source_question !== live.source_question || (published.source_spawn_gen ?? null) !== live.source_spawn_gen)) throw new DecisionSourceError('source request changed since publication; refresh before answering')
+        }
+      }
       if (input.kind === 'answer_decision' && input.option_id) {
         const proposals = eligibleRequests.filter(row => row.id === input.request_id)
         const options = proposals.length === 1 ? decisionOptionsSchema.safeParse(proposals[0].options) : null

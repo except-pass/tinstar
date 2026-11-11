@@ -2138,3 +2138,56 @@ it.each(['none', 'work', 'ask', 'work recovery', 'ask recovery'])('retains an an
   seedOriginAllowlist(port)
   expect((await fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(p), action_id: 'proceed', client_key: crypto.randomUUID() }) })).status).toBe(404)
 })
+
+it.each(['mcp', 'ui', 'direct', 'selection'].flatMap(entry => ['closed', 'rebound', 'changed', 'stale'].map(source => ({ entry, source }))))('refuses a new $entry answer when its published source is $source without writing', async ({ entry, source }) => {
+  const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
+  const { proposalAnswerId } = await import('../../ask/decision')
+  const { AskApi } = await import('../../ask/routes')
+  const f = decisionFixture(), root = await mkdtemp(join(tmpdir(), 'decision-live-source-')); roots.push(root)
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  const sources = f.sources(root)
+  vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
+  sources.workflow.decisionDelivery = f.bridge
+  const item = (await sources.queue()).items.find(row => row.sources.some(candidate => candidate.request?.id === f.source.id))!
+  const p = { ...fixtureProposal(item.id, id), source: { kind: 'firstmate-request' as const, id: f.source.id, revision: '1' } }
+  expect(await sources.updateWork({ ...f.request, proposal: p, options: [{ id: 'proceed', label: 'R3' }] } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
+  if (source === 'closed') f.home.observation.data!.backlog = []
+  if (source === 'rebound') f.home.observation.data!.backlog![0]!.cardReferences = [{ pageId: 'b'.repeat(32), basis: 'explicit', source: 'notion_page_id' }]
+  if (source === 'changed') f.home.observation.data!.backlog![0]!.hold_reason = 'Approve a different decision?'
+  if (source === 'stale') f.home.observation.expiresAt = new Date(Date.now() - 1).toISOString()
+  const cardBefore = structuredClone(f.raw)
+  if (entry === 'direct') f.comments.push({ id: 'new-direct-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued' }] })
+  const commentsBefore = f.comments.length
+  const mutations = () => f.requests.filter(request => request.method === 'PATCH' || request.method === 'POST' && new URL(request.url).pathname === '/v1/comments').length
+  const writesBefore = mutations()
+  if (entry === 'direct') {
+    expect(await sources.workflow.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'verification-needed' })
+  } else {
+    const mcp = new ReconciliationMcp(sources, root)
+    const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
+    const server = createServer(async (req, res) => { if (await mcp.handle(req, res) || await asks.handle(req, res)) return; await handleReconciliationRequest(sources, req, res) }); servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
+    seedOriginAllowlist(port)
+    const answer = { ...f.answer, resolve_wait: undefined, ...(entry === 'ui' ? { option_id: 'proceed' } : {}) }
+    if (entry === 'mcp') {
+      const client = new Client({ name: 'decision-live-source', version: '1' }); clients.push(client)
+      await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
+      const result = JSON.parse(((await client.callTool({ name: 'update_work', arguments: answer })).content as Array<{ text: string }>)[0]!.text)
+      expect(result).toMatchObject({ outcome: 'not-saved', code: 'decision-verification-needed', saved_fields: [] })
+      expect(result.message).toMatch(/request|source/)
+    } else if (entry === 'ui') {
+      const response = await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'update', input: answer }) })
+      expect((await response.json()).data).toMatchObject({ outcome: 'not-saved', code: 'decision-verification-needed', saved_fields: [] })
+    } else {
+      const response = await fetch(`${base}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(p), action_id: 'proceed', client_key: crypto.randomUUID() }) })
+      expect([404, 409]).toContain(response.status)
+      expect(await asks.store.list('owner@example.test')).toEqual([])
+    }
+  }
+  expect(f.raw).toEqual(cardBefore)
+  expect(f.comments).toHaveLength(commentsBefore)
+  expect(mutations()).toBe(writesBefore)
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+})
