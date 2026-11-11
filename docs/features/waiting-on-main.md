@@ -47,6 +47,21 @@ still provide current knowledge. Copying a snapshot does not refresh its time.
 Snapshot or ask observations five minutes old are unknown. Ask coverage is
 independent of unrelated task/backlog completeness.
 
+Main answers a keyed ask with `fm-send --resolve-key`. That appends
+`resolved [key=…] [at=…]` to the mate's `state/<id>.status` in the parent home,
+for a remote secondmate the same as for a local mate, and does not copy the line
+into the mate's `state/parent-replies.status`. When the collected home has
+secondmates, the collector also publishes `parent_resolutions`: each mate id,
+the keys main resolved, and each line's `[at=]` time. The backstop drops an ask
+when that mate's own channel already has a later resolved line for the key, or
+when a fresh `parent_resolutions` entry for the mate shows the key resolved at
+or after the ask's `[at=]`. The mate is the secondmate task on main's snapshot
+whose home path is the child's fleet home. A missing publication, a stale one,
+or an unknown entry for that mate closes nothing, and an ask with no timestamp
+stays open.
+Main's Mac has to run this collector after it is merged before those answers
+leave the backstop.
+
 Unknown/stale reads retain last-known items and show an incomplete count (`N+`
 or `unknown`). Only a fresh complete source can remove an absent item. Unknown
 items are never used to send an overdue notification.

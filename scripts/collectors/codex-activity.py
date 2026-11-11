@@ -120,6 +120,82 @@ def fold_parent_asks(lines):
     return {'status': 'known' if known else 'unknown', 'items': list(opened.values())}
 
 
+def secondmate_ids(snapshot):
+    """Task ids whose parent ledger is state/<id>.status. Kind, role, or a current record."""
+    ids, seen = [], set()
+
+    def add(mate_id):
+        if isinstance(mate_id, str) and mate_id not in seen:
+            seen.add(mate_id)
+            ids.append(mate_id)
+
+    current = snapshot.get('secondmate_current')
+    records = current.get('records') if isinstance(current, dict) else None
+    if isinstance(records, list):
+        for row in records:
+            if isinstance(row, dict):
+                add(row.get('id'))
+    for task in snapshot.get('tasks') or []:
+        if isinstance(task, dict) and (task.get('kind') == 'secondmate' or task.get('role') == 'secondmate'):
+            add(task.get('id'))
+    return ids
+
+
+def mate_status_file(home, mate_id):
+    """The parent writes --resolve-key closes to state/<mate-id>.status. A slash leaves that directory."""
+    if not isinstance(mate_id, str) or not mate_id or '/' in mate_id or mate_id in ('.', '..'):
+        return None
+    return Path(home) / 'state' / (mate_id + '.status')
+
+
+def resolved_keys(lines):
+    """Last well-formed resolved [key=] [at=] per key. Duplicate or unstamped times are not a time."""
+    if lines and not lines.endswith('\n'):
+        lines = lines.rsplit('\n', 1)[0] if '\n' in lines else ''
+    found = {}
+    for line in lines.splitlines():
+        match = re.match(r'^resolved\b(.*)$', line)
+        if not match:
+            continue
+        metadata, separator, _text = match.group(1).partition(':')
+        if not separator:
+            continue
+        keys = re.findall(r'\[key=([^\]]+)\]', metadata)
+        stamps = re.findall(r'\[at=([^\]]+)\]', metadata)
+        # One key and one canonical epoch. A duplicate or padded stamp is not a time.
+        if len(keys) != 1 or len(stamps) != 1 or not keys[0]:
+            continue
+        stamp = stamps[0]
+        if stamp.isdigit() and len(stamp) <= 12 and stamp == str(int(stamp)):
+            found[keys[0]] = int(stamp)
+    return [{'key': key, 'at': found[key]} for key in sorted(found)]
+
+
+def parent_resolutions(home, snapshot, now):
+    """Resolved keys this home recorded for its secondmates. Absent when it has none."""
+    ids = secondmate_ids(snapshot)
+    if not ids:
+        return None
+    mates, known = {}, True
+    for mate_id in ids:
+        path = mate_status_file(home, mate_id)
+        if path is None:
+            mates[mate_id] = {'status': 'unknown', 'keys': []}
+            known = False
+            continue
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            mates[mate_id] = {'status': 'known', 'keys': []}
+            continue
+        except (OSError, UnicodeError):
+            mates[mate_id] = {'status': 'unknown', 'keys': []}
+            known = False
+            continue
+        mates[mate_id] = {'status': 'known', 'keys': resolved_keys(text)}
+    return {'status': 'known' if known else 'unknown', 'observed_at': iso(now.timestamp()), 'mates': mates}
+
+
 def parent_asks(home, now):
     try:
         channel = (Path(home) / 'state/parent-replies.status').read_text()
@@ -159,6 +235,9 @@ def collect(home, candidates, now):
     if snapshot.get('schema') != 'fm-fleet-snapshot.v1' or snapshot.get('fm_home') != home or not isinstance(snapshot.get('tasks'), list):
         raise ValueError('unexpected snapshot schema or home')
     snapshot['parent_asks'] = parent_asks(home, now)
+    resolutions = parent_resolutions(home, snapshot, now)
+    if resolutions is not None:
+        snapshot['parent_resolutions'] = resolutions
     return augment(snapshot, candidates, now)
 
 

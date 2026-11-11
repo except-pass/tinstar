@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ParentAsks } from '../../shared/waitingOnMain'
+import type { ParentAsks, ParentResolutions } from '../../shared/waitingOnMain'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readFleetSnapshot } from '../fleet/snapshot'
@@ -66,6 +66,18 @@ function parentAsksField(value: unknown): { parent_asks?: ParentAsks } {
   return parsed.success ? { parent_asks: parsed.data } : {}
 }
 
+const parentResolutionsSchema = z.object({
+  status: z.enum(['known', 'unknown']), observed_at: z.string().datetime({ offset: true }),
+  mates: z.record(z.string().min(1), z.object({
+    status: z.enum(['known', 'unknown']),
+    keys: z.array(z.object({ key: z.string().min(1), at: z.number().int().nonnegative() })),
+  })),
+})
+function parentResolutionsField(value: unknown): { parent_resolutions?: ParentResolutions } {
+  const parsed = parentResolutionsSchema.safeParse(value)
+  return parsed.success ? { parent_resolutions: parsed.data } : {}
+}
+
 export function fleetObservation(source: FleetSource) {
   // File publication includes snapshot generation and transport between homes.
   const maxAgeMs = source.snapshotFile ? 300_000 : 60_000
@@ -113,6 +125,7 @@ export function fleetObservation(source: FleetSource) {
       observedAt: snapshot.generated, coverage: complete ? 'complete' as const : 'partial' as const,
       data: {
         ...parentAsksField(snapshot.parent_asks),
+        ...parentResolutionsField(snapshot.parent_resolutions),
         schema: snapshot.schema, fm_home: source.home, generated: snapshot.generated,
         coverageScope: 'home-task-metadata-and-backlog; child homes and runtime liveness are independent',
         main_inventory: fields(snapshot.main_inventory, ['valid', 'reason', 'unstructured_current_count']),
