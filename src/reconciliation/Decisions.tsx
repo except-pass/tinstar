@@ -42,6 +42,7 @@ function decisionCopy(item: QueueItem, title: string) {
  * creates a second decision, approval or read/archive state. */
 export function Decisions() {
   const workspace = useDeskWorkspace()
+  const controls = useAskControls()
   const { scene, error, queue, queueError, state, send, connection, bridgeError, now, views } = workspace
   const [query, setQuery] = useState(''), [openedId, setOpenedId] = useState<string | null>(() => { try { return sessionStorage.getItem('tinstar-decision-request') } catch { return null } })
   const [detailOpen, setDetailOpen] = useState(!!openedId)
@@ -128,6 +129,13 @@ export function Decisions() {
   const needsVerification = unavailable || incomplete || bridgeError || !!queue?.warnings?.length || !!queue?.operationalExceptions?.length || !!coordination.length
   const missingOrigin = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' && openedId === workspace.origin.target.id && !!queue && !entries.some(entry => entry.key === openedId)
   const preview = missingOrigin ? undefined : selected ?? (!contextCardId && !state.queueOpen ? visible[0] : undefined)
+  const previewId = preview?.item.id
+  const previousRequest = useRef(previewId)
+  useLayoutEffect(() => {
+    if (previousRequest.current === previewId) return
+    previousRequest.current = previewId
+    if (previewId && controls?.deskVisible && controls.expanded && !controls.items.some(turn => turn.conversation_id === controls.expanded && turn.context.target?.kind === 'decision' && turn.context.target.id === previewId)) controls.collapse()
+  }, [previewId, controls])
   const position = preview ? visible.findIndex(entry => entry.key === preview.key) : -1
   const openEntry = (entry: DecisionEntry) => {
     interaction.current++
@@ -197,9 +205,6 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
   const request = item as Partial<NeedsWillItem>
   const turns = (controls?.items ?? []).filter(turn => turn.context.target?.kind === 'decision' && turn.context.target.id === item.id)
   const latest = turns.at(-1), answer = mostRecentAnswer(turns)
-  useLayoutEffect(() => {
-    if (controls?.deskVisible && controls.expanded && !turns.some(turn => turn.conversation_id === controls.expanded)) controls.collapse()
-  })
   const replyProposals = turns.flatMap(turn => {
     const value = turn.reply?.decision_proposal
     return value && value.request_key === item.id && value.source.kind === 'ask-reply' && value.source.id === turn.request_id && (!value.card_id || item.cardIds.includes(value.card_id)) ? [{ answer_id: turn.request_id, value }] : []

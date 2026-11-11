@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { fixtureProposal } from '../../../test-fixtures/reconciliation/decisionProposal'
-import { AskProvider, AskDesk } from '../../ask/Ask'
+import { AskProvider, AskDesk, useAskControls } from '../../ask/Ask'
 import { Decisions } from '../Decisions'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueSource } from '../../server/reconciliation/queue'
@@ -657,4 +657,27 @@ it('collapses another request thread when selection changes and sends through on
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Explain request B' } })
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send question' })) })
   expect(bodies.at(-1)?.target?.id).toBe(second.id)
+})
+
+it('keeps an unrelated conversation opened in global Desk while the decision selection stays unchanged', async () => {
+  const queue = fixtureQueue(), first = { ...queue.items[0]!, id: 'request-a' }
+  queue.items = [first]; queue.needsWill = undefined; workspace.value.queue = queue
+  const id = '22222222-2222-4222-a222-222222222222'
+  const record = { request_id: id, conversation_id: id, question: 'Explain request B', input_mode: 'text', context: { anchor: { kind: 'decision', page_id: first.cardIds[0]!, label: 'Request B', url: null, observed_at: null }, target: { kind: 'decision', id: 'request-b' }, view: { scene: 'decisions' } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered', reply: { summary: 'Answer for unrelated request B', detail: '', references: [], suggested_actions: [] }, error: null, read_at: new Date().toISOString(), dismissed_at: null }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, data: [record] }))))
+  function OpenConversation() {
+    const controls = useAskControls()
+    return <button onClick={() => { controls!.setDeskVisible(true); controls!.showThread(controls!.items[0]!) }}>Open unrelated conversation</button>
+  }
+  const app = () => <AskProvider scene={fixtureScene()} state={state} send={vi.fn()} onReturn={vi.fn()}><Decisions /><OpenConversation /><AskDesk now={Date.now()} view="needs-you" /></AskProvider>
+  const view = render(app())
+  await act(async () => {})
+  expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', first.id)
+  fireEvent.click(screen.getByRole('button', { name: 'Open unrelated conversation' }))
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toBeVisible()
+  expect(screen.getByText('Answer for unrelated request B')).toBeVisible()
+  expect(screen.getAllByRole('textbox')).toHaveLength(1)
+  view.rerender(app())
+  expect(screen.getByRole('button', { name: 'Collapse answer' })).toBeVisible()
+  expect(screen.getAllByRole('textbox')).toHaveLength(1)
 })
