@@ -6,6 +6,7 @@ import { askElement } from '../ask/element'
 import { useViewSnapshot } from '../ask/workspaceHistory'
 import type { AskReturn } from '../shared/ask'
 import { SmartSearch } from '../reconciliation/SmartSearch'
+import { useFloorScene } from '../reconciliation/useFloorScene'
 import { initialPresentation, type Target } from '../shared/reconciliationPresentation'
 import type { ReleasesRead } from '../shared/releases'
 import { eligibleReleaseNote, type ReleaseChange, type ReleaseObject } from '../shared/releaseObjects'
@@ -133,7 +134,8 @@ export function ReleaseCanvas({ release, changes, tab, setTab, audience, setAudi
 }
 
 export function Releases({ data, error, refresh }: { data: ReleasesRead | null; error: string | null; refresh: () => void }) {
-  const { scene, error: sceneError, now, origin, clearOrigin, views } = useDeskWorkspace()
+  const { origin, clearOrigin, views } = useDeskWorkspace()
+  const { scene, error: sceneError, now, refresh: refreshScene } = useFloorScene(true, true)
   const [view, setView] = useState<ReleaseView>({ mode: 'plan', id: null, tab: 'changes', audience: 'internal', drawer: null })
   useViewSnapshot(views, 'releases', () => ({ filter: view }), saved => setView(saved.filter), !!data && !!scene)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -166,7 +168,7 @@ export function Releases({ data, error, refresh }: { data: ReleasesRead | null; 
   const drawerChange = changes.find(change => change.id === view.drawer)
   return <section className="rel-v3" aria-label="Releases"><header className="main-top"><h1>Releases</h1>{scene && <SmartSearch scene={scene} state={initialPresentation()} now={now} scope="releases" documents={documents} open={searchOpen} focused={false} onOpen={() => setSearchOpen(true)} onDismiss={() => setSearchOpen(false)} onRestore={() => {}} onChoose={openSearchHit} />}</header>
     <nav className="lane-tabs" role="tablist" aria-label="Release lifecycle" onKeyDown={tabKeys}>{(['plan', 'verify'] as const).map(mode => <button key={mode} type="button" role="tab" aria-selected={view.mode === mode} tabIndex={view.mode === mode ? 0 : -1} className={`lane-tab ${view.mode === mode ? 'active' : ''}`} onClick={() => { clearOrigin?.(); setView({ mode, id: null, tab: defaultTab(mode), audience: 'internal', drawer: null }) }}>{mode === 'plan' ? 'Plan' : 'Verify'}{releases.length > 0 && <span className="tab-count" aria-hidden="true">{String(releases.filter(release => mode === 'plan' ? release.kind !== 'production' : release.kind === 'production').length).padStart(2, '0')}</span>}</button>)}</nav>
-    {(error || sceneError) && <p className="source-gaps" role="status">{error ?? sceneError} Retained records are last known. <button type="button" className="hero-cta" onClick={refresh}>Read sources again</button></p>}
+    {(error || sceneError) && <p className="source-gaps" role="status">{error ?? sceneError} Retained records are last known. <button type="button" className="hero-cta" onClick={() => { refresh(); void refreshScene() }}>Read sources again</button></p>}
     {originGap && <p className="source-gaps" role="status">{originGap}</p>}
     <div className="body-layout"><aside className="releases-rail" aria-label="Releases to select"><p className="rail-head">{view.mode === 'plan' ? 'Release candidates' : 'Production releases'}</p><div className="release-picker">{selectable.map(release => <button key={release.id} className={`pick ${selected?.id === release.id ? 'active' : ''}`} type="button" aria-pressed={selected?.id === release.id} aria-label={`${release.version} ${kind(release)} ${short(release.planId)} ${short(release.executionId)}`} onClick={() => choose(release.id)}><span className="pick-title"><span className="pick-version">{release.version}</span><span className="pick-type">{kind(release)}</span></span><span className="pick-detail">{release.state} · {short(release.kind === 'production' ? release.executionId : release.planId)}</span><span className="pick-meta">{release.repository}</span></button>)}</div><div className="rail-note">{view.mode === 'plan' ? 'Exact targets come from a frozen coordinator plan.' : 'Actual deployments come from committed production receipts.'}</div></aside>
       {selected ? <ReleaseCanvas release={selected} changes={changes} tab={view.tab} setTab={tab => setView(value => ({ ...value, tab }))} audience={view.audience} setAudience={audience => setView(value => ({ ...value, audience }))} open={drawer => setView(value => ({ ...value, drawer }))} /> : <section className="release-page"><h2>{!data ? 'Reading release sources…' : view.mode === 'plan' ? 'No release candidates' : 'No recorded production releases'}</h2><p className="empty-state">{!data ? 'Waiting for authoritative coordinator identities. No counts or deployment claims are available yet.' : 'No authoritative coordinator objects are available for this view. Configure a coordinator export in releases/reconciliation.json; GitHub tags alone do not create releases.'}</p>{data?.reconciliation?.warnings.map(warning => <p key={warning} className="source-gaps">{warning}</p>)}</section>}

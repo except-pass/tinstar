@@ -11,6 +11,7 @@ import { releaseChanges } from '../../shared/releaseChanges'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, origin: undefined as AskReturn | undefined }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, origin: observed.origin, error: null, now: Date.now(), clearOrigin: vi.fn() }) }))
+vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now(), refresh: vi.fn() }) }))
 let data: ReleasesRead
 beforeEach(() => {
   observed.origin = undefined
