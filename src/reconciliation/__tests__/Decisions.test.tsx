@@ -39,6 +39,9 @@ describe('Decisions', () => {
     workspace.value.queue = null
     const reloaded = render(<Decisions />)
     expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    workspace.value.queue = { ...queue, items: [], refreshing: true }
+    reloaded.rerender(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
     workspace.value.queue = queue
     reloaded.rerender(<Decisions />)
     expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', second.id)

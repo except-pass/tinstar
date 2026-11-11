@@ -60,7 +60,8 @@ export function Decisions() {
   })
   useEffect(() => {
     if (!queue) return
-    setOpenedId(current => !selectedId || entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId) ? current : null)
+    setOpenedId(current => queue.refreshing && !entries.some(entry => entry.key === current) ? current
+      : !selectedId || entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId) ? current : null)
   }, [selectedId, queue])
   const queueCardId = state.queueOpen ? state.queueCardId : null
   const selected = state.queueOpen

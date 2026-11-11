@@ -60,6 +60,8 @@ export class ReconciliationSources {
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
+  // Owner-authorized PR evidence must never enter an anonymous display response.
+  private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.notionApi = api ?? new NotionApi(fetcher)
@@ -97,6 +99,64 @@ export class ReconciliationSources {
       // Earlier batches can age while a later home consumes its timeout.
       fleet, intentions: ageObservation(intentions), diagnostics: { notion: this.notionApi.diagnostics },
     }
+  }
+
+  private knownSnapshot(): SourceSnapshot {
+    return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
+      intentions: this.workReader.declarations(),
+      fleet: this.fleet.map(({ source, observation }) => ({ source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' },
+        observation: observation.peek() ?? { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
+          attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
+  }
+
+  /** The same queue, progressively displayed from known sources. Operational
+   * reconciliation remains shared in the background; selections still use the
+   * existing fresh, request-scoped queue and writer validation. */
+  async queueDisplay(req?: IncomingMessage, force = false) {
+    const authorized = !!await this.authorizePulls?.(req)
+    let cached = this.queueDisplays.get(authorized)
+    if (!cached) { cached = { until: 0, again: false }; this.queueDisplays.set(authorized, cached) }
+    const entry = cached
+    if (force) { entry.until = 0; if (entry.pending) entry.again = true }
+    if (!entry.pending && Date.now() >= entry.until) {
+      entry.failed = false
+      entry.pending = this.queue(req).then(value => { entry.value = value }, () => { entry.failed = true }).finally(() => {
+        entry.pending = undefined
+        entry.until = entry.again ? 0 : Date.now() + 20_000
+        entry.again = false
+      })
+    }
+    if (!entry.pending && !entry.failed && entry.value) return { ...entry.value, refreshing: false }
+
+    // Start the normal cached property/fleet reads, but never make list delivery
+    // wait for a slow source or for per-card history/reconciliation.
+    void this.snapshot().catch(() => {})
+    const snapshot = this.knownSnapshot(), scene = this.reconciler.project(snapshot)
+    const queue = buildQueue(snapshot)
+    const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
+      const context = this.context.cachedComments(id)
+      return context ? [[id, context] as const] : []
+    }))
+    const known = needsWill(queue, scene, contexts, null, new Map(), authorized)
+    const prior = new Map((entry.value?.needsWill ?? []).map(item => [item.id, item]))
+    const warning = entry.failed ? 'Request enrichment could not refresh. Last-known requests remain visible; verify sources before choosing.'
+      : 'Refreshing request evidence. Known requests remain visible; choices need verification until refresh completes.'
+    // An unfinished read cannot establish that a retained request disappeared.
+    const rows = new Map([...prior])
+    for (const item of known) rows.set(item.id, { ...prior.get(item.id), ...item,
+      proposal: prior.get(item.id)?.proposal ?? item.proposal,
+      proposals: prior.get(item.id)?.proposals ?? item.proposals,
+      currentProposalAnswerId: prior.get(item.id)?.currentProposalAnswerId ?? item.currentProposalAnswerId })
+    queue.needsWill = [...rows.values()].map(item => ({ ...item, oneTouch: false, proposalHistoryComplete: false,
+      readiness: item.readiness === 'future-or-conditional' ? item.readiness : 'needs-readiness-verification',
+      reasons: [...new Set([...item.reasons, warning])] }))
+    const projected = new Map(queue.needsWill.map(item => [item.id, item]))
+    queue.items = [...queue.items.map(item => projected.get(item.id) ?? { ...item, oneTouch: false }),
+      ...queue.needsWill.filter(item => !queue.items.some(current => current.id === item.id))]
+    queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
+    queue.warnings.push(warning)
+    queue.operationalExceptions = executionWarnings(scene)
+    return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
   async card(id: string) { return workReadback(await this.context.details(id)) }
@@ -346,5 +406,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queue(req) : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

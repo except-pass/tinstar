@@ -18,13 +18,15 @@ function useQueueRead<T extends DeskQueue | ReviewQueueRead>(reviewsOnly: boolea
       const controller = new AbortController()
       pending = controller
       const deadline = setTimeout(() => controller.abort(), 60_000)
+      let refreshing = false
       try {
-        const res = await apiFetch(`/api/reconciliation/queue${reviewsOnly ? `?view=reviews${force ? '&refresh=1' : ''}` : ''}`, { signal: controller.signal, headers: { 'X-Tinstar-UI': '1' } })
+        const res = await apiFetch(`/api/reconciliation/queue${reviewsOnly ? `?view=reviews${force ? '&refresh=1' : ''}` : force ? '?refresh=1' : ''}`, { signal: controller.signal, headers: { 'X-Tinstar-UI': '1' } })
         const body = await res.json()
         if (!res.ok || !body.ok || !Array.isArray(reviewsOnly ? body.data?.reviews?.items : body.data?.items)) throw new Error('queue unavailable')
+        refreshing = body.data.refreshing === true
         if (!stopped && pending === controller) { setQueue(previous => reviewsOnly ? retainReviewEvidence(body.data, previous) as T : body.data); setError(null) }
       } catch { if (!stopped && pending === controller) setError('Queue source unavailable; retained items are last-known. Readiness requires verification.') }
-      finally { clearTimeout(deadline); if (!stopped && pending === controller) timer = setTimeout(() => void read(), 20_000) }
+      finally { clearTimeout(deadline); if (!stopped && pending === controller) timer = setTimeout(() => void read(), refreshing ? 1000 : 20_000) }
     }
     const refresh = () => { void read(true) }
     window.addEventListener(WORKFLOW_SAVED, refresh)
