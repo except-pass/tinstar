@@ -234,6 +234,9 @@ The wrapper captures the previous running `/api/deployment` build SHA, persists
 restarting, and records `floor-smoke` only after green smoke and a matching new
 running build SHA. The server build embeds its Git revision; an old build without
 that endpoint reports unknown rather than treating checkout HEAD as live proof.
+The pre-install SHA probe uses only Node built-ins; any probe failure falls back
+to unknown so dependency installation and healthy deployment can proceed. Unknown
+provenance remains an unresolved handoff exception in the deployment audit.
 
 Explicit commit-to-PR membership is read through `gh-axi` (at most 50 first-parent
 commits); a direct commit, unknown previous SHA or incomplete read becomes a
@@ -264,7 +267,11 @@ receives them through the existing FleetOutbox and inbox request receipt. The
 outbox is only delivery transport: its normal pruning never erases the durable
 audit exception. A saved inbox receipt is not an acknowledgment or acceptance.
 Resolved handoffs and successful delivery receipts prevent duplicate submissions
-and repeated notices. No new polling service or event stream is introduced.
+and repeated notices. A resolved handoff retains its canonical card association
+even after the completed card leaves the active source census. Evidence must
+match the deployment ID, deployed SHA, tested SHA and every declared PR/head
+before an existing submission can satisfy that deployment's handoff.
+No new polling service or event stream is introduced.
 
 To supply missing evidence after a healthy deploy, prepare the manifest and run
 `node scripts/deploy/review-handoff.mjs record` with that deployment's source and

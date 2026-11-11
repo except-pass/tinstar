@@ -666,7 +666,9 @@ The shared UI/MCP `update_work` path supports:
   `operation_id`, `submission_key`, `feedback`, `remaining_scope`, and
   `scope_complete` (false unless explicitly attested). Acceptance records Will's
   explicit acceptance and its authenticated recorder. Only attested full scope
-  with no current wait or unfinished child becomes Done. Otherwise the card
+  with no current wait or unfinished child and complete child relations becomes Done.
+  Pending acceptance rechecks current waits, child relations and child statuses
+  before applying the retained transition, including after restart. Otherwise the card
   stays open with Firstmate. Request changes records feedback and queues it for
   Firstmate; worker dispatch remains Firstmate's responsibility.
 
