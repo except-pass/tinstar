@@ -50,6 +50,7 @@ export function Decisions() {
   const list = useRef<HTMLDivElement>(null), interaction = useRef(0)
   const [expiredFlash, setExpiredFlash] = useState<number | null>(null)
   const selectedId = state.selection?.kind === 'card' ? state.selection.id : null
+  const previousSelectedId = useRef(selectedId)
   const flash = state.flash && state.flash.until > Date.now() && state.flash.until !== expiredFlash ? state.flash : null
   useViewSnapshot(views, 'decisions', () => ({ query, filter: { request: openedId, detailOpen } }), saved => { setQuery(saved.query); setOpenedId(saved.filter.request); setDetailOpen(saved.filter.detailOpen) })
 
@@ -60,13 +61,16 @@ export function Decisions() {
   })
   useEffect(() => {
     if (!queue) return
-    setOpenedId(current => queue.refreshing && !entries.some(entry => entry.key === current) ? current
+    const selectionChanged = previousSelectedId.current !== selectedId
+    previousSelectedId.current = selectedId
+    setOpenedId(current => queue.refreshing && !selectionChanged && !entries.some(entry => entry.key === current) ? current
       : !selectedId || entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId) ? current : null)
   }, [selectedId, queue])
+  const pendingSelection = !!queue?.refreshing && !!openedId && !state.queueOpen && !entries.some(entry => entry.key === openedId)
   const queueCardId = state.queueOpen ? state.queueCardId : null
   const selected = state.queueOpen
     ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
-    : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
+    : pendingSelection ? undefined : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
   const contextCardId = queueCardId && !selected ? queueCardId : null
   const closeDetail = () => { workspace.clearOrigin?.(); setDetailOpen(false); send({ type: 'close-queue' }) }
   const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
@@ -130,7 +134,7 @@ export function Decisions() {
   const retainedNotes = (workspace.messages ?? []).filter(message => message.kind === 'message' && !(workspace.workers ?? []).some(worker => worker.home === message.home && worker.id === message.taskId))
   const needsVerification = unavailable || incomplete || bridgeError || !!queue?.warnings?.length || !!queue?.operationalExceptions?.length || !!coordination.length
   const missingOrigin = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' && openedId === workspace.origin.target.id && !!queue && !entries.some(entry => entry.key === openedId)
-  const preview = missingOrigin ? undefined : selected ?? (!contextCardId && !state.queueOpen ? visible[0] : undefined)
+  const preview = missingOrigin || pendingSelection ? undefined : selected ?? (!contextCardId && !state.queueOpen ? visible[0] : undefined)
   const previewId = preview?.item.id
   const previousRequest = useRef(previewId)
   useLayoutEffect(() => {
@@ -146,7 +150,7 @@ export function Decisions() {
     if (entry.id && canFocus(entry.id)) send({ type: 'focus', target: { kind: 'card', id: entry.id }, origin: 'manual' })
     setOpenedId(entry.key); setDetailOpen(true)
   }
-  return <section className={`decisions${(detailOpen || state.queueOpen) && (preview || contextCardId || missingOrigin) ? ' detail-open' : ''}`} aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
+  return <section className={`decisions${(detailOpen || state.queueOpen) && (preview || contextCardId || missingOrigin || pendingSelection) ? ' detail-open' : ''}`} aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
     <header className="decisions-top"><SessionConnection /><div className="decisions-brand"><h1>Decisions</h1><span>Choose a decision to resolve</span></div>
       <details className="decisions-source"><summary>{needsVerification ? 'Some sources need verification' : 'Source status'}</summary><div className="decisions-warnings">
         <h3>Source health</h3>
@@ -162,7 +166,7 @@ export function Decisions() {
         </details>
       </div></details>
     </header>
-    <div className="decisions-layout" data-selected={!!preview || !!contextCardId || missingOrigin}>
+    <div className="decisions-layout" data-selected={!!preview || !!contextCardId || missingOrigin || pendingSelection}>
       <section className="decisions-queue" aria-label="Decision queue"><div className="decisions-queue-top">
         <div className="decisions-queue-title"><strong>Decision queue</strong><span>{visible.length} shown</span></div>
         <label className="decisions-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Search decisions" value={query} onChange={event => { interaction.current++; setExpiredFlash(state.flash?.until ?? null); setQuery(event.target.value) }} placeholder="Find a decision…" /></label>
@@ -182,18 +186,18 @@ export function Decisions() {
       </div></section>
       {preview && <DecisionDetail key={preview.key} entry={preview} items={queue?.needsWill ?? queue?.items ?? []} unavailable={unavailable} onClose={closeDetail} query={query} position={position} total={visible.length}
         previous={() => openEntry(visible[(position - 1 + visible.length) % visible.length]!)} next={() => openEntry(visible[(position + 1) % visible.length]!)} />}
-      {missingOrigin && <MissingDecision requestKey={openedId!} onClose={closeDetail} />}
+      {(missingOrigin || pendingSelection) && <MissingDecision requestKey={openedId!} pending={!!queue?.refreshing} onClose={closeDetail} />}
       {contextCardId && !missingOrigin && <aside className="decisions-summary" aria-label="Card context"><button type="button" onClick={closeDetail}>← All decisions</button><h2>Card context</h2><DecisionCardContext key={contextCardId} id={contextCardId} /></aside>}
     </div>
   </section>
 }
 
-function MissingDecision({ requestKey, onClose }: { requestKey: string; onClose: () => void }) {
+function MissingDecision({ requestKey, pending = false, onClose }: { requestKey: string; pending?: boolean; onClose: () => void }) {
   const controls = useAskControls(), { openDesk } = useDeskWorkspace()
   const latest = controls?.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === requestKey).at(-1)
-  return <aside className="decisions-summary" aria-label="Request unavailable">
+  return <aside className="decisions-summary" aria-label={pending ? 'Refreshing request' : 'Request unavailable'}>
     <button type="button" className="mobile-back" onClick={onClose}>← All decisions</button>
-    <h2 className="detail-heading">Request unavailable</h2><p className="lede">This request is absent from the current queue. Its conversation remains in Discuss.</p>
+    <h2 className="detail-heading">{pending ? 'Refreshing request' : 'Request unavailable'}</h2><p className="lede">{pending ? 'This request’s sources are still refreshing.' : 'This request is absent from the current queue.'} Its conversation remains in Discuss.</p>
     {latest && <><p>{displayRequestText(latest.context.anchor.label)}</p><button type="button" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); openDesk() }}>Full conversation ↗</button>
       {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Source record ↗</a>}</>}
   </aside>
