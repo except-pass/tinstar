@@ -6,6 +6,10 @@ Mate, read terminal screens, control workers, or contact another machine.
 Python 3 (standard library only) and each home's existing
 `bin/fm-fleet-snapshot.sh --json` are the only requirements.
 
+The collector also publishes parent asks for the
+[Waiting on First Mate backstop](waiting-on-main.md), which owns that field's
+contract and coverage rules.
+
 For every Codex task, `paths.worktree.path` is matched exactly against the first
 `session_meta.payload.cwd` in session logs. The scan covers all dated session directories below `$CODEX_HOME/sessions` (default
 `~/.codex/sessions`). Only files modified within the last seven days are
