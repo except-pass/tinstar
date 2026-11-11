@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, expect, it, vi } from 'vitest'
 import { NeedsYouPanel } from './NeedsYouPanel'
 import { apiFetch } from '../../apiClient'
-import type { ReviewView } from '../../shared/reviews'
+import { retainReviewEvidence, separatePullReview, type ReviewEvidence, type ReviewView } from '../../shared/reviews'
 vi.mock('../../apiClient', () => ({ apiFetch: vi.fn(), apiUrl: (value: string) => value }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 const view: ReviewView = { complete: true, warning: null, observedAt: new Date().toISOString(), items: [{ id: 'review:one', cardId: 'a'.repeat(32), submissionKey: 'one',
@@ -56,4 +56,35 @@ it('keeps feedback, scope and loaded evidence with their card when submission ke
   fireEvent.click(row.getByRole('button', { name: 'Approve deliverable' }))
   await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2))
   expect(JSON.parse(String(vi.mocked(apiFetch).mock.calls[1]![1]!.body)).input).toMatchObject({ card_id: second.cardId, scope_complete: false })
+})
+
+it('preserves drafts and linked PR suppression across evidence arrival and expiry, separating revisions', () => {
+  const first = { ...view.items[0]!, revision: 'revision-one', submissionKey: 'legacy:first' }
+  const submission = { submission_key: 'structured', pulls: [{ url: 'https://github.com/except-pass/tinstar/pull/42', head: 'a'.repeat(40) }] } as ReviewEvidence
+  const props = { cards: [], workers: [], errors: [], waiting: false, submit: vi.fn(), dismissing: () => false, dismissed: () => false, dismissError: () => null, onOpen: vi.fn(), onDismiss: vi.fn() }
+  let queue = { reviews: { ...view, items: [first] }, warnings: [] }
+  const rendered = render(<NeedsYouPanel {...props} reviews={queue.reviews} />)
+  fireEvent.change(screen.getByLabelText('Feedback'), { target: { value: 'Keep my feedback' } })
+  fireEvent.change(screen.getByLabelText('Remaining scope (one item per line)'), { target: { value: 'Provisioning' } })
+  fireEvent.click(screen.getByRole('checkbox'))
+  for (const item of [{ ...first, submissionKey: 'structured', submission }, first]) {
+    queue = retainReviewEvidence({ ...queue, reviews: { ...view, items: [item] } }, queue)
+    rendered.rerender(<NeedsYouPanel {...props} reviews={queue.reviews} />)
+    expect(screen.getByLabelText('Feedback')).toHaveValue('Keep my feedback')
+    expect(screen.getByLabelText('Remaining scope (one item per line)')).toHaveValue('Provisioning')
+    expect(screen.getByRole('checkbox')).toBeChecked()
+    expect(separatePullReview(submission.pulls[0]!.url, 'unknown', queue.reviews)).toBe(false)
+    expect(separatePullReview(submission.pulls[0]!.url, 'open', queue.reviews)).toBe(true)
+    expect(separatePullReview('https://github.com/except-pass/tinstar/pull/43', 'unknown', queue.reviews)).toBe(true)
+  }
+  const replacement = { ...first, submissionKey: 'new-deliverable', submission: { ...submission, submission_key: 'new-deliverable' } }
+  rendered.rerender(<NeedsYouPanel {...props} reviews={{ ...view, items: [replacement] }} />)
+  expect(screen.getByLabelText('Feedback')).toHaveValue('')
+  expect(screen.getByRole('checkbox')).not.toBeChecked()
+  queue = retainReviewEvidence({ ...queue, reviews: { ...view, items: [{ ...first, revision: 'revision-two' }] } }, queue)
+  expect(queue.reviews.items[0]!.submission).toBeNull()
+  rendered.rerender(<NeedsYouPanel {...props} reviews={queue.reviews} />)
+  expect(screen.getByLabelText('Feedback')).toHaveValue('')
+  expect(screen.getByLabelText('Remaining scope (one item per line)')).toHaveValue('')
+  expect(screen.getByRole('checkbox')).not.toBeChecked()
 })

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Composer, Face } from './present'
 import type { AttentionCard, Draft, OutboxMessage, SubmitResult, Worker } from './types'
 import type { ReviewItem, ReviewView } from '../../shared/reviews'
@@ -7,7 +7,7 @@ import { useWorkSave } from '../../reconciliation/WorkActions'
 
 function DeliverableReview({ item: initial, onOpen }: { item: ReviewItem; onOpen?: (id: string) => void }) {
   const [detail, setDetail] = useState<ReviewItem | null>(null), [loadError, setLoadError] = useState<string | null>(null)
-  const item = detail ?? initial
+  const item = initial.submission && detail?.submission && initial.submissionKey !== detail.submissionKey ? initial : detail ?? initial
   async function loadEvidence() {
     try {
       const response = await apiFetch('/api/reconciliation/workflow', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1' }, body: JSON.stringify({ operation: 'get', input: { card_id: item.cardId, details: true, refresh: true } }) })
@@ -17,6 +17,12 @@ function DeliverableReview({ item: initial, onOpen }: { item: ReviewItem; onOpen
     } catch { setLoadError('Review evidence unavailable; open the canonical card and refresh before acting.') }
   }
   const [feedback, setFeedback] = useState(''), [remaining, setRemaining] = useState(''), [complete, setComplete] = useState(false)
+  const knownSubmission = useRef<string | null>(null)
+  useEffect(() => {
+    if (!item.submission) return
+    if (knownSubmission.current && knownSubmission.current !== item.submissionKey) { setFeedback(''); setRemaining(''); setComplete(false) }
+    knownSubmission.current = item.submissionKey
+  }, [item.submission, item.submissionKey])
   const { save, busy, result } = useWorkSave(async () => {})
   const respond = (kind: 'accept_review' | 'request_review_changes') => save({ kind, card_id: item.cardId, submission_key: item.submissionKey,
     feedback: feedback.trim() || 'Will explicitly accepted this deliverable in Review.', remaining_scope: remaining.split('\n').map(line => line.trim()).filter(Boolean), scope_complete: complete })
@@ -182,7 +188,7 @@ export function NeedsYouPanel({ cards, workers, errors, waiting, submit, dismiss
   return <div className="cockpit-attention-list" aria-label="Needs You">
     {errors.length > 0 && <p className="cockpit-attention-empty" role="alert">Needs You unavailable — {errors.join('; ')}</p>}
     {reviews?.warning && <p role="status">{reviews.warning}</p>}
-    {reviews?.items.map(item => <DeliverableReview key={JSON.stringify([item.cardId, item.submissionKey])} item={item} onOpen={onCardOpen} />)}
+    {reviews?.items.map(item => <DeliverableReview key={JSON.stringify([item.cardId, item.revision ?? item.submissionKey])} item={item} onOpen={onCardOpen} />)}
     {cards.length ? cards.map(card => <AttentionCardView key={card.key} card={card} worker={workers.find(worker => worker.key === card.workerKey) ?? null} open={() => onOpen(card)} submit={submit} dismissing={dismissing(card)} dismissed={dismissed(card)} dismissError={dismissError(card)} onDismiss={onDismiss} />)
       : errors.length > 0 || reviews?.items.length || reviews && !reviews.complete ? null : <p className="cockpit-attention-empty">{waiting ? 'Loading Needs You…' : 'Nothing needs you right now.'}</p>}
   </div>

@@ -1,3 +1,4 @@
+import { separatePullReview } from './shared/reviews'
 import { NeedsYouPanel } from './cockpit/shell/NeedsYouPanel'
 import { useReviewQueue } from './reconciliation/useDeskQueue'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -306,7 +307,7 @@ export default function App() {
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? reviews.complete && !reviewQueue.error ? reviews.items.length + attention.filter(card => card.type === 'review').length : null : workers.length} onCollapse={() => setPanelMode(null)}>
 
-      {panelMode === 'needs' && <NeedsYouPanel cards={attention.filter(card => card.type === 'review' && (card.reviewStatus === 'open' || !reviewQueue.queue?.reviews?.items.some(item => item.submission?.pulls.some(pull => pull.url === card.prUrl))))} workers={workers}
+      {panelMode === 'needs' && <NeedsYouPanel cards={attention.filter(card => card.type === 'review' && separatePullReview(card.prUrl, card.reviewStatus, reviews))} workers={workers}
         reviews={reviewQueue.error ? { ...reviews, complete: false, warning: 'Review coverage is unavailable; shown cards are last-known.' } : reviews} errors={[...fleet.errors, ...(reviewQueue.error ? [reviewQueue.error] : []), ...(reviewQueue.queue?.warnings ?? [])]} waiting={!reviewQueue.queue}
         submit={submit} dismissing={() => false} dismissed={() => false} dismissError={() => null} onDismiss={() => {}}
         onOpen={card => { if (card.workerKey) openWorker(card.workerKey) }}
