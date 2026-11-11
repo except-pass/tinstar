@@ -27,6 +27,15 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
   const port = 39000 + Math.floor(Math.random() * 10000)
   const portStart = 49000 + Math.floor(Math.random() * 10000)
   let server: ChildProcess | null = null
+  const terminalInput: string[] = []
+  page.on('websocket', socket => {
+    if (!socket.url().includes('/s/cockpit-0-scroll/')) return
+    socket.on('framesent', ({ payload }) => {
+      const message = payload.toString()
+      // ttyd's input frames start with the ASCII command byte "0".
+      if (message.startsWith('0')) terminalInput.push(message.slice(1))
+    })
+  })
   const tmux = (...args: string[]) => execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   try {
     for (const path of [home, config, bin, join(home, 'bin'), join(home, 'state'), join(home, 'data', 'scroll')]) mkdirSync(path, { recursive: true })
@@ -123,6 +132,17 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
       const term = (window as unknown as { term?: { getSelection?: () => string } }).term
       return (term?.getSelection?.() || '').trim().length
     }), { timeout: 3_000 }).toBeGreaterThan(0)
+
+    // An ordinary click must still send both SGR mouse reports to ttyd.
+    // In particular, the forced-selection workaround must not swallow release.
+    const inputStart = terminalInput.length
+    await input.evaluate(element => (element as HTMLElement).blur())
+    await page.mouse.click(live!.x + 24, y)
+    await expect(input).toBeFocused()
+    await expect.poll(() => terminalInput.slice(inputStart).join('')).toMatch(/\x1b\[<0;(\d+);(\d+)M\x1b\[<0;\1;\2m/)
+    // Type through the focus established by the click, without locator refocus.
+    await page.keyboard.type('PLAIN_CLICK')
+    await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('PLAIN_CLICK')
 
     // Switching workers hides this view without detaching it. The pane it
     // scrolled must not stay in copy mode behind it.
