@@ -4,9 +4,12 @@ Overview shows an independent **Waiting on First Mate** count and oldest age.
 Click it to see each card or mate, key, age and request text. At four hours the
 control turns red. It is global, independent of Overview filters.
 
-Cards match `Waiting For` or `Waiting For ID`, case-insensitively: `First Mate`,
-`First Mate (main)`, `Main:`, `via main`, or `main firstmate`. Matching lives in
-`src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
+Cards match a trimmed, whole `Waiting For ID` of `First Mate`, `First Mate (main)`,
+`Main`, or `main firstmate`, case-insensitively. A populated different ID never
+matches. With an empty ID, `Waiting For` must start with one of those names
+followed by `:` or ` -`, or contain `via main`. A prose mention alone never
+matches; `Firstmate` and `firstmate maintainer` are different actors. Matching
+lives in `src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
 Card age is an at-least estimate until Tin Star observes the wait start.
 The initial estimate uses the card's last edit when the wait was first observed.
 Unrelated later edits do not reset that saved age; changed
@@ -34,8 +37,11 @@ The Tin Star collector `scripts/collectors/codex-activity.py` adds:
 It folds `state/parent-replies.status` in append order. The latest keyed
 `blocked` or `needs-decision` line remains open until a later `resolved` with
 the same key or correlation. `working` and `done` do not close it. Missing or
-unreadable channels, malformed keyed timestamps and incomplete appended lines
-produce unknown coverage. An explicit readable empty channel proves no asks.
+unreadable channels and incomplete appended lines produce unknown coverage.
+An open keyed ask with a missing/malformed timestamp or malformed line stays
+visible with a null timestamp and unknown age; it makes coverage unknown only
+until it is resolved or replaced by a valid timestamped ask. Resolved historical
+asks do not affect coverage. An explicit readable empty channel proves no asks.
 The collection time dates the read, not the ask; an old unchanged channel can
 still provide current knowledge. Copying a snapshot does not refresh its time.
 Snapshot or ask observations five minutes old are unknown. Ask coverage is

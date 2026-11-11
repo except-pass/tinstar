@@ -8,7 +8,7 @@ import { ageObservation } from './observation'
 import type { SourceSnapshot } from './index'
 import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
-import { mainHomeLabel, namesMain, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead } from '../../shared/waitingOnMain'
+import { mainHomeLabel, mainWaitField, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead } from '../../shared/waitingOnMain'
 
 export const MAIN_WAIT_OWNER = '84d29212-4a5b-49f1-91bf-92b7adeff516'
 export const MAIN_WAIT_CARD = '41550ce6d42281239fd4f9f20c901b80'
@@ -25,7 +25,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')
     if (card.archived || card.in_trash || ['done', 'archived'].includes(value('Status').toLowerCase())) continue
     const wait = value('Waiting For'), id = value('Waiting For ID')
-    if (!namesMain(wait) && !namesMain(id)) continue
+    if (!mainWaitField(wait, id)) continue
     const truncated = ['Waiting For', 'Waiting For ID'].some(name => card.properties[name]?.hasMore)
     if (truncated) { complete.delete('board'); unknown.push('Some card wait fields are truncated') }
     items.push({ id: `card:${card.id}`, source: 'board', kind: 'card', label: value('Name') || card.id, key: card.id,
@@ -49,7 +49,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     if (fresh && asks?.status === 'known') complete.add(source)
     else unknown.push(`${label}: parent asks unknown or stale`)
     for (const ask of asks?.items ?? []) items.push({ id: JSON.stringify([source, ask.key]), source, kind: 'mate', label,
-      key: ask.key, text: ask.text, since: new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
+      key: ask.key, text: ask.text, since: ask.at === null ? null : new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
       fresh: fresh && asks?.status === 'known' })
   }
   if (!snapshot.fleet.length) unknown.push('Fleet parent asks unknown; no homes configured')
