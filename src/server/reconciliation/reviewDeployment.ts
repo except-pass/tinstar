@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { reviewEvidenceSchema, reviewSha, type ReviewEvidence } from '../../shared/reviews'
+import { lateEvidenceSchema, deploymentsWithEvidence } from '../../shared/reviewHandoff.mjs'
 import { releaseAssociations } from '../../shared/releases'
 import { updateWorkSchema, type StartWorkResult } from '../../shared/workflow'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
@@ -23,7 +24,7 @@ export type FloorDeployment = z.infer<typeof floorDeploymentSchema>
 const smokeSchema = z.object({ action: z.literal('floor-smoke'), deploymentId: z.string(), newSha: reviewSha, time: z.string(), passed: z.literal(true), receipt: z.string().min(1) })
 export interface HandoffException { id: string; deploymentId: string; deployedSha: string; cardId: string | null; pull: string | null; owner: 'Firstmate'; worker: string | null; missing: string[]; nextAction: string; resolved: boolean }
 type HandoffEvent = { action: 'review-handoff'; time: string; exception: HandoffException; deliverySaved?: boolean }
-type AuditEvent = FloorDeployment | z.infer<typeof smokeSchema> | HandoffEvent
+type AuditEvent = FloorDeployment | z.infer<typeof smokeSchema> | z.infer<typeof lateEvidenceSchema> | HandoffEvent
 const stable = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 function validateDeploymentEvidence(deployment: FloorDeployment, evidence: ReviewEvidence) {
@@ -46,6 +47,7 @@ export class ReviewDeploymentAudit {
       const row = JSON.parse(line)
       if (row.action === 'floor-deployment') events.push(floorDeploymentSchema.parse(row))
       else if (row.action === 'floor-smoke') events.push(smokeSchema.parse(row))
+      else if (row.action === 'floor-review-evidence') events.push(lateEvidenceSchema.parse(row))
       else if (row.action === 'review-handoff') {
         if (!row.exception?.id || !Array.isArray(row.exception.missing) || typeof row.exception.resolved !== 'boolean') throw new Error('Invalid review handoff audit')
         events.push(row)
@@ -61,7 +63,7 @@ export class ReviewDeploymentAudit {
   }
   async validate(input: Extract<ReviewOperation, { kind: 'submit_for_review' }>, scene: FloorScene, associations: AssociationStore) {
     const events = await this.read(), evidence = input.review
-    const deployment = events.filter((event): event is FloorDeployment => event.action === 'floor-deployment' && event.id === evidence.deployment_id).at(-1)
+    const deployment = deploymentsWithEvidence<FloorDeployment>(events).find(event => event.id === evidence.deployment_id)
     if (!deployment || deployment.newSha !== evidence.deployed_sha) throw new ReviewWriteError('deployment-missing', 'No matching guarded deployment receipt for this SHA')
     validateDeploymentEvidence(deployment, evidence)
     if (!events.some(event => event.action === 'floor-smoke' && event.deploymentId === deployment.id && event.newSha === deployment.newSha)) throw new ReviewWriteError('smoke-missing', 'Guarded deployment has no verified successful smoke receipt')
@@ -92,7 +94,7 @@ export class ReviewDeploymentReconciler {
   }
   private async reconcile() {
     const events = await this.audit.read()
-    const deployments = [...new Map(events.filter((row): row is FloorDeployment => row.action === 'floor-deployment').map(row => [row.id, row])).values()]
+    const deployments = deploymentsWithEvidence<FloorDeployment>(events)
     if (!deployments.length) return
     const latest = new Map(events.filter((row): row is HandoffEvent => row.action === 'review-handoff').map(row => [row.exception.id, row]))
     const scene = await this.deps.scene(), links = releaseAssociations(scene, await this.deps.associations.read())
@@ -153,7 +155,7 @@ export class ReviewDeploymentReconciler {
           if (missing.length && !deployment.ownerHome) missing.push('Configured Firstmate home responsible for handoff delivery')
           const worker = cardId ? scene.claims.find(claim => claim.cardId === cardId && claim.basis === 'explicit' && claim.state === 'current' && claim.verification === 'confirmed')?.executionId ?? null : null
           const exception: HandoffException = { id, deploymentId: deployment.id, deployedSha: deployment.newSha, cardId, pull: pr?.url ?? null, owner: 'Firstmate', worker,
-            missing, nextAction: missing.length ? 'Firstmate: supply the listed evidence/association and reconcile this guarded deployment; use the same submission key for a pending write.' : 'Handoff confirmed', resolved: !missing.length }
+            missing, nextAction: missing.length ? `Firstmate: repair the listed association/source gaps; supply evidence with review-handoff.mjs record --deployment ${deployment.id}, then refresh work views. Keep the same submission key for a pending write.` : 'Handoff confirmed', resolved: !missing.length }
           let saved = prior?.deliverySaved ?? false
           if (!prior || JSON.stringify(prior.exception) !== JSON.stringify(exception)) await this.audit.append({ action: 'review-handoff', time: new Date().toISOString(), exception, deliverySaved: saved })
           if (missing.length && !saved && deployment.ownerHome) {
