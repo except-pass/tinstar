@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,7 +49,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TINSTAR_CONFIG_HOME: config, TINSTAR_NO_SESSIONS: '1', TINSTAR_CORS_ORIGINS: `http://127.0.0.1:${port}` }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
     const base = `http://127.0.0.1:${port}`
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
@@ -109,7 +110,7 @@ test('a second mate shows a badge on the overview card and in the detail rail', 
     await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('private-overview-390x844.png') })
   } finally {
-    server?.kill('SIGTERM')
+    await stopServer(server)
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server'], { stdio: 'ignore' }) } catch { /* private server absent */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }

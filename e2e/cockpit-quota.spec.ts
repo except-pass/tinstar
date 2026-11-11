@@ -1,3 +1,4 @@
+import { stopServer } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -42,7 +43,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -173,7 +174,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     expect(phoneTip.left >= 0 && phoneTip.right <= 390 && phoneTip.top >= 0).toBe(true)
     await page.screenshot({ path: test.info().outputPath('quota-rail-390x844.png') })
   } finally {
-    server?.kill('SIGTERM')
+    await stopServer(server)
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
@@ -228,7 +229,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     }
     delete env.TMUX
     delete env.TMUX_PANE
-    server = spawn(join(repo, 'node_modules', '.bin', 'tsx'), ['src/server/standalone.ts', '--port', String(port), '--no-open'], {
+    server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
     const base = `http://127.0.0.1:${port}`
@@ -285,7 +286,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     await expect(bot.getByRole('tooltip')).toContainText('stale reading')
     await page.screenshot({ path: test.info().outputPath('quota-grok-bot-stale-hover-1440x900.png') })
   } finally {
-    server?.kill('SIGTERM')
+    await stopServer(server)
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }
 })
