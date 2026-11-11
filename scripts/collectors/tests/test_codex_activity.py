@@ -71,6 +71,30 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'known')
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['items'], [])
 
+    def test_parent_asks_resolved_ageless_history_restores_known_coverage(self):
+        history = ('blocked [corr=fa26339b40a79efc] [key=bandit-ssh]: access needed\n'
+                   'resolved [key=bandit-ssh] [at=200]: access restored\n'
+                   'needs-decision [corr=1234567890abcdef] [key=api] [at=bad]: choose\n'
+                   'resolved [corr=1234567890abcdef] [at=300]: answered\n'
+                   'blocked [key=malformed] [at=350] missing colon\n'
+                   'resolved [key=malformed] [at=400]: closed\n'
+                   'blocked [key=current] [at=500]: still waiting\n')
+        self.assertEqual(collector.fold_parent_asks(history), {
+            'status': 'known', 'items': [{'key': 'current', 'corr': None,
+                'state': 'blocked', 'at': 500, 'text': 'still waiting'}]})
+
+    def test_parent_asks_ageless_open_ask_is_retained_until_resolved(self):
+        history = 'blocked [corr=fa26339b40a79efc] [key=bandit-ssh]: access needed\n'
+        result = collector.fold_parent_asks(history)
+        self.assertEqual(result, {'status': 'unknown', 'items': [{
+            'key': 'bandit-ssh', 'corr': 'fa26339b40a79efc', 'state': 'blocked',
+            'at': None, 'text': 'access needed'}]})
+        self.assertEqual(collector.fold_parent_asks(history +
+            'working [key=bandit-ssh] [at=200]: checking\n')['status'], 'unknown')
+        self.assertEqual(collector.fold_parent_asks(history +
+            'resolved [corr=fa26339b40a79efc] [at=300]: restored\n'),
+            {'status': 'known', 'items': []})
+
     def test_open_closed_and_reopened_turns(self):
         for events, expected in [(['task_started'], True), (['task_started', 'task_complete'], False),
                                  (['task_started', 'task_complete', 'task_started'], True), (['task_complete'], False)]:

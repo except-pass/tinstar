@@ -3,7 +3,7 @@ export const MAIN_NAMES = /\bfirst\s+mate\b(?!\s*\((?!main\))[^)]*\))|\bmain\s*:
 export const namesMain = (value: unknown): boolean => typeof value === 'string' && MAIN_NAMES.test(value)
 export const mainHomeLabel = (value: string | undefined): boolean => value?.toLowerCase() === 'main' || namesMain(value)
 export const MAIN_WAIT_INTERVAL = 4 * 3600_000
-export interface ParentAsk { key: string; corr: string | null; state: 'blocked' | 'needs-decision'; at: number; text: string }
+export interface ParentAsk { key: string; corr: string | null; state: 'blocked' | 'needs-decision'; at: number | null; text: string }
 export interface ParentAsks { status: 'known' | 'unknown'; observed_at: string; items: ParentAsk[] }
 export interface MainWaitItem {
   id: string; source: string; kind: 'card' | 'mate'; label: string; key: string; text: string

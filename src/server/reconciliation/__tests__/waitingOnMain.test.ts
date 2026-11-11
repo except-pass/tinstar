@@ -47,6 +47,16 @@ describe('Waiting on main', () => {
     value.fleet[1]!.observation.data!.parent_asks = snapshot().fleet[1]!.observation.data!.parent_asks
     expect(mainWaitCandidates(value, now).items.find(item => item.kind === 'mate')?.fresh).toBe(false)
   })
+  it('shows an open ageless ask without inventing an overdue age', () => {
+    const value = snapshot(), asks = value.fleet[1]!.observation.data!.parent_asks!
+    asks.status = 'unknown'
+    asks.items[0]!.at = null
+    const projected = mainWaitCandidates(value, now)
+    const ask = projected.items.find(row => row.kind === 'mate')!
+    expect(ask).toMatchObject({ key: 'approve-api', since: null, fresh: false })
+    expect(projected.unknown.join(' ')).toMatch(/parent asks unknown/)
+    expect(waitAlertDue(ask.since, null, now)).toBe(false)
+  })
   it('accepts fresh ask coverage even when unrelated task metadata is partial', () => {
     const value = snapshot()
     value.fleet[1]!.observation.status = 'stale'
@@ -203,6 +213,11 @@ describe('Waiting on main', () => {
     const raw = { schema: 'fm-fleet-snapshot.v1', fm_home: directory, generated: new Date().toISOString(), tasks: [], backlog: { present: true, records: [] }, main_inventory: { valid: true }, parent_asks: { status: 'known', observed_at: new Date().toISOString(), items: [] } }
     await writeFile(file, JSON.stringify(raw))
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_asks?.status).toBe('known')
+    const ageless = { status: 'unknown', observed_at: raw.generated, items: [
+      { key: 'ageless', corr: null, state: 'blocked', at: null, text: 'Access needed' },
+    ] }
+    await writeFile(file, JSON.stringify({ ...raw, parent_asks: ageless }))
+    expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_asks).toEqual(ageless)
     await writeFile(file, JSON.stringify({ ...raw, parent_asks: { status: 'known' } }))
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_asks).toBeUndefined()
   })

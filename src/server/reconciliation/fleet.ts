@@ -59,7 +59,7 @@ const codexFields = (task: Record<string, unknown>): { codex?: CodexActivity | n
 
 const parentAsksSchema = z.object({
   status: z.enum(['known', 'unknown']), observed_at: z.string().datetime({ offset: true }),
-  items: z.array(z.object({ key: z.string().min(1), corr: z.string().nullable(), state: z.enum(['blocked', 'needs-decision']), at: z.number().int().nonnegative(), text: z.string() })),
+  items: z.array(z.object({ key: z.string().min(1), corr: z.string().nullable(), state: z.enum(['blocked', 'needs-decision']), at: z.number().int().nonnegative().nullable(), text: z.string() })),
 })
 function parentAsksField(value: unknown): { parent_asks?: ParentAsks } {
   const parsed = parentAsksSchema.safeParse(value)

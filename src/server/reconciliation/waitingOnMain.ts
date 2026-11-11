@@ -49,7 +49,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     if (fresh && asks?.status === 'known') complete.add(source)
     else unknown.push(`${label}: parent asks unknown or stale`)
     for (const ask of asks?.items ?? []) items.push({ id: JSON.stringify([source, ask.key]), source, kind: 'mate', label,
-      key: ask.key, text: ask.text, since: new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
+      key: ask.key, text: ask.text, since: ask.at === null ? null : new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
       fresh: fresh && asks?.status === 'known' })
   }
   if (!snapshot.fleet.length) unknown.push('Fleet parent asks unknown; no homes configured')

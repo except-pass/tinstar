@@ -34,8 +34,11 @@ The Tin Star collector `scripts/collectors/codex-activity.py` adds:
 It folds `state/parent-replies.status` in append order. The latest keyed
 `blocked` or `needs-decision` line remains open until a later `resolved` with
 the same key or correlation. `working` and `done` do not close it. Missing or
-unreadable channels, malformed keyed timestamps and incomplete appended lines
-produce unknown coverage. An explicit readable empty channel proves no asks.
+unreadable channels and incomplete appended lines produce unknown coverage.
+An open keyed ask with a missing/malformed timestamp or malformed line stays
+visible with a null timestamp and unknown age; it makes coverage unknown only
+until it is resolved or replaced by a valid timestamped ask. Resolved historical
+asks do not affect coverage. An explicit readable empty channel proves no asks.
 The collection time dates the read, not the ask; an old unchanged channel can
 still provide current knowledge. Copying a snapshot does not refresh its time.
 Snapshot or ask observations five minutes old are unknown. Ask coverage is

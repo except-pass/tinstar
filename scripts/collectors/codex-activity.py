@@ -97,14 +97,12 @@ def augment(snapshot, candidates, now):
 def fold_parent_asks(lines):
     """Only resolved closes a keyed ask; ordinary working/done lines do not."""
     opened = {}
-    known = True
     for line in lines.splitlines():
-        match = re.match(r'^(blocked|needs-decision|resolved)\b(.*?):\s*(.*)$', line)
+        match = re.match(r'^(blocked|needs-decision|resolved)\b(.*)$', line)
         if not match:
-            if re.match(r'^(blocked|needs-decision|resolved)\b', line):
-                known = False
             continue
-        state, metadata, text = match.groups()
+        state, content = match.groups()
+        metadata, separator, text = content.partition(':')
         fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
         key, corr = fields.get('key'), fields.get('corr')
         if state == 'resolved':
@@ -113,11 +111,12 @@ def fold_parent_asks(lines):
                     del opened[identity]
         elif key:
             stamp = fields.get('at', '')
-            if not stamp.isdigit():
-                known = False
-                continue
+            # Keep ageless/malformed asks so later resolutions can close them.
+            # Only unresolved unknown ages make the final coverage unknown.
             opened[key] = {'key': key, 'corr': corr, 'state': state,
-                           'at': int(stamp), 'text': text}
+                           'at': int(stamp) if separator and stamp.isdigit() else None,
+                           'text': text.lstrip() if separator else content.strip()}
+    known = all(ask['at'] is not None for ask in opened.values())
     return {'status': 'known' if known else 'unknown', 'items': list(opened.values())}
 
 
