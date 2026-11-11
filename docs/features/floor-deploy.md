@@ -257,8 +257,17 @@ The placeholder `review` above must be the full typed object documented in
 feature proof against the intended deployed SHA; a passed generic smoke is not
 UI acceptance evidence. Missing/malformed proof produces an exception, never a
 fabricated submission. With multiple configured Firstmate homes, set
-`TINSTAR_REVIEW_FIRSTMATE_HOME` to the responsible configured home; a single
-configured home is selected automatically.
+`TINSTAR_REVIEW_FIRSTMATE_HOME` to an exact absolute home path from
+`reconciliation.fleet[].home` or `firstmate.homes`, or a unique
+`reconciliation.fleet[].label` (for example `hulk`). A single distinct configured
+home is selected automatically; the same path in both lists counts once. Labels
+are resolved to their absolute path in the audit and existing FleetOutbox/inbox
+delivery. A typo, unconfigured path or ambiguous label cannot select an inbox;
+use the exact configured absolute path to disambiguate.
+
+There is no need to add a reconciliation home to `firstmate.homes`: that legacy
+list still controls the old cockpit's worker/attention readers. Review delivery
+and receipt observation accept both lists without altering those worker views.
 
 The existing post-deploy queue refresh and normal server/fleet refresh reconcile
 these records after restart. `review-handoff` records retain unresolved gaps,

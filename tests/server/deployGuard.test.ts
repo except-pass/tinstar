@@ -45,6 +45,8 @@ async function fixture(isolatedDeploy = false) {
     await mkdir(deploy, { recursive: true })
     await mkdir(join(root, 'src/shared'), { recursive: true })
     for (const name of ['reviewEvidence.mjs', 'reviewHandoff.mjs']) await cp(resolve('src/shared', name), join(root, 'src/shared', name))
+    await mkdir(join(root, 'src/server/fleet'), { recursive: true })
+    await cp(resolve('src/server/fleet/reviewHomes.mjs'), join(root, 'src/server/fleet/reviewHomes.mjs'))
     for (const name of ['floor-deploy.sh', 'deploy-support.mjs', 'post-deploy-smoke.mjs', 'review-handoff.mjs']) await cp(resolve('scripts/deploy', name), join(deploy, name))
     executable = join(deploy, 'floor-deploy.sh')
   }

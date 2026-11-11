@@ -21,6 +21,7 @@ import { directKey, directSet, WorkerMarks, WorkerMarksUnreadable } from './mark
 import { deliverKeys, deliverPrompt, PromptDeliveryError } from './promptInput'
 import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
 import { readFleetSnapshot } from './snapshot'
+import { loadReviewHomes, resolveReviewHome } from './reviewHomes.mjs'
 
 const execFileAsync = promisify(execFile)
 
@@ -114,7 +115,8 @@ export class CockpitFleet {
   portOf(key: string): number | null { return this.views.portOf(key) }
 
   messages() {
-    return this.outbox.list(this.homes, message => (message.sourceAnchor ? this.deskRequests : this.attention).some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
+    const deliveryHomes = [...new Set([...this.homes, ...loadReviewHomes(getConfigRoot()).map(row => row.home)])]
+    return this.outbox.list(deliveryHomes, message => (message.sourceAnchor ? this.deskRequests : this.attention).some(card => this.sameCall(card, message)), this.ready && this.errors.length === 0)
   }
 
   completeDecision(requestId: string) { return this.outbox.completeDecision(requestId) }
@@ -168,10 +170,11 @@ export class CockpitFleet {
 
   /** Server-owned deployment handoffs reuse the existing durable inbox delivery. */
   async deliverReviewException(home: string, identity: string, text: string): Promise<SubmitResult> {
-    if (!this.homes.includes(home)) return { saved: false, error: 'Firstmate home is not configured', canReceive: 'unknown' }
+    const ownerHome = resolveReviewHome(loadReviewHomes(getConfigRoot()), home)
+    if (!ownerHome) return { saved: false, error: 'Firstmate home is not configured or its label is ambiguous', canReceive: 'unknown' }
     const requestId = `${identity.slice(0, 8)}-${identity.slice(8, 12)}-5${identity.slice(13, 16)}-a${identity.slice(17, 20)}-${identity.slice(20, 32)}`
     const prior = await this.outbox.get(requestId)
-    return this.outbox.submit(prior ?? { requestId, home, kind: 'message', taskId: null, decisionKey: null, holdId: null, cardType: null, text }, 'Tin Star guarded deployment')
+    return this.outbox.submit(prior ?? { requestId, home: ownerHome, kind: 'message', taskId: null, decisionKey: null, holdId: null, cardType: null, text }, 'Tin Star guarded deployment')
   }
 
   /** Closes a classified decision here. An unclassified decision stays on the inbox-note path. */
