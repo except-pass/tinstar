@@ -41,7 +41,7 @@ describe('release-first V3 surfaces', () => {
     refresh.mockClear()
     fireEvent.click(older)
     expect(older).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('heading', { name: 'v1.18.0', exact: true })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'v1.18.0' })).toBeTruthy()
     expect(refresh).toHaveBeenCalledWith('v1.18.0')
   })
 
