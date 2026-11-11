@@ -13,13 +13,18 @@ export interface CardContextRead {
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private commentCache = new Map<string, { until: number; value: Promise<CardContextRead> }>()
+  private commentCache = new Map<string, { until: number; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
   private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
   invalidate(id: string) { this.cache.delete(id); this.commentCache.delete(id) }
+  /** Display cached evidence without making a property-only view wait on prose. */
+  cachedComments(id: string): CardContextRead | undefined {
+    const cached = this.commentCache.get(id)
+    return cached && cached.until > Date.now() ? cached.resolved : undefined
+  }
   details(id: string, force = false): Promise<CardContextRead> {
     if (force) this.invalidate(id)
     return Promise.all([this.get(id), this.commentDetails(id, force)]).then(([body, comments]): CardContextRead => ({
@@ -33,7 +38,9 @@ export class CardContextReader {
     if (!force && cached && cached.until > Date.now()) return cached.value
     if (this.commentCache.size >= 100) this.commentCache.delete(this.commentCache.keys().next().value!)
     const value = this.readComments(id)
-    this.commentCache.set(id, { until: Date.now() + 30_000, value })
+    const entry = { until: Date.now() + 30_000, value, resolved: undefined as CardContextRead | undefined }
+    this.commentCache.set(id, entry)
+    void value.then(result => { entry.resolved = result }).catch(() => {})
     return value
   }
   private async readComments(id: string): Promise<CardContextRead> {

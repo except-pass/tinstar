@@ -1,3 +1,4 @@
+import { reviewSubmissions } from '../../shared/reviews'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
@@ -206,6 +207,13 @@ export class WorkflowOperations {
         outcome: 'partially-saved' as const, code: 'firstmate-pending', message: resolution.message,
       } : { message: 'Decision recorded · First Mate reconciled' }) }
     })
+  }
+  async savedReviewAssociations() {
+    return (await this.creations.list('review:')).flatMap(([, receipt]) => receipt.cardId && receipt.review?.done
+      ? reviewSubmissions([{ text: receipt.review.note }]).flatMap(submission => submission.pulls.map(pull => ({ cardId: receipt.cardId!, pull: pull.url }))) : [])
+  }
+  async pendingReviewCount() {
+    return (await this.creations.list('review:')).filter(([, receipt]) => receipt.review && !receipt.review.done).length
   }
   async reconcileReviews() {
     const pending = (await this.creations.list('review:')).filter(([, receipt]) => receipt.review && !receipt.review.done)

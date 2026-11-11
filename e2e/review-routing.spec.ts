@@ -47,7 +47,13 @@ for (const mobile of [false, true]) test(`existing review drawer supports ${mobi
   source.intentions.data!.cards = cards
   const queue = () => buildQueue(source)
   const writes: Array<Record<string, unknown>> = []
-  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: queue() } }))
+  let releaseReviews!: () => void
+  const firstReview = new Promise<void>(resolve => { releaseReviews = resolve })
+  await page.route('**/api/reconciliation/queue?*', async route => { await firstReview; await route.fulfill({ json: { ok: true, data: { reviews: queue().reviews, warnings: [] } } }) })
+  // The unrelated full operational queue stays pending for the whole proof.
+  let releaseQueue!: () => void
+  const slowQueue = new Promise<void>(resolve => { releaseQueue = resolve })
+  await page.route('**/api/reconciliation/queue', async route => { await slowQueue; await route.fulfill({ json: { ok: true, data: queue() } }).catch(() => {}) })
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: new SceneReconciler().reconcile(source) } }))
   await page.route('**/api/reconciliation/workflow', async route => {
     const request = route.request().postDataJSON()
@@ -63,6 +69,10 @@ for (const mobile of [false, true]) test(`existing review drawer supports ${mobi
   else { await trigger.focus(); await page.keyboard.press('Enter') }
   const panel = page.getByRole('complementary', { name: 'Review Ready' })
   await expect(panel).toBeVisible()
+  await expect(panel.getByText(/Review coverage is loading/)).toBeVisible()
+  await expect(panel.locator('.cockpit-context-title')).toHaveText('Review Ready?')
+  await expect(panel.getByText('Nothing needs you right now.')).toHaveCount(0)
+  releaseReviews()
   await expect(panel.getByRole('article')).toHaveCount(2)
   await expect(panel.getByRole('article', { name: 'Discuss and Decisions acceptance (fixture)' }).getByRole('link', { name: 'Open live feature ↗' })).toHaveAttribute('href', /page=decisions/)
   if (process.env.TINSTAR_REVIEW_PROOF_DIR) await page.screenshot({ path: join(process.env.TINSTAR_REVIEW_PROOF_DIR, `review-${mobile ? 'mobile' : 'desktop'}-before.png`), fullPage: true })
@@ -86,4 +96,5 @@ for (const mobile of [false, true]) test(`existing review drawer supports ${mobi
   await expect(panel).toBeHidden()
   await expect(trigger).toBeFocused()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  releaseQueue()
 })

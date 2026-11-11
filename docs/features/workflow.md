@@ -651,6 +651,26 @@ retain known cards with a coverage warning; an empty incomplete result is not an
 all-clear. The Review Ready button opens the existing context panel, including
 its mobile drawer and keyboard controls; it creates no new page or Discuss item.
 
+The drawer reads `GET /api/reconciliation/queue?view=reviews`: the same canonical
+card census and Review projection, without waiting for operational recovery, PR
+readiness, remote fleet snapshots or network comment reads. Cached comment
+evidence is included when available; **Load current review evidence** retrieves
+exact history on demand.
+Local pending-write and handoff warnings remain visible. Initial or failed source
+reads show unknown coverage and an unknown count, never an empty all-clear. The
+full queue and normal refresh retain operational reconciliation.
+
+Linked PR actions with unknown status are suppressed using explicit associations
+from the shared Releases projection or completed local review receipts, as well
+as available submission evidence. Genuine open PR review actions remain visible.
+Fleet association reads refresh in the background; incomplete or stale association
+coverage has its own warning and does not delay canonical card rows.
+
+While a card remains in the drawer, feedback, remaining scope and the completion
+checkbox survive evidence arrival, cache expiry and unrelated card edits. A known
+change of deliverable or deployed SHA clears the draft; drafts never transfer
+between canonical cards.
+
 The shared UI/MCP `update_work` path supports:
 
 - `submit_for_review`: canonical `card_id`, `operation_id`, and `review` containing
