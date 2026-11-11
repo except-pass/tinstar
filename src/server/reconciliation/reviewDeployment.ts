@@ -63,7 +63,7 @@ export class ReviewDeploymentAudit {
   }
   async validate(input: Extract<ReviewOperation, { kind: 'submit_for_review' }>, scene: FloorScene, associations: AssociationStore) {
     const events = await this.read(), evidence = input.review
-    const deployment = deploymentsWithEvidence(events).find(event => event.id === evidence.deployment_id)
+    const deployment = deploymentsWithEvidence<FloorDeployment>(events).find(event => event.id === evidence.deployment_id)
     if (!deployment || deployment.newSha !== evidence.deployed_sha) throw new ReviewWriteError('deployment-missing', 'No matching guarded deployment receipt for this SHA')
     validateDeploymentEvidence(deployment, evidence)
     if (!events.some(event => event.action === 'floor-smoke' && event.deploymentId === deployment.id && event.newSha === deployment.newSha)) throw new ReviewWriteError('smoke-missing', 'Guarded deployment has no verified successful smoke receipt')
@@ -94,7 +94,7 @@ export class ReviewDeploymentReconciler {
   }
   private async reconcile() {
     const events = await this.audit.read()
-    const deployments = deploymentsWithEvidence(events)
+    const deployments = deploymentsWithEvidence<FloorDeployment>(events)
     if (!deployments.length) return
     const latest = new Map(events.filter((row): row is HandoffEvent => row.action === 'review-handoff').map(row => [row.exception.id, row]))
     const scene = await this.deps.scene(), links = releaseAssociations(scene, await this.deps.associations.read())

@@ -300,10 +300,11 @@ and non-reviewable classifications; include all evidence that should remain
 available. Incorrect SHA, tested SHA, PR/head, malformed proof or an unconfigured
 home is refused before appending so it cannot falsely satisfy another deployment.
 Correct the input and rerun; no live build is stopped or blocked. Identical
-retries (including JSON key/collection reordering) append nothing. Normal refresh
-and restart use the latest late-evidence event and suppress already resolved
-submissions. Canonical PR/card association and policy checks still run through
-the shared writer before any Notion mutation.
+retries (including JSON key/collection reordering) append nothing when they match
+the effective evidence. Normal refresh and restart apply deployment receipts and
+late-evidence updates in audit order, so the later update supplies the handoff
+evidence. Already resolved submissions are suppressed. Canonical PR/card association
+and policy checks still run through the shared writer before any Notion mutation.
 
 Without `--deployment`, `record` targets the **configured source checkout HEAD**,
 which may differ from the running server; do not use it for historical repair.
@@ -311,7 +312,11 @@ which may differ from the running server; do not use it for historical repair.
 `floor-deployment` and require its SHA to match the running build. Late-evidence
 events never become that selection or create smoke proof for an older build.
 Do not pass an older deployment's manifest to `--check-only`; it is rejected.
-A repeated record for the current SHA preserves its original verified membership.
+A repeated `record` reuses the effective receipt's membership when the previous
+running SHA already matches the target or is unknown. A genuine deployment retry
+from a different known running SHA performs discovery again and can correct
+incomplete membership from a failed attempt. Evidence-only updates preserve
+deployment and smoke provenance.
 A previously unknown association is resolved only when fresh shared source
 supplies its canonical card identity. Do not restart or roll back healthy code
 to repair a review write.
