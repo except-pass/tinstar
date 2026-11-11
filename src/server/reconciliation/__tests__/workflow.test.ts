@@ -27,6 +27,14 @@ import { workerLinkRecord } from '../workerLinks'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
 const id = 'a'.repeat(32), dataSourceId = 'b'.repeat(32)
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
+async function completeQueueDisplay(url: string, headers: Record<string, string> = {}) {
+  let body = await (await fetch(url, { headers })).json()
+  await vi.waitFor(async () => {
+    if (body.data.refreshing) body = await (await fetch(url, { headers })).json()
+    expect(body.data.refreshing).not.toBe(true)
+  })
+  return body
+}
 function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evidence note' }) {
   let raw = { object: 'page', id, parent: { data_source_id: dataSourceId }, url: `https://www.notion.so/${id}`, last_edited_time: new Date().toISOString(),
     properties: { Name: { type: 'title', title: [{ plain_text: 'Fixture start' }] }, Status: { type: 'status', status: { name: 'Queued' } },
@@ -1269,10 +1277,10 @@ it('serves one current Needs Will projection through UI and authenticated MCP wi
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
   seedOriginAllowlist(port)
-  const restricted = await (await fetch(`${base}/api/reconciliation/queue`)).json()
+  const restricted = await completeQueueDisplay(`${base}/api/reconciliation/queue`)
   expect(restricted.data.needsWill).toEqual(view.needsWill)
   expect(restricted.data.needsWill[0]).toMatchObject({ pulls: [], prDetails: 'PR details require owner authorization' })
-  const ui = await (await fetch(`${base}/api/reconciliation/queue`, { headers: { 'X-Tinstar-UI': '1' } })).json()
+  const ui = await completeQueueDisplay(`${base}/api/reconciliation/queue`, { 'X-Tinstar-UI': '1' })
   const client = new Client({ name: 'offline-consumer-view', version: '1' }); clients.push(client)
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
   const read = await client.callTool({ name: 'get_work_views', arguments: {} })
@@ -1573,7 +1581,7 @@ it('proves source decision UI/MCP receipt parity and before/after queue readback
   expect(after.items.some((item: any) => item.sources.some((source: any) => source.request?.id === f.source.id))).toBe(false)
   expect((await call('get_work', { card_id: id, details: false })).card.source.properties.Status.value).toBe('Queued')
   expect(after.items.some((item: any) => item.cardIds.includes(id))).toBe(true) // unrelated Merge ask
-  const uiQueue = await (await fetch(`${base}/api/reconciliation/queue`)).json()
+  const uiQueue = await completeQueueDisplay(`${base}/api/reconciliation/queue`)
   expect(uiQueue.data.items).toEqual(after.items)
 })
 

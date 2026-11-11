@@ -133,13 +133,14 @@ export class ReconciliationSources {
     void this.snapshot().catch(() => {})
     const snapshot = this.knownSnapshot(), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
+    queue.readOnly = false // The shared refresh can finalize an already-recorded answer.
     const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
       const context = this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))
     const known = needsWill(queue, scene, contexts, null, new Map(), authorized)
     const prior = new Map((entry.value?.needsWill ?? []).map(item => [item.id, item]))
-    const warning = entry.failed ? 'Request enrichment could not refresh. Last-known requests remain visible; verify sources before choosing.'
+    const warning = entry.failed ? 'Request evidence could not refresh. Last-known requests remain visible; verify sources before choosing.'
       : 'Refreshing request evidence. Known requests remain visible; choices need verification until refresh completes.'
     // An unfinished read cannot establish that a retained request disappeared.
     const rows = new Map([...prior])
@@ -155,6 +156,7 @@ export class ReconciliationSources {
       ...queue.needsWill.filter(item => !queue.items.some(current => current.id === item.id))]
     queue.counts = Object.fromEntries(['ready-now', 'needs-readiness-verification', 'future-or-conditional'].map(readiness => [readiness, queue.items.filter(item => item.readiness === readiness).length]))
     queue.warnings.push(warning)
+    if (!authorized) queue.warnings.push('PR details require owner authorization')
     queue.operationalExceptions = executionWarnings(scene)
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
