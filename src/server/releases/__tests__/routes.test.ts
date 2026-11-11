@@ -14,14 +14,16 @@ import { GithubReleaseReader } from '../github'
 import { releaseChanges } from '../../../shared/releaseChanges'
 import { ReleasePullReader } from '../pulls'
 
-beforeEach(() => { vi.spyOn(GithubReleaseReader.prototype, 'get').mockResolvedValue({ releases: [], status: 'fresh', observedAt: null, warnings: [] }) })
+beforeEach(() => { vi.spyOn(GithubReleaseReader.prototype, 'display').mockImplementation(data => ({ releases: data.releases ?? [], status: 'fresh', observedAt: null, warnings: [] })); vi.spyOn(GithubReleaseReader.prototype, 'get').mockResolvedValue({ releases: [], status: 'fresh', observedAt: null, warnings: [] }) })
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); resetOriginAllowlistForTests(); vi.restoreAllMocks() })
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'releases-api-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const read = vi.fn().mockResolvedValue({ title: 'Real merged PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: 'a'.repeat(40) })
   const api = new ReleasesApi({ scene: async () => scene }, root, new ReleasePullReader(read), async () => ['owner@example.com'])
-  const server = createServer((req, res) => { void api.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
+  // These HTTP authorization/audit fixtures are fully enriched. Slow progressive
+  // display is exercised independently in display.test.ts.
+  const server = createServer((req, res) => { void (async () => { if (req.method === 'GET' && req.url === '/api/releases') await api.read(); const handled = await api.handle(req, res); if (!handled) { res.writeHead(404); res.end() } })() })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   const port = (server.address() as { port: number }).port
   seedOriginAllowlist(port)

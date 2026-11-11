@@ -7,12 +7,14 @@ needed. New version tags appear on refresh. Release identity is repository/tag;
 the current tagged commit is retained separately so a moved tag does not reuse
 its old source evidence.
 
-Plan opens on Changes for a tag without observed component activity, explicitly
-labeled Draft. Verify opens on Acceptance for a tag with observed component push
-runs, including failed and incomplete attempts. A tag/run is release activity,
-not proof of current production delivery. The 238px desktop selector becomes
+Plan opens on Changes for **untagged main work since the latest version tag**.
+Already-tagged versions always belong to Verify/history, even when Actions data
+is missing, unreadable or expired. Verify opens on Acceptance and shows all discovered
+version tags in explicit numeric major/minor/patch order, newest first. Selecting
+an older tag loads its details. Tags and component activity do
+not prove current production delivery. The 238px desktop selector becomes
 horizontal tiles on phones. Changes, Acceptance and draft Release notes remain
-scoped to the selected release, with the existing contextual drawer and contracts.
+scoped to the selected identity, with the existing contextual drawer and contracts.
 
 ## GitHub-native source and evidence boundaries
 
@@ -22,7 +24,8 @@ Release records (including visible drafts) with pagination. Missing Release reco
 reads: **v1.24.0 has no GitHub Release record**, and appears from its tag and
 component runs when available. Only tags matching `vMAJOR.MINOR.PATCH` are
 version releases; prerelease/suffixed tags and surgical tags such as
-`deploy/v1.24.0-siteconfig-1` are ignored. Runs must match the exact tag, tagged commit and `push` event; same-SHA
+`deploy/v1.24.0-siteconfig-1` are ignored. Run reads query by exact source SHA and paginate, using the existing Reader
+query support. Exact tag and `push`/`workflow_run` events are matched locally; same-SHA
 main/PR/surgical-dispatch runs and the record-only observer are excluded.
 
 The adapter reads cmsandbox's generated `native-production-release` block,
@@ -34,17 +37,32 @@ outside the generated block never becomes deployment proof.
 
 Changes and source-file scope come from the Git compare between consecutive
 version tags. Effective merged PR identities are read from those commits and
-joined to existing explicit many-to-many Notion associations. Membership advances
+joined to existing explicit many-to-many Notion associations. Plan uses the
+latest-tag-to-main comparison rather than a synthetic release candidate. Membership advances
 in bounded batches, with partial counts and exact gaps until complete. A non-linear
 range remains unknown; equal-source consecutive tags have an empty range. GitHub's
 300-file compare limit is visible independently of paginated commit/PR membership.
 
-To keep refresh latency and the shared GitHub budget bounded, observations cache
-for one minute. Each refresh advances the latest tag and the selected tag (or one historical tag);
-other tags remain selectable with explicit pending/unknown evidence. Catalogs
-paginate up to ten pages and report partial coverage at that limit. Source loss
-retains last-known observations with a visible unknown state. Missing or unreadable
-GitHub data never becomes an assertion that there are no releases.
+The list HTTP path serves known catalog data immediately, independently of slow
+Notion associations, Actions reads or per-commit PR enrichment. The catalog is
+published first; component details and membership fill in as their reads finish.
+A `refreshing` response makes the browser poll after one second; settled views
+poll every 20 seconds. Canonical operational reads still await full enrichment.
+The in-memory last result stays available while refresh runs, with no release
+ledger or new configuration. Failed association refreshes retain known links,
+mark association coverage incomplete and show a safe warning, including on a
+cold failure. Recovery clears that warning. Acceptance receipt store warnings
+remain visible in each release's source gaps during native-data refreshes.
+
+GitHub observations cache for one minute. Only the recent five tags (plus an
+explicit historical selection) receive Actions reads. Membership advances for
+the latest and selected releases and for untagged main. Catalogs paginate up to
+ten pages and report partial coverage at that limit. Source loss retains known
+observations with a visible unknown state; missing data never means no releases.
+Actions freshness is evaluated on every display from each detail read's cache
+timestamp. After one minute, retained runs remain visible as last-known evidence,
+with unknown activity and partial source coverage even while the next catalog
+read is pending. A successful complete Actions read restores fresh evidence.
 
 A successful component workflow is **awaiting PROD verification**, exactly as the
 native Release body states. Neither a tag, published Release nor green Actions

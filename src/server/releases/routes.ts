@@ -8,7 +8,7 @@ import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { fail, ok } from '../api/envelope'
 import { releaseChanges } from '../../shared/releaseChanges'
-import { releaseAssociations } from '../../shared/releases'
+import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
 import { AssociationConflict, AssociationStore, associationInput } from './associations'
 import { ReleasePullReader } from './pulls'
 import type { EvidenceRead } from './evidence'
@@ -29,6 +29,29 @@ export class ReleasesApi {
   readonly store: AssociationStore
   constructor(private sources: Pick<ReconciliationSources, 'scene'>, private root = getConfigRoot(), private pulls = new ReleasePullReader(), private owners = ownerLogins, private releaseObjects = new GithubReleaseReader(), private reconciler = new ReleaseReconciler()) {
     this.store = new AssociationStore(root)
+  }
+  private displayCache: ReleasesRead | null = null
+  private displayPending: Promise<void> | null = null
+  private displayUntil = 0
+  private displayFailed = false
+
+  /** Fast list projection, like Decisions: serve known records while source,
+   * associations and PR enrichment refresh independently in the background. */
+  display(writable = false, tag?: string): ReleasesRead {
+    const cached: ReleasesRead = this.displayCache ?? { generatedAt: new Date().toISOString(), pulls: [], unassociatedCards: [], warnings: ['Notion PR associations are still loading.'], associationsComplete: false, associationsWritable: false }
+    if (!this.displayPending && Date.now() >= this.displayUntil) {
+      this.displayPending = this.read(false, false, tag).then(() => {}, () => { this.displayFailed = true }).finally(() => {
+        this.displayPending = null
+        this.displayUntil = Date.now() + 20_000
+      })
+    }
+    const failure = 'Release association refresh failed; retained associations are last known and may be stale or unavailable.'
+    const data = this.displayFailed ? { ...cached, associationsComplete: false, warnings: [...cached.warnings.filter(warning => warning !== 'Notion PR associations are still loading.'), failure] } : cached
+    const native = this.releaseObjects.display(data, tag)
+    const gaps = data.warnings.filter(warning => warning.startsWith('Acceptance receipt store') || warning === failure)
+    const refreshing = !!this.displayPending || !!native.refreshing
+    return { ...data, associationsWritable: writable && !!this.displayCache && !data.warnings.some(warning => warning.startsWith('Local association audit')), refreshing, releases: native.releases.map(release => ({ ...release, gaps: [...new Set([...release.gaps, ...gaps])] })),
+      releaseSource: { status: native.status, observedAt: native.observedAt, warnings: native.warnings, refreshing: native.refreshing } }
   }
   /** Shared authorized-source projection for Releases and contextual Ask. */
   async read(writable = false, force = false, tag?: string) {
@@ -63,6 +86,8 @@ export class ReleasesApi {
     reconciled.acceptanceRecords = reconciled.acceptanceRecords.filter(record => visibleChecks.has(record.key))
     const acceptanceWarning = reconciled.warnings.find(message => message.startsWith('Acceptance receipt store'))
     if (acceptanceWarning) for (const release of reconciled.releases) release.gaps.push(acceptanceWarning)
+    this.displayFailed = false
+    this.displayCache = reconciled
     return reconciled
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -78,7 +103,8 @@ export class ReleasesApi {
     const writable = (peer === '::1' || peer.startsWith('127.')) && typeof login === 'string' && (await this.owners(this.root)).includes(login)
     try {
       if (path !== '/api/releases/associations' && req.method === 'GET') {
-        const reconciled = await this.read(writable, false, new URL(req.url ?? '/', 'http://localhost').searchParams.get('tag') ?? undefined)
+        const tag = new URL(req.url ?? '/', 'http://localhost').searchParams.get('tag') ?? undefined
+        const reconciled = path === '/api/releases' ? this.display(writable, tag) : await this.read(writable, false, tag)
         return ok(res, path === '/api/releases/automation' ? reconciled.automation : path === '/api/releases/reconciliation' ? reconciled.reconciliation : reconciled, { headers })
       }
       if (path !== '/api/releases/associations' || req.method !== 'POST') return fail(res, 'BAD_REQUEST', 'Use GET for Releases or POST for a local association', { headers })
@@ -98,7 +124,9 @@ export class ReleasesApi {
       const scene = await this.sources.scene()
       // Do not attach an arbitrary inaccessible card. Unlink remains possible for retired local edges.
       if (input.action === 'link' && !scene.cards.some(card => card.id === input.cardId && !card.source.in_trash && !card.source.archived)) return fail(res, 'NOT_FOUND', 'Card unavailable in the authorized source', { headers })
-      return ok(res, await this.store.append(input, String(login)), { headers })
+      const record = await this.store.append(input, String(login))
+      this.displayUntil = 0
+      return ok(res, record, { headers })
     } catch (error) {
       if (error instanceof AssociationConflict) return fail(res, 'CONFLICT', error.message, { headers })
       if (error instanceof z.ZodError || error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid association request', { headers })

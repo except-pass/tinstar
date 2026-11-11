@@ -24,7 +24,7 @@ describe('GitHub-native releases', () => {
     const excluded = ['v1.25.0-rc1', 'v1.25.0+build', 'v1.25.0.1', '1.25.0']
     const tags = [...nativeTags, ...excluded.map(name => ({ name, commit: { sha: 'd'.repeat(40) } }))]
     const result = await new GithubReleaseReader(nativeFixtureRead({ tags }), () => now).get(data())
-    expect(result.releases.map(release => release.version)).toEqual(['v1.24.0', 'v1.22.0'])
+    expect(result.releases.filter(release => release.kind === 'production').map(release => release.version)).toEqual(['v1.24.0', 'v1.22.0'])
   })
   it('retains the GitHub Release body, component result table and snapshot without certifying deployment', async () => {
     const result = await new GithubReleaseReader(nativeFixtureRead({ records: [nativeRecord] }), () => now).get(data())
@@ -73,26 +73,27 @@ describe('GitHub-native releases', () => {
       if (path.includes('/actions/runs?')) throw new Error('no access')
       return fixture(path)
     }, () => now).get(data())
-    expect(missingRuns.releases[0]).toMatchObject({ state: 'Unknown', kind: 'draft', github: { runsStatus: 'unknown' } })
+    expect(missingRuns.releases[0]).toMatchObject({ state: 'Unknown', kind: 'production', github: { runsStatus: 'unknown' } })
   })
-  it('discovers new tags on refresh without configuration and keeps a tag without runs a Draft', async () => {
+  it('discovers new tags on refresh without configuration and keeps a tag without runs in history', async () => {
     let clock = now, tags = nativeTags
     const reader = new GithubReleaseReader(path => nativeFixtureRead({ tags })(path), () => clock)
     await reader.get(data())
     tags = [{ name: 'v1.25.0', commit: { sha: 'd'.repeat(40) } }, ...nativeTags]; clock += 61_000
     const release = (await reader.get(data())).releases[0]!
-    expect(release).toMatchObject({ version: 'v1.25.0', kind: 'draft', state: 'Deployment unknown', targets: [] })
+    expect(release).toMatchObject({ version: 'v1.25.0', kind: 'production', state: 'Deployment unknown', targets: [] })
   })
 })
 
-it('prioritizes the selected historical tag without waiting for the background history rotation', async () => {
+it('reuses prefetched historical Actions while enriching the selected release membership', async () => {
   const tags = [...nativeTags, { name: 'v1.21.0', commit: { sha: 'e'.repeat(40) } }]
   const read = vi.fn(nativeFixtureRead({ tags }))
   const reader = new GithubReleaseReader(read, () => now)
   await reader.get(data())
   read.mockClear()
-  await reader.get(data(), 'v1.21.0')
-  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${'e'.repeat(40)}`))).toBe(true)
+  const result = await reader.get(data(), 'v1.21.0')
+  expect(result.releases.find(release => release.version === 'v1.21.0')).toMatchObject({ github: { runsStatus: 'fresh' }, membership: { status: 'unknown' } })
+  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${'e'.repeat(40)}`))).toBe(false)
 })
 
 
@@ -104,7 +105,7 @@ it('shows an existing draft Release record rather than claiming it is missing', 
 
 it.each([undefined, 'v1.22.0'])('reads a concurrent historical selection before caching it after %s', async firstTag => {
   const historicalSha = 'e'.repeat(40)
-  const tags = [...nativeTags, { name: 'v1.21.0', commit: { sha: historicalSha } }]
+  const tags = [...nativeTags, ...['v1.21.0', 'v1.20.0', 'v1.19.0'].map((name, index) => ({ name, commit: { sha: String(index + 1).repeat(40) } })), { name: 'v1.0.0', commit: { sha: historicalSha } }]
   let releaseFirst!: () => void, releaseSecond!: () => void, secondStarted!: () => void
   const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
   const secondGate = new Promise<void>(resolve => { releaseSecond = resolve })
@@ -121,18 +122,18 @@ it.each([undefined, 'v1.22.0'])('reads a concurrent historical selection before 
   const reader = new GithubReleaseReader(read, () => now)
   const first = reader.get(data(), firstTag)
   let resolved = false
-  const second = reader.get(data(), 'v1.21.0').then(result => { resolved = true; return result })
-  const sameSelection = reader.get(data(), 'v1.21.0')
+  const second = reader.get(data(), 'v1.0.0').then(result => { resolved = true; return result })
+  const sameSelection = reader.get(data(), 'v1.0.0')
   releaseFirst()
   await first
   await Promise.race([started, second])
   expect(resolved).toBe(false)
   releaseSecond()
   const [result, shared] = await Promise.all([second, sameSelection])
-  expect(result.releases.find(release => release.version === 'v1.21.0')?.github?.runsStatus).toBe('fresh')
+  expect(result.releases.find(release => release.version === 'v1.0.0')?.github?.runsStatus).toBe('fresh')
   expect(shared).toEqual(result)
   expect(read.mock.calls.filter(([path]) => path.includes(`/actions/runs?head_sha=${historicalSha}`))).toHaveLength(1)
   const count = read.mock.calls.length
-  await reader.get(data(), 'v1.21.0')
+  await reader.get(data(), 'v1.0.0')
   expect(read).toHaveBeenCalledTimes(count)
 })

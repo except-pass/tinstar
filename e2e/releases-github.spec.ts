@@ -3,10 +3,7 @@ import { githubReleasePreview } from '../test-fixtures/releases/github-preview'
 
 let preview: Awaited<ReturnType<typeof githubReleasePreview>>
 test.beforeAll(async () => { preview = await githubReleasePreview() })
-test.afterAll(async () => {
-  preview.server.closeAllConnections()
-  await new Promise<void>(resolve => preview.server.close(() => resolve()))
-})
+test.afterAll(async () => { await preview.close() })
 
 test('v1.24.0 is visible from tag/runs without a GitHub Release; Plan/Verify, notes and narrow layout remain release-scoped', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -40,10 +37,25 @@ test('v1.24.0 is visible from tag/runs without a GitHub Release; Plan/Verify, no
 })
 
 test('unreadable GitHub data renders unknown rather than an empty release history', async ({ page }) => {
-  await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { ...preview.data, releases: [], releaseSource: { status: 'unknown', observedAt: null, warnings: ['GitHub version tags unavailable; release history is unknown.'] } } } }))
+  await page.route('**/api/releases', route => route.fulfill({ json: { ok: true, data: { ...preview.data, refreshing: false, releases: [], releaseSource: { status: 'unknown', observedAt: null, warnings: ['GitHub version tags unavailable; release history is unknown.'] } } } }))
   await page.goto(`${preview.base}/?view=releases`)
   await expect(page.getByRole('heading', { name: 'Release history unknown', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No release candidates', exact: true })).toHaveCount(0)
   await page.getByRole('tab', { name: 'Verify', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Release history unknown', exact: true })).toBeVisible()
+})
+
+
+test('warm cache paints untagged main within three seconds and keeps all version tags in Verify', async ({ page }) => {
+  const started = performance.now()
+  await page.goto(`${preview.base}/?view=releases`)
+  await expect(page.getByRole('heading', { name: 'Untagged main', exact: true })).toBeVisible()
+  expect(performance.now() - started).toBeLessThan(3000)
+  await expect(page.locator('.release-picker .pick')).toHaveCount(1)
+  await expect(page.locator('.release-picker .pick-version')).toHaveText('main')
+  await expect(page.getByText('Untagged command change', { exact: true })).toBeVisible()
+  await expect(page.getByText('Improve command delivery', { exact: true })).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Verify', exact: true }).click()
+  await expect(page.locator('.release-picker .pick-version').first()).toHaveText('v1.24.0')
+  await expect(page.locator('.release-picker')).not.toContainText('DRAFT')
 })

@@ -13,12 +13,14 @@ export function useReleases() {
       if (pending || stopped) return
       pending = new AbortController()
       const deadline = setTimeout(() => pending?.abort(), 60_000)
+      let refreshing = false
       try {
         const res = await apiFetch(`/api/releases${tagRef.current ? `?tag=${encodeURIComponent(tagRef.current)}` : ''}`, { signal: pending.signal }), body = await res.json()
         if (!res.ok || !body.ok || !Array.isArray(body.data?.pulls)) throw new Error('Release observation unavailable')
+        refreshing = !!body.data.refreshing
         if (!stopped) { setData(body.data); setError(null) }
       } catch { if (!stopped) setError('Release sources unavailable. Retained records are last known; deployment remains unknown.') }
-      finally { clearTimeout(deadline); pending = null; if (!stopped) timer = setTimeout(() => void read(), 20_000) }
+      finally { clearTimeout(deadline); pending = null; if (!stopped) timer = setTimeout(() => void read(), refreshing ? 1000 : 20_000) }
     }
     refreshRef.current = tag => { tagRef.current = tag; clearTimeout(timer); void read() }
     void read()
