@@ -5,9 +5,13 @@ import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
 import { releaseFixture } from './fixtures'
 import { changeFixture, objectFixture } from '../../../test-fixtures/releases/objects'
 import type { AskReturn } from '../../shared/ask'
+import { notesFixture } from '../../../test-fixtures/releases/notes'
+import { draftReleaseNotes } from '../../shared/releaseNotes'
+import { releaseChanges } from '../../shared/releaseChanges'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, origin: undefined as AskReturn | undefined }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ scene: observed.scene, origin: observed.origin, error: null, now: Date.now(), clearOrigin: vi.fn() }) }))
+vi.mock('../../reconciliation/useFloorScene', () => ({ useFloorScene: () => ({ scene: observed.scene, error: null, now: Date.now(), refresh: vi.fn() }) }))
 let data: ReleasesRead
 beforeEach(() => {
   observed.origin = undefined
@@ -88,6 +92,31 @@ describe('release-first V3 surfaces', () => {
     const search = screen.getByRole('combobox', { name: 'Find names, IDs and text' })
     fireEvent.change(search, { target: { value: 'PR #2' } }); fireEvent.keyDown(search, { key: 'Enter' })
     expect(screen.getByRole('dialog')).toHaveTextContent('owner/repo#2')
+  })
+  it('copies the selected audience only, explains exclusions internally and resets all notes on release selection', async () => {
+    const f = notesFixture(); observed.scene = f.scene; data = f.data
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    mount(); fireEvent.click(screen.getByRole('tab', { name: 'Verify' })); fireEvent.click(screen.getByRole('tab', { name: 'Release notes' }))
+    const paper = document.querySelector('.notes-paper')!
+    expect(paper).toHaveTextContent('Internal: Bound query load.')
+    expect(paper).not.toHaveTextContent('Correct enum mappings')
+    fireEvent.click(screen.getByText('Excluded from Customer notes (5)'))
+    expect(screen.getByText('Internal-only work')).toBeTruthy()
+    expect(screen.getByText('Acceptance: Failed')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Customer' }))
+    expect(screen.queryByText('Excluded from Customer notes (5)')).toBeNull()
+    expect(paper).toHaveTextContent('Customer: Hide absent generator frequency.')
+    expect(paper).not.toHaveTextContent('Bound query load')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy draft' }))
+    expect(writeText).toHaveBeenLastCalledWith(draftReleaseNotes(f.release, releaseChanges(f.release, data, f.scene), 'customer').text)
+    expect(await screen.findByText('Release notes copied')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /v1.23.9 PROD/ }))
+    expect(screen.getByRole('heading', { name: 'v1.23.9' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Release notes' }))
+    expect(screen.getByRole('button', { name: 'Internal' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('No changes are currently eligible for this audience.')).toBeTruthy()
+    expect(screen.queryByText('Release notes copied')).toBeNull()
   })
   it('restores a contextual PR origin once without reopening a dismissed drawer on refresh', () => {
     observed.origin = { section: 'releases', target: { kind: 'pull', id: data.pulls[0]!.id }, view: { scene: 'releases', release_id: 'production' } }

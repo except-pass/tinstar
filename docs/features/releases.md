@@ -54,9 +54,8 @@ page clicks never dispatch. Build/DEV readiness never establishes acceptance;
 missing, failed, skipped and inconclusive checks cannot pass. The drawer shows
 the latest result first with prior evidence retained in expandable history.
 
-Production notes remain ineligible until verified membership and linked accepted
-work exist. Internal/Customer selection and Copy draft operate on the selected
-release; D.4 publication and D.5 Notion closure/policy changes remain separate.
+For selected-release drafts, audience eligibility, copying and separate
+publication, see [D.4 release notes](../releases-notes.md).
 
 Every V3 surface ships in D.2. Clearly labelled synthetic test-fixture screenshots
 cover the failed/manual acceptance drawer and populated eligible-notes compositions
@@ -389,3 +388,9 @@ is current PROD. A later current-state export can use the existing normalized
 The [activation packet](../releases-activation.md#evidence-and-limits-of-this-slice)
 owns the captured v1.24.0 proof, exact component mapping and remaining activation
 prerequisites.
+
+### D.4 release notes
+
+[Release notes](../releases-notes.md) owns draft usage, editorial wording,
+exclusion reasons and publication activation/recovery. D.5 Notion closure and
+policy changes remain separate.

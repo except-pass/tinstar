@@ -35,6 +35,10 @@ export function releaseChanges(release: ReleaseObject, data: ReleasesRead, scene
       delivery: release.kind !== 'production' ? 'Awaiting delivery' : proven ? 'Deployed' : absent ? 'Not deployed' : 'Unknown',
       acceptance: 'Unknown', successCondition: null, method: null, checkRef: null, acceptanceEvidence: null, note: null, audience: 'internal' }
     const { contract, gap } = cardAcceptanceContract(card?.source.properties.Evidence?.value)
+    // Editorial copy never changes the check identity or invents acceptance.
+    change.note = contract?.notes?.internal ?? change.title
+    change.audience = contract?.notes?.audience ?? 'internal'
+    change.customerNote = contract?.notes?.customer ?? change.note
     change.acceptanceGap = gap
     change.checks = (contract?.checks ?? []).map(check => {
       const key = acceptanceKey(release, change, check, data.acceptanceWorkflows)

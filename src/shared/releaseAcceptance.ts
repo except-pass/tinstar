@@ -3,6 +3,9 @@ import type { ReleaseChange, ReleaseObject } from './releaseObjects'
 
 const text = z.string().trim().min(1)
 export const acceptanceContractSchema = z.object({
+  notes: z.object({
+    audience: z.enum(['internal', 'customer']), internal: text.optional(), customer: text.optional(),
+  }).strict().optional(),
   checks: z.array(z.object({
     id: text, successCondition: text, method: z.enum(['workflow', 'human', 'observation']),
     ref: text, owner: text.optional(), fixture: text.optional(),

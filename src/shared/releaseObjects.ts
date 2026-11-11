@@ -28,7 +28,7 @@ export interface ReleaseChange {
   acceptance: 'Unknown' | 'Failed' | 'Running' | 'Human review' | 'Passed' | 'Missing' | 'Inconclusive' | 'Skipped'
   successCondition: string | null; method: string | null; checkRef: string | null
   checks?: AcceptanceResult[]; acceptanceGap?: string | null
-  acceptanceEvidence: string | null; note: string | null; audience: 'internal' | 'customer'
+  acceptanceEvidence: string | null; note: string | null; customerNote?: string | null; audience: 'internal' | 'customer'
 }
 
 export const eligibleReleaseNote = (release: ReleaseObject, change: ReleaseChange) =>
