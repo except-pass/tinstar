@@ -4,8 +4,10 @@ import { z } from 'zod'
 const text = z.string().trim().min(1).max(4000)
 const key = z.string().trim().min(1).max(128)
 const url = z.string().url().max(2048).refine(value => {
-  const parsed = new URL(value)
-  return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password
+  try {
+    const parsed = new URL(value)
+    return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password
+  } catch { return false }
 }, 'Use an HTTP evidence link without credentials')
 export const reviewSha = z.string().regex(/^[a-f0-9]{40}$/)
 export const reviewEvidenceSchema = z.object({

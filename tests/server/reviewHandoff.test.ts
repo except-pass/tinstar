@@ -45,13 +45,14 @@ describe('late evidence operator command', () => {
     await run()
     expect(await readFile(f.audit, 'utf8')).toBe(saved)
   })
-  it.each(['unknown', 'sha', 'tested-sha', 'head', 'pull', 'classification', 'proof', 'home'])('refuses %s evidence without changing the audit', async scenario => {
+  it.each(['unknown', 'sha', 'tested-sha', 'head', 'pull', 'classification', 'proof', 'url', 'home'])('refuses %s evidence without changing the audit', async scenario => {
     const f = await fixture()
     if (scenario === 'sha') f.review.deployed_sha = current
     if (scenario === 'tested-sha') f.review.proof.tested_sha = current
     if (scenario === 'head') f.review.pulls[0]!.head = current
     if (scenario === 'pull') f.review.pulls[0]!.url += '1'
     if (scenario === 'proof') f.review.proof.screenshots = []
+    if (scenario === 'url') f.review.proof.receipt = ''
     await writeFile(f.manifest, JSON.stringify({ evidence: [{ card_id: card, review: f.review }], nonReviewable: scenario === 'classification' ? [{ pull: pull + '1', reason: 'test only', evidence: 'diff' }] : [] }))
     const before = await readFile(f.audit, 'utf8')
     await expect(recordLateEvidence(scenario === 'unknown' ? `floor:${head}` : f.deployment.id, { ...f.env, ...(scenario === 'home' ? { TINSTAR_REVIEW_FIRSTMATE_HOME: '/unconfigured' } : {}) })).rejects.toThrow()
