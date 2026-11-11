@@ -523,7 +523,9 @@ existing Ask action validation. A revision is a new publication with a new
 For the same open request, typed Ask and work publications are resolved together.
 Any proposal named by another publication’s `supersedes` is history; the newest
 remaining publication wins, even when intermediate revisions are absent or
-publications are unrelated. Legacy rows without typed proposals are metadata.
+publications are unrelated. Equal publication times use the lexicographically
+greatest proposal ID, independent of input order. Legacy rows without typed
+proposals are metadata.
 Legacy options and freeform text retain their existing behavior.
 
 Ask replies may carry the same `decision_proposal` object with
@@ -534,16 +536,19 @@ the server verifies current queue membership, source binding/generation, proposa
 revision, freshness and owner authorization, then imports the publication into
 the same request's Ask thread and records the ordinary idempotent selection.
 Importing a publication never invents an owner message or sends it to First Mate.
-The selection is the only new outbound turn. Unknown delivery retains its key;
+For ordinary actions, the selection is the only new outbound turn. Merge actions
+use the [Clawson handoff](../pr-actions.md#send-selected-prs-to-clawson-for-admin-merge)
+and retain its receipt on the selection instead. Unknown delivery retains its key;
 retrying or choosing from a second device converges on the original selection.
 No choice marks a card Done, changes its owner/status, or dismisses the queue.
 
-Decisions uses the existing Ask provider and text/voice composer. Its context
-and return locator carry the exact request key, including for unlinked requests.
-Full conversation opens that same persistent Discuss thread; Return to source
-restores Decisions and its search, closing the mobile Discuss sheet. Resolving a contextual Ask scopes the existing queue projection to that request so unrelated card histories do not delay the turn. Source text, receipts and diagnostics remain
-available through the compact disclosures. Stale or unknown evidence disables
-recommendation buttons while retaining the last-known proposal and source links.
+The [Decisions workbench](reconciliation-queue.md#decisions-tab) owns presentation,
+Discussion and return navigation. The queue projects the authoritative current
+answer ID across configured owners while keeping other owners’ private Ask
+content out of the response. Incomplete publication history retains last-known
+proposals as disabled evidence until a complete refresh. Resolving a contextual
+Ask scopes the existing queue projection to that request so unrelated card
+histories do not delay the turn.
 
 The MCP catalog changes only by the additive optional `request_decision.proposal`
 field; refresh the connector once to discover it. No tools are added.

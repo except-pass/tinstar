@@ -1258,7 +1258,7 @@ it('keeps decision Discussion choices through explanations and disables them for
   records = [first, explanation]
   const renderDesk = (decisionItems: typeof queue.items = [item], decisionUnavailable = false, now = Date.now()) => <AskProvider decisionUnavailable={decisionUnavailable} decisionItems={decisionItems} scene={scene} state={initialPresentation()} send={vi.fn()} onReturn={vi.fn()}><AskDesk now={now} view="needs-you" /></AskProvider>
   const view = render(renderDesk())
-  fireEvent.click(await screen.findByRole('button', { name: /Why is this waiting/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /Why this option/ }))
   expect(await screen.findByRole('button', { name: /^Proceed:/ })).toBeEnabled()
   for (const unavailable of [[], [{ ...item, action: 'Changed request' }], [{ ...item, cardIds: [] }], [{ ...item, sources: [] }], [{ ...item, sources: [{ ...item.sources[0]!, coverage: 'partial' as const }] }], [{ ...item, sources: [{ ...item.sources[0]!, status: 'unknown' as const }] }]]) {
     view.rerender(renderDesk(unavailable))
