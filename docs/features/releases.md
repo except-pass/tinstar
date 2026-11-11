@@ -54,9 +54,8 @@ page clicks never dispatch. Build/DEV readiness never establishes acceptance;
 missing, failed, skipped and inconclusive checks cannot pass. The drawer shows
 the latest result first with prior evidence retained in expandable history.
 
-Production notes remain ineligible until verified membership and linked accepted
-work exist. Internal/Customer selection and Copy draft operate on the selected
-release; D.4 publication and D.5 Notion closure/policy changes remain separate.
+For selected-release drafts, audience eligibility, copying and separate
+publication, see [D.4 release notes](../releases-notes.md).
 
 Every V3 surface ships in D.2. Clearly labelled synthetic test-fixture screenshots
 cover the failed/manual acceptance drawer and populated eligible-notes compositions
@@ -392,8 +391,6 @@ prerequisites.
 
 ### D.4 release notes
 
-[Release notes](../releases-notes.md) documents release-scoped Internal/Customer
-drafts, optional wording in the D.3 contract, exclusion reasons, and the separate
-default-OFF GitHub publication command. Copy is read-only. Publication requires
-an existing tag matching the release source and explicit owner activation after listener
-review; it never creates a tag or enables the D.1 Notion writer.
+[Release notes](../releases-notes.md) owns draft usage, editorial wording,
+exclusion reasons and publication activation/recovery. D.5 Notion closure and
+policy changes remain separate.

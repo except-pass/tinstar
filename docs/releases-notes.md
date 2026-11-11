@@ -7,10 +7,15 @@ check passed with evidence. The accepted subset of a partial rollout can have
 draft notes; unresolved work stays excluded. Plan notes are a planning preview,
 never a deployment or acceptance claim. No page read or click publishes.
 
-Internal view explains each Customer exclusion (internal-only work, unknown or
-incomplete membership, unlinked work, undelivered targets, failed, running,
-missing or otherwise unaccepted checks). Excluded material is outside the draft
-and is never copied/published. Customer view omits that internal explanation.
+Releases reads history-inclusive work for eligibility, wording and copying;
+the publication command uses the same scope. Marking linked work Done does not
+remove its acceptance contract or editorial wording from release notes.
+
+In Verify, Internal view explains each Customer exclusion (internal-only work,
+unknown or incomplete membership, unlinked work, undelivered targets, failed,
+running, missing or otherwise unaccepted checks). Customer drafts, copies and
+publication omit those entries. Internal drafts may include accepted internal-only
+work. Customer view omits the internal exclusion explanation.
 
 ## Editorial wording on existing work
 
@@ -103,10 +108,12 @@ with a reason. These are supported dispositions, not a local stuck state.
 
 ## Audit, retry and disable
 
-Each explicit operation records actor, reason, exact release/audience/body and
-result under a `release-notes:` key in the existing
+After publication holds and tag inspection pass, an explicit publish invocation
+records actor, reason, exact release/audience/body and result under a
+`release-notes:` key in the existing
 `workflow-create-receipts.json`. GitHub remains the release record; this is an
-operation audit, not another release ledger. A failed/lost response is
+operation audit, not another release ledger. Preview and rejected preflight
+invocations do not write audit records. A failed/lost create or readback response is
 `inconclusive` and never retries automatically. Inspect GitHub and rerun the
 same command with a reason; it checks for the existing record before any create.
 GitHub's tag/release uniqueness handles concurrent creates. The explicit owner
