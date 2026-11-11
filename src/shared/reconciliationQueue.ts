@@ -1,5 +1,5 @@
 import type { buildQueue } from '../server/reconciliation/queue'
-export type DeskQueue = ReturnType<typeof buildQueue>
+export type DeskQueue = ReturnType<typeof buildQueue> & { refreshing?: boolean }
 export interface QueueUnavailable { outcome: 'queue-source-unavailable'; message: string }
 export type QueueRead = DeskQueue | QueueUnavailable
 export const hasQueue = (value: QueueRead | null | undefined): value is DeskQueue => !!value && 'items' in value

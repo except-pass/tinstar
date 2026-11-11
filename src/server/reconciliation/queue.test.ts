@@ -642,13 +642,22 @@ it('serves the shared queue boundary without unapproved domain writes', async ()
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('No port')
   seedOriginAllowlist(address.port)
   const url = `http://127.0.0.1:${address.port}/api/reconciliation/queue`
+  const completeDisplay = async (headers: Record<string, string> = {}, refresh = false) => {
+    let body = await (await fetch(`${url}${refresh ? '?refresh=1' : ''}`, { headers })).json()
+    await vi.waitFor(async () => {
+      if (body.data.refreshing) body = await (await fetch(url, { headers })).json()
+      expect(body.data.refreshing).not.toBe(true)
+    })
+    return body
+  }
   try {
     const restricted = await fetch(url)
     expect(restricted.status).toBe(200)
     expect(await restricted.json()).toMatchObject({ ok: true, data: { warnings: expect.arrayContaining(['PR details require owner authorization']) } })
     const response = await fetch(url, { headers: { 'X-Tinstar-UI': '1' } })
     expect(response.headers.get('cache-control')).toBe('no-store')
-    expect(await response.json()).toMatchObject({ ok: true, data: { readOnly: false, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
+    expect((await response.json()).ok).toBe(true)
+    expect(await completeDisplay()).toMatchObject({ ok: true, data: { readOnly: false, items: [expect.objectContaining({ action: 'Choose A or B', readiness: 'needs-readiness-verification' })], coverage: { intentions: { status: 'unknown' } } } })
     for (const method of ['POST', 'PATCH', 'DELETE']) expect((await fetch(url, { method })).status).toBe(400)
     expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
     expect((await fetch(url, { method: 'OPTIONS' })).status).toBe(204)
@@ -667,7 +676,8 @@ it('serves the shared queue boundary without unapproved domain writes', async ()
       for (const headers of [{}, { 'X-Tinstar-UI': '1' }, { 'Tailscale-User-Login': 'stranger@example.test' }] as Record<string, string>[]) {
         const response = await fetch(url, { headers })
         expect(response.status).toBe(200)
-        const body = await response.json()
+        await response.body?.cancel()
+        const body = await completeDisplay(headers, true)
         expect(body.data.needsWill).toEqual([expect.objectContaining({ cardIds: [a], pulls: [], prDetails: 'PR details require owner authorization' })])
         expect(JSON.stringify(body)).not.toContain('Private PR title')
       }
@@ -675,7 +685,8 @@ it('serves the shared queue boundary without unapproved domain writes', async ()
       expect(readiness).not.toHaveBeenCalled()
       const owner = await fetch(url, { headers: { 'Tailscale-User-Login': 'owner@example.test' } })
       expect(owner.status).toBe(200)
-      const body = await owner.json()
+      await owner.body?.cancel()
+      const body = await completeDisplay({ 'Tailscale-User-Login': 'owner@example.test' })
       expect(body.data.needsWill[0].pulls).toEqual([expect.objectContaining({ title: 'Private PR title', author: 'private-author', head: 'a'.repeat(40), base: 'private-branch' })])
       expect(body.data.needsWill[0].prDetails).toBeUndefined()
       expect(read).toHaveBeenCalledTimes(1)

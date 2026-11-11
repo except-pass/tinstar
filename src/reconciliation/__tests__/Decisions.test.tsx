@@ -39,14 +39,26 @@ describe('Decisions', () => {
     workspace.value.queue = null
     const reloaded = render(<Decisions />)
     expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    workspace.value.queue = { ...queue, items: [], refreshing: true }
+    reloaded.rerender(<Decisions />)
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
+    expect(screen.getByLabelText('Refreshing request')).toBeVisible()
+    workspace.value.queue = { ...queue, items: [first], refreshing: true }
+    reloaded.rerender(<Decisions />)
+    expect(screen.queryByLabelText('Selected decision')).toBeNull()
+    expect(screen.getByLabelText('Refreshing request')).toBeVisible()
+    expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
     workspace.value.queue = queue
     reloaded.rerender(<Decisions />)
     expect(screen.getByLabelText('Selected decision')).toHaveAttribute('data-decision-id', second.id)
     expect(sessionStorage.getItem('tinstar-decision-request')).toBe(second.id)
 
+    workspace.value.queue = { ...queue, items: [first], refreshing: true }
+    reloaded.rerender(<Decisions />)
     state.selection = { kind: 'card', id: fixtureId(5) }
     reloaded.rerender(<Decisions />)
     expect(sessionStorage.getItem('tinstar-decision-request')).toBeNull()
+    expect(screen.queryByLabelText('Refreshing request')).toBeNull()
     await act(async () => {})
   })
   it('finds conditional cards and sends canonical shared focus without opening a second Desk', () => {
