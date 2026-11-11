@@ -64,7 +64,10 @@ describe('default-OFF production writer and shared Desk publication', () => {
     expect(queue).toHaveLength(1)
     expect(queue[0]).toMatchObject({ title: expect.stringContaining('Ada:'), readiness: 'ready-now', oneTouch: false, cardIds: [f.scene.cards[0]!.id] })
     const desk = { ...buildQueue(fixtureSources()), items: queue }
-    const published = needsWill(desk, f.scene, new Map(), null, new Map())
+    const unverified = needsWill(desk, f.scene, new Map(), null, new Map())
+    expect(decisionItems({ ...desk, needsWill: unverified })).toEqual([])
+    const contexts = new Map(f.scene.cards.map(card => [card.id, { outcome: 'available' as const, blocks: [] }]))
+    const published = needsWill(desk, f.scene, contexts, null, new Map())
     expect(decisionItems({ ...desk, needsWill: published }).map(item => item.id)).toEqual([queue[0]!.id])
     expect(queue[0]!.evidence.some(link => link.url === f.evidence.receipts[0]!.workflowUrl)).toBe(true)
     const calls = [...f.calls]
