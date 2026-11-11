@@ -142,7 +142,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     await expect.poll(() => terminalInput.slice(inputStart).join('')).toMatch(/\x1b\[<0;(\d+);(\d+)M\x1b\[<0;\1;\2m/)
     // Type through the focus established by the click, without locator refocus.
     await page.keyboard.type('PLAIN_CLICK')
-    await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('PLAIN_CLICK')
+    await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('PLAIN_CLICK')
 
     // Switching workers hides this view without detaching it. The pane it
     // scrolled must not stay in copy mode behind it.
@@ -161,7 +161,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     await page.getByRole('button', { name: /scroll .*WORKING/i }).click()
     await expect(screen).toBeVisible()
     await input.pressSequentially('AFTER_SWITCH')
-    await expect.poll(() => tmux('capture-pane', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
+    await expect.poll(() => tmux('capture-pane', '-J', '-p', '-t', 'firstmate:fm-scroll')).toContain('AFTER_SWITCH')
   } finally {
     if (server) server.kill('SIGTERM')
     try { tmux('kill-server') } catch { /* already gone */ }
