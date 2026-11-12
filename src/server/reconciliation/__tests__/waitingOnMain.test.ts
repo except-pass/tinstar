@@ -429,6 +429,35 @@ describe('Waiting on main', () => {
     expect(next.body).not.toContain('rollout A')
     expect((await create().bridgeWork()).pending).toEqual([next])
   })
+  it.each([
+    ['board', 'stale', false], ['board', 'stale', true],
+    ['board', 'unknown', false], ['board', 'unknown', true],
+    ['mate', 'stale', false], ['mate', 'stale', true],
+    ['mate', 'unknown', false], ['mate', 'unknown', true],
+  ] as const)('drops pending %s waits with %s coverage after prior offer %s', async (source, coverage, offered) => {
+    const value = snapshot(), directory = await root()
+    const create = () => new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => now)
+    const service = create()
+    await service.sweep()
+    const reserved = JSON.parse(await readFile(join(directory, 'waiting-on-main.json'), 'utf8')).nudge
+    if (offered) await service.bridgeWork()
+    const staleBoard = () => { value.intentions.status = coverage }
+    const staleMate = () => {
+      if (coverage === 'stale') value.fleet[1]!.observation.data!.generated = new Date(now - 300_000).toISOString()
+      else value.fleet[1]!.observation.data!.parent_asks!.status = 'unknown'
+    }
+    if (source === 'board') staleBoard()
+    else staleMate()
+    const restarted = create()
+    const next = (await restarted.bridgeWork()).pending[0]!
+    expect(next.request_id).toBe(reserved.requestId)
+    expect(next.inbox_request_id).toBe(inboxRequestId(reserved.requestId))
+    const payload = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
+    expect(payload.map((row: { kind: string }) => row.kind)).toEqual([source === 'board' ? 'mate' : 'card'])
+    staleBoard()
+    staleMate()
+    expect(await restarted.bridgeWork()).toEqual({ pending: [], tracked: [] })
+  })
   it.each(['closed', 'resolved', 'owner'] as const)('removes %s work from an offered batch without changing its id', async change => {
     const value = snapshot(), directory = await root()
     const service = new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => now)

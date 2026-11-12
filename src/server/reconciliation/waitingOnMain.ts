@@ -299,7 +299,7 @@ export class WaitingOnMain implements MainWaitBridge {
     state.rows = [...saved.values()]
     const rows = state.rows
     if (state.nudge && state.nudge.announced !== true) {
-      const current = rows.filter(row => row.item.audience !== 'owner' && state.nudge!.itemIds.includes(row.item.id))
+      const current = rows.filter(row => row.item.fresh && row.item.audience !== 'owner' && state.nudge!.itemIds.includes(row.item.id))
       if (!current.length) state.nudge = null
       else {
         state.nudge.itemIds = current.map(row => row.item.id)
