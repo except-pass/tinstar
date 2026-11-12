@@ -301,7 +301,7 @@ export class WaitingOnMain implements MainWaitBridge {
     if (state.nudge && state.nudge.announced !== true) {
       const current = rows.filter(row => row.item.audience !== 'owner' && state.nudge!.itemIds.includes(row.item.id))
       if (!current.length) state.nudge = null
-      else if (current.length !== state.nudge.itemIds.length) {
+      else {
         state.nudge.itemIds = current.map(row => row.item.id)
         state.nudge.body = mainWaitNudge(current.map(row => row.item), now)
       }

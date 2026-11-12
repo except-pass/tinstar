@@ -386,7 +386,7 @@ describe('Waiting on main', () => {
     time += FOUR_HOURS
     freshen(value, time)
     expect((await restarted.sweep()).items.every(row => row.nudgedAt == null)).toBe(true)
-    expect((await restarted.bridgeWork()).pending).toEqual(offered.pending)
+    expect((await restarted.bridgeWork()).pending).toEqual([expect.objectContaining({ request_id: offered.pending[0]!.request_id, inbox_request_id: offered.pending[0]!.inbox_request_id })])
     await restarted.ingest({ request_id: offered.pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'nudge-note', request_id: offered.pending[0]!.inbox_request_id } })
     expect((await restarted.bridgeWork()).pending).toEqual([])
     const deliveredAt = time
@@ -402,6 +402,32 @@ describe('Waiting on main', () => {
     expect(again.pending).toHaveLength(1)
     expect(again.pending[0]!.request_id).not.toBe(offered.pending[0]!.request_id)
     expect((await restarted.sweep()).items.every(row => row.nudgedAt === new Date(deliveredAt).toISOString())).toBe(true)
+  })
+  it.each([
+    ['card', false], ['card', true], ['mate', false], ['mate', true],
+  ] as const)('refreshes pending %s content with prior offer %s while retaining correlation', async (kind, offered) => {
+    const value = snapshot(), directory = await root()
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    const ask = value.fleet[1]!.observation.data!.parent_asks!.items[0]!
+    const setText = (rollout: string) => {
+      if (kind === 'card') card.properties['Waiting For']!.value = `First Mate (main): approve rollout ${rollout}`
+      else ask.text = `Approve rollout ${rollout}`
+    }
+    setText('A')
+    const create = () => new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => now)
+    const service = create()
+    await service.sweep()
+    const reserved = JSON.parse(await readFile(join(directory, 'waiting-on-main.json'), 'utf8')).nudge
+    if (offered) await service.bridgeWork()
+    setText('B')
+    const next = (await create().bridgeWork()).pending[0]!
+    expect(next.request_id).toBe(reserved.requestId)
+    expect(next.inbox_request_id).toBe(inboxRequestId(reserved.requestId))
+    const payload = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
+    expect(payload).toHaveLength(2)
+    expect(payload.find((row: { kind: string }) => row.kind === kind).text).toBe(kind === 'card' ? 'First Mate (main): approve rollout B' : 'Approve rollout B')
+    expect(next.body).not.toContain('rollout A')
+    expect((await create().bridgeWork()).pending).toEqual([next])
   })
   it.each(['closed', 'resolved', 'owner'] as const)('removes %s work from an offered batch without changing its id', async change => {
     const value = snapshot(), directory = await root()
