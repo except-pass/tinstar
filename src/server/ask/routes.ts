@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { askCreateSchema, askSelectionInputSchema, bridgeUpdateSchema, publicAsk, isArtifactTarget, type AskContext } from '../../shared/ask'
-import type { MainWaitBridge } from '../reconciliation/waitingOnMain'
 import { currentDecisionProposal } from '../../shared/decisionProposal'
 import { clawsonMergeSchema, type ClawsonMergeInput } from '../../shared/clawsonMerge'
 import { decisionContext, decisionFresh, decisionRevision } from './decision'
@@ -53,8 +52,6 @@ async function readBody(req: IncomingMessage) {
  */
 export class AskApi {
   readonly store: AskStore
-  /** Waiting-on-main nudges ride the same bridge pull as check-ins and workflow notices. */
-  mainWaits?: MainWaitBridge
   constructor(private sources: Pick<ReconciliationSources, 'scene'> & Partial<Pick<ReconciliationSources, 'queue' | 'askStore' | 'proposalSource'>>, private root = getConfigRoot(), private getConfig = config, private artifacts?: AskArtifactSources, private checkIns?: CheckInWatchdog, private workUpdates?: FirstmateUpdates, private voice = new LocalTranscriber(root)) {
     this.store = sources.askStore ?? new AskStore(root)
   }
@@ -94,8 +91,7 @@ export class AskApi {
           const data = await this.store.bridgeWork(syntheticId, (await checkInSettings(this.root)).deliveryEnabled, (input, owner) => this.sendMerge(input, owner))
           const system = !syntheticId && this.checkIns ? await this.checkIns.bridgeWork() : { pending: [], tracked: [] }
           const work = !syntheticId && this.workUpdates ? await this.workUpdates.bridgeWork() : { pending: [], tracked: [] }
-          const waits = !syntheticId && this.mainWaits ? await this.mainWaits.bridgeWork() : { pending: [], tracked: [] }
-          return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending, ...waits.pending], tracked: [...data.tracked, ...system.tracked, ...waits.tracked], ...bridgeContract }, { headers })
+          return ok(res, { pending: [...data.pending, ...system.pending, ...work.pending], tracked: [...data.tracked, ...system.tracked], ...bridgeContract }, { headers })
         }
         if (req.method === 'POST') {
           const update = bridgeUpdateSchema.parse(await readBody(req))
@@ -105,11 +101,6 @@ export class AskApi {
           }
           if (!syntheticId && await this.workUpdates?.owns(update.request_id)) {
             await this.workUpdates!.ingest(update)
-            return ok(res, { accepted: true }, { headers })
-          }
-          const waits = this.mainWaits
-          if (!syntheticId && waits && await waits.owns(update.request_id)) {
-            await waits.ingest(update)
             return ok(res, { accepted: true }, { headers })
           }
           const row = await this.store.ingest(update, syntheticId)

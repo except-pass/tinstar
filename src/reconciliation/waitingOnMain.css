@@ -1,9 +1,0 @@
-.ov-main-waits-quiet {
-  margin: 0 16px 6px;
-  color: var(--ov-low, #7f9ba8);
-  font-size: 12px;
-}
-.ov-main-waits-quiet > button {
-  padding: 2px 0;
-  text-align: left;
-}

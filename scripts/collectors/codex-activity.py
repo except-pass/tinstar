@@ -139,17 +139,6 @@ def augment_open_decisions(task):
                      'open_decisions_source': 'tinstar-status-fold'}
 
 
-def parent_ask_fields(metadata):
-    """Bracket fields win. A bare at=<epoch> after [key=] is still a timestamp."""
-    fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
-    if str(fields.get('at', '')).isdigit():
-        return fields
-    bare = re.search(r'(?:^|\s)at=(\d+)(?=\s|$)', metadata)
-    if bare:
-        fields['at'] = bare.group(1)
-    return fields
-
-
 def fold_parent_asks(lines):
     """Only resolved closes a keyed ask; ordinary working/done lines do not."""
     opened = {}
@@ -159,7 +148,7 @@ def fold_parent_asks(lines):
             continue
         state, content = match.groups()
         metadata, separator, text = content.partition(':')
-        fields = parent_ask_fields(metadata)
+        fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
         key, corr = fields.get('key'), fields.get('corr')
         if state == 'resolved':
             for identity, ask in list(opened.items()):

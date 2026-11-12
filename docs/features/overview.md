@@ -4,8 +4,8 @@ Tin Star's primary home follows the [operational shared-floor prototype](../desi
 The reference contains illustrative data only. Production reads the configured
 Notion and First Mate sources and never substitutes fixture records.
 
-The [Waiting on First Mate reference](waiting-on-main.md) owns the inbox nudge,
-the quiet two-hour indicator, and owner-alert behavior.
+The [Waiting on First Mate reference](waiting-on-main.md) owns the independent
+wait count, expanded details, age estimates and owner-alert behavior.
 
 Overview defaults to **Ultra Compact**: 29px collapsed rows, 25px outer
 headers and 21px inner headers. Workers stay on the left and Notion tasks on
