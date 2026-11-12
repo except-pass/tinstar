@@ -1,4 +1,4 @@
-/** All supported textual names for the main First Mate live here. */
+/** Canonical aliases for identifying the main First Mate home. */
 const MAIN_NAME = String.raw`(?:first mate(?: \(main\))?|main|main firstmate)`
 export const MAIN_NAMES = new RegExp('^' + MAIN_NAME + '$', 'i')
 export const namesMain = (value: unknown): boolean => typeof value === 'string' && MAIN_NAMES.test(value.trim())

@@ -11,7 +11,7 @@ the new batch; an empty batch sends nothing. Retired requests are never offered
 again, but late receipts remain accepted and update clocks only for waits whose
 content matches the delivered note. An already captured retired request can
 leave one extra note alongside its successor.
-Stale or unknown coverage does not send a nudge. Dedup lives in the
+Only fresh items are nudged; incomplete coverage elsewhere does not block them. Dedup lives in the
 same state file as the owner alerts and survives a restart.
 
 The startup/60-second sweep computes and persists the due nudge. Bridge pulls
@@ -110,8 +110,8 @@ path; actual push delivery depends on the owner's Notion notification settings.
 Owner-wait alerts are comments on that card. The nudge is offered on the
 existing Ask bridge pull. No new notification service is involved.
 
-On the first alert sweep, already-overdue items produce **one summary comment**
-on the backstop card, listing every known overdue item with its key, age and
+On the first alert sweep, already-overdue owner waits produce **one summary comment**
+on the backstop card `41550ce6d42281239fd4f9f20c901b80`, listing every known overdue owner wait with its key, age and
 text (truncated to 200 characters per item). All included items record the
 delivery outcome and attempt time. Subsequent newly-overdue
 items and four-hour repeats use individual comments. An empty initial known
@@ -127,6 +127,8 @@ already-alerted items. Owner waits and their delivery status are excluded from
 the Waiting on First Mate list. State read/write failure shows unknown and sends no comment,
 preventing duplicate alerts after a lost throttle record. Restore a damaged
 state file from backup, or move it aside to intentionally start a new summary.
+Bridge state-read failures preserve the damaged file and return no nudge work
+or ownership, so unrelated Ask work and receipts can still proceed.
 
 State lives in `$TINSTAR_STATE_HOME/waiting-on-main.json`, defaulting to
 `${XDG_STATE_HOME:-~/.local/state}/tinstar/waiting-on-main.json`, outside the

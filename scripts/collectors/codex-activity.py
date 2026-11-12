@@ -140,7 +140,7 @@ def augment_open_decisions(task):
 
 
 def parent_ask_fields(metadata):
-    """Bracket fields win. A bare at=<epoch> after [key=] is still a timestamp."""
+    """A valid bracket timestamp wins; otherwise accept a bare at=<epoch>."""
     fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
     if str(fields.get('at', '')).isdigit():
         return fields
