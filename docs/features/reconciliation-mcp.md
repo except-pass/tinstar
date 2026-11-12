@@ -349,7 +349,7 @@ For `next_queue_item`, either direction of `navigate-queue`, and every `open-que
 
 `rendered_scene.scene_generated_at` continues to mean the loaded **source** snapshot generation time. `rendered_at` and `revision` identify the browser commit, while delivery `observed_at` identifies the DOM inspection. Fresh heartbeats never rewrite old source timestamps. `visibility`, `focused`, `surface`, `route` and `pending_command` explain hidden, stale or unresolved destinations.
 
-The tool names are unchanged, but `get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`; refresh the ChatGPT connector once after deployment to load the updated schemas/descriptions. `search_work` owner/status filtering and `coverage.intentions` are unchanged.
+`get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`. For connector refresh instructions, see the [scoped facade setup](#scoped-outbound-tunnel-facade).
 
 The registry keeps at most 64 windows and 256 command receipts per window. Windows/receipts expire after ten minutes; a heartbeat older than ten seconds is disconnected. The MCP interface is stateless at the transport level: browser window IDs, rather than transport sessions, select the view. There is no event watcher or new fleet poller.
 
