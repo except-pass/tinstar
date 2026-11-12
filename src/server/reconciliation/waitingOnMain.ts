@@ -207,7 +207,7 @@ export class WaitingOnMain implements MainWaitBridge {
   }
   /** Pulls only read the last sweep's reservation; source refreshes never run on the bridge. */
   bridgeWork() { return this.offerNudge() }
-  async owns(requestId: string) { return (await this.load()).nudge?.requestId === requestId }
+  async owns(requestId: string) { return (await this.loadForBridge())?.nudge?.requestId === requestId }
   ingest(input: BridgeUpdate) {
     const update = bridgeUpdateSchema.parse(input)
     return this.writeState(() => this.applyNudge(update))
@@ -222,9 +222,16 @@ export class WaitingOnMain implements MainWaitBridge {
     try { return savedStateSchema.parse(JSON.parse(await readFile(join(this.root, 'waiting-on-main.json'), 'utf8'))) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return { initializedAlerts: false, rows: [] } }
   }
+  private async loadForBridge() {
+    try { return await this.load() }
+    catch {
+      this.latest = { ...this.latest, items: this.latest.items.map(item => ({ ...item, fresh: false })), error: 'Waiting on First Mate state unavailable; alerts unconfirmed', unknown: ['Waiting on First Mate state/source read failed'] }
+      return null
+    }
+  }
   private async offerNudge() {
-    const state = await this.load()
-    const nudge = state.nudge
+    const state = await this.loadForBridge()
+    const nudge = state?.nudge
     if (!nudge || nudge.announced === true) return { pending: [], tracked: [] }
     return {
       pending: [{ request_id: nudge.requestId, inbox_request_id: inboxRequestId(nudge.requestId), body: nudge.body }],
@@ -290,7 +297,8 @@ export class WaitingOnMain implements MainWaitBridge {
         // dependency starts a new conservative age; throttle remains per item.
         if (prior && item.kind === 'card' && prior.item.text === item.text) item.since = prior.item.since
         if (prior?.item.alert) item.alert = prior.item.alert
-        saved.set(item.id, { item, lastAttempt: prior?.lastAttempt ?? null, nudgeFirstAt: prior?.nudgeFirstAt ?? null, nudgeLastAt: prior?.nudgeLastAt ?? null })
+        const sameAudience = (prior?.item.audience === 'owner') === (item.audience === 'owner')
+        saved.set(item.id, { item, lastAttempt: prior?.lastAttempt ?? null, nudgeFirstAt: sameAudience ? prior?.nudgeFirstAt ?? null : null, nudgeLastAt: sameAudience ? prior?.nudgeLastAt ?? null : null })
       }
       state.rows = [...saved.values()]
       const rows = state.rows

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fixtureSources, fixtureId } from '../../../../test-fixtures/reconciliation/scenes'
+import { randomUUID } from 'node:crypto'
 import { inboxRequestId } from '../../../shared/ask'
 import { namesMain, waitDependency, MAIN_WAIT_INTERVAL as FOUR_HOURS, MAIN_WAIT_NUDGE_INTERVAL as TWO_HOURS, waitAlertDue, type MainWaitItem } from '../../../shared/waitingOnMain'
 import { MAIN_WAIT_CARD, MAIN_WAIT_OWNER, mainWaitCandidates, mainWaitComment, mainWaitNotifier, parentAskClosed, WaitingOnMain } from '../waitingOnMain'
@@ -599,6 +600,67 @@ describe('Waiting on main', () => {
     const service = new WaitingOnMain(async () => snapshot(), async () => 'mentioned', directory, async () => true, () => now)
     expect((await service.sweep()).error).toBeUndefined()
     expect((await service.bridgeWork()).pending).toHaveLength(1)
+  })
+  it.each([60_000, TWO_HOURS + 60_000])('restarts nudge clocks after an audience round trip lasting %s ms', async elapsed => {
+    const directory = await root(), value = snapshot()
+    let clock = now
+    const service = new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => clock)
+    await service.sweep()
+    const first = (await service.bridgeWork()).pending[0]!
+    await service.ingest({ request_id: first.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'first-note', request_id: first.inbox_request_id } })
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    asOwner(card, 'name')
+    await service.sweep()
+    const ownerState = JSON.parse(await readFile(join(directory, 'waiting-on-main.json'), 'utf8'))
+    expect(ownerState.rows.find((row: { item: MainWaitItem }) => row.item.key === card.id)).toMatchObject({ nudgeFirstAt: null, nudgeLastAt: null })
+    clock += elapsed
+    freshen(value, clock)
+    card.properties['Waiting For ID']!.value = 'First Mate'
+    const view = await service.sweep()
+    expect(view.items.find(row => row.key === card.id)?.nudgedAt).toBeUndefined()
+    const next = (await service.bridgeWork()).pending[0]!
+    expect(next.request_id).not.toBe(first.request_id)
+    expect(JSON.parse(next.body.split('\n')[1]!).waiting_on_first_mate).toContainEqual(expect.objectContaining({ card_id: card.id }))
+    await service.ingest({ request_id: next.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'next-note', request_id: next.inbox_request_id } })
+    expect((await service.sweep()).items.find(row => row.key === card.id)?.nudgedAt).toBe(new Date(clock).toISOString())
+  })
+  it.each(['corrupt', 'invalid', 'unreadable'] as const)('isolates %s nudge state from ordinary Ask pulls and receipts', async damage => {
+    const directory = await root(), path = join(directory, 'waiting-on-main.json')
+    const bytes = damage === 'corrupt' ? '{broken' : JSON.stringify({ rows: 'invalid' })
+    if (damage === 'unreadable') await mkdir(path)
+    else await writeFile(path, bytes)
+    const source = vi.fn(async () => snapshot()), notify = vi.fn(async () => 'mentioned' as const), enabled = vi.fn(async () => true)
+    const waiting = new WaitingOnMain(source, notify, directory, enabled, () => now)
+    const token = 'x'.repeat(32)
+    const api = new AskApi({ scene: async () => { throw new Error('unused') } }, directory, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
+    api.mainWaits = waiting
+    const ask = await api.store.create('owner@example.test', randomUUID(), 'Why wait?', { anchor: { kind: 'work', page_id: fixtureId(1), label: 'Task', url: null, observed_at: null, freshness: 'unknown', expires_at: null }, view: { scene: 'overview' } })
+    const server = createServer((req, res) => { void api.handle(req, res) })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('no port')
+      const url = `http://127.0.0.1:${address.port}/api/ask/bridge`
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+      const pulled = await fetch(url, { headers })
+      expect(pulled.status).toBe(200)
+      expect((await pulled.json()).data.pending).toContainEqual(expect.objectContaining({ request_id: ask.request_id }))
+      expect(waiting.view().error).toContain('state unavailable')
+      const posted = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ request_id: ask.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'ask-note', request_id: inboxRequestId(ask.request_id) } }) })
+      expect(posted.status).toBe(200)
+      expect((await api.store.list('owner@example.test'))[0]?.note_id).toBe('ask-note')
+      expect(await waiting.bridgeWork()).toEqual({ pending: [], tracked: [] })
+      expect(await waiting.owns(ask.request_id)).toBe(false)
+      await expect(waiting.ingest({ request_id: ask.request_id, error: 'capture-failed' })).rejects.toThrow()
+      if (damage === 'unreadable') expect((await stat(path)).isDirectory()).toBe(true)
+      else expect(await readFile(path, 'utf8')).toBe(bytes)
+      expect(source).not.toHaveBeenCalled()
+      expect(notify).not.toHaveBeenCalled()
+      expect(enabled).not.toHaveBeenCalled()
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
   })
   it('reads persisted bridge work without snapshot, update, config reads, or state writes', async () => {
     const directory = await root()
