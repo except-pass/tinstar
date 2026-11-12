@@ -43,6 +43,96 @@ class CollectorTests(unittest.TestCase):
     def read(self):
         return collector.augment(self.snapshot(), collector.session_candidates(self.sessions, NOW), NOW)
 
+    def decision_snapshot(self, lines):
+        path = self.root / 'worker.status'
+        path.write_text(lines)
+        return {'tasks': [{'id': 'worker', 'harness': 'claude',
+            'current_state': {'state': 'unknown', 'source': 'pane'},
+            'paths': {'status_log': {'path': str(path)}},
+            'hints': {'open_decisions': [], 'pending_decision': False,
+                      'blocked_event': False, 'last_event_text': 'keep me'}}]}
+
+    def test_unknown_pane_recovers_keyed_decisions_and_blockers(self):
+        snapshot = self.decision_snapshot(
+            'needs-decision [at=100] [key=pilot-go]: Approve the pilot: yes or no?\n'
+            'blocked [key=access] [at=200]: Access required\n'
+            'needs-decision [at=300]: Unkeyed report\n')
+        hints = collector.augment(snapshot, [], NOW)['tasks'][0]['hints']
+        self.assertEqual(hints, {
+            'open_decisions': [
+                {'key': 'pilot-go', 'verb': 'needs-decision', 'summary': 'Approve the pilot: yes or no?'},
+                {'key': 'access', 'verb': 'blocked', 'summary': 'Access required'}],
+            'pending_decision': True, 'blocked_event': True,
+            'last_event_text': 'keep me', 'open_decisions_source': 'tinstar-status-fold'})
+
+    def test_decisions_close_only_on_resolution_with_the_same_key(self):
+        history = ('needs-decision [key=pilot-go] [corr=shared] [at=100]: Choose\n'
+                   'blocked [key=access] [at=200]: Access required\n'
+                   'resolved [key=other] [corr=shared] [at=300]: Unrelated\n'
+                   'resolved [corr=shared] [at=400]: No matching key\n'
+                   'resolved [key=access] [at=500]: Access granted\n')
+        snapshot = self.decision_snapshot(history)
+        hints = collector.augment(snapshot, [], NOW)['tasks'][0]['hints']
+        self.assertEqual(hints['open_decisions'], [
+            {'key': 'pilot-go', 'verb': 'needs-decision', 'summary': 'Choose'}])
+        self.assertTrue(hints['pending_decision'])
+        self.assertFalse(hints['blocked_event'])
+        snapshot = self.decision_snapshot(history + 'resolved [key=pilot-go] [at=600]: Approved\n')
+        hints = collector.augment(snapshot, [], NOW)['tasks'][0]['hints']
+        self.assertEqual(hints['open_decisions'], [])
+        self.assertFalse(hints['pending_decision'])
+        self.assertFalse(hints['blocked_event'])
+
+    def test_working_and_done_do_not_close_a_keyed_decision(self):
+        snapshot = self.decision_snapshot(
+            'needs-decision [key=pilot-go] [at=100]: Choose\n'
+            'working [key=pilot-go] [at=200]: Resumed\n'
+            'done [key=pilot-go] [at=300]: Completed elsewhere\n')
+        self.assertEqual(collector.augment(snapshot, [], NOW)['tasks'][0]['hints']['open_decisions'], [
+            {'key': 'pilot-go', 'verb': 'needs-decision', 'summary': 'Choose'}])
+
+    def test_authoritative_states_and_nonpane_unknown_are_untouched(self):
+        for state, source in [('working', 'run-step'), ('parked', 'pane'),
+                              ('blocked', 'run-step'), ('done', 'run-step'),
+                              ('failed', 'run-step'), ('unknown', 'run-step')]:
+            with self.subTest(state=state, source=source):
+                snapshot = self.decision_snapshot('needs-decision [key=pilot-go] [at=100]: Choose\n')
+                snapshot['tasks'][0]['current_state'] = {'state': state, 'source': source}
+                before = json.loads(json.dumps(snapshot))
+                self.assertEqual(collector.augment(snapshot, [], NOW), before)
+
+    def test_existing_firstmate_decisions_are_untouched(self):
+        snapshot = self.decision_snapshot('needs-decision [key=pilot-go] [at=100]: Choose\n')
+        snapshot['tasks'][0]['hints']['open_decisions'] = [
+            {'key': 'firstmate', 'verb': 'needs-decision', 'summary': 'Published by First Mate'}]
+        before = json.loads(json.dumps(snapshot))
+        self.assertEqual(collector.augment(snapshot, [], NOW), before)
+
+    def test_unreadable_or_missing_status_log_is_unchanged(self):
+        for path in [self.root / 'missing.status', self.root, None]:
+            with self.subTest(path=path):
+                snapshot = self.decision_snapshot('needs-decision [key=pilot-go] [at=100]: Choose\n')
+                snapshot['tasks'][0]['paths']['status_log'] = {'path': str(path)} if path else {}
+                before = json.loads(json.dumps(snapshot))
+                self.assertEqual(collector.augment(snapshot, [], NOW), before)
+
+    def test_partial_resolution_does_not_close_decision(self):
+        snapshot = self.decision_snapshot(
+            'needs-decision [key=pilot-go] [at=100]: Choose\nresolved [key=pilot-go]')
+        self.assertEqual(collector.augment(snapshot, [], NOW)['tasks'][0]['hints']['open_decisions'], [
+            {'key': 'pilot-go', 'verb': 'needs-decision', 'summary': 'Choose'}])
+
+    def test_collect_recovers_decision_even_without_a_codex_session(self):
+        snapshot = self.decision_snapshot('needs-decision [key=pilot-go] [at=100]: Choose\n')
+        snapshot.update(schema='fm-fleet-snapshot.v1', fm_home=str(self.root))
+        snapshot['tasks'][0]['harness'] = 'codex'
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps(snapshot))
+        with patch.object(collector.subprocess, 'run', return_value=result):
+            task = collector.collect(str(self.root), [], NOW)['tasks'][0]
+        self.assertEqual(task['hints']['open_decisions'], [
+            {'key': 'pilot-go', 'verb': 'needs-decision', 'summary': 'Choose'}])
+        self.assertEqual(task['codex_reason'], 'worker_folder_missing')
+
     def test_parent_asks_fold_by_key_or_corr_only_resolved_closes(self):
         log = ('needs-decision [corr=1234567890abcdef] [key=api] [at=100]: choose API\n'
                'blocked [key=other] [at=200]: access\n'

@@ -69,6 +69,7 @@ def augment(snapshot, candidates, now):
     observed = iso(now.timestamp())
     cache = {}
     for task in snapshot['tasks']:
+        augment_open_decisions(task)
         if task.get('harness') != 'codex':
             continue
         folder = task.get('paths', {}).get('worktree', {}).get('path')
@@ -92,6 +93,50 @@ def augment(snapshot, candidates, now):
         except OSError:
             task['codex_reason'] = 'session_unreadable'
     return snapshot
+
+
+def fold_open_decisions(lines):
+    """Task decisions close only on resolved with the same key."""
+    opened = {}
+    for line in lines.splitlines():
+        match = re.match(r'^(blocked|needs-decision|resolved)\b(.*)$', line)
+        if not match:
+            continue
+        verb, content = match.groups()
+        metadata, separator, summary = content.partition(':')
+        fields = dict(re.findall(r'\[(key)=([^\]]+)\]', metadata))
+        key = fields.get('key')
+        if not key:
+            continue
+        if verb == 'resolved':
+            opened.pop(key, None)
+        else:
+            opened[key] = {'key': key, 'verb': verb,
+                           'summary': summary.lstrip() if separator else content.strip()}
+    return list(opened.values())
+
+
+def augment_open_decisions(task):
+    """Recover status-log decisions hidden by an unavailable pane state read."""
+    state = task.get('current_state', {})
+    hints = task.get('hints', {})
+    if state.get('state') != 'unknown' or state.get('source') != 'pane' or hints.get('open_decisions'):
+        return
+    path = task.get('paths', {}).get('status_log', {}).get('path')
+    if not path:
+        return
+    try:
+        lines = Path(path).read_text()
+    except (OSError, UnicodeError):
+        return
+    # Ignore an in-progress append, especially a partial resolution.
+    if lines and not lines.endswith('\n'):
+        lines = lines.rsplit('\n', 1)[0] if '\n' in lines else ''
+    decisions = fold_open_decisions(lines)
+    task['hints'] = {**hints, 'open_decisions': decisions,
+                     'pending_decision': any(item['verb'] == 'needs-decision' for item in decisions),
+                     'blocked_event': any(item['verb'] == 'blocked' for item in decisions),
+                     'open_decisions_source': 'tinstar-status-fold'}
 
 
 def fold_parent_asks(lines):
