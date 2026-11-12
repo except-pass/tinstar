@@ -55,12 +55,8 @@ would require additional evidence.
 
 ## Fix and evidence
 
-Exact-card GETs now make at most three attempts for timeout/network failures,
-HTTP 408, 429 and 5xx, with 250ms/500ms backoff and a fresh five-second deadline
-per attempt. The shared queue still honors Retry-After. Waiting for queue
-admission now observes cancellation without allowing later requests to bypass
-the active request or its pacing delay. Permanent HTTP failures, malformed
-responses, and card/source identity mismatches are not retried.
+The [workflow read contract](../../features/workflow.md#read-contracts) owns
+the exact-card retry policy and queue cancellation guarantees.
 
 The [workflow regression tests](../../../src/server/reconciliation/__tests__/workflow.test.ts)
 hold a fake refresh ahead of the exact read for six seconds. Before the fix,
