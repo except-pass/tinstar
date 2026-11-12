@@ -103,6 +103,83 @@ Whenever the facade tool catalog changes (tools added, removed or renamed), refr
 
 ## Tools and authority
 
+### Conversation continuity probe (Phase 1)
+
+`session_probe(session_token?)` is a read-only experiment available through both
+the private endpoint and the scoped facade, without a browser. It never reads or
+changes cards, status, owners or worker links. It implements no card leases.
+
+Without an argument it returns `outcome: issued` and an opaque `session_token`.
+Carry that token explicitly in the next call's arguments. A recognized token
+returns `matches_known_token: true`; an unknown token returns false with a fresh
+probe instruction. Tokens are bound to the existing authenticated caller and
+credentials, kept only as hashes in backend memory, and limited to the latest
+256 issued tokens. Backend restart forgets them. This is a diagnostic lifetime,
+not the planned durable 60-minute card lease. Metadata does not authenticate a
+caller or bind a probe token to a conversation; copying a token to another
+conversation with the same caller would recognize it too.
+
+Probe calls record only HTTP header **names** and top-level request `_meta`
+**keys**, in `session-probe-facade.jsonl` and `session-probe-backend.jsonl` under
+each process's `getConfigRoot()`. Each owner-only file retains at most 128 calls,
+64 names per collection, and 128 characters per name. No values, caller labels,
+arguments or tokens are logged. Only calls to this tool produce these logs.
+Backend `log_recorded: false` or a facade warning means diagnostic coverage is
+unavailable; token calls still work. The two files distinguish tunnel arrivals
+from backend forwarding. Facade tool calls now preserve request `_meta`; they
+still do not forward client identity headers.
+
+Identity inventory from the implementation:
+
+| Signal | Availability and meaning |
+| --- | --- |
+| Incoming `Mcp-Session-Id` | Observable at facade ingress if sent; both facade and backend use `sessionIdGenerator: undefined`, creating fresh MCP server/transport instances per request. No server session ID is issued or promised, and the facade does not forward this header. |
+| Facade `Authorization` | Separate configured private-tunnel caller credential injected by tunnel-client. It identifies the configured caller boundary, not an individual ChatGPT conversation or OAuth subject. |
+| Backend `Authorization` | Per-install credential supplied by facade. Direct private clients share that install authority; it is not conversation identity. |
+| `X-Tinstar-Caller` / `X-Tinstar-Caller-Authorization` | Facade-configured caller label and credential proof. Incoming client copies are discarded. Backend workflow attribution uses the label; private PR reads separately verify a revocable owner grant. Multiple conversations can share this caller. |
+| OAuth `authInfo` / subject | Neither endpoint implements OAuth middleware or sets SDK `authInfo`. There is no verified per-ChatGPT-user OAuth subject here. |
+| Tool request `params._meta` | Available at facade handler and, with this change, forwarded to backend handler `extra._meta`. Actual connector keys must be established by the live probe; code inspection cannot establish their presence. |
+| `openai/session`, `openai/subject`, `openai/organization` | Official OpenAI documentation describes anonymized conversation, user and organization identifiers respectively. These are client metadata, not this service's credential authority. No values are used by this probe. |
+| `openai/locale`, `webplus/i18n`, `openai/userAgent`, `openai/userLocation` | Documented locale/legacy locale and optional user-agent/location hints; not conversation identity or authorization. |
+| `openai/widgetSessionId` | Documented host-provided tool-result metadata for a mounted widget; not a browser-independent conversation identity. |
+| `Mcp-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and protocol `_meta` | Protocol/routing consistency signals, not user or conversation identity. |
+| SDK JSON-RPC request ID and initialize `clientInfo` | Request correlation / client implementation information. Facade creates an upstream client per request with its own fixed client name. Neither is a stable conversation identifier. |
+| Remote address, forwarded headers, user agent, UI `scene_id`/`session_code` | Network hints or separate browser presentation identity. No conversation identity is inferred from them. |
+
+Code sources: [facade](../../src/server/reconciliation/tunnel.ts),
+[backend](../../src/server/reconciliation/mcp.ts),
+[tool catalog](../../src/server/reconciliation/toolCatalog.ts),
+[probe](../../src/server/reconciliation/sessionProbe.ts), and
+[PR caller grant](../../src/server/reconciliation/prReadGrant.ts).
+Official source (checked 2026-11-12):
+[OpenAI client metadata and tool results reference](https://developers.openai.com/plugins/reference).
+The documentation describes `openai/session`; it does not prove that the deployed
+Tin Star connector sends it, preserves it across turns, or separates threads.
+Names-only logs also cannot prove equality or uniqueness of metadata values.
+
+After deploying this probe and refreshing the connector catalog, run this
+prompt independently in **three new ChatGPT conversations**:
+
+> Call Tin Star session_probe without a token. Keep the returned token private
+> in tool context. Call session_probe again with that exact session_token.
+> Report only issued/recognized and diagnostic coverage, never the token.
+
+Then send a later user turn in each conversation:
+
+> Call session_probe with the token previously issued in this conversation.
+> Report only recognized/unknown and diagnostic coverage. Do not mint a new
+> token to conceal a failed continuation. Never show or save the token.
+
+Record each thread's outcomes, later-turn retention and the observed key/header
+names without tokens or metadata values. Independent initial calls receive
+independently generated tokens; local integration tests verify their
+distinctness and retry recognition. That synthetic test is not evidence of
+ChatGPT retaining tokens. A successful live later-turn test proves explicit
+argument continuity only; it does not certify automatic metadata identity.
+If a thread loses its token, record the failure. Restart/eviction yields unknown
+by design; do not restart the backend between the live continuity calls.
+Card-lease implementation remains gated on the live result and separate go-ahead.
+
 | Tool | Result |
 | --- | --- |
 | `search_work(...)` | Scoped, paginated work properties, UI search predicates, links, evidence and coverage without a browser |
@@ -272,7 +349,7 @@ For `next_queue_item`, either direction of `navigate-queue`, and every `open-que
 
 `rendered_scene.scene_generated_at` continues to mean the loaded **source** snapshot generation time. `rendered_at` and `revision` identify the browser commit, while delivery `observed_at` identifies the DOM inspection. Fresh heartbeats never rewrite old source timestamps. `visibility`, `focused`, `surface`, `route` and `pending_command` explain hidden, stale or unresolved destinations.
 
-The tool names are unchanged, but `get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`; refresh the ChatGPT connector once after deployment to load the updated schemas/descriptions. `search_work` owner/status filtering and `coverage.intentions` are unchanged.
+`get_scene`, `present_view`, and `next_queue_item` accept optional `session_code` and optional `scene_id`. For connector refresh instructions, see the [scoped facade setup](#scoped-outbound-tunnel-facade).
 
 The registry keeps at most 64 windows and 256 command receipts per window. Windows/receipts expire after ten minutes; a heartbeat older than ten seconds is disconnected. The MCP interface is stateless at the transport level: browser window IDs, rather than transport sessions, select the view. There is no event watcher or new fleet poller.
 

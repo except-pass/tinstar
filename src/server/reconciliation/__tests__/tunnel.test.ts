@@ -38,7 +38,7 @@ async function setup(allowView = true) {
   const backend = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(backend)
   await new Promise<void>(resolve => backend.listen(0, '127.0.0.1', resolve))
   const installToken = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
-  const options = { upstreamPort: (backend.address() as { port: number }).port, installToken, caller: { id: 'owner-chatgpt', token: callerToken, allowView } }
+  const options = { configRoot: root, upstreamPort: (backend.address() as { port: number }).port, installToken, caller: { id: 'owner-chatgpt', token: callerToken, allowView } }
   const facade = createTunnelFacade(options); servers.push(facade.server)
   await facade.listen(0)
   const url = new URL(`http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`)
@@ -52,6 +52,43 @@ async function post(url: URL, method: string, version = '2026-07-28', params: Re
     'Mcp-Protocol-Version': version, 'Mcp-Method': method, ...(typeof params.name === 'string' ? { 'Mcp-Name': params.name } : {}), ...headers,
   }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method, params: { _meta: { 'io.modelcontextprotocol/protocolVersion': version }, ...params } }) })
 }
+it.each(['2026-07-28', '2025-11-25'])('carries explicit probe tokens and metadata over independent stateless %s requests without card or UI changes', async version => {
+  const { url, mcp, options, scene, updateWork } = await setup(false)
+  const before = JSON.stringify(scene)
+  const call = async (thread: number, token?: string) => {
+    const response = await post(url, 'tools/call', version, {
+      name: 'session_probe', arguments: token ? { session_token: token } : {},
+      _meta: { 'io.modelcontextprotocol/protocolVersion': version, 'openai/session': `private-thread-${thread}`, 'openai/subject': 'private-user' },
+    }, { 'X-OpenAI-Session': 'private-header', 'X-Tinstar-Caller': 'spoofed-caller' })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('mcp-session-id')).toBeNull()
+    return parse((await response.json()).result)
+  }
+  const issued = await Promise.all([0, 1, 2].map(thread => call(thread)))
+  expect(issued.every(value => value.outcome === 'issued' && value.log_recorded)).toBe(true)
+  expect(new Set(issued.map(value => value.session_token)).size).toBe(3)
+  for (let turn = 0; turn < 2; turn++) {
+    const repeated = await Promise.all(issued.map((value, thread) => call(thread, value.session_token)))
+    expect(repeated.every(value => value.matches_known_token && value.log_recorded)).toBe(true)
+    expect(repeated.every(value => !('session_token' in value))).toBe(true)
+  }
+  expect((await call(0, 'invented-token')).matches_known_token).toBe(false)
+  const facadeLog = await readFile(join(options.configRoot, 'session-probe-facade.jsonl'), 'utf8')
+  const backendLog = await readFile(join(options.configRoot, 'session-probe-backend.jsonl'), 'utf8')
+  const incoming = JSON.parse(facadeLog.trim().split('\n')[0]!)
+  const forwarded = JSON.parse(backendLog.trim().split('\n')[0]!)
+  expect(incoming.meta_keys).toEqual(expect.arrayContaining(['openai/session', 'openai/subject']))
+  expect(forwarded.meta_keys).toEqual(expect.arrayContaining(['openai/session', 'openai/subject']))
+  expect(incoming.header_names).toContain('x-openai-session')
+  expect(forwarded.header_names).not.toContain('x-openai-session')
+  expect(forwarded.header_names).toContain('x-tinstar-caller-authorization')
+  for (const secret of [callerToken, options.installToken, 'private-thread', 'private-user', 'private-header', 'spoofed-caller', ...issued.map(value => value.session_token)]) {
+    expect(facadeLog + backendLog).not.toContain(secret)
+  }
+  expect(mcp.sessions.list()).toEqual([])
+  expect(updateWork).not.toHaveBeenCalled()
+  expect(JSON.stringify(scene)).toBe(before)
+})
 it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with the same scoped canonical results', async version => {
   const { url, mcp, options } = await setup(false)
   const session = mcp.sessions.register(initialPresentation())
@@ -62,7 +99,7 @@ it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with th
   const list = await listed.json()
   expect(list.id).toBe(7)
   expect(list.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work', 'get_work_views', 'submit_handoff']))
-  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toHaveLength(18)
+  expect(list.result.tools.map((tool: { name: string }) => tool.name)).toHaveLength(19)
   expect(list.result.tools.map((tool: { name: string }) => tool.name)).not.toContain('present_view')
   if (version === '2026-07-28') expect(list.result).toMatchObject({ resultType: 'complete', ttlMs: 0, cacheScope: 'private' })
   else expect(list.result).not.toHaveProperty('resultType')
@@ -90,7 +127,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(response.status).toBe(200)
   const text = await response.text()
   const tools: Tool[] = JSON.parse(text).result.tools
-  expect(tools).toHaveLength(20)
+  expect(tools).toHaveLength(21)
   // 45 KiB today, including all eleven operations that the old 29 KiB catalog
   // omitted. Catch accidental catalog expansion without an exact byte snapshot.
   expect(Buffer.byteLength(text)).toBeLessThan(64 * 1024)
@@ -203,7 +240,7 @@ it('requires explicit separate caller auth and rejects forwarded identities and 
   for (const path of ['/api/reconciliation/mcp', '/api/reconciliation/ui', '/.well-known/oauth-protected-resource/mcp']) {
     expect((await fetch(new URL(path, url), { headers: { Authorization: `Bearer ${callerToken}` } })).status).toBe(404)
   }
-  expect((await client.listTools()).tools.map(tool => tool.name)).toHaveLength(20)
+  expect((await client.listTools()).tools.map(tool => tool.name)).toHaveLength(21)
   for (const name of ['echo', 'server_info', 'dispatch_worker', 'openExternal']) expect((await client.callTool({ name, arguments: {} })).isError).toBe(true)
 })
 it('read scope cannot call view tools, even by guessing a hidden name', async () => {
@@ -299,7 +336,7 @@ it('starts from the shared Authorization file and rejects invalid caller values'
         })
         const client = new Client({ name: 'cli-test', version: '1' }); clients.push(client)
         await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { Authorization: value.trim() } } }))
-        expect((await client.listTools()).tools).toHaveLength(18)
+        expect((await client.listTools()).tools).toHaveLength(19)
         await client.close()
       } else {
         expect((await exited)[0]).toBe(1)
