@@ -1483,7 +1483,7 @@ function decisionFixture() {
   return { ...f, workflow, fleet, source, bridge, messages, request, answer }
 }
 
-it('publishes a typed recommendation and accepts its authenticated choice using only the card task link', async () => {
+it.each(['In Progress', 'Queued'])('publishes one typed owner decision and accepts its choice using only the card task link (%s)', async status => {
   const { AskApi } = await import('../../ask/routes')
   const { proposalAnswerId } = await import('../../ask/decision')
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -1493,11 +1493,16 @@ it('publishes a typed recommendation and accepts its authenticated choice using 
   const hold = f.home.observation.data!.backlog![0]!
   hold.cardReferences = []
   hold.queue!.originTaskId = f.task.id
-  const source = { ...f.source, taskId: f.task.id }
+  if (status === 'Queued') {
+    hold.id = f.task.id
+    Object.assign(f.task, queueSignals({ hints: { open_decisions: [{ key: 'pilot-go', verb: 'needs-decision', summary: 'Keep R1 or approve R3?' }] } }))
+    f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+  }
+  const source = { ...f.source, taskId: f.task.id, id: String(hold.id) }
   const links = workerLinkRecord([{ fm_home: source.home, task_id: source.taskId, first_observed_spawn_gen: f.task.identity.spawn_gen! }])
   f.raw.properties['First Mate tasks'] = { type: 'rich_text', ...links.properties['First Mate tasks'] }
-  f.raw.properties.Status.status.name = 'In Progress'
-  f.raw.properties['Waiting For'].rich_text = []
+  f.raw.properties.Status.status.name = status
+  f.raw.properties['Waiting For'].rich_text = status === 'Queued' ? [{ plain_text: 'Queued behind the KD and CI work (Will, 2026-10-25). Do not drop.' }] : []
   const sources = f.sources(root)
   vi.spyOn(sources, 'fleetSnapshot').mockImplementation(async () => f.fleet)
   sources.workflow.decisionDelivery = f.bridge
@@ -1508,6 +1513,7 @@ it('publishes a typed recommendation and accepts its authenticated choice using 
   const published = (await sources.queue()).needsWill!.find(entry => entry.id === item.id)!
   expect(published.proposal?.value).toEqual(proposal)
   expect(published.readiness).toBe('ready-now')
+  if (status === 'Queued') expect((await sources.queue()).needsWill).toHaveLength(1)
   const asks = new AskApi(sources, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) }))
   const server = createServer(async (req, res) => { if (!await asks.handle(req, res)) { res.writeHead(404); res.end() } }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -1530,7 +1536,7 @@ it('publishes a typed recommendation and accepts its authenticated choice using 
   expect(await sources.updateWork({ ...f.answer, answer: selected.action_selection.label, resolve_wait: undefined } as UpdateWorkInput, 'owner@example.test'))
     .toMatchObject({ decision_resolution: { state: 'pending' } })
   expect(f.messages).toHaveLength(1)
-  expect(f.messages[0]!.sourceAnchor).toBe(item.sources.find(entry => entry.kind === 'firstmate')!.responseAnchor)
+  expect(f.messages[0]!.sourceAnchor).toBe(item.sources.find(entry => entry.request?.kind === source.kind && entry.request?.id === source.id)!.responseAnchor)
   expect(f.messages[0]!.text).toContain('Proceed')
   expect(f.requests.filter(request => request.method === 'PATCH' && request.url.includes('/pages/'))
     .some(request => Object.hasOwn(request.body?.properties ?? {}, 'First Mate tasks'))).toBe(false)
