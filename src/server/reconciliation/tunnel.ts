@@ -6,8 +6,10 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, JSONRPCRequestSchema, ListToolsRequestSchema, RequestSchema, SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod/v4'
 import { secretEquals } from './sessions'
+import { getConfigRoot } from '../configRoot'
+import { recordProbeNames } from './sessionProbe'
 
-const commonTools = ['search_work', 'get_work', 'get_workflow_rules', 'get_work_views', 'start_work', 'create_work', 'update_work', 'submit_handoff', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command', 'list_prs', 'get_pr', 'get_release_status']
+const commonTools = ['session_probe', 'search_work', 'get_work', 'get_workflow_rules', 'get_work_views', 'start_work', 'create_work', 'update_work', 'submit_handoff', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'get_command', 'list_prs', 'get_pr', 'get_release_status']
 const views = ['present_view', 'next_queue_item']
 const modernVersion = '2026-07-28'
 const supportedVersions = [modernVersion, ...SUPPORTED_PROTOCOL_VERSIONS]
@@ -19,6 +21,7 @@ export interface TunnelOptions {
   upstreamPort: number
   installToken: string
   caller: { id: string; token: string; allowView: boolean }
+  configRoot?: string
 }
 export function createTunnelFacade(options: TunnelOptions) {
   const { caller, installToken, upstreamPort } = options
@@ -101,7 +104,15 @@ export function createTunnelFacade(options: TunnelOptions) {
       server.setRequestHandler(CallToolRequestSchema, async request => {
         const complete = modern ? { resultType: 'complete' } : {}
         if (!allowed.has(request.params.name)) return { ...complete, isError: true, content: [{ type: 'text', text: 'Tool outside configured caller scope' }] }
-        try { return { ...await upstream.callTool({ name: request.params.name, arguments: request.params.arguments }), ...complete } }
+        const probeLogRecorded = request.params.name === 'session_probe'
+          ? recordProbeNames(options.configRoot ?? getConfigRoot(), 'facade', req.headers, request.params._meta) : undefined
+        try {
+          const response = await upstream.callTool({ name: request.params.name, arguments: request.params.arguments, _meta: request.params._meta })
+          return { ...response, ...complete, ...(probeLogRecorded === false ? { content: [
+            ...(Array.isArray(response.content) ? response.content : []),
+            { type: 'text' as const, text: 'Warning: session probe diagnostic log unavailable at facade; check private config permissions.' },
+          ] } : {}) }
+        }
         catch { return { ...complete, isError: true, content: [{ type: 'text', text: 'Tin Star tool unavailable; retry a read to check source/window state' }] } }
       })
       await server.connect(transport)

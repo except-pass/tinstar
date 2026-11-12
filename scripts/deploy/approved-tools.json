@@ -16,6 +16,7 @@
   "present_view",
   "read_record",
   "search_work",
+  "session_probe",
   "start_work",
   "submit_handoff",
   "update_work"

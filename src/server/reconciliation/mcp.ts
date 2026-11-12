@@ -19,6 +19,7 @@ import { cardIdSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateW
 import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
+import { SessionProbe } from './sessionProbe'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -73,7 +74,9 @@ const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string
 export class ReconciliationMcp {
   readonly sessions = new SceneSessions()
   private token: string | null
+  private sessionProbe: SessionProbe
   constructor(private readers: PresentationReaders, root = getConfigRoot(), private domainReads?: DomainReadTools) {
+    this.sessionProbe = new SessionProbe(root)
     // MCP config trouble degrades this interface only; source viewing still works.
     try { this.token = installToken(root) } catch { this.token = null }
   }
@@ -81,6 +84,7 @@ export class ReconciliationMcp {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
     const catalog = createToolCatalog(server)
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    catalog.registerTool('session_probe', { description: 'Read-only conversation continuity experiment; never claims or changes a card. Omit session_token once to receive an opaque token, then pass it explicitly on successive calls and later turns in this conversation. Independently start each conversation without a token. Keep tokens in tool arguments only, never visible prose, card text or URLs. Reports whether the existing authenticated caller issued that token in this backend process (bounded to 256 tokens; restart forgets them). Logs only metadata/header names, never values. Does not infer conversation identity from browser tabs, actor or transport.', inputSchema: { session_token: z.string().min(1).max(256).optional() }, annotations: readAnnotations }, async (input, extra) => result(this.sessionProbe.call(actor, request?.headers ?? {}, extra._meta, input.session_token)))
     catalog.registerTool('search_work', { description: 'Find configured-board work by owner, status, initiative, epic or checkpoint. Independent of browser filters; default scope excludes Done/Archived. Paginated bounded property reads share UI links and Smart Search patterns (unknown is not none). No scene/window required.', inputSchema: searchWorkSchema, annotations: readAnnotations }, async input => result(await this.readers.searchWork?.(input) ?? { outcome: 'unavailable' }))
     catalog.registerTool('get_work', { description: 'Read an exact configured-board card, bounded body/comments, linked worker/PR evidence and freshness. Explicit refresh also reconciles previously recorded source decision answers. Routine body reads are not the full specification. For exact approved contract chunks request implementation_contract {revision?,offset?,limit?}; follow next_offset, concatenate chunks, verify manifest SHA-256, length and version. Previous versions remain readable. No scene/window required.', inputSchema: getWorkSchema, annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await this.readers.getWork?.(input) ?? { outcome: 'unavailable' }))
     catalog.registerTool('get_work_views', { description: 'Read canonical review-status cards in reviews (independent of owner/asks), with truthful coverage, plus the same Needs Will requests (bounded refresh also reconciles previously recorded source answers), associated PR/check evidence, honest request age and per-source execution warnings as Decisions. Passing checks alone never create a merge ask; unknown/stale sources never prove a stranded worker. No scene/window required.', inputSchema: {}, annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: true, openWorldHint: true } }, async () => result(await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable', message: 'Workflow views unavailable; retained client data is last-known' }))))
