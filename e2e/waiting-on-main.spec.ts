@@ -45,44 +45,35 @@ test.afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true })
 })
 
-test('Overview counts both sources, opens keyed text/age details, turns red at 4h, and preserves unknown', async ({ page }) => {
+test('Overview hides waits on First Mate until a nudge has been open for 2h', async ({ page }) => {
   const now = Date.now()
   await page.clock.install({ time: now })
   await page.setViewportSize({ width: 1440, height: 900 })
-  const waits: MainWaitRead = { unknown: [], items: [
-    { id: 'card:rollout', source: 'board', kind: 'card', label: 'Rollout approval', key: 'card-rollout', text: 'First Mate (main): review rollout', since: new Date(now - MAIN_WAIT_INTERVAL + 60_000).toISOString(), ageBasis: 'at least', fresh: true, url: 'https://www.notion.so/00000000000000000000000000000004' },
-    { id: 'mate:api', source: 'mate:hulk', kind: 'mate', label: 'Hulk', key: 'api-choice', text: 'Choose the API version', since: new Date(now - 3600_000).toISOString(), ageBasis: 'status timestamp', fresh: true, url: null, alert: 'plain-comment' },
+  const waits: MainWaitRead = { unknown: ['Hulk: parent asks unknown or stale'], items: [
+    { id: 'card:rollout', source: 'board', kind: 'card', label: 'Rollout approval', key: 'card-rollout', text: 'First Mate (main): review rollout', since: new Date(now - MAIN_WAIT_INTERVAL).toISOString(), ageBasis: 'at least', fresh: true, url: 'https://www.notion.so/00000000000000000000000000000004' },
+    { id: 'mate:api', source: 'mate:hulk', kind: 'mate', label: 'Hulk', key: 'api-choice', text: 'Choose the API version', since: new Date(now - 3600_000).toISOString(), ageBasis: 'status timestamp', fresh: false, url: null, alert: 'plain-comment' },
   ] }
   const scene = { ...fixtureScene({ now }), waitingOnMain: waits }
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue*', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
   await page.goto(base)
+  await expect(page.getByRole('region', { name: 'Overview' })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Waiting on First Mate' })).toHaveCount(0)
+  waits.items[0]!.nudgedAt = new Date(now - 2 * 3600_000).toISOString()
+  await page.clock.runFor(60_000)
   const waitsPanel = page.getByRole('region', { name: 'Waiting on First Mate', exact: true })
-  await expect(waitsPanel.getByRole('button')).toContainText('Waiting on First Mate · 2')
-  await expect(waitsPanel.getByRole('button')).toContainText('oldest at least 3h 59m')
+  await expect(waitsPanel.getByRole('button')).toHaveText('First Mate nudge still open')
   await expect(waitsPanel).toHaveAttribute('data-overdue', 'false')
+  await expect(waitsPanel.getByRole('button')).not.toContainText('coverage')
   await waitsPanel.getByRole('button').click()
   await expect(waitsPanel.getByRole('link', { name: 'Rollout approval' })).toBeVisible()
   await expect(waitsPanel).toContainText('Hulk')
   await expect(waitsPanel).toContainText('api-choice')
   await expect(waitsPanel).toContainText('Choose the API version')
-  await expect(waitsPanel).toContainText('1h 0m')
   const undeliveredItem = waitsPanel.getByRole('article').filter({ hasText: 'api-choice' })
   await expect(undeliveredItem.getByRole('status')).toContainText('Owner alert not delivered (mention failed)')
-  await expect(undeliveredItem).toHaveCSS('border-top-color', 'rgb(239, 68, 68)')
-  await expect(undeliveredItem).toHaveCSS('background-color', 'rgb(69, 26, 26)')
   await page.clock.runFor(60_000)
-  await expect(waitsPanel).toHaveAttribute('data-overdue', 'true')
-  await expect(waitsPanel).toHaveCSS('border-top-color', 'rgb(239, 68, 68)')
-  waits.unknown = ['Hulk: parent asks unknown or stale']
-  waits.items[1]!.fresh = false
-  await page.clock.runFor(30_000)
-  await expect(waitsPanel.getByRole('button')).toContainText('2+')
-  await expect(waitsPanel).toContainText('coverage unknown')
-  await expect(waitsPanel).toContainText('last known')
-  // A failed source with no retained items must never render a reassuring zero.
-  waits.items = []
-  await page.clock.runFor(30_000)
-  await expect(waitsPanel.getByRole('button')).toContainText('Waiting on First Mate · unknown')
+  await expect(waitsPanel.getByRole('button')).toHaveText('First Mate nudge still open')
+  await expect(waitsPanel).toHaveAttribute('data-overdue', 'false')
 })
