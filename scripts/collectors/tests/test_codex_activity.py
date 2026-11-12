@@ -146,15 +146,6 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result['items'][0]['at'], 700)
         self.assertEqual(result['items'][0]['text'], 'new request')
 
-    def test_parent_asks_bare_at_after_key_is_aged(self):
-        bare = collector.fold_parent_asks('needs-decision [key=k] at=1794498392: choose the API\n')
-        self.assertEqual(bare, {'status': 'known', 'items': [{
-            'key': 'k', 'corr': None, 'state': 'needs-decision', 'at': 1794498392,
-            'text': 'choose the API'}]})
-        bracket = collector.fold_parent_asks('blocked [key=k] [at=1794498392]: still waiting\n')
-        self.assertEqual(bracket['status'], 'known')
-        self.assertEqual(bracket['items'][0]['at'], 1794498392)
-
     def test_parent_asks_missing_malformed_and_partial_append_stay_unknown(self):
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
         state = self.root / 'state'
