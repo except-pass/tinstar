@@ -85,7 +85,8 @@ function lower(item: QueueItem, readiness: QueueReadiness, reason: string) {
   if (rank[readiness] > rank[item.readiness]) item.readiness = readiness
   item.reasons.push(reason)
 }
-function restrictAction(item: QueueItem, value: string | null): boolean {
+type ActionContext = 'action' | 'owner-question' | 'execution-plan'
+function restrictAction(item: QueueItem, value: string | null, context: ActionContext = 'action'): boolean {
   if (value) {
     const decoded = requestText(value)
     if (decoded === null || !displayRequestText(decoded, '')) {
@@ -98,13 +99,16 @@ function restrictAction(item: QueueItem, value: string | null): boolean {
       return true
     }
   }
+  // A corroborated question can describe conditional execution after the answer.
+  // Check the question itself; structured dates/dependencies are checked separately.
+  if (context === 'owner-question' && value?.includes('?')) value = value.slice(0, value.indexOf('?') + 1)
   const action = value?.replace(/^(?:decide|choose|determine)\s+(?:if|when)\b/i, '')
   let restricted = false
-  if (action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
+  if (context !== 'execution-plan' && action && /\b(?:when|after|once|until|pending|awaiting|if|later|tomorrow|not yet|blocked by|release-blocked)\b/i.test(action)) {
     restricted = true
     lower(item, 'future-or-conditional', 'Next action contains a future condition/prerequisite; it is retained in work context')
   }
-  if (value && /\bthen\b|;\s*(?:then\s+)?(?:review|verify|test|build|run|deploy|release|merge|approve)\b|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(value)) {
+  if (context !== 'execution-plan' && value && /\bthen\b|;\s*(?:then\s+)?(?:review|verify|test|build|run|deploy|release|merge|approve)\b|\band\s+(?:review|verify|test|build|run|deploy|release|merge|approve)\b/i.test(value)) {
     restricted = true
     lower(item, 'needs-readiness-verification', 'Next action still contains multiple steps; verify the one-touch owner decision')
   }
@@ -137,6 +141,12 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const scene = reconcileScene({ ...input, intentions, fleet }, now)
   const cards = new Map((intentions.data?.cards ?? []).map(card => [card.id, card]))
   const candidates: QueueItem[] = []
+  const actionContexts = new Map<QueueItem, ActionContext>()
+  const accountable = (card: Card, home: string) => {
+    const owner = normalize(word(card, 'Owner') ?? '')
+    const label = fleet.find(row => row.source.home === home)?.source.label
+    return ['firstmate', 'will'].includes(owner) || !!label?.trim() && owner === normalize(label)
+  }
   const resolvedMerges = new Set<QueueItem>()
   const tagOnlyCandidates = new Set<QueueItem>()
   const identities = new Map<QueueItem, string[]>()
@@ -181,13 +191,16 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const hold = home.observation.data?.backlog?.find(row => row.id === entry.matchedHoldId)
       const canonical = decisionCard(request, [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])], intentions)
       if (!canonical.cardId) continue
-      const taskHold = homeRequests[index]!.find(candidate => candidate.ownerReady && candidate.request.kind === 'hold' &&
-        candidate.request.taskId === request.taskId && candidate.request.id === request.taskId)
+      const taskHolds = homeRequests[index]!.filter(candidate => candidate.ownerReady && candidate.request.kind === 'hold' &&
+        candidate.request.taskId === request.taskId)
+      // Origin is an explicit task binding. Competing holds cannot choose a
+      // proposal/request identity on the owner's behalf.
+      const taskHold = taskHolds.length === 1 ? taskHolds[0] : undefined
       // Keep the previously answerable request key so saved typed proposals
       // remain bound after the card and its task question join this item.
       const holdId = entry.matchedHoldId ?? taskHold?.matchedHoldId
       const queueId = holdId ? JSON.stringify(['hold', request.home, holdId]) : requestAnchor(request)
-      const binding = { request, taskHoldId: entry.matchedHoldId, queueId }
+      const binding = { request, taskHoldId: holdId ?? null, queueId }
       keyedByCard.set(canonical.cardId, [...(keyedByCard.get(canonical.cardId) ?? []), binding])
     }
   })
@@ -196,7 +209,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const actions = card && prop(card, 'Will action')
     const tags = (Array.isArray(actions) ? actions : [actions]).filter(value => typeof value === 'string' && value.trim())
     if (card && !card.archived && !card.in_trash && !complete(word(card, 'Status')) &&
-      ['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')) &&
+      accountable(card, bindings[0]!.request.home) &&
       !card.properties['Will action']?.hasMore && tags.length === 1 && normalize(String(tags[0])) === 'decision' &&
       new Set(bindings.map(binding => requestAnchor(binding.request))).size === 1) ownerDecisions.set(id, bindings[0]!)
   }
@@ -231,7 +244,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     identities.set(item, [item.id, ...(ownerDecisions.has(card.id) ? [ownerDecisions.get(card.id)!.queueId] : [])])
     explicitPulls.set(item, pullIds([word(card, 'Link'), word(card, 'Evidence')]))
     if (ownerDecisions.has(card.id)) tagOnlyCandidates.add(item)
-    if (owner !== 'will' || !action) {
+    if (!ownerDecisions.has(card.id) && (owner !== 'will' || !action)) {
       if (item.readiness === 'ready-now') tagOnlyCandidates.add(item)
       lower(item, 'needs-readiness-verification', 'A Will action tag/owner alone does not establish a concrete owner-only next action')
     }
@@ -239,7 +252,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       tagOnlyCandidates.delete(item)
       lower(item, 'needs-readiness-verification', 'Command/release readiness requires prerequisite and authority verification')
     }
-    if (item.readiness === 'ready-now') item.reasons.push('Published owner Will and a concrete next action, with no published dependency')
+    if (item.readiness === 'ready-now') item.reasons.push(ownerDecisions.has(card.id) ? 'Explicit owner Decision action corroborated by an open keyed First Mate request' : 'Published owner Will and a concrete next action, with no published dependency')
     candidates.push(item)
   }
 
@@ -269,9 +282,11 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       // A Notion status change is not an acknowledgment of a First Mate request.
       const item = blank(call.key, call.headline,
         call.headline.trim() || null, call.type === 'blocked' ? 'blocked' : 'decision')
-      restrictAction(item, call.headline)
-      restrictAction(item, text(hold?.hold_reason))
-      restrictAction(item, text(task?.backlog.hold_reason))
+      const actionContext = ownerDecision ? request.kind === 'hold' ? 'execution-plan' : 'owner-question' : 'action'
+      actionContexts.set(item, actionContext)
+      restrictAction(item, call.headline, actionContext)
+      restrictAction(item, text(hold?.hold_reason), actionContext)
+      restrictAction(item, text(task?.backlog.hold_reason), actionContext)
       item.homeIds.push(home.source.home)
       if (execution) item.executionIds.push(execution.id)
       if (requestId && call.type !== 'blocked') item.decisionKeys.push(requestId)
@@ -289,7 +304,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       for (const url of questionLinks) link(item, url)
       explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
       if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision)
-      if (canonicalRelationship && known.some(card => !['firstmate', 'will'].includes(normalize(word(card, 'Owner') ?? '')))) {
+      if (canonicalRelationship && known.some(card => !accountable(card, request.home))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
       if (!canonicalRelationship) {
@@ -347,7 +362,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   const retained: QueueItem[] = []
   for (const item of candidates) {
     for (const pull of queuePulls(item, inventory)) link(item, pull.url)
-    if (restrictAction(item, item.action)) tagOnlyCandidates.delete(item)
+    if (restrictAction(item, item.action, actionContexts.get(item))) tagOnlyCandidates.delete(item)
     const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
     if (!verifyPull(item)) continue
