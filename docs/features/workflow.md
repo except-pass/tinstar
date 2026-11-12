@@ -242,7 +242,13 @@ source properties without waiting for per-card comment checks. These reads share
 comment cache and API limiter. New comment IDs, including author, enter the
 existing coalesced update and retry path even when page revisions are unchanged. Failed or
 partial source reads retain prior assignment state and never imply deletion.
-New pickup delivery rechecks the exact card; source failure retains it for retry.
+The existing periodic sweep rechecks the exact card and persists ready bridge
+offers; source failure retains the notice for revalidation on the next sweep.
+A stale pickup is withdrawn on the next sweep. Bridge GETs read the persisted
+offers and receipts without reading sources or waiting for an in-flight sweep.
+The ten-second coalescing window is a minimum; delivery becomes available when
+the next periodic sweep reserves the notice. Restarts retain reserved IDs and
+bodies; older stores without reservations wait for the next sweep.
 Preview delivery follows the watchdog's existing disabled-by-default settings.
 
 The watchdog's census, exact verification and context use the same reader/cache

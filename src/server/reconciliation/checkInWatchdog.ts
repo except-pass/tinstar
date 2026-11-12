@@ -72,6 +72,8 @@ const deliverySchema = z.object({
   noteId: z.string().nullable(), announced: z.boolean().nullable(),
   reply: z.object({ body: z.string(), at: z.string(), cursor: z.string() }).nullable(),
   error: z.enum(['capture-failed', 'wake-failed']).nullable(),
+  // Legacy rows wait for the next sweep to reserve an offer.
+  pending: z.boolean().optional(),
 })
 type Delivery = z.infer<typeof deliverySchema>
 const rowSchema = z.object({
@@ -245,7 +247,9 @@ export class CheckInWatchdog {
           }
         })
       }
-    } finally { this.scanning = false }
+    } finally {
+      try { await this.prepareOffers() } finally { this.scanning = false }
+    }
   }
   private async verify(row: CheckInRow): Promise<string | undefined> {
     try {
@@ -292,11 +296,23 @@ export class CheckInWatchdog {
       return correction
     } catch { /* Failed read never closes an appointment; retry on next sweep. */ }
   }
-  /** Existing bearer bridge is the only delivery surface. Before first exposure,
-   * re-read the exact card and current identity graph. Freeze the body and ID
-   * before returning it; uncertain HTTP/inbox retries use those same bytes. */
+  /** The bridge reads the last completed sweep, never sources or the writer queue. */
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
+    const rows = await this.load()
+    return {
+      pending: rows.filter(row => !['resolved', 'superseded', 'answered-needs-correction'].includes(row.state))
+        .flatMap(row => [row.request, row.followUp].flatMap(item => item?.pending && !item.reply &&
+          (!item.noteId || item.announced === false || !!item.error)
+          ? [{ request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }] : [])),
+      tracked: rows.flatMap(row => [row.request, row.followUp].flatMap(item => item?.noteId && !item.reply
+        ? [{ request_id: item.requestId, note_id: item.noteId }] : [])),
+    }
+  }
+  /** Reserve offers during the periodic sweep. External reads stay outside the
+   * writer; the last persisted offers remain available while a read is in flight. */
+  private async prepareOffers() {
+    if (!(await this.settings()).deliveryEnabled) return
     const observed = await this.rows()
     const start = this.deliveryCursor % Math.max(observed.length, 1)
     const ordered = [...observed.slice(start), ...observed.slice(0, start)]
@@ -309,6 +325,7 @@ export class CheckInWatchdog {
     }
     return this.change(rows => {
       const pending: { request_id: string; inbox_request_id: string; body: string }[] = []
+      for (const row of rows) for (const item of [row.request, row.followUp]) if (item) item.pending = false
       for (const candidate of candidates) {
         const row = rows.find(row => row.key === candidate.key)
         if (!row) continue
@@ -345,12 +362,12 @@ export class CheckInWatchdog {
         }
         const entry = { request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }
         if (jsonBytes(pending) + jsonBytes(entry) > 256 * 1024) break
+        item.pending = true
         item.offeredAt ??= new Date(this.now()).toISOString()
         if (row.state === 'due') row.state = 'requested'
         item.error = null
         pending.push(entry)
       }
-      return { pending, tracked: rows.flatMap(row => [row.request, row.followUp].flatMap(d => d?.noteId && !d.reply ? [{ request_id: d.requestId, note_id: d.noteId }] : [])) }
     })
   }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }

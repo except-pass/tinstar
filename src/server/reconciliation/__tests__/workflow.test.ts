@@ -377,6 +377,7 @@ describe('one-call approved implementation handoff', () => {
   it('uses the authenticated MCP facade and exactly one test-bridge pickup, separating delivery from real tracked execution', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
     const f = await setup(), sources = f.sources(f.root)
+    f.pages.delete(id) // Keep the periodic census scoped to this handoff's card.
     const feed = new FirstmateUpdates(sources, f.root, async () => ({ deliveryEnabled: true }))
     f.workflow.onChange = change => feed.confirmed(change)
     f.workflow.deliveryStatus = (cardId, operationId) => feed.deliveryStatus(cardId, operationId)
@@ -400,6 +401,7 @@ describe('one-call approved implementation handoff', () => {
     const first = await call(), cardId = first.record.card_id
     expect(first).toMatchObject({ outcome: 'saved', assignment: { status: 'Queued' }, execution: { state: 'queued' }, delivery: { state: 'unknown' } })
     vi.setSystemTime(new Date(Date.now() + 10_001))
+    await feed.sweep(true)
     const pending = (await feed.bridgeWork()).pending
     expect(pending).toHaveLength(1)
     const changes = JSON.parse(pending[0]!.body.split('\n').slice(1).join('\n')).changes
@@ -414,6 +416,7 @@ describe('one-call approved implementation handoff', () => {
     const revision = { ...input, revision_id: 'r2', expected_contract_hash: first.record.spec_hash, spec_markdown: input.spec_markdown + '\nApproved amendment' }
     expect(await call(revision)).toMatchObject({ outcome: 'saved', assignment: { status: 'In Progress' }, execution: { state: 'running', worker: { task_id: 'native-task' } } })
     vi.setSystemTime(new Date(Date.now() + 10_001))
+    await feed.sweep(true)
     const updates = (await feed.bridgeWork()).pending.flatMap(notice => JSON.parse(notice.body.split('\n').slice(1).join('\n')).changes)
     expect(updates.length).toBeGreaterThan(0); expect(updates.every((row: any) => row.kind === 'update')).toBe(true)
     expect(await call(revision)).toMatchObject({ assignment: { pickup_offered: false }, delivery: { state: 'offered', pickup_offered: false } })
@@ -1026,6 +1029,7 @@ it.each(['property', 'body', 'comment'] as const)('preserves an unobserved human
   if (kind === 'comment') f.comments.push({ id: 'human', created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: 'Human evidence' }] })
   expect(await f.workflow.update({ kind: 'edit', card_id: id, operation_id: 'self-note', note: 'Unrelated self note' }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
   vi.setSystemTime(new Date('2026-11-10T15:02:00Z'))
+  await feed.sweep(true)
   const notices = (await feed.bridgeWork()).pending
   expect(notices).toHaveLength(1)
   const batch = JSON.parse(notices[0]!.body.split('\n').slice(1).join('\n'))
@@ -1062,6 +1066,7 @@ it.each(['brief', 'acceptance_criteria'] as const)('observes confirmed %s before
   expect(await f.workflow.update(input, 'Firstmate')).toMatchObject({ outcome: 'partially-saved', saved_fields: ['Last touched by', name] })
   expect(changes.filter(change => change.sections?.includes(name))).toHaveLength(1)
   vi.setSystemTime(new Date('2026-11-10T15:01:00Z'))
+  await feed.sweep(true)
   expect((await feed.bridgeWork()).pending).toEqual([])
   const sectionWrites = () => f.requests.filter(request => request.method === 'PATCH' && request.url.includes('/blocks/')).length
   const writes = sectionWrites()
@@ -1072,11 +1077,13 @@ it.each(['brief', 'acceptance_criteria'] as const)('observes confirmed %s before
   expect(changes.filter(change => change.notes?.length)).toHaveLength(1)
   await feed.sweep(true)
   vi.setSystemTime(new Date('2026-11-10T15:02:00Z'))
+  await feed.sweep(true)
   expect((await feed.bridgeWork()).pending).toEqual([])
   f.raw.last_edited_time = new Date().toISOString()
   f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Unrelated human dependency' }]
   await feed.sweep(true)
   vi.setSystemTime(new Date('2026-11-10T15:03:00Z'))
+  await feed.sweep(true)
   const notices = (await feed.bridgeWork()).pending
   expect(notices).toHaveLength(1)
   const batch = JSON.parse(notices[0]!.body.split('\n').slice(1).join('\n'))
@@ -1113,11 +1120,12 @@ it('observes comment-only edits through rotating and explicit refreshes without 
   comments.get(id)!.push(comment('self-comment-id', self))
   const current = await sources.currentCard(id)
   await feed.confirmed({ before: current, card: current, actor: 'Firstmate', operationId: 'self-comment', properties: {}, notes: ['Confirmed self note'] })
+  await feed.sweep(true)
   expect((await feed.bridgeWork()).pending).toEqual([])
   for (const cardId of cardIds) comments.get(cardId)!.push(comment(`human-${cardId}`, 'Human comment without property edits'))
   const bodyReads = f.requests.filter(request => request.url.includes('/blocks/')).length
   const observed = new Set<string>()
-  for (let cycle = 0; cycle < 3; cycle++) {
+  for (let cycle = 0; cycle < 4; cycle++) {
     vi.setSystemTime(new Date(Date.now() + 60_001))
     f.fetcher.mockClear()
     await feed.sweep()
@@ -1143,6 +1151,7 @@ it('observes comment-only edits through rotating and explicit refreshes without 
   await feed.sweep(true)
   expect(f.fetcher.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/comments')).toHaveLength(9)
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const forced = (await feed.bridgeWork()).pending
   expect(forced).toHaveLength(1)
   expect(JSON.parse(forced[0]!.body.split('\n').slice(1).join('')).changes[0].comments).toEqual([{ id: 'forced-comment', text: 'Forced refresh human input', author: 'human-author' }])
@@ -1150,6 +1159,7 @@ it('observes comment-only edits through rotating and explicit refreshes without 
   comments.get(id)!.push(comment('explicit-comment', 'Immediate human input'))
   await sources.getWork({ card_id: id, refresh: true, details: false })
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const explicit = (await feed.bridgeWork()).pending
   expect(explicit).toHaveLength(1)
   expect(JSON.parse(explicit[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'explicit-comment', text: 'Immediate human input', author: 'human-author' }] })
@@ -1172,12 +1182,14 @@ it('does not wake for successful Firstmate notes when unsupported body blocks le
     vi.setSystemTime(new Date(Date.now() + 60_001))
     await feed.sweep()
     vi.setSystemTime(new Date(Date.now() + 10_001))
+    await feed.sweep(true)
     expect((await feed.bridgeWork()).pending).toEqual([])
   }
   f.comments.push({ id: 'human-after-self', created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: 'Human comment remains actionable' }] })
   vi.setSystemTime(new Date(Date.now() + 60_001))
   await feed.sweep()
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const notices = (await feed.bridgeWork()).pending
   expect(notices).toHaveLength(1)
   expect(JSON.parse(notices[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ kind: 'update', comments: [{ id: 'human-after-self', text: 'Human comment remains actionable', author: 'human-author' }] })
@@ -1197,6 +1209,7 @@ it.each(['brief', 'acceptance_criteria', 'both-sections', 'note', 'comment', 'pr
   vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
   await feed.sweep(true)
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   for (const notice of (await feed.bridgeWork()).pending) await feed.ingest({ request_id: notice.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: notice.request_id, request_id: inboxRequestId(notice.request_id) } })
   const content = effect === 'both-sections' ? { brief: 'Confirmed brief', acceptance_criteria: 'Confirmed acceptance' }
     : effect === 'brief' || effect === 'acceptance_criteria' ? { [effect]: `Confirmed ${effect}` } : undefined
@@ -1208,12 +1221,14 @@ it.each(['brief', 'acceptance_criteria', 'both-sections', 'note', 'comment', 'pr
     vi.setSystemTime(new Date(Date.now() + 60_001))
     await feed.sweep()
     vi.setSystemTime(new Date(Date.now() + 10_001))
+    await feed.sweep(true)
     expect((await feed.bridgeWork()).pending).toEqual([])
   }
   f.blocks[0].paragraph.rich_text = [{ plain_text: 'Human changed an unrelated paragraph' }]
   vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
   await feed.sweep(true)
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const human = (await feed.bridgeWork()).pending
   expect(human).toHaveLength(1)
   expect(JSON.parse(human[0]!.body.split('\n').slice(1).join('')).changes[0].body_sections).toEqual(['body-1'])
@@ -1234,12 +1249,14 @@ it.each(['brief', 'acceptance_criteria'] as const)('adopts unknown cold-start bo
     vi.setSystemTime(new Date(Date.now() + 60_001))
     await feed.sweep(true)
     vi.setSystemTime(new Date(Date.now() + 10_001))
+    await feed.sweep(true)
     expect((await feed.bridgeWork()).pending).toEqual([])
   }
   f.blocks[0].paragraph.rich_text = [{ plain_text: 'Human edit of covered paragraph' }]
   vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
   await feed.sweep(true)
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const human = (await feed.bridgeWork()).pending
   expect(human).toHaveLength(1)
   expect(JSON.parse(human[0]!.body.split('\n').slice(1).join('')).changes[0].body_sections).toEqual(['body-1'])
@@ -1248,6 +1265,7 @@ it.each(['brief', 'acceptance_criteria'] as const)('adopts unknown cold-start bo
   vi.setSystemTime(new Date(Date.now() + 60_001)); f.raw.last_edited_time = new Date().toISOString()
   await feed.sweep(true)
   vi.setSystemTime(new Date(Date.now() + 10_001))
+  await feed.sweep(true)
   const unknown = (await feed.bridgeWork()).pending
   expect(unknown).toHaveLength(1)
   expect(JSON.parse(unknown[0]!.body.split('\n').slice(1).join('')).changes[0]).toMatchObject({ body_sections: [], omissions: 'card body changed (details unavailable)' })

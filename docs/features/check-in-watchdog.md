@@ -70,17 +70,18 @@ request and immutable body. One outstanding original request and at most one
 follow-up exist per appointment. Failed deliveries retry automatically through
 the same bridge. There is no separate retry daemon.
 
-Before exposing a pending request, Tin Star performs an uncached GET of the
-exact Notion page and verifies both page ID and configured data source. Changed
-owner, status, checkpoint, trash or archive suppress the original request.
-Preflight reads have a five-second timeout; bridge batches attempt at most
-three pages and rotate so one failed page does not starve the rest. This keeps
-the existing puller's 20-second HTTP read bound. External reads run outside the
-serialized writer so slow Notion responses do not hold up receipt ingestion or
-card indicators. Before freezing a delivery, the writer reloads the ledger and
-reconciles the preflight result against current request and receipt state.
-Fleet refreshes stay on the
-source-refresh path rather than delaying bridge work. A suppressed appointment
+The existing periodic sweep performs an uncached GET of the exact Notion page
+and verifies both page ID and configured data source before reserving an offer.
+Changed owner, status, checkpoint, trash or archive suppress the original
+request on the next sweep. Each sweep attempts at most three candidate pages
+and rotates so one failed page does not starve the rest. External reads run
+outside the serialized writer so slow Notion responses do not hold up receipt
+ingestion or card indicators. Before freezing a delivery, the writer reloads the
+ledger and reconciles the preflight result against current request and receipt
+state. The authenticated bridge GET reads only the persisted offers and current
+receipts; it never reads Notion, refreshes the fleet, or waits for an in-flight
+sweep. A restart retains the reserved ID and body; older stores without a
+reservation become eligible after the next sweep. A suppressed appointment
 never silently acquires another request ID.
 
 After two hours without a substantive acknowledgement or a correlated card

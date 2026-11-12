@@ -131,6 +131,7 @@ it('delivers an eligible scoped card missing from an incomplete board, then supp
   expect(first.pending[0]!.body).toContain(`"card_id":"${id(2001)}"`)
   expect(first.pending[0]!.body).toContain('"worker":null')
   f.close()
+  await watchdog.sweep(true)
   expect((await watchdog.bridgeWork()).pending).toEqual([])
   expect(f.fetcher.mock.calls.every(([, init]) => !init?.method || ['GET', 'POST'].includes(init.method))).toBe(true)
   expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').every(([url]) => String(url).endsWith('/query'))).toBe(true)
