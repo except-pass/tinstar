@@ -2,7 +2,11 @@ import type { ReconciliationConfig } from './config'
 import { notionObservation, readNotionCard, type WorkScope } from './notion'
 import { NotionApi } from './notionApi'
 import { checkInTime } from '../../shared/checkIn'
-export type WorkCard = Awaited<ReturnType<typeof readNotionCard>>
+import { isJiraCard } from '../../shared/workIdentity'
+import { JiraAdapter } from './jira'
+import { CachedObservation, retainMissing } from './observation'
+export type WorkCard = Awaited<ReturnType<typeof readNotionCard>> & { source?: { provider: 'jira'; instanceId: string; collectionId: string; itemId: string; displayKey: string; synthetic: true } }
+export type WorkData = Omit<NonNullable<Awaited<ReturnType<ReturnType<typeof notionObservation>['get']>>['data']>, 'cards'> & { cards: WorkCard[] }
 export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   const value = (name: string) => card.properties[name]?.value
   const has = (name: string, expected?: string) => !expected || (Array.isArray(value(name)) ? (value(name) as unknown[]).includes(expected) : value(name) === expected)
@@ -15,17 +19,27 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   return !matches || classifications.includes(false) ? false : classifications.includes(undefined) ? undefined : true
 }
 export class WorkReader {
-  private queries = new Map<string, { scope: WorkScope; observation: ReturnType<typeof notionObservation> }>()
+  private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
   private cards = new Map<string, { until: number; value: Promise<WorkCard> }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
   lastKnown(id: string) { return this.known.get(id) }
-  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi) {}
+  readonly jira?: JiraAdapter
+  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira']) { if (jira) this.jira = new JiraAdapter(jira, api.fetch) }
   query(scope: WorkScope = {}, force = false) {
     const key = JSON.stringify([scope.owner, scope.statuses?.slice().sort(), scope.initiative, scope.epic, scope.checkpoint_before, !!scope.history])
     let entry = this.queries.get(key)
     if (!entry) {
       if (this.queries.size >= 100) this.queries.delete(this.queries.keys().next().value!)
-      entry = { scope, observation: notionObservation(this.config, this.api.fetch, scope) }
+      const notion = notionObservation(this.config, this.api.fetch, scope), jira = this.jira?.observation(scope)
+      const observation = !jira ? notion : !this.config ? jira : new CachedObservation<WorkData>(async () => {
+        const reads = await Promise.all([notion.get(true), jira.get(true)])
+        const available = reads.flatMap(read => read.data ? [read.data] : [])
+        if (!available.length) throw new Error('Work sources unavailable')
+        const complete = reads.every(read => read.status === 'fresh' && read.coverage === 'complete')
+        return { observedAt: new Date().toISOString(), coverage: complete ? 'complete' : 'partial', data: { ...available[0]!,
+          cards: available.flatMap(data => data.cards), hasMore: !complete, scope: 'Independent Notion and synthetic Jira sources; no sync or dual writes' } }
+      }, 60_000, 120_000, 'Work source coverage incomplete', Date.now, (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
+      entry = { scope, observation }
       this.queries.set(key, entry)
     } else if (!force && entry.observation.isCached()) this.api.diagnostics.cacheHits++
     return entry.observation.get(force)
@@ -40,7 +54,8 @@ export class WorkReader {
   card(id: string, force = false) {
     const cached = this.cards.get(id)
     if (!force && cached && cached.until > Date.now()) { this.api.diagnostics.cacheHits++; return cached.value }
-    const value = readNotionCard(this.config, id, this.api.fetch).then(card => {
+    const read = isJiraCard(id) ? this.jira ? this.jira.read(id) : Promise.reject(new Error('Jira is not configured')) : readNotionCard(this.config, id, this.api.fetch)
+    const value: Promise<WorkCard> = read.then(card => {
       if (this.known.size >= 200) this.known.delete(this.known.keys().next().value!)
       this.known.set(id, { card, observedAt: new Date().toISOString() }); return card
     }).catch(error => { this.cards.delete(id); throw error })

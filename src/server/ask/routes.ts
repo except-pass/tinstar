@@ -1,3 +1,4 @@
+import { cardSourceUrl } from '../../shared/workIdentity'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -216,7 +217,7 @@ export class AskApi {
           if (!card && !worker) throw new AskNotFound('Card unavailable in the authorized source')
           const title = card?.source.properties.Name?.value
           const observation = worker?.observation ?? scene.coverage.intentions
-          context = { schema_version: 2, return_to: { section: 'overview', target: input.target ?? { kind: 'card', id: card!.id }, view: input.view }, anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : `https://www.notion.so/${card!.id}`, observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
+          context = { schema_version: 2, return_to: { section: 'overview', target: input.target ?? { kind: 'card', id: card!.id }, view: input.view }, anchor: { kind: worker ? 'worker' : claim ? 'link' : 'work', page_id: worker?.id ?? card!.id, label: (worker ? String(worker.source.backlog.title || worker.identity.task_id || 'Worker') : typeof title === 'string' ? title : card!.id).slice(0, 512), url: worker ? null : card!.source.url ?? cardSourceUrl(card!.id), observed_at: observation.observedAt, freshness: observation.status, expires_at: observation.expiresAt }, view: input.view,
             ...(input.target ? { target: input.target } : {}),
             ...(input.element ? { element: input.element } : {}),
             ...(input.field_key ? { field_key: input.field_key, field_value: input.field_value } : {}),

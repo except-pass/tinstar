@@ -17,7 +17,14 @@ const notionSchema = z.object({
   dataSourceId: z.string().regex(/^[a-fA-F0-9-]{32,36}$/),
   token: z.string().min(1),
 })
-export interface ReconciliationConfig { fleet: FleetSource[]; notion?: z.infer<typeof notionSchema>; warnings: string[] }
+const jiraSchema = z.object({
+  // These restrictions protect real Jira projects during the authorized pilot.
+  url: z.literal('https://fortresspower-jira.atlassian.net'),
+  projectId: z.literal('10638'),
+  email: z.string().min(1), token: z.string().min(1),
+})
+export type JiraConfig = z.infer<typeof jiraSchema>
+export interface ReconciliationConfig { fleet: FleetSource[]; notion?: z.infer<typeof notionSchema>; jira?: JiraConfig; warnings: string[] }
 
 export function loadReconciliationConfig(root = getConfigRoot()): ReconciliationConfig {
   try {
@@ -35,7 +42,11 @@ export function loadReconciliationConfig(root = getConfigRoot()): Reconciliation
     // Independent credentials/config errors must not hide readable fleet data.
     const parsedNotion = notionSchema.optional().safeParse(raw.reconciliation?.notion)
     if (!parsedNotion.success) warnings.push('Invalid reconciliation Notion settings; configure dataSourceId and token')
-    return { fleet, notion: parsedNotion.success ? parsedNotion.data : undefined, warnings }
+    const jira = raw.reconciliation?.jira
+    const parsedJira = jiraSchema.optional().safeParse(jira ? { ...jira,
+      email: process.env.TINSTAR_JIRA_EMAIL ?? jira.email, token: process.env.TINSTAR_JIRA_TOKEN ?? jira.token } : undefined)
+    if (!parsedJira.success) warnings.push('Invalid Jira pilot settings; configure the authorized TSSPIKE site/project and credentials')
+    return { fleet, notion: parsedNotion.success ? parsedNotion.data : undefined, jira: parsedJira.success ? parsedJira.data : undefined, warnings }
   } catch (error) {
     return { fleet: [], warnings: [(error as NodeJS.ErrnoException).code === 'ENOENT'
       ? 'Tin Star config.json is absent; sources are not configured' : 'Tin Star config.json could not be read'] }

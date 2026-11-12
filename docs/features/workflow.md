@@ -1,6 +1,8 @@
 # Shared workflow operations
 
-Tin Star owns workflow recording; Notion remains authoritative. The Inspector’s
+The optional [isolated Jira adapter pilot](jira-adapter.md) reuses these operations for explicitly configured synthetic TSSPIKE records. Its reference owns provider-specific persistence, configuration and limitations.
+
+Tin Star owns workflow recording; each card has one authoritative provider. Notion remains authoritative for existing work. The Inspector’s
 **Update work** and **Start work** forms call the same backend operations as the
 authenticated MCP. `create_work` remains available through authenticated MCP;
 the UI workflow endpoint does not accept creation, and Overview has no creation
@@ -8,7 +10,7 @@ control. Work tools require no open browser or `scene_id`. Explicit
 window selection and acknowledgment still govern presentation focus/flash.
 
 This slice also delivers the work-read part of MCP Slice B. `search_work` wraps
-the existing Notion reader, scene/link projection and Smart Search predicates.
+the configured work reader, scene/link projection and Smart Search predicates.
 `get_work` reads an exact card from the configured board, including history outside
 the operational result. IDs are the UI’s card/execution/claim IDs; links retain
 current, last-known, historical, conflicting and unverified distinctions. Unknown
@@ -22,7 +24,7 @@ PR and release reads follow the [MCP domain-read contract](reconciliation-mcp.md
 `search_work` accepts `owner`, `statuses`, `initiative`, `epic`,
 `checkpoint_before` (ISO timestamp), `query`, `patterns`, `history`, `offset`,
 `limit` (1–100, default 50) and `refresh`. Owner/status/classification/checkpoint
-filters run at Notion. Relation classifications use the canonical related page ID.
+filters run in the configured provider reader. Relation classifications use canonical related card IDs.
 Absent explicit statuses, operational queries exclude Done and Archived;
 `history: true` allows an explicit historical scope. The response names its scope,
 coverage, warnings, card/worker totals and `next_offset`. The same offset/limit pages the records and worker evidence. Unlinked workers remain discoverable through an unfiltered or text query; owner/status/classification filters return only workers related to cards in that scope, with link verification disclosed. Total is within the observed
@@ -74,9 +76,9 @@ rich-text field. Other Delegated To content remains. External runs never become 
 First Mate tasks. Reads/UI preserve their own references, reporter and observation;
 a report that ages out displays execution unknown without changing card status.
 
-One Notion PATCH couples worker provenance, Status = In Progress and Last touched
-by. Caller attribution comes from the existing authenticated interface: the local
-UI authority is `Tin Star UI`, direct install-token MCP is `Tin Star MCP`, and the
+A start couples worker provenance, Status = In Progress and Last touched by
+through the provider writer (one PATCH in Notion). Caller attribution comes from
+the existing authenticated interface: the local UI authority is `Tin Star UI`, direct install-token MCP is `Tin Star MCP`, and the
 existing facade supplies its authenticated configured caller ID. Tool arguments
 cannot choose their actor. The facade’s network/credential boundary and explicit
 presentation permission remain; all authenticated consumers get the same workflow
@@ -609,8 +611,9 @@ Required input:
 }
 ```
 
-Use `target: {card_id: "<canonical 32-character ID>"}` for a known card. An
-explicit ID is authoritative and must belong to the configured board. Otherwise,
+Use `target: {card_id: "<canonical card ID>"}` for a known card. Notion IDs
+remain 32-character page IDs; Jira identity is defined in the
+[adapter mapping](jira-adapter.md#field-mapping). An explicit ID is authoritative and must belong to the configured board. Otherwise,
 the existing receipt file binds the submission and external reference to one
 creation identity. `target.candidate_ids` supplies narrow candidates, but even a
 single candidate requires an explicit target: `needs-target` returns identities
@@ -641,7 +644,8 @@ was requested, and how to request it explicitly when fields were preserved.
 null means pickup evidence is unavailable, including older delivery receipts
 that did not retain the notice kind. Delivery never confirms worker acceptance.
 
-The executive brief is inserted at the top without deleting existing content.
+In Notion, the executive brief is inserted at the top without deleting existing
+content. Jira persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
 The distinct **Implementation contract** section stores immutable version
 manifests, ordered raw-text chunks, and a completion marker. Markdown, Unicode,
 tables, code fences, acceptance, decisions, constraints and references are retained
@@ -657,8 +661,8 @@ UTF-16 code units per element without dividing Unicode code points; contract
 chunks are at most 8,000 code units and append batches at most 20 blocks. These
 stay below the [Notion request limits](https://developers.notion.com/reference/request-limits).
 The brief uses [Notion's insert-at-start position](https://developers.notion.com/reference/patch-block-children#controlling-insert-position).
-The existing shared limiter and Retry-After policy serve every read/write. Both
-MCP transport request bounds are 2 MiB so large contracts can traverse the same
+For Notion, the existing shared limiter and Retry-After policy serve every
+read/write. Both MCP transport request bounds are 2 MiB so large contracts can traverse the same
 tunnel. Oversize input fails explicitly; nothing is condensed to fit.
 
 Routine `get_work` still reads bounded/redacted context and explicitly says the
@@ -693,8 +697,8 @@ worker dispatch or In Progress. Missing/stale execution stays unknown.
 The existing creation receipt file also holds submission hashes, target IDs,
 captured preconditions, step flags and uncertain batch hashes, not authoritative
 specification text or an offline task queue. A changed payload under the same
-submission/revision conflicts. A same-ID retry reads Notion first, verifies saved
-chunks and continues only never-submitted batches. The latch is written before
+submission/revision conflicts. A same-ID retry reads the authoritative provider
+first, verifies saved chunks and continues only never-submitted batches. The latch is written before
 each append/history operation to prevent duplicate production writes after a
 lost response or restart. An uncertain append or comment POST is never replayed.
 Partial results identify the canonical card, verified/missing chunk indices and

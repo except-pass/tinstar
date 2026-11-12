@@ -1,3 +1,4 @@
+import { isJiraCard } from '../../shared/workIdentity'
 import type { SourceSnapshot } from './index'
 import { dispatchForTask } from './dispatchProvenance'
 import { declaredLinks, reconcileScene, type Execution } from './scene'
@@ -52,7 +53,7 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
     const active = scene.executions.filter(e => e.home === source.home && operationalWorker(e))
     for (const execution of active) {
       const claims = scene.claims.filter(c => c.executionId === execution.id && operationalCard(c.cardId))
-      const declared = claims.filter(c => c.sources.includes(`notion.${FIRST_MATE_TASKS}`))
+      const declared = claims.filter(c => c.sources.includes(`${isJiraCard(c.cardId) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`))
       const cardIds = sorted(claims.map(c => c.cardId))
       const backlog = scene.backlog.find(b => b.home === source.home && b.source.id === (execution.source.backlog.id ?? execution.identity.task_id))
       const provenance = dispatchForTask(execution.source, backlog?.source)
@@ -101,7 +102,7 @@ function groupBackfill(scene: ReturnType<typeof reconcileScene>, proposals: Back
     // Positive declarations can name a task absent from the snapshot. Keep that
     // investigation/unknown distinct from an invented zero-worker assertion.
     const missing = scene.claims.filter(c => c.identity.fm_home === source.home && c.state !== 'historical' && operationalCard(c.cardId) &&
-      c.sources.includes(`notion.${FIRST_MATE_TASKS}`) && !scene.executions.some(e => e.id === c.executionId))
+      c.sources.includes(`${isJiraCard(c.cardId) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`) && !scene.executions.some(e => e.id === c.executionId))
     for (const claim of missing) {
       const tier = claim.verification === 'conflicting' || homeAvailable && notionCurrent ? 'conflicts' : 'unavailable'
       tiers[tier].push({ kind: 'declaration', task_id: claim.identity.task_id, spawn_gen: claim.identity.spawn_gen,
@@ -138,7 +139,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
     ? declaration.tasks.map(task => key(task.fm_home, task.task_id)) : []))
   const proposals: BackfillProposal[] = []
   for (const claim of scene.claims) {
-    if (claim.sources.includes(`notion.${FIRST_MATE_TASKS}`) || claim.basis === 'inferred' || claim.verification === 'conflicting') continue
+    if (claim.sources.includes(`${isJiraCard(claim.cardId) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`) || claim.basis === 'inferred' || claim.verification === 'conflicting') continue
     const { fm_home, task_id, spawn_gen } = claim.identity
     const home = scene.coverage.homes.find(home => home.source.home === fm_home)
     const entry = cards.find(entry => entry.card.id === claim.cardId)

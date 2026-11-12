@@ -1,3 +1,4 @@
+import { cardSourceUrl } from '../../shared/workIdentity'
 import { createHash } from 'node:crypto'
 import { decisionRequestRevision, type DecisionProposal } from '../../shared/decisionProposal'
 import type { AskContext } from '../../shared/ask'
@@ -15,7 +16,7 @@ export function decisionContext(item: QueueItem, view: AskContext['view']): AskC
     decision: { request_key: item.id, revision: decisionRevision(item) },
     schema_version: 2, target: { kind: 'decision', id: item.id },
     return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { ...view, scene: 'decisions', request_key: item.id } },
-    anchor: { kind: 'decision', page_id: cardId ?? item.id, label: item.title.slice(0, 512), url: cardId ? `https://www.notion.so/${cardId}` : null,
+    anchor: { kind: 'decision', page_id: cardId ?? item.id, label: item.title.slice(0, 512), url: cardId ? cardSourceUrl(cardId) : null,
       observed_at: source?.observedAt ?? null, expires_at: source?.expiresAt ?? null, freshness: source?.status === 'fresh' || source?.status === 'partial' ? source.status : 'unknown' },
     view: { ...view, scene: 'decisions', request_key: item.id },
   }

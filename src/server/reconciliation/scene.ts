@@ -1,3 +1,4 @@
+import { isJiraCard } from '../../shared/workIdentity'
 import { externalWorkers } from '../../shared/workflow'
 import { homeLabel } from '../../shared/reconciliationLabels'
 import { isException as exception } from '../../shared/reconciliationFindings'
@@ -115,7 +116,7 @@ function expectation(card: SourceCard, now: number): Pick<SceneCard, 'expectatio
     (start && Number.isFinite(Date.parse(start)) && Date.parse(start) > now)) {
     return { ...common, expectation: 'wait-planned', expectationReason: wait ? `Waiting For: ${wait}` : `Status ${word(card, 'Status')}${start ? `; Start Date ${start}` : ''}; no worker required now` }
   }
-  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: 'Notion Owner Firstmate and Status In Progress, without a published wait or future start' }
+  if (status === 'in progress') return { ...common, expectation: 'expected-now', expectationReason: `${isJiraCard(card.id) ? 'Jira' : 'Notion'} Owner Firstmate and Status In Progress, without a published wait or future start` }
   return { ...common, expectation: 'unknown', expectationReason: `Status ${word(card, 'Status')} has no execution expectation rule` }
 }
 
@@ -271,15 +272,15 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
       const state = historical ? 'historical' : available && execution ? 'current' : 'last-known'
       const corroboration = execution?.source.cardReferences.filter(ref => ref.pageId === card.id).map(ref => ref.source) ?? []
       claims.push({ id: key(card.id, id, 'explicit'), cardId: card.id, executionId: id,
-        identity: execution?.identity ?? identity, basis: 'explicit', sources: [`notion.${FIRST_MATE_TASKS}`, ...corroboration],
+        identity: execution?.identity ?? identity, basis: 'explicit', sources: [`${isJiraCard(card.id) ? 'jira' : 'notion'}.${FIRST_MATE_TASKS}`, ...corroboration],
         observedAt: intentions.observedAt, firstObservedAt: intentions.observedAt, endedAt: null, state, verification,
         accountability: { home: link.fm_home, parentHome: home?.source.parentHome ?? null, owner: word(card.source, 'Owner') } })
       add(conflict ? 'unverified-conflicting' : !available ? 'unknown-stale-source' : execution ? 'confirmed-link' : historical ? 'outside-coverage' : 'unverified-conflicting',
         [card.id], execution ? [id] : [], conflict
           ? `${[duplicatePrimary && 'Same home/task declared on multiple primary cards', spawnEvidence && 'Observed spawn evidence differs from the declaration or contains multiple attempts'].filter(Boolean).join('; ')}; First Mate must investigate continuity or ID reuse; never auto-switch`
-          : !available ? 'Declared relationship is last-known; Notion or worker home unavailable, stale or partial'
-            : execution ? 'Notion First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery'
-              : historical ? 'Historical Notion relationship retained; worker is not currently observed'
+          : !available ? `Declared relationship is last-known; ${isJiraCard(card.id) ? 'Jira' : 'Notion'} or worker home unavailable, stale or partial`
+            : execution ? `${isJiraCard(card.id) ? 'Jira' : 'Notion'} First Mate tasks matches exact home, task ID and spawn evidence; this does not establish progress or delivery`
+              : historical ? `Historical ${isJiraCard(card.id) ? 'Jira' : 'Notion'} relationship retained; worker is not currently observed`
                 : 'Declared worker not observed in a complete fresh home; First Mate must investigate', [link.fm_home], [
           ...(duplicatePrimary ? ['duplicate-primary' as const] : []),
           ...(spawnEvidence ? ['spawn-evidence' as const] : []),

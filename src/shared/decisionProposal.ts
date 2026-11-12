@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { FirstMateRequest } from './deskSource'
 import { askActionSchema } from './ask-actions'
+import { cardIdSchema } from './workIdentity'
 
 export const decisionReferenceSchema = z.object({ label: z.string().min(1).max(512), url: z.string().url().refine(value => {
   const url = new URL(value)
@@ -11,7 +12,7 @@ export const decisionReferenceSchema = z.object({ label: z.string().min(1).max(5
 export const decisionProposalSchema = z.object({
   schema: z.literal('tinstar.decision-proposal.v1'),
   proposal_id: z.string().min(1).max(256), request_key: z.string().min(1).max(4096),
-  card_id: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+  card_id: cardIdSchema.optional(),
   question: z.string().trim().min(1).max(2000), rationale: z.string().trim().min(1).max(4000),
   recommended_action_id: z.string().min(1).max(64), actions: z.array(askActionSchema).min(1).max(10),
   references: z.array(decisionReferenceSchema).max(20),

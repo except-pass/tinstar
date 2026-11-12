@@ -2,8 +2,9 @@ import { reviewEvidenceSchema, reviewResponseSchema } from './reviews'
 import { z } from 'zod'
 import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
+import { cardIdSchema } from './workIdentity'
+export { cardIdSchema } from './workIdentity'
 const identity = z.string().min(1).max(1024).refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value), 'Use an exact nonempty identity')
-export const cardIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
 export const workerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('firstmate'), fm_home: identity, task_id: identity, first_observed_spawn_gen: identity }).strict(),
   z.object({ kind: z.literal('external'), system: identity, run_id: identity, reference: z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use an HTTP run reference'),
@@ -65,6 +66,7 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
 ])
 export type UpdateWorkInput = z.infer<typeof updateWorkSchema>
 export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(128), name: label, owner: label, area: label,
+  provider: z.enum(['notion', 'jira']).optional(),
   status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'),
   properties: ordinaryPropertiesSchema.omit({ Name: true, Area: true }).optional(), content: contentSchema.optional(),
 }).strict()
@@ -102,7 +104,7 @@ export const workflowRules = {
     'A decision answer names the next Owner/Status and clears only that request. Other asks, waits and worker history survive.',
     'Completion/parking requires a caller-supported disposition; a merge or worker exit never implies business completion.',
     'Next check-in uses America/New_York, date-only means 9 AM. Checkpoints require assessment, evidence, next action and provisional/owner-confirmed attribution. In Progress appointments obey the board ceiling. Ordinary activity never advances them.',
-    'Notion is authoritative. Unconfirmed writes report not-saved or partially-saved. Ordinary workflow has no offline write queue or automatic replay/restart recovery; bounded review operations use durable source reconciliation; other operations repair only a missing note in-process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id. Source-bound recorded decisions have the narrow recovery exception described in operations.repair.',
+    'Notion remains authoritative for existing work; explicitly configured synthetic Jira cards have Jira as their sole source. Unconfirmed writes report not-saved or partially-saved. Ordinary workflow has no offline write queue or automatic replay/restart recovery; bounded review operations use durable source reconciliation; other operations repair only a missing note in-process while the card remains unchanged after a confirmed property write. Otherwise review current state and re-issue with a new operation_id. Source-bound recorded decisions have the narrow recovery exception described in operations.repair.',
     'UI and MCP use the same serialized operations and authenticated actor. Firstmate pickup is Queued only; active edits are contextual updates, never worker dispatch.',
   ],
   operations: {

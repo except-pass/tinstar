@@ -1,6 +1,7 @@
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
+import { isJiraCard } from '../../shared/workIdentity'
 
 export const richText = (content: string) => {
   const rich_text: Array<{ type: 'text'; text: { content: string } }> = []
@@ -31,6 +32,21 @@ export class NotionWriteError extends Error { constructor(readonly status: numbe
 export class ManagedSectionConflict extends Error {}
 export class WorkflowContent {
   constructor(private reader: WorkReader) {}
+  private jira(id: string) {
+    if (!isJiraCard(id)) return
+    if (!this.reader.jira) throw new Error('Jira is not configured')
+    return this.reader.jira
+  }
+  async patchProperties(id: string, properties: Record<string, unknown>) {
+    const jira = this.jira(id)
+    if (jira) return jira.patch(id, properties)
+    return this.request(`pages/${id}`, 'PATCH', { properties })
+  }
+  async appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) {
+    const jira = this.jira(id)
+    if (jira) return jira.appendContract(id, children.map(block => ({ type: block.type, text: createBlockText(block) })))
+    return this.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) })
+  }
   async request(path: string, method = 'GET', body?: unknown) {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
@@ -53,6 +69,8 @@ export class WorkflowContent {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }
   async notes(id: string): Promise<WorkflowNote[]> {
+    const jira = this.jira(id)
+    if (jira) return jira.notes(id)
     const result: WorkflowNote[] = []; let cursor: string | undefined
     for (let page = 0; page < 5; page++) {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
@@ -67,6 +85,8 @@ export class WorkflowContent {
     throw new Error('Comments truncated; cannot safely resolve or deduplicate this operation')
   }
   async sections(id: string, includeStructured = false, complete = false) {
+    const jira = this.jira(id)
+    if (jira) return jira.sections(id, complete)
     const result: Array<{ id: string; text: string; type: string }> = []; let cursor: string | undefined
     const cursors = new Set<string>()
     // Only an explicit full-contract read/write requests complete pagination.
@@ -86,6 +106,8 @@ export class WorkflowContent {
   }
   async section(id: string, name: string, text: string, expected?: string) {
     const marker = sectionMarker(name), desired = sectionText(name, text)
+    const jira = this.jira(id)
+    if (jira) return jira.section(id, name, desired, expected)
     const sections = await this.sections(id), matches = sections.filter(block => block.text.split('\n')[0] === marker)
     if (matches.length > 1) throw new ManagedSectionConflict('Duplicate managed sections; correct the specific section before replacing it')
     const found = matches[0]
@@ -99,7 +121,9 @@ export class WorkflowContent {
   async note(id: string, text: string, marker: string) {
     const before = await this.notes(id)
     if (before.some(note => workflowNoteHasMarker(note, marker))) return
-    await this.request('comments', 'POST', { parent: { page_id: id }, ...richText(`${text}\n${marker}`) })
+    const jira = this.jira(id)
+    if (jira) await jira.note(id, `${text}\n${marker}`)
+    else await this.request('comments', 'POST', { parent: { page_id: id }, ...richText(`${text}\n${marker}`) })
     if (!(await this.notes(id)).some(note => note.text === `${text}\n${marker}`)) throw new Error('Note readback differs')
   }
 }

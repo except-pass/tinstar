@@ -29,7 +29,7 @@ export function notionReleaseTransport(reader: WorkReader): ReleaseTransport {
       // Preserve any existing actionable instruction. The shared Desk publisher
       // carries this production check even when Next action is already occupied.
       if (proposal.desk && card.properties['Next action']?.type === 'rich_text' && !card.properties['Next action'].value) properties['Next action'] = richText(proposal.desk.item.action!)
-      await content.request(`pages/${card.id}`, 'PATCH', { properties })
+      await content.patchProperties(card.id, properties)
       const current = await reader.card(card.id, true)
       if (current.properties.Status?.value !== proposal.to) throw new Error('Release status readback differs; retry to inspect current state')
       reader.confirm(current)

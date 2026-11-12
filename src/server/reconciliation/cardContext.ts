@@ -1,5 +1,8 @@
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
+import { isJiraCard } from '../../shared/workIdentity'
+import type { JiraAdapter } from './jira'
+import { workReadback } from './workReadback'
 
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
@@ -15,7 +18,7 @@ export interface CardContextRead {
 export class CardContextReader {
   private commentCache = new Map<string, { until: number; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
   private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
-  constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch) {}
+  constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch, private jira?: JiraAdapter) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
@@ -45,6 +48,12 @@ export class CardContextReader {
   }
   private async readComments(id: string): Promise<CardContextRead> {
     const context: CardContextRead = { outcome: 'available', blocks: [] }
+    if (isJiraCard(id)) {
+      try {
+        if (!this.jira) throw new Error('Jira is not configured')
+        return { outcome: 'available', blocks: workReadback((await this.jira.notes(id)).map(note => ({ ...note, type: 'comment' }))) }
+      } catch { return { outcome: 'partial', blocks: [], omissions: 'Jira comment history unavailable or truncated; decision and receipt absence unknown.' } }
+    }
     if (!this.config) return { outcome: 'unavailable', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
     let cursor: string | undefined, bytes = 0
@@ -94,6 +103,11 @@ export class CardContextReader {
     return value
   }
   async read(id: string): Promise<CardContextRead> {
+    if (isJiraCard(id)) {
+      if (!this.jira) return { outcome: 'unavailable', blocks: [], message: 'Jira is not configured' }
+      return { outcome: 'available', observedAt: new Date().toISOString(), blocks: workReadback(await this.jira.sections(id)),
+        omissions: 'Jira Description prose only. Exact implementation contracts in attachments are not requested; use get_work implementation_contract for verified chunks.' }
+    }
     if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
     const signal = AbortSignal.timeout(20_000)
     const blocks: CardContextRead['blocks'] = []

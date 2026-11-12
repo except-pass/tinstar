@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { cardSourceUrl } from '../../shared/workIdentity'
 import type { SubmitHandoffInput } from '../../shared/workflow'
 import { heading, paragraph, WorkflowContent, NotionWriteError, type WorkflowCreateBlock, createBlockText } from './workflowContent'
 import type { HandoffReceiptState } from './workflowReceipts'
@@ -25,7 +26,7 @@ export function implementationContract(input: SubmitHandoffInput, actor: string)
   const list = (items: string[]) => items.map((item, index) => `${index + 1}. ${item}`).join('\n')
   const text = prefix + input.spec_markdown + `\n\n# Acceptance criteria\n${list(input.acceptance_criteria)}\n\n# Approved decisions\n${list(input.decisions)}\n\n# Forbidden approaches\n${list(input.forbidden_approaches)}\n\n# Durable references\n${input.references.map(ref => `${ref.description}: ${ref.url}`).join('\n')}\n` +
     (input.source_conversation ? `\nSource conversation: ${input.source_conversation}\n` : '') +
-    (input.parent_card_id ? `\nParent card: https://www.notion.so/${input.parent_card_id}\n` : '') +
+    (input.parent_card_id ? `\nParent card: ${cardSourceUrl(input.parent_card_id)}\n` : '') +
     (input.ui_prototype ? `\nApproved prototype: ${input.ui_prototype}\nBinding UI acceptance: the approved prototype is the implementation contract. A real screenshot of the first implemented pass must be compared with this prototype before claiming done.\n` : '')
   // This bound keeps each Notion write and on-demand read finite, without truncation.
   if (Buffer.byteLength(text, 'utf8') > 1500000) throw new ContractError('contract-too-large', 'Contract exceeds 1,500,000 UTF-8 bytes; submit a smaller explicit revision. Nothing was truncated.')
@@ -137,7 +138,7 @@ export class ImplementationContracts {
   }
   private async append(id: string, children: WorkflowCreateBlock[], state: HandoffReceiptState, save: () => Promise<void>, atStart = false) {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
-    try { await this.content.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) }) }
+    try { await this.content.appendBlocks(id, children, atStart) }
     catch (error) {
       if (error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
       throw error

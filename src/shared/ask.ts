@@ -4,7 +4,8 @@ import { organizerSchema, statusFilterSchema } from './reconciliationCommands'
 import { decisionProposalSchema } from './decisionProposal'
 import { askSuggestionsSchema } from './ask-actions'
 
-export const pageIdSchema = z.string().regex(/^[a-f0-9]{32}$/)
+export { cardIdSchema as pageIdSchema } from './workIdentity'
+import { cardIdSchema as pageIdSchema } from './workIdentity'
 export const askViewSchema = z.object({
   // Worker terminals are a mode of the existing Overview shell. Retain their
   // exact home/task identity so Return to source can reopen the same worker.
