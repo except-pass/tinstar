@@ -41,8 +41,13 @@ expansion and body/comment reads. The existing search index’s bounded backgrou
 prose collection remains independent of these property-only scans.
 
 All application Notion requests share pacing (350 ms between requests) and
-honor Retry-After before another request. A 429 degrades source coverage; writes
-are never automatically retried. Counts by method/resource/query, cache hits,
+honor Retry-After before another request. Exact-card property GETs make at most
+three attempts for timeout/network failures, HTTP 408, 429 and 5xx, with
+250 ms/500 ms backoff and a fresh five-second deadline per attempt, including
+queue wait. Cancelled queue waits return promptly without bypassing earlier
+requests or pacing. Permanent HTTP failures, malformed responses and card/source
+identity mismatches are not retried. Unrecovered source failures remain visible
+in coverage; writes are never automatically retried. Counts by method/resource/query, cache hits,
 429 responses and cumulative request/queue latency appear in the existing sources
 and work-read diagnostics. There is no persistent mirror or offline write queue.
 

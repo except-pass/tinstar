@@ -43,13 +43,34 @@ export function notionCard(value: unknown) {
   }
 }
 
+class NotionCardReadError extends Error {
+  constructor(readonly transient: boolean) { super('Notion card read failed') }
+}
+
 /** Exact uncached page read, sharing the source parser. Used immediately before
- * inbox delivery and for closure; cached scene data cannot authorize either. */
+ * inbox delivery and for closure; cached scene data cannot authorize either.
+ * Retry only reads: queue deadlines, rate limits and source outages can clear
+ * without changing write intent. Each attempt gets a fresh five-second budget. */
 export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: typeof fetch = fetch) {
   if (!config || notionPageId(id) !== id) throw new Error('Notion card unavailable')
+  for (let attempt = 0; ; attempt++) {
+    try { return await readNotionCardOnce(config, id, fetcher) } catch (error) {
+      const transient = error instanceof NotionCardReadError ? error.transient
+        : error instanceof TypeError || error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name)
+      if (!transient || attempt >= 2) throw error
+      await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
+    }
+  }
+}
+
+async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['notion']>, id: string, fetcher: typeof fetch) {
   const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error', signal: AbortSignal.timeout(5_000),
     headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } })
-  if (!response.ok || !response.body) throw new Error('Notion card read failed')
+  if (!response.ok) {
+    await response.body?.cancel()
+    throw new NotionCardReadError(response.status === 408 || response.status === 429 || response.status >= 500 && response.status < 600)
+  }
+  if (!response.body) throw new Error('Notion card read failed')
   const reader = response.body.getReader(), chunks: Uint8Array[] = []
   let bytes = 0
   try {

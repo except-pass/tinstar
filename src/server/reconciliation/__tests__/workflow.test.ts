@@ -581,6 +581,148 @@ it('honors Retry-After across all operations and measures request counts and lat
   expect(fetcher).toHaveBeenCalledTimes(2); expect(api.diagnostics.rateLimits).toBe(1); expect(api.diagnostics.latencyMs).toBeGreaterThanOrEqual(2000)
 })
 
+describe('workflow exact-card source recovery', () => {
+  const input = (kind: 'checkpoint' | 'edit' | 'complete'): UpdateWorkInput => ({ card_id: id, operation_id: `source-${kind}`, ...({
+    checkpoint: { kind: 'checkpoint' as const, checkpoint: { assessment: 'Verified source recovery', evidence: 'Fake-source readback passed', next_action: 'Review result', next_check_in: new Date(Date.now() + 3600_000).toISOString(), confirmation: 'owner-confirmed' as const } },
+    edit: { kind: 'edit' as const, properties: { Priority: 'High' }, note: 'Verified source recovery' },
+    complete: { kind: 'complete' as const, disposition: 'Accepted behavior', evidence: 'Fake-source readback passed' },
+  })[kind] })
+  function setup() {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.raw.properties.Priority = { type: 'select', select: { name: 'Low' } }
+    const fetcher = f.fetcher.getMockImplementation()!
+    let reads = 0
+    const intercept = (onRead: (read: number) => Response | undefined) => f.fetcher.mockImplementation(async (url, init) => {
+      if (String(url) === `https://api.notion.com/v1/pages/${id}` && (!init?.method || init.method === 'GET')) {
+        const response = onRead(++reads)
+        if (response) return response
+      }
+      return fetcher(url, init)
+    })
+    return { ...f, intercept, reads: () => reads }
+  }
+  function clockDeadlines() {
+    // Native AbortSignal.timeout uses real time; model it on the fake clock.
+    return vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms)
+      return controller.signal
+    })
+  }
+  it.each(['checkpoint', 'edit', 'complete'] as const)('saves %s through transient failures in both preconditions and readback without a board census or duplicate writes', async kind => {
+    const f = setup()
+    f.intercept(read => [1, 3, 5].includes(read) ? json({}, 503) : undefined)
+    const result = f.workflow.update(input(kind), 'Owner')
+    await vi.runAllTimersAsync()
+    expect(await result).toMatchObject({ outcome: 'saved' })
+    expect(f.requests.filter(row => row.method === 'PATCH' && row.url.endsWith(`/pages/${id}`))).toHaveLength(1)
+    expect(f.requests.filter(row => row.method === 'POST' && row.url.endsWith('/comments'))).toHaveLength(1)
+    expect(f.requests.some(row => row.url.includes('/data_sources/'))).toBe(false)
+  })
+  it('survives a shared refresh holding the queue beyond the old five-second card deadline', async () => {
+    const f = setup()
+    const timeout = clockDeadlines()
+    const fetcher = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementationOnce(async (url, init) => {
+      await new Promise(resolve => setTimeout(resolve, 6000))
+      return fetcher(url, init)
+    })
+    try {
+      const refresh = f.api.fetch(`https://api.notion.com/v1/data_sources/${dataSourceId}/query`, { method: 'POST', body: '{}' })
+      const update = f.workflow.update(input('complete'), 'Owner')
+      await vi.runAllTimersAsync()
+      await refresh
+      expect(await update).toMatchObject({ outcome: 'saved' })
+      expect(f.requests.filter(row => row.method === 'PATCH')).toHaveLength(1)
+    } finally { timeout.mockRestore() }
+  })
+  it('bounds retries to 15.75 seconds even when an earlier source request remains stuck', async () => {
+    const f = setup(), timeout = clockDeadlines()
+    let release!: (response: Response) => void
+    f.fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve }))
+    const active = f.api.fetch(`https://api.notion.com/v1/comments`)
+    let result: Awaited<ReturnType<WorkflowOperations['update']>> | undefined
+    const pending = f.workflow.update(input('complete'), 'Owner').then(value => { result = value })
+    try {
+      await vi.advanceTimersByTimeAsync(15_749)
+      expect(result).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      await pending
+      expect(result).toMatchObject({ outcome: 'not-saved', code: 'source-unavailable', saved_fields: [] })
+      expect(f.fetcher).toHaveBeenCalledTimes(1)
+    } finally { release(json({})); await active; timeout.mockRestore() }
+  })
+  it('checks current values again after a transient failure at the second precondition', async () => {
+    const f = setup()
+    f.intercept(read => {
+      if (read === 2) { f.raw.properties.Priority.select.name = 'Urgent'; return json({}, 503) }
+    })
+    const result = f.workflow.update(input('edit'), 'Owner')
+    await vi.runAllTimersAsync()
+    expect(await result).toMatchObject({ outcome: 'not-saved', code: 'conflict', requires_new_operation_id: true, saved_fields: [] })
+    expect(f.raw.properties.Priority.select.name).toBe('Urgent')
+    expect(f.requests.every(row => row.method === 'GET')).toBe(true)
+  })
+  it('exhausts transient reads without authorizing a write from cached data', async () => {
+    const f = setup()
+    await f.reader.card(id)
+    f.intercept(() => json({}, 503))
+    const result = f.workflow.update(input('complete'), 'Owner')
+    await vi.runAllTimersAsync()
+    expect(await result).toMatchObject({ outcome: 'not-saved', code: 'source-unavailable', saved_fields: [] })
+    expect(f.reads()).toBe(3)
+    expect(f.requests.every(row => row.method === 'GET')).toBe(true)
+  })
+  it.each([408, 429, 500, 502, 503, 504, 'network'])('recovers an exact read after transient %s', async failure => {
+    const f = setup()
+    f.intercept(read => {
+      if (read !== 1) return
+      if (failure === 'network') throw new TypeError('fetch failed')
+      return json({}, Number(failure))
+    })
+    const pending = f.reader.card(id, true)
+    await vi.runAllTimersAsync()
+    expect((await pending).id).toBe(id)
+    expect(f.reads()).toBe(2)
+  })
+  it.each([400, 401, 403, 404, 'wrong-source', 'wrong-id', 'malformed'])('does not retry permanent %s or authorize a write', async failure => {
+    const f = setup()
+    f.intercept(() => {
+      if (typeof failure === 'number') return json({}, failure)
+      if (failure === 'wrong-source') return json({ ...f.raw, parent: { data_source_id: 'c'.repeat(32) } })
+      if (failure === 'wrong-id') return json({ ...f.raw, id: 'c'.repeat(32) })
+      return new Response('invalid json')
+    })
+    const pending = f.workflow.update(input('complete'), 'Owner')
+    await vi.runAllTimersAsync()
+    expect(await pending).toMatchObject({ outcome: 'not-saved', saved_fields: [] })
+    expect(f.reads()).toBe(1)
+    expect(f.requests).toHaveLength(0)
+  })
+  it('honors Retry-After before retrying a throttled exact-card read', async () => {
+    const f = setup()
+    f.intercept(read => read === 1 ? new Response('{}', { status: 429, headers: { 'Retry-After': '3' } }) : undefined)
+    const pending = f.reader.card(id, true)
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(f.reads()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect((await pending).id).toBe(id)
+    expect(f.reads()).toBe(2)
+  })
+  it('keeps a submitted write uncertain after readback exhaustion and never replays it', async () => {
+    const f = setup()
+    f.intercept(read => read >= 3 ? json({}, 503) : undefined)
+    const update = input('complete'), pending = f.workflow.update(update, 'Owner')
+    await vi.runAllTimersAsync()
+    const result = await pending
+    expect(result).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed', saved_fields: [] })
+    expect(await f.workflow.update(update, 'Owner')).toEqual(result)
+    expect(f.requests.filter(row => row.method === 'PATCH')).toHaveLength(1)
+    expect(f.requests.some(row => row.method === 'POST')).toBe(false)
+  })
+})
+
 it('uses one policy through authenticated UI, MCP and the existing tunnel, without a browser or scene', async () => {
   vi.useFakeTimers({ toFake: ['Date'] })
   const f = fixture({ body: 'Acceptance token=abcdefgh12345678', comment: 'Evidence ghp_abcdefghijklmnopqrstuvwx' })
