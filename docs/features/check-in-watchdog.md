@@ -62,7 +62,7 @@ idempotency key (equivalent timezone renderings are the same epoch).
 
 Tin Star's existing backend singleton owns each config root. A serialized
 writer reloads the system store and atomically replaces a mode-0600 file. The
-request UUID, body and offered time are durable before the existing
+request UUID and body are durable before the existing
 authenticated `/api/ask/bridge` returns them. The unchanged Mac puller uses its
 existing durable `fm-inbox.sh note --request-id` replay mechanism. Lost responses,
 capture failures, failed wakes, restarts and repeated UI reads reuse the same
@@ -84,14 +84,20 @@ sweep. A restart retains the reserved ID and body; older stores without a
 reservation become eligible after the next sweep. A suppressed appointment
 never silently acquires another request ID.
 
-After two hours without a substantive acknowledgement or a correlated card
+Reservation leaves a never-delivered request due. The first saved-note receipt
+records `offeredAt` and marks it requested, including when the wake failed; retries
+retain that timestamp. A puller outage does not start the acknowledgement clock.
+An appointment changed before its first receipt is superseded on the next sweep,
+while its reserved identity remains owned for late receipts.
+
+After two hours from that receipt without a substantive acknowledgement or a correlated card
 checkpoint, a single persisted follow-up flags the unresolved request to First Mate.
 A checkpoint with the exact request ID that fails verification before a follow-up
-has been offered instead records
+has received a saved-note receipt instead records
 `answered-needs-correction` and shows the failing field on the quiet card line.
 It stays unresolved without sending a no-answer follow-up; a corrected checkpoint
 resolves it on the next sweep. A queued follow-up retains its ID and receipts but
-is suppressed. Already-offered follow-ups retain their state and history, and
+is suppressed. Receipted follow-ups retain their state and history, and
 resolve when their checkpoint verifies. An unsupported "still
 working" reply does not stop it. Moving the date without verified evidence
 also does not evade this one follow-up on a still-active integrated card: its

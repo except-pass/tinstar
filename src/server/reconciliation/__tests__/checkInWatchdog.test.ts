@@ -235,6 +235,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it.each(['empty', 'synthetic', 'unrelated', 'old-checkpoint'])('does not clear for %s evidence', async kind => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id)
     if (kind === 'empty') h.setContext({ outcome: 'available', blocks: [] })
     if (kind === 'synthetic') h.setContext({ outcome: 'available', blocks: [{ id: 'empty', type: 'paragraph', text: h.report(id).replace(/Evidence: .*/, 'Evidence: none') }] })
@@ -278,6 +279,7 @@ describe('durable lifecycle on the existing bridge', () => {
     const h = await harness(); h.advance(20_000)
     await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.advance(25_000)
     h.publish(id, '2026-11-10T19:01:00Z')
     h.setContext({ outcome: 'available', blocks: [{ id: 'over-ceiling', type,
@@ -296,6 +298,7 @@ describe('durable lifecycle on the existing bridge', () => {
   ])('enforces the ceiling on property %s when the answer is %s', async (property, answer, state) => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id, answer)
     h.card.properties['Next check-in']!.value = { start: property }
     await h.watchdog.sweep(true)
@@ -345,6 +348,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it.each(['closed', 'none (Done).', 'N/A.', 'DONE (archived)', 'Closed!'])('accepts a closed checkpoint %s', async next => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id)
     h.card.properties.Status!.value = next.includes('archived') ? 'Archived' : 'Done'
     h.card.properties['Next check-in']!.value = null
@@ -356,6 +360,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it('compares date-only appointments at 9 AM New York and trims attribution', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id, '2026-11-11T14:00:00Z')
     h.card.properties.Status!.value = 'Waiting For'
     h.card.properties['Last touched by']!.value = ' FIRSTMATE '
@@ -413,6 +418,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it('still rejects a Next check-in that is not after the checkpoint', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id, '2026-11-10T14:00:00Z')
     await h.watchdog.sweep(true)
     expect((await h.watchdog.rows())[0]).toMatchObject({
@@ -471,10 +477,10 @@ describe('durable lifecycle on the existing bridge', () => {
     const restarted = h.make()
     await restarted.sweep(true)
     expect((await restarted.rows())[0]).toMatchObject({
-      state: stage === 'queued' ? 'answered-needs-correction' : 'needs-attention',
+      state: stage !== 'receipted' ? 'answered-needs-correction' : 'needs-attention',
       verification: 'Evidence: substantive evidence required', followUp: saved, verifiedAt: null,
     })
-    if (stage === 'queued') {
+    if (stage !== 'receipted') {
       expect(checkInIndicatorText((await restarted.indicators()).get(h.card.id)!)).toBe('Answered; correction needed · Evidence: substantive evidence required')
       expect((await restarted.bridgeWork()).pending).toEqual([])
     }
@@ -486,6 +492,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it.each(['before-request', 'future', 'missing'])('retains the %s checkpoint-time guard', async kind => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id)
     h.setContext({ outcome: 'available', blocks: [{ id: 'bad-time', type: 'comment', text: h.report(id),
       created_time: kind === 'missing' ? undefined : new Date(h.time() + (kind === 'future' ? 60_000 : -60_000)).toISOString() }] })
@@ -537,6 +544,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it('creates a new epoch only after its new appointment passes', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id); await h.watchdog.sweep(true)
     expect(await h.watchdog.rows()).toHaveLength(1)
     h.advance(2 * 3600_000); await h.watchdog.sweep(true)
@@ -582,6 +590,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it('verifies a named-timezone checkpoint against its property instant', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     h.publish(id, '2026-11-10T17:00:00')
     h.card.properties['Next check-in']!.value = { start: '2026-11-10T17:00:00', time_zone: 'Europe/Paris' }
     await h.watchdog.sweep(true)
@@ -600,7 +609,7 @@ describe('durable lifecycle on the existing bridge', () => {
     try {
       await Promise.race([
         (async () => {
-          expect((await h.watchdog.indicators()).get(h.card.id)?.state).toBe('requested')
+          expect((await h.watchdog.indicators()).get(h.card.id)?.state).toBe('due')
           await h.note(id)
           await h.reply(id, h.report(id))
         })(),
@@ -748,4 +757,47 @@ it('revalidates legacy check-in reservations on a sweep without changing retry b
   expect(await restarted.owns(offered[0]!.request_id)).toBe(true)
   await restarted.sweep(true)
   expect((await restarted.bridgeWork()).pending).toEqual(offered)
+})
+
+
+it('keeps a reserved request due throughout a puller outage and starts grace on receipt', async () => {
+  const h = await harness(); await h.watchdog.sweep(true)
+  const offer = (await h.watchdog.bridgeWork()).pending[0]!
+  h.advance(CHECK_IN_GRACE_MS * 3)
+  const restarted = h.make()
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]).toMatchObject({ state: 'due', request: { offeredAt: null }, followUp: null })
+  expect((await restarted.bridgeWork()).pending).toEqual([offer])
+  expect((await restarted.indicators()).get(h.card.id)?.requestedAt).toBeNull()
+  await h.watchdog.ingest({ request_id: offer.request_id, error: 'capture-failed' })
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]!.followUp).toBeNull()
+  await h.note(offer.request_id, false)
+  const deliveredAt = new Date(h.time()).toISOString()
+  h.advance(CHECK_IN_GRACE_MS - 1)
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]).toMatchObject({ state: 'requested', request: { offeredAt: deliveredAt }, followUp: null })
+  await h.note(offer.request_id)
+  expect((await restarted.bridgeWork()).pending).toEqual([])
+  h.advance(1)
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]).toMatchObject({ state: 'needs-attention', request: { offeredAt: deliveredAt } })
+  expect((await restarted.bridgeWork()).pending[0]!.body).toContain('SYSTEM CHECK-IN FOLLOW-UP')
+})
+
+it('supersedes a reserved checkpoint changed before delivery while retaining late receipt ownership', async () => {
+  const h = await harness(); await h.watchdog.sweep(true)
+  const offer = (await h.watchdog.bridgeWork()).pending[0]!
+  h.advance(CHECK_IN_GRACE_MS * 3)
+  h.card.properties['Next check-in']!.value = { start: new Date(h.time() + 3600_000).toISOString() }
+  const restarted = h.make()
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]).toMatchObject({ state: 'superseded', request: { offeredAt: null }, followUp: null })
+  expect((await restarted.bridgeWork()).pending).toEqual([])
+  expect(await restarted.owns(offer.request_id)).toBe(true)
+  await h.note(offer.request_id)
+  await h.reply(offer.request_id, 'Received after checkpoint changed')
+  h.advance(CHECK_IN_GRACE_MS)
+  await restarted.sweep(true)
+  expect((await restarted.rows())[0]).toMatchObject({ state: 'superseded', followUp: null })
 })

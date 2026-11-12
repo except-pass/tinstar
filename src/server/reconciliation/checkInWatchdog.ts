@@ -363,9 +363,6 @@ export class CheckInWatchdog {
         const entry = { request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }
         if (jsonBytes(pending) + jsonBytes(entry) > 256 * 1024) break
         item.pending = true
-        item.offeredAt ??= new Date(this.now()).toISOString()
-        if (row.state === 'due') row.state = 'requested'
-        item.error = null
         pending.push(entry)
       }
     })
@@ -377,10 +374,12 @@ export class CheckInWatchdog {
       const row = rows.find(r => r.request.requestId === update.request_id || r.followUp?.requestId === update.request_id)
       if (!row) throw new AskNotFound('Unknown system request')
       const item = row.request.requestId === update.request_id ? row.request : row.followUp!
-      if (!item.offeredAt) throw new AskConflict('System request was not offered for delivery')
+      if (!item.body) throw new AskConflict('System request was not offered for delivery')
       if (update.note) {
         if (update.note.request_id !== inboxRequestId(item.requestId) || item.noteId && item.noteId !== update.note.id ||
           rows.some(r => [r.request, r.followUp].some(d => d && d.requestId !== item.requestId && d.noteId === update.note!.id))) throw new AskConflict('Note does not match system request')
+        item.offeredAt ??= new Date(this.now()).toISOString()
+        if (row.state === 'due') row.state = 'requested'
         item.noteId = update.note.id
         item.announced = item.announced === true || update.note.announced === true ? true : update.note.announced
         item.error = item.announced === false ? 'wake-failed' : null
