@@ -255,7 +255,7 @@ export class FirstmateUpdates {
         if (batch.items.some(item => item.kind === 'pickup') && batch.offered &&
           batch.items.some(item => item.kind === 'pickup' && !current.has(item.card_id))) continue
         if (!batch.offered) {
-          // A source failure retains the notice for the next pull. A confirmed
+          // A source failure retains the notice for the next sweep. A confirmed
           // move out of Queued cancels pickup without dispatching stale work.
           const remaining = batch.items.filter(item => item.kind === 'pickup' && !current.has(item.card_id))
           const verified = batch.items.filter(item => item.kind !== 'pickup' || current.has(item.card_id) && queued(current.get(item.card_id)!))

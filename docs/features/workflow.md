@@ -249,6 +249,8 @@ offers and receipts without reading sources or waiting for an in-flight sweep.
 The ten-second coalescing window is a minimum; delivery becomes available when
 the next periodic sweep reserves the notice. Restarts retain reserved IDs and
 bodies; older stores without reservations wait for the next sweep.
+Delivery state `offered` means the sweep reserved a notice for bridge pickup;
+`confirmed` requires an announced saved-note receipt.
 Preview delivery follows the watchdog's existing disabled-by-default settings.
 
 The watchdog's census, exact verification and context use the same reader/cache

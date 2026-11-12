@@ -392,6 +392,7 @@ describe('durable lifecycle on the existing bridge', () => {
   it('notes a different Next check-in and takes the next epoch from the property', async () => {
     const h = await harness(); await h.watchdog.sweep()
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    await h.note(id)
     const property = '2026-11-10T17:00:00Z'
     const answer = '2026-11-10T18:00:00Z'
     h.card.last_edited_time = new Date(h.time()).toISOString()

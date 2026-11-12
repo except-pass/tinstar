@@ -20,8 +20,7 @@ for caching and coverage. The worker identity graph reuses the cached default
 operational declarations when available, without fetching historical cards or
 requiring a broader scan. Incomplete or unavailable declaration coverage routes
 requests to First Mate for reconciliation rather than selecting an unverified
-worker. Before delivery, the existing uncached exact-page read rechecks scope,
-status and appointment.
+worker. Offer validation is described under [Delivery and persistence](#delivery-and-persistence).
 
 The report's `source` describes the scoped eligibility census; `boardSource`
 separately reports the supplied declaration coverage. Saved snapshots can include
@@ -41,8 +40,8 @@ These fixture measurements demonstrate budget headroom at the specified
 latency; they do not establish production latency. The real deadline still
 applies when the API is slow, and failed/truncated reads retain truthful source
 state. The filtered 72-card regression completes in one query page even when
-the full-board fixture exceeds 2,000 cards. The exact-card GET before delivery
-continues to suppress a closed/changed card independently of either census.
+the full-board fixture exceeds 2,000 cards. Offer validation remains independent
+of either census; see [Delivery and persistence](#delivery-and-persistence).
 
 An exact canonical `First Mate tasks` declaration, confirmed/current claim and
 fresh running execution can name one worker **via First Mate**. Candidate title
@@ -90,8 +89,9 @@ retain that timestamp. A puller outage does not start the acknowledgement clock.
 An appointment changed before its first receipt is superseded on the next sweep,
 while its reserved identity remains owned for late receipts.
 
-After two hours from that receipt without a substantive acknowledgement or a correlated card
-checkpoint, a single persisted follow-up flags the unresolved request to First Mate.
+After two hours from that receipt without a substantive acknowledgement or a
+correlated card checkpoint, a single persisted follow-up flags the unresolved
+request to First Mate.
 A checkpoint with the exact request ID that fails verification before a follow-up
 has received a saved-note receipt instead records
 `answered-needs-correction` and shows the failing field on the quiet card line.
