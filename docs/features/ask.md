@@ -275,6 +275,8 @@ report their exit status; managed service health is described in the runbook.
    The same response also carries system check-ins; their separate persistence,
    batch bounds and automatic retry policy are owned by the
    [watchdog reference](check-in-watchdog.md#delivery-and-persistence).
+   Waiting-on-First-Mate nudges also share this bridge; their reservation and
+   retry lifecycle is owned by the [wait reference](waiting-on-main.md).
 2. For each pending request the puller invokes, locally and with body on stdin:
    `FM_HOME=<home> <home>/bin/fm-inbox.sh note --request-id
    tinstar-ask-<request-UUID> --json -`. Exit 0 is captured; exit 3 is saved but

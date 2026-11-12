@@ -8,7 +8,7 @@ Tinstar shows the workers First Mate is already running, the calls that need you
 
 Overview is the primary home: independent Workers and Notion cards share groups controlled by organizer presets and Customize in the compact toolbar, with relationships between the columns. See the [Overview reference](docs/features/overview.md) for grouping, filtering and presentation behavior and the [source setup](docs/features/reconciliation-floor.md#run-and-configure) for fleet and Notion configuration. The optional [Jira adapter pilot](docs/features/jira-adapter.md) supports isolated synthetic work.
 
-Use [Waiting on First Mate](docs/features/waiting-on-main.md) on Overview to inspect waits on main and their owner-alert delivery status.
+Waits on First Mate are nudged to First Mate automatically. Overview keeps that list off the default view; see [Waiting on First Mate](docs/features/waiting-on-main.md).
 
 For Codex worker-state collection and machine-local setup, see the
 [Codex activity reference](docs/features/codex-activity.md).
