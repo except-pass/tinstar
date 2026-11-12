@@ -1,3 +1,15 @@
+async function waitForTurn(prior: Promise<unknown>, signal?: AbortSignal | null) {
+  if (!signal) return prior
+  signal.throwIfAborted()
+  let abort!: () => void
+  try {
+    await Promise.race([prior, new Promise<never>((_, reject) => {
+      abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+    })])
+  } finally { signal.removeEventListener('abort', abort) }
+}
+
 /** All application Notion traffic shares pacing and Retry-After, including
  * forced refreshes. No automatic write retry: a lost response may have saved. */
 export class NotionApi {
@@ -23,19 +35,22 @@ export class NotionApi {
   private async request(input: Parameters<typeof fetch>[0], init?: RequestInit) {
     const prior = this.tail
     let release!: () => void
-    this.tail = new Promise<void>(resolve => { release = resolve })
-    await prior
+    const slot = new Promise<void>(resolve => { release = resolve })
+    // A cancelled waiter must return on its deadline, while later requests
+    // still wait for the active request rather than jumping the pacing queue.
+    this.tail = prior.then(() => slot)
     const started = Date.now()
     try {
+      await waitForTurn(prior, init?.signal)
       const delay = this.nextAt - Date.now()
       if (delay > 0) await new Promise<void>((resolve, reject) => {
         const signal = init?.signal
-        const abort = () => { clearTimeout(timer); reject(new Error('Notion request deadline exceeded')) }
+        const abort = () => { clearTimeout(timer); reject(signal?.reason) }
         const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, delay)
         if (signal?.aborted) abort()
         else signal?.addEventListener('abort', abort, { once: true })
       })
-      if (init?.signal?.aborted) throw new Error('Notion request deadline exceeded')
+      init?.signal?.throwIfAborted()
       const url = new URL(String(input)), method = init?.method ?? 'GET'
       const operation = `${method} ${url.pathname.split('/')[2] ?? 'other'}${url.pathname.endsWith('/query') ? '/query' : ''}`
       this.diagnostics.requests[operation] = (this.diagnostics.requests[operation] ?? 0) + 1
