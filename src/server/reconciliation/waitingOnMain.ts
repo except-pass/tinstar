@@ -227,6 +227,7 @@ export class WaitingOnMain implements MainWaitBridge {
   }
   private async offerNudge() {
     if (!(await this.enabled())) return { pending: [], tracked: [] }
+    await this.update(await this.snapshot(), false)
     const state = await this.load()
     const nudge = state.nudge
     if (!nudge || nudge.announced === true) return { pending: [], tracked: [] }
@@ -243,6 +244,14 @@ export class WaitingOnMain implements MainWaitBridge {
     if (!nudge.offeredAt) throw new AskConflict('Main-wait nudge was not offered for delivery')
     if (update.note) {
       if (update.note.request_id !== inboxRequestId(nudge.requestId) || nudge.noteId && nudge.noteId !== update.note.id) throw new AskConflict('Note does not match main-wait nudge')
+      if (nudge.announced !== true && update.note.announced === true) {
+        const now = this.now()
+        for (const row of state.rows) {
+          if (!nudge.itemIds.includes(row.item.id) || row.item.audience === 'owner') continue
+          if (row.nudgeFirstAt == null) row.nudgeFirstAt = now
+          row.nudgeLastAt = now
+        }
+      }
       nudge.noteId = update.note.id
       nudge.announced = nudge.announced === true || update.note.announced === true ? true : update.note.announced
       nudge.error = nudge.announced === false ? 'wake-failed' : null
@@ -256,10 +265,6 @@ export class WaitingOnMain implements MainWaitBridge {
     if (state.nudge && state.nudge.announced !== true) return false
     const due = state.rows.filter(row => row.item.audience !== 'owner' && row.item.fresh && nudgeDue(row.nudgeLastAt ?? null, now))
     if (!due.length) return false
-    for (const row of due) {
-      if (row.nudgeFirstAt == null) row.nudgeFirstAt = now
-      row.nudgeLastAt = now
-    }
     state.nudge = {
       requestId: randomUUID(), body: mainWaitNudge(due.map(row => row.item), now),
       offeredAt: null, noteId: null, announced: null, error: null, itemIds: due.map(row => row.item.id),
@@ -293,6 +298,14 @@ export class WaitingOnMain implements MainWaitBridge {
     }
     state.rows = [...saved.values()]
     const rows = state.rows
+    if (state.nudge && state.nudge.announced !== true) {
+      const current = rows.filter(row => row.item.audience !== 'owner' && state.nudge!.itemIds.includes(row.item.id))
+      if (!current.length) state.nudge = null
+      else if (current.length !== state.nudge.itemIds.length) {
+        state.nudge.itemIds = current.map(row => row.item.id)
+        state.nudge.body = mainWaitNudge(current.map(row => row.item), now)
+      }
+    }
     await this.save(state)
     if (deliver) {
       const enabled = await this.enabled()

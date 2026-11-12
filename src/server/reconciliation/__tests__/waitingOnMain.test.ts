@@ -369,7 +369,7 @@ describe('Waiting on main', () => {
     await service().refresh(value)
     expect((await service().bridgeWork()).pending).toEqual([])
     const first = service()
-    expect((await first.sweep()).items.map(row => row.nudgedAt)).toEqual([new Date(now).toISOString(), new Date(now).toISOString()])
+    expect((await first.sweep()).items.every(row => row.nudgedAt == null)).toBe(true)
     expect(notify).not.toHaveBeenCalled()
     const offered = await first.bridgeWork()
     expect(offered.pending).toHaveLength(1)
@@ -381,12 +381,19 @@ describe('Waiting on main', () => {
       expect.objectContaining({ kind: 'mate', key: 'approve-api', card_id: null, text: 'Choose the API', age: '1m' }),
     ])
     const restarted = service()
-    expect(await restarted.bridgeWork()).toEqual(offered)
+    await restarted.ingest({ request_id: offered.pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: false, id: 'nudge-note', request_id: offered.pending[0]!.inbox_request_id } })
+    expect((await restarted.bridgeWork()).pending).toEqual(offered.pending)
+    time += FOUR_HOURS
+    freshen(value, time)
+    expect((await restarted.sweep()).items.every(row => row.nudgedAt == null)).toBe(true)
+    expect((await restarted.bridgeWork()).pending).toEqual(offered.pending)
+    await restarted.ingest({ request_id: offered.pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'nudge-note', request_id: offered.pending[0]!.inbox_request_id } })
+    expect((await restarted.bridgeWork()).pending).toEqual([])
+    const deliveredAt = time
+    await restarted.ingest({ request_id: offered.pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'nudge-note', request_id: offered.pending[0]!.inbox_request_id } })
     time += TWO_HOURS - 1
     freshen(value, time)
     await restarted.sweep()
-    expect(await restarted.bridgeWork()).toEqual(offered)
-    await restarted.ingest({ request_id: offered.pending[0]!.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'nudge-note', request_id: offered.pending[0]!.inbox_request_id } })
     expect((await restarted.bridgeWork()).pending).toEqual([])
     time += 1
     freshen(value, time)
@@ -394,7 +401,24 @@ describe('Waiting on main', () => {
     const again = await restarted.bridgeWork()
     expect(again.pending).toHaveLength(1)
     expect(again.pending[0]!.request_id).not.toBe(offered.pending[0]!.request_id)
-    expect((await restarted.sweep()).items.every(row => row.nudgedAt === new Date(now).toISOString())).toBe(true)
+    expect((await restarted.sweep()).items.every(row => row.nudgedAt === new Date(deliveredAt).toISOString())).toBe(true)
+  })
+  it.each(['closed', 'resolved', 'owner'] as const)('removes %s work from an offered batch without changing its id', async change => {
+    const value = snapshot(), directory = await root()
+    const service = new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => now)
+    await service.sweep()
+    const first = (await service.bridgeWork()).pending[0]!
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    if (change === 'closed') card.properties.Status!.value = 'Done'
+    if (change === 'owner') asOwner(card, 'name')
+    if (change === 'resolved') publishResolutions(value, [{ key: 'approve-api', at: askAt }])
+    const next = (await service.bridgeWork()).pending[0]!
+    expect(next.request_id).toBe(first.request_id)
+    const items = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
+    expect(items.map((row: { key: string }) => row.key)).toEqual(change === 'resolved' ? [card.id] : ['approve-api'])
+    card.properties.Status!.value = 'Done'
+    value.fleet[1]!.observation.data!.parent_asks!.items = []
+    expect((await service.bridgeWork()).pending).toEqual([])
   })
   it('does not nudge a closed item, stale coverage, or a disabled instance', async () => {
     const directory = await root()

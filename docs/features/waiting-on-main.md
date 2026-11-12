@@ -3,7 +3,9 @@
 Overview does not show waits on First Mate by default. Each fresh wait sends
 First Mate one inbox nudge on the existing check-in and workflow-notice bridge.
 The note carries the card id, or the mate and key, plus the wait text and age.
-The same open item is nudged again at most every two hours. A closed item is
+The same open item is nudged again at most every two hours after a successful
+announcement. Pending retries keep their request ID; closed, resolved, and
+owner waits are removed before offering the remaining batch. A closed item is
 not nudged. Stale or unknown coverage does not send one. Dedup lives in the
 same state file as the owner alerts and survives a restart.
 

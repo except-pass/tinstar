@@ -25,7 +25,7 @@ export interface MainWaitItem {
   audience?: 'owner' | 'first-mate'
   since: string | null; ageBasis: 'status timestamp' | 'at least'; url: string | null; fresh: boolean
   alert?: 'mentioned' | 'plain-comment' | 'unconfirmed' | 'failed' | 'disabled'
-  /** When the first inbox nudge for this still-open item was reserved. */
+  /** When the first inbox nudge for this still-open item was announced. */
   nudgedAt?: string | null
 }
 export interface MainWaitRead { items: MainWaitItem[]; unknown: string[]; error?: string }
