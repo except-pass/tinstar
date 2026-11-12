@@ -4,9 +4,10 @@ Overview does not show waits on First Mate by default. Each fresh wait sends
 First Mate one inbox nudge on the existing check-in and workflow-notice bridge.
 The note carries the card id, or the mate and key, plus the wait text and age.
 The same open item is nudged again at most every two hours after a successful
-announcement. Pending retries keep their request ID; closed, resolved, and
-owner waits are removed before offering the remaining batch. A closed item is
-not nudged. Stale or unknown coverage does not send one. Dedup lives in the
+announcement. Pending retries keep their request ID and rebuild the note from
+current wait text; closed, resolved, owner, and no-longer-fresh waits are removed
+before offering the remaining batch. An empty batch sends nothing.
+Stale or unknown coverage does not send a nudge. Dedup lives in the
 same state file as the owner alerts and survives a restart.
 
 The owner's Overview shows a quiet "First Mate nudge still open" line only when
@@ -106,13 +107,13 @@ items and four-hour repeats use individual comments. An empty initial known
 census initializes normally. An entirely unknown census waits for readable data.
 
 User-read failure or a definite mention rejection falls back to a plain Notion
-comment, recorded as owner alert not delivered (mention failed) and shown on
-the opened item detail; the mentioned alert is retried at the normal
+comment, recorded as owner alert not delivered (mention failed) in the saved
+state; the mentioned alert is retried at the normal
 once-per-four-hour cadence. A network timeout is ambiguous; it does
 not cause an immediate second write. Each attempt is durably reserved before
 posting and is eligible again four hours later, so crashes/restarts cannot spam
-already-alerted items. Failed/unconfirmed delivery is shown in the expanded
-Overview list. State read/write failure shows unknown and sends no comment,
+already-alerted items. Owner waits and their delivery status are excluded from
+the Waiting on First Mate list. State read/write failure shows unknown and sends no comment,
 preventing duplicate alerts after a lost throttle record. Restore a damaged
 state file from backup, or move it aside to intentionally start a new summary.
 
@@ -134,8 +135,9 @@ then confirm fresh `parent_asks` fields in the transported child snapshots and
 the updated collector before its answers leave the backstop. No First
 Mate repository change is required. Confirm main's fleet label and child parent
 links before deploying the backend/client. Preserve alert state outside the
-release/config trees. The first live enabled sweep sends the single startup
-summary; tests and preview proof use synthetic data and never write real comments.
+release/config trees. The first live enabled sweep sends the startup summary
+if owner waits are already overdue and queues fresh First Mate waits for inbox
+delivery; tests and preview proof use synthetic data and never write real comments.
 
 Tests: `src/server/reconciliation/__tests__/waitingOnMain.test.ts`,
 `npm run test:codex-collector`, and `e2e/waiting-on-main.spec.ts` cover matching,
