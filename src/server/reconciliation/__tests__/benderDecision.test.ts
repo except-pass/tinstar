@@ -9,23 +9,25 @@ const now = Date.parse('2026-11-12T01:27:00Z')
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now) })
 afterEach(() => vi.useRealTimers())
 const source = { home: '/fixture/hulk', taskId: benderTaskId, id: benderTaskId, kind: 'hold' as const }
+const existingHoldKey = JSON.stringify(['hold', '/fixture/hulk', benderTaskId])
 it('merges the explicit Decision card, keyed question and task hold as one owner decision', () => {
   const queue = buildQueue(benderDecisionSources(now), new Map(), now)
   expect(queue.items).toHaveLength(1)
-  expect(queue.items[0]).toMatchObject({ id: requestAnchor(source), readiness: 'ready-now', kind: 'decision', action: benderQuestion,
+  expect(queue.items[0]).toMatchObject({ id: existingHoldKey, readiness: 'ready-now', kind: 'decision', action: benderQuestion,
     cardIds: [benderCardId], decisionKeys: expect.arrayContaining(['pilot-go']), oneTouch: true })
   expect(queue.items[0]!.sources.filter(source => source.request)).toHaveLength(3)
   expect(queue.items[0]!.sources.find(entry => entry.request?.kind === 'hold')).toMatchObject({ responseAnchor: requestAnchor(source), readiness: 'ready-now' })
   expect(queue.items[0]!.sources.find(entry => entry.request?.kind === 'decision')?.responseAnchor).toBeUndefined()
 })
-it('keeps the typed recommendation on that same canonical request', () => {
+it('keeps an already-published typed recommendation on the pre-merge hold key', () => {
   const snapshot = benderDecisionSources(now), queue = buildQueue(snapshot, new Map(), now)
-  const proposal = { ...fixtureProposal(requestAnchor(source), benderCardId), source: { kind: 'firstmate-request' as const, id: source.id, revision: '1' } }
+  const proposal = { ...fixtureProposal(existingHoldKey, benderCardId), source: { kind: 'firstmate-request' as const, id: source.id, revision: '1' } }
   const blocks = [{ id: 'typed-note', type: 'comment', text: `Requested from: Will\nQuestion: ${benderQuestion}\nTin Star request: ${JSON.stringify({
     id: 'pilot-recommendation', action: 'Decision', source_request: source, source_question: benderQuestion, source_spawn_gen: 'attempt-1', proposal,
   })}` }]
   const rows = needsWill(queue, { ...reconcileScene(snapshot, now), claimHistory: [], historyScope: 'fixture' }, new Map([[benderCardId, { outcome: 'available', blocks }]]), null, new Map())
   expect(rows).toHaveLength(1)
+  expect(queue.items[0]!.sources.filter(entry => entry.request)).toHaveLength(3)
   expect(rows[0]).toMatchObject({ readiness: 'ready-now', proposal: { value: proposal }, proposalHistoryComplete: true })
 })
 it.each(['future start', 'structured wait', 'task blocker', 'conditional question', 'stale fleet', 'incomplete history'])('retains verification/prerequisites for %s', condition => {

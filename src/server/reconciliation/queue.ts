@@ -185,7 +185,8 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         candidate.request.taskId === request.taskId && candidate.request.id === request.taskId)
       // Keep the previously answerable request key so saved typed proposals
       // remain bound after the card and its task question join this item.
-      const queueId = entry.matchedHoldId ? JSON.stringify(['hold', request.home, entry.matchedHoldId]) : taskHold?.card.key ?? requestAnchor(request)
+      const holdId = entry.matchedHoldId ?? taskHold?.matchedHoldId
+      const queueId = holdId ? JSON.stringify(['hold', request.home, holdId]) : requestAnchor(request)
       const binding = { request, taskHoldId: entry.matchedHoldId, queueId }
       keyedByCard.set(canonical.cardId, [...(keyedByCard.get(canonical.cardId) ?? []), binding])
     }
