@@ -20,8 +20,7 @@ for caching and coverage. The worker identity graph reuses the cached default
 operational declarations when available, without fetching historical cards or
 requiring a broader scan. Incomplete or unavailable declaration coverage routes
 requests to First Mate for reconciliation rather than selecting an unverified
-worker. Before delivery, the existing uncached exact-page read rechecks scope,
-status and appointment.
+worker. Offer validation is described under [Delivery and persistence](#delivery-and-persistence).
 
 The report's `source` describes the scoped eligibility census; `boardSource`
 separately reports the supplied declaration coverage. Saved snapshots can include
@@ -41,8 +40,8 @@ These fixture measurements demonstrate budget headroom at the specified
 latency; they do not establish production latency. The real deadline still
 applies when the API is slow, and failed/truncated reads retain truthful source
 state. The filtered 72-card regression completes in one query page even when
-the full-board fixture exceeds 2,000 cards. The exact-card GET before delivery
-continues to suppress a closed/changed card independently of either census.
+the full-board fixture exceeds 2,000 cards. Offer validation remains independent
+of either census; see [Delivery and persistence](#delivery-and-persistence).
 
 An exact canonical `First Mate tasks` declaration, confirmed/current claim and
 fresh running execution can name one worker **via First Mate**. Candidate title
@@ -62,7 +61,7 @@ idempotency key (equivalent timezone renderings are the same epoch).
 
 Tin Star's existing backend singleton owns each config root. A serialized
 writer reloads the system store and atomically replaces a mode-0600 file. The
-request UUID, body and offered time are durable before the existing
+request UUID and body are durable before the existing
 authenticated `/api/ask/bridge` returns them. The unchanged Mac puller uses its
 existing durable `fm-inbox.sh note --request-id` replay mechanism. Lost responses,
 capture failures, failed wakes, restarts and repeated UI reads reuse the same
@@ -70,27 +69,35 @@ request and immutable body. One outstanding original request and at most one
 follow-up exist per appointment. Failed deliveries retry automatically through
 the same bridge. There is no separate retry daemon.
 
-Before exposing a pending request, Tin Star performs an uncached GET of the
-exact Notion page and verifies both page ID and configured data source. Changed
-owner, status, checkpoint, trash or archive suppress the original request.
-Preflight reads have a five-second timeout; bridge batches attempt at most
-three pages and rotate so one failed page does not starve the rest. This keeps
-the existing puller's 20-second HTTP read bound. External reads run outside the
-serialized writer so slow Notion responses do not hold up receipt ingestion or
-card indicators. Before freezing a delivery, the writer reloads the ledger and
-reconciles the preflight result against current request and receipt state.
-Fleet refreshes stay on the
-source-refresh path rather than delaying bridge work. A suppressed appointment
+The existing periodic sweep performs an uncached GET of the exact Notion page
+and verifies both page ID and configured data source before reserving an offer.
+Changed owner, status, checkpoint, trash or archive suppress the original
+request on the next sweep. Each sweep attempts at most three candidate pages
+and rotates so one failed page does not starve the rest. External reads run
+outside the serialized writer so slow Notion responses do not hold up receipt
+ingestion or card indicators. Before freezing a delivery, the writer reloads the
+ledger and reconciles the preflight result against current request and receipt
+state. The authenticated bridge GET reads only the persisted offers and current
+receipts; it never reads Notion, refreshes the fleet, or waits for an in-flight
+sweep. A restart retains the reserved ID and body; older stores without a
+reservation become eligible after the next sweep. A suppressed appointment
 never silently acquires another request ID.
 
-After two hours without a substantive acknowledgement or a correlated card
-checkpoint, a single persisted follow-up flags the unresolved request to First Mate.
+Reservation leaves a never-delivered request due. The first saved-note receipt
+records `offeredAt` and marks it requested, including when the wake failed; retries
+retain that timestamp. A puller outage does not start the acknowledgement clock.
+An appointment changed before its first receipt is superseded on the next sweep,
+while its reserved identity remains owned for late receipts.
+
+After two hours from that receipt without a substantive acknowledgement or a
+correlated card checkpoint, a single persisted follow-up flags the unresolved
+request to First Mate.
 A checkpoint with the exact request ID that fails verification before a follow-up
-has been offered instead records
+has received a saved-note receipt instead records
 `answered-needs-correction` and shows the failing field on the quiet card line.
 It stays unresolved without sending a no-answer follow-up; a corrected checkpoint
 resolves it on the next sweep. A queued follow-up retains its ID and receipts but
-is suppressed. Already-offered follow-ups retain their state and history, and
+is suppressed. Receipted follow-ups retain their state and history, and
 resolve when their checkpoint verifies. An unsupported "still
 working" reply does not stop it. Moving the date without verified evidence
 also does not evade this one follow-up on a still-active integrated card: its
