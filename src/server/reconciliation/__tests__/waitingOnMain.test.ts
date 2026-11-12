@@ -404,6 +404,48 @@ describe('Waiting on main', () => {
     expect(again.pending[0]!.request_id).not.toBe(offered.pending[0]!.request_id)
     expect((await restarted.sweep()).items.every(row => row.nudgedAt === new Date(deliveredAt).toISOString())).toBe(true)
   })
+  it.each([false, true])('preserves existing requests across age-only sweeps and restarts (legacy payload: %s)', async legacy => {
+    const directory = await root(), value = snapshot()
+    let time = now
+    const create = () => new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => time)
+    await create().sweep()
+    const first = (await create().bridgeWork()).pending[0]!
+    const path = join(directory, 'waiting-on-main.json')
+    const state = JSON.parse(await readFile(path, 'utf8'))
+    if (legacy) delete state.nudge.items
+    state.retiredNudges = Array.from({ length: 43 }, () => ({ ...state.nudge, requestId: randomUUID() }))
+    await writeFile(path, JSON.stringify(state))
+    const advance = () => {
+      time += 60_000
+      freshen(value, time)
+      value.intentions.data!.cards.find(row => row.id === fixtureId(4))!.last_edited_time = new Date(time).toISOString()
+      value.fleet[1]!.observation.data!.parent_asks!.items[0]!.at! += 60
+    }
+    for (let minute = 0; minute < 10; minute++) {
+      advance()
+      const service = create()
+      await service.refresh(value)
+      await service.sweep()
+      expect((await service.bridgeWork()).pending).toEqual([first])
+    }
+    await create().ingest({ request_id: first.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', saved: true, acknowledged: false, announced: true, id: 'existing-note', request_id: first.inbox_request_id } })
+    const deliveredAt = time
+    for (let minute = 1; minute < 120; minute++) {
+      advance()
+      const service = create()
+      const view = await service.sweep()
+      expect(view.items.every(row => row.nudgedAt === new Date(deliveredAt).toISOString())).toBe(true)
+      expect((await service.bridgeWork()).pending).toEqual([])
+    }
+    advance()
+    await create().sweep()
+    const next = (await create().bridgeWork()).pending[0]!
+    expect(next.request_id).not.toBe(first.request_id)
+    expect(next.body).not.toBe(first.body)
+    await create().sweep()
+    expect((await create().bridgeWork()).pending).toEqual([next])
+    expect(JSON.parse(await readFile(path, 'utf8')).retiredNudges).toHaveLength(43)
+  })
   it.each([
     ['card', false], ['card', true], ['mate', false], ['mate', true],
   ] as const)('replaces pending %s content with prior offer %s using a new reservation', async (kind, offered) => {
@@ -555,20 +597,20 @@ describe('Waiting on main', () => {
   it('mentions the owner only for Will waits and nudges First Mate waits to the inbox', async () => {
     const directory = await root()
     const value = snapshot()
-    const mate = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
-    mate.properties['Will action'] = { id: 'Will action', type: 'multi_select', value: ['Merge'], hasMore: false }
+    const tagged = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
+    tagged.properties['Will action'] = { id: 'Will action', type: 'multi_select', value: ['Merge'], hasMore: false }
     asOwner(value.intentions.data!.cards.find(card => card.id === fixtureId(1))!, 'tag')
     asOwner(value.intentions.data!.cards.find(card => card.id === fixtureId(6))!, 'name')
     const notify = vi.fn<ReturnType<typeof mainWaitNotifier>>(async () => 'mentioned' as const)
     const service = new WaitingOnMain(async () => value, notify, directory, async () => true, () => now)
     const view = await service.sweep()
-    expect(view.items.map(row => row.key).sort()).toEqual([fixtureId(4), 'approve-api'].sort())
+    expect(view.items.map(row => row.key)).toEqual(['approve-api'])
     expect(notify).toHaveBeenCalledTimes(1)
     const mentioned = notify.mock.calls[0]![0]
-    expect((Array.isArray(mentioned) ? mentioned : [mentioned]).map(row => row.key).sort()).toEqual([fixtureId(1), fixtureId(6)].sort())
+    expect((Array.isArray(mentioned) ? mentioned : [mentioned]).map(row => row.key).sort()).toEqual([fixtureId(1), fixtureId(4), fixtureId(6)].sort())
     expect((Array.isArray(mentioned) ? mentioned : [mentioned]).every(row => row.audience === 'owner')).toBe(true)
     const body = (await service.bridgeWork()).pending[0]!.body
-    expect(body).toContain(fixtureId(4))
+    expect(body).not.toContain(fixtureId(4))
     expect(body).toContain('approve-api')
     expect(body).not.toContain(fixtureId(1))
     expect(body).not.toContain(fixtureId(6))
@@ -582,7 +624,7 @@ describe('Waiting on main', () => {
     ['Mate (hulk)', 'text', false],
     ['hulk', 'id', true],
     ['hulk', 'text', false],
-  ] as const)('routes %s via %s with owner tag %s exclusively to the inbox', async (dependency, field, tagged) => {
+  ] as const)('routes %s via %s with owner tag %s to the correct audience', async (dependency, field, tagged) => {
     const value = snapshot()
     value.fleet[1]!.source.label = 'hulk'
     const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
@@ -592,24 +634,31 @@ describe('Waiting on main', () => {
     asOwner(value.intentions.data!.cards.find(row => row.id === fixtureId(6))!, 'name')
     const notify = vi.fn<ReturnType<typeof mainWaitNotifier>>(async () => 'mentioned' as const)
     const service = new WaitingOnMain(async () => value, notify, await root(), async () => true, () => now)
-    expect((await service.sweep()).items).toContainEqual(expect.objectContaining({ key: card.id, audience: 'first-mate' }))
+    const view = await service.sweep()
+    expect(view.items.some(row => row.key === card.id)).toBe(!tagged)
     const pending = (await service.bridgeWork()).pending
     const payload = JSON.parse(pending[0]!.body.split('\n').slice(1).join('\n'))
-    expect(payload.waiting_on_first_mate).toContainEqual(expect.objectContaining({ card_id: card.id }))
+    expect(payload.waiting_on_first_mate.some((row: { card_id: string | null }) => row.card_id === card.id)).toBe(!tagged)
     expect(notify).toHaveBeenCalledTimes(1)
-    expect(notify.mock.calls[0]![0]).toEqual([expect.objectContaining({ key: fixtureId(6), audience: 'owner' })])
+    expect(notify.mock.calls[0]![0]).toEqual(tagged
+      ? [expect.objectContaining({ key: card.id, audience: 'owner' }), expect.objectContaining({ key: fixtureId(6), audience: 'owner' })]
+      : [expect.objectContaining({ key: fixtureId(6), audience: 'owner' })])
   })
   it.each([
     ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', '', false, 'first-mate'],
-    ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', '', true, 'first-mate'],
+    ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', '', true, 'owner'],
     ['Dependency: Legal | Unblocks when: Will approves | Follow-up: Will', '', false, null],
     ['Dependency: Will | Unblocks when: approval | Follow-up: First Mate (hulk)', '', false, 'owner'],
-    ['Dependency: Will | Unblocks when: approval | Follow-up: Will\nDependency: First Mate (hulk) | Unblocks when: review | Follow-up: Will', '', true, 'first-mate'],
-    ['Will: approval\nFirst Mate (hulk) - review', '', false, 'first-mate'],
+    ['Dependency: Will | Unblocks when: approval | Follow-up: Will\nDependency: First Mate (hulk) | Unblocks when: review | Follow-up: Will', '', true, 'owner'],
+    ['Will: approval\nFirst Mate (hulk) - review', '', false, 'owner'],
     ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', 'Will', false, 'owner'],
-    ['Dependency: Will | Unblocks when: approval | Follow-up: Will', 'First Mate (hulk)', true, 'first-mate'],
+    ['Dependency: Will | Unblocks when: approval | Follow-up: Will', 'First Mate (hulk)', true, 'owner'],
+    ['Will: check lab Guardian 0143', 'hilda', true, 'owner'],
+    ['Will: check lab Guardian 0143', 'hilda', false, 'owner'],
+    ['Dependency: Will | Unblocks when: approval', 'First Mate', false, 'owner'],
   ] as const)('routes retained dependencies in %s with ID %s and tag %s', async (text, id, tagged, audience) => {
     const value = snapshot()
+    value.fleet[1]!.source.label = 'hilda'
     const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
     card.properties['Waiting For']!.value = text
     card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: id, hasMore: false }
