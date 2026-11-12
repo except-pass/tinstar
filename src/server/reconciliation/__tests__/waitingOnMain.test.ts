@@ -444,6 +444,32 @@ describe('Waiting on main', () => {
     expect(body).not.toContain(fixtureId(1))
     expect(body).not.toContain(fixtureId(6))
   })
+  it.each([
+    ['First Mate (hulk)', 'id', true],
+    ['First Mate (hulk)', 'id', false],
+    ['First Mate (hulk)', 'text', true],
+    ['First Mate (hulk)', 'text', false],
+    ['Mate (hulk)', 'id', true],
+    ['Mate (hulk)', 'text', false],
+    ['hulk', 'id', true],
+    ['hulk', 'text', false],
+  ] as const)('routes %s via %s with owner tag %s exclusively to the inbox', async (dependency, field, tagged) => {
+    const value = snapshot()
+    value.fleet[1]!.source.label = 'hulk'
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    card.properties['Waiting For']!.value = field === 'text' ? `${dependency}: approve rollout` : 'approve rollout'
+    card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: field === 'id' ? dependency : '', hasMore: false }
+    card.properties['Will action'] = { id: 'Will action', type: 'multi_select', value: tagged ? ['Decision'] : [], hasMore: false }
+    asOwner(value.intentions.data!.cards.find(row => row.id === fixtureId(6))!, 'name')
+    const notify = vi.fn<ReturnType<typeof mainWaitNotifier>>(async () => 'mentioned' as const)
+    const service = new WaitingOnMain(async () => value, notify, await root(), async () => true, () => now)
+    expect((await service.sweep()).items).toContainEqual(expect.objectContaining({ key: card.id, audience: 'first-mate' }))
+    const pending = (await service.bridgeWork()).pending
+    const payload = JSON.parse(pending[0]!.body.split('\n').slice(1).join('\n'))
+    expect(payload.waiting_on_first_mate).toContainEqual(expect.objectContaining({ card_id: card.id }))
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0]![0]).toEqual([expect.objectContaining({ key: fixtureId(6), audience: 'owner' })])
+  })
   it('loads a state file written before nudges existed and still nudges fresh waits', async () => {
     const directory = await root()
     await writeFile(join(directory, 'waiting-on-main.json'), JSON.stringify({ initializedAlerts: true, rows: [{ item: item(), lastAttempt: now }] }))

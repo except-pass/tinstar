@@ -14,11 +14,13 @@ The reconciliation scene still carries the full list. It stays global and
 independent of Overview filters.
 
 Cards match a trimmed, whole `Waiting For ID` of `First Mate`, `First Mate (main)`,
-`Main`, or `main firstmate`, case-insensitively. A populated different ID never
-matches. With an empty ID, `Waiting For` must start with one of those names
+`Main`, or `main firstmate`, case-insensitively. First Mate with any parenthesized home label, mate identities, and configured
+fleet labels also route to the inbox, even with a Will action tag. A populated
+dependency ID takes precedence over the wait text. With an empty ID, `Waiting For` must start with one of those names
 followed by `:` or ` -`, or contain `via main`. A prose mention alone never
-matches; `Firstmate` and `firstmate maintainer` are different actors. Matching
-lives in `src/shared/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
+matches; `Firstmate` and `firstmate maintainer` are different actors. Main identity matching
+lives in `src/shared/waitingOnMain.ts`; candidate audience classification lives
+in `src/server/reconciliation/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
 Card age is an at-least estimate until Tin Star observes the wait start.
 The initial estimate uses the card's last edit when the wait was first observed.
 Unrelated later edits do not reset that saved age; changed

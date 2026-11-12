@@ -45,11 +45,14 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
   const boardFresh = ['fresh', 'partial'].includes(board.status) && !!board.data
   if (board.status === 'fresh' && board.coverage === 'complete' && board.data && !board.data.hasMore) complete.add('board')
   else unknown.push('Board waits unknown or incomplete')
+  const mateNames = new Set(snapshot.fleet.map(row => (row.source.label ?? basename(row.source.home)).trim().toLowerCase()))
+  const namesMate = (name: string) => /^(?:first mate|second mate|secondmate|mate)(?: \([^)]+\))?$/i.test(name.trim()) || mateNames.has(name.trim().toLowerCase())
   for (const card of board.data?.cards ?? []) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')
     if (card.archived || card.in_trash || ['done', 'archived'].includes(value('Status').toLowerCase())) continue
     const wait = value('Waiting For'), id = value('Waiting For ID')
-    const main = !!mainWaitField(wait, id)
+    const dependency = id.trim() || wait.trim().split(/:| -/)[0]!.trim()
+    const main = namesMate(dependency) || !!mainWaitField(wait, id)
     const willAction = card.properties['Will action']?.value
     const willTags = (Array.isArray(willAction) ? willAction : typeof willAction === 'string' && willAction ? [willAction] : [])
       .some(tag => typeof tag === 'string' && !!tag.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(tag.trim()))
