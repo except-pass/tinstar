@@ -4,9 +4,13 @@ Overview does not show waits on First Mate by default. Each fresh wait sends
 First Mate one inbox nudge on the existing check-in and workflow-notice bridge.
 The note carries the card id, or the mate and key, plus the wait text and age.
 The same open item is nudged again at most every two hours after a successful
-announcement. Pending retries keep their request ID and rebuild the note from
-current wait text during the periodic sweep; closed, resolved, owner, and
-no-longer-fresh waits are removed on that sweep before offering the remaining batch. An empty batch sends nothing.
+announcement. Each request ID keeps an immutable payload and membership. When
+due waits or their text change, the sweep retires the pending request and reserves
+a new ID. Closed, resolved, owner, and no-longer-fresh waits are excluded from
+the new batch; an empty batch sends nothing. Retired requests are never offered
+again, but late receipts remain accepted and update clocks only for waits whose
+content matches the delivered note. An already captured retired request can
+leave one extra note alongside its successor.
 Stale or unknown coverage does not send a nudge. Dedup lives in the
 same state file as the owner alerts and survives a restart.
 

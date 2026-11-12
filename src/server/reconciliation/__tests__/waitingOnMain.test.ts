@@ -406,7 +406,7 @@ describe('Waiting on main', () => {
   })
   it.each([
     ['card', false], ['card', true], ['mate', false], ['mate', true],
-  ] as const)('refreshes pending %s content with prior offer %s while retaining correlation', async (kind, offered) => {
+  ] as const)('replaces pending %s content with prior offer %s using a new reservation', async (kind, offered) => {
     const value = snapshot(), directory = await root()
     const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
     const ask = value.fleet[1]!.observation.data!.parent_asks!.items[0]!
@@ -423,13 +423,44 @@ describe('Waiting on main', () => {
     setText('B')
     await create().sweep()
     const next = (await create().bridgeWork()).pending[0]!
-    expect(next.request_id).toBe(reserved.requestId)
-    expect(next.inbox_request_id).toBe(inboxRequestId(reserved.requestId))
+    expect(next.request_id).not.toBe(reserved.requestId)
+    expect(next.inbox_request_id).toBe(inboxRequestId(next.request_id))
     const payload = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
     expect(payload).toHaveLength(2)
     expect(payload.find((row: { kind: string }) => row.kind === kind).text).toBe(kind === 'card' ? 'First Mate (main): approve rollout B' : 'Approve rollout B')
     expect(next.body).not.toContain('rollout A')
     expect((await create().bridgeWork()).pending).toEqual([next])
+  })
+  it.each(['card', 'mate'] as const)('keeps captured %s payloads immutable and correlates late receipts to delivered waits', async kind => {
+    const value = snapshot(), directory = await root()
+    let time = now
+    const create = () => new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => time)
+    const service = create()
+    await service.sweep()
+    const first = (await service.bridgeWork()).pending[0]!
+    const receipt = (work: typeof first, id: string, announced: boolean) => ({ request_id: work.request_id, note: { schema: 'fm-inbox-note.v1' as const, outcome: 'created' as const, saved: true as const, acknowledged: false, announced, id, request_id: work.inbox_request_id } })
+    await service.ingest(receipt(first, 'captured-A', false))
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    const ask = value.fleet[1]!.observation.data!.parent_asks!.items[0]!
+    if (kind === 'card') card.properties['Waiting For']!.value = 'First Mate (main): request B'
+    else ask.text = 'Request B'
+    await create().sweep()
+    const next = (await create().bridgeWork()).pending[0]!
+    expect(next.request_id).not.toBe(first.request_id)
+    expect(next.body).toContain(kind === 'card' ? 'request B' : 'Request B')
+    const state = JSON.parse(await readFile(join(directory, 'waiting-on-main.json'), 'utf8'))
+    expect(state.retiredNudges[0]).toMatchObject({ requestId: first.request_id, body: first.body })
+    expect(await create().owns(first.request_id)).toBe(true)
+    await create().ingest(receipt(first, 'captured-A', true))
+    const view = await create().refresh(value)
+    expect(view.items.find(row => row.kind === kind)?.nudgedAt).toBeUndefined()
+    expect(view.items.find(row => row.kind !== kind)?.nudgedAt).toBe(new Date(time).toISOString())
+    expect((await create().bridgeWork()).pending).toEqual([next])
+    time += 1000
+    await create().ingest(receipt(next, 'captured-B', true))
+    expect((await create().refresh(value)).items.find(row => row.kind === kind)?.nudgedAt).toBe(new Date(time).toISOString())
+    await create().sweep()
+    expect((await create().bridgeWork()).pending).toEqual([])
   })
   it.each([
     ['board', 'stale', false], ['board', 'stale', true],
@@ -453,8 +484,8 @@ describe('Waiting on main', () => {
     const restarted = create()
     await restarted.sweep()
     const next = (await restarted.bridgeWork()).pending[0]!
-    expect(next.request_id).toBe(reserved.requestId)
-    expect(next.inbox_request_id).toBe(inboxRequestId(reserved.requestId))
+    expect(next.request_id).not.toBe(reserved.requestId)
+    expect(next.inbox_request_id).toBe(inboxRequestId(next.request_id))
     const payload = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
     expect(payload.map((row: { kind: string }) => row.kind)).toEqual([source === 'board' ? 'mate' : 'card'])
     staleBoard()
@@ -462,7 +493,7 @@ describe('Waiting on main', () => {
     await restarted.sweep()
     expect(await restarted.bridgeWork()).toEqual({ pending: [], tracked: [] })
   })
-  it.each(['closed', 'resolved', 'owner'] as const)('removes %s work from an offered batch without changing its id', async change => {
+  it.each(['closed', 'resolved', 'owner'] as const)('replaces an offered batch after %s work is removed', async change => {
     const value = snapshot(), directory = await root()
     const service = new WaitingOnMain(async () => value, async () => 'mentioned', directory, async () => true, () => now)
     await service.sweep()
@@ -473,7 +504,7 @@ describe('Waiting on main', () => {
     if (change === 'resolved') publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     await service.sweep()
     const next = (await service.bridgeWork()).pending[0]!
-    expect(next.request_id).toBe(first.request_id)
+    expect(next.request_id).not.toBe(first.request_id)
     const items = JSON.parse(next.body.split('\n').slice(1).join('\n')).waiting_on_first_mate
     expect(items.map((row: { key: string }) => row.key)).toEqual(change === 'resolved' ? [card.id] : ['approve-api'])
     card.properties.Status!.value = 'Done'

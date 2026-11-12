@@ -160,13 +160,20 @@ const rowSchema = z.object({
 const nudgeSchema = z.object({
   requestId: z.string().uuid(), body: z.string(),
   noteId: z.string().nullable(), announced: z.boolean().nullable(),
-  error: z.enum(['capture-failed', 'wake-failed']).nullable(), itemIds: z.array(z.string()),
+  error: z.enum(['capture-failed', 'wake-failed']).nullable(), itemIds: z.array(z.string()), items: z.array(itemSchema).optional(),
 })
 const savedStateSchema = z.object({
-  initializedAlerts: z.boolean(), rows: z.array(rowSchema), nudge: nudgeSchema.nullable().optional(),
+  initializedAlerts: z.boolean(), rows: z.array(rowSchema), nudge: nudgeSchema.nullable().optional(), retiredNudges: z.array(nudgeSchema).optional(),
 })
 type SavedState = z.infer<typeof savedStateSchema>
 type SavedRow = z.infer<typeof rowSchema>
+const waitIdentity = (item: MainWaitItem) => JSON.stringify([item.id, item.text, item.since, item.label, item.key, item.url, item.kind, item.ageBasis])
+function containsWait(nudge: z.infer<typeof nudgeSchema>, item: MainWaitItem) {
+  if (nudge.items) return nudge.items.some(saved => waitIdentity(saved) === waitIdentity(item))
+  const payload = (body: string) => (JSON.parse(body.slice(body.indexOf('\n') + 1)).waiting_on_first_mate as Record<string, unknown>[])
+    .map(({ age: _age, ...wait }) => JSON.stringify(wait))
+  return payload(nudge.body).includes(payload(mainWaitNudge([item], 0))[0]!)
+}
 const shownItem = (row: SavedRow): MainWaitItem => row.nudgeFirstAt == null ? row.item : { ...row.item, nudgedAt: new Date(row.nudgeFirstAt).toISOString() }
 
 export interface MainWaitBridge {
@@ -207,7 +214,10 @@ export class WaitingOnMain implements MainWaitBridge {
   }
   /** Pulls only read the last sweep's reservation; source refreshes never run on the bridge. */
   bridgeWork() { return this.offerNudge() }
-  async owns(requestId: string) { return (await this.loadForBridge())?.nudge?.requestId === requestId }
+  async owns(requestId: string) {
+    const state = await this.loadForBridge()
+    return state?.nudge?.requestId === requestId || !!state?.retiredNudges?.some(nudge => nudge.requestId === requestId)
+  }
   ingest(input: BridgeUpdate) {
     const update = bridgeUpdateSchema.parse(input)
     return this.writeState(() => this.applyNudge(update))
@@ -240,14 +250,14 @@ export class WaitingOnMain implements MainWaitBridge {
   }
   private async applyNudge(update: BridgeUpdate) {
     const state = await this.load()
-    const nudge = state.nudge
-    if (!nudge || nudge.requestId !== update.request_id) throw new AskNotFound('Unknown main-wait nudge')
+    const nudge = [state.nudge, ...(state.retiredNudges ?? [])].find(candidate => candidate?.requestId === update.request_id)
+    if (!nudge) throw new AskNotFound('Unknown main-wait nudge')
     if (update.note) {
       if (update.note.request_id !== inboxRequestId(nudge.requestId) || nudge.noteId && nudge.noteId !== update.note.id) throw new AskConflict('Note does not match main-wait nudge')
       if (nudge.announced !== true && update.note.announced === true) {
         const now = this.now()
         for (const row of state.rows) {
-          if (!nudge.itemIds.includes(row.item.id) || row.item.audience === 'owner') continue
+          if (!containsWait(nudge, row.item) || row.item.audience === 'owner') continue
           if (row.nudgeFirstAt == null) row.nudgeFirstAt = now
           row.nudgeLastAt = now
         }
@@ -262,14 +272,17 @@ export class WaitingOnMain implements MainWaitBridge {
   }
   /** Reserve one batched note before the bridge can see it, so a restart cannot send a second copy. */
   private queueNudge(state: SavedState, now: number) {
-    if (state.nudge && state.nudge.announced !== true) return false
     const due = state.rows.filter(row => row.item.audience !== 'owner' && row.item.fresh && nudgeDue(row.nudgeLastAt ?? null, now))
-    if (!due.length) return false
+    if (state.nudge && state.nudge.announced !== true) {
+      if (due.length === state.nudge.itemIds.length && due.every(row => containsWait(state.nudge!, row.item))) return
+      state.retiredNudges = [...(state.retiredNudges ?? []), state.nudge]
+      state.nudge = null
+    }
+    if (!due.length) return
     state.nudge = {
       requestId: randomUUID(), body: mainWaitNudge(due.map(row => row.item), now),
-      noteId: null, announced: null, error: null, itemIds: due.map(row => row.item.id),
+      noteId: null, announced: null, error: null, itemIds: due.map(row => row.item.id), items: due.map(row => row.item),
     }
-    return true
   }
   private async save(state: SavedState) {
     await mkdir(this.root, { recursive: true })
@@ -294,25 +307,25 @@ export class WaitingOnMain implements MainWaitBridge {
       for (const item of projection.items) {
         const prior = saved.get(item.id)
         // Unrelated card edits do not restart a wait already observed. A changed
-        // dependency starts a new conservative age; throttle remains per item.
+        // dependency starts a new conservative age.
         if (prior && item.kind === 'card' && prior.item.text === item.text) item.since = prior.item.since
         if (prior?.item.alert) item.alert = prior.item.alert
-        const sameAudience = (prior?.item.audience === 'owner') === (item.audience === 'owner')
-        saved.set(item.id, { item, lastAttempt: prior?.lastAttempt ?? null, nudgeFirstAt: sameAudience ? prior?.nudgeFirstAt ?? null : null, nudgeLastAt: sameAudience ? prior?.nudgeLastAt ?? null : null })
+        const sameWait = (prior?.item.audience === 'owner') === (item.audience === 'owner') && (!prior || waitIdentity(prior.item) === waitIdentity(item))
+        saved.set(item.id, { item, lastAttempt: prior?.lastAttempt ?? null, nudgeFirstAt: sameWait ? prior?.nudgeFirstAt ?? null : null, nudgeLastAt: sameWait ? prior?.nudgeLastAt ?? null : null })
       }
       state.rows = [...saved.values()]
       const rows = state.rows
-      if (state.nudge && state.nudge.announced !== true) {
-        const current = rows.filter(row => row.item.fresh && row.item.audience !== 'owner' && state.nudge!.itemIds.includes(row.item.id))
-        if (!current.length) state.nudge = null
-        else {
-          state.nudge.itemIds = current.map(row => row.item.id)
-          state.nudge.body = mainWaitNudge(current.map(row => row.item), now)
-        }
+      if (!deliver && state.nudge && state.nudge.announced !== true &&
+        !state.nudge.itemIds.every(id => rows.some(row => row.item.id === id && row.item.fresh && row.item.audience !== 'owner' && containsWait(state.nudge!, row.item)))) {
+        state.retiredNudges = [...(state.retiredNudges ?? []), state.nudge]
+        state.nudge = null
       }
       if (deliver) {
         if (enabled) this.queueNudge(state, now)
-        else state.nudge = null
+        else if (state.nudge) {
+          state.retiredNudges = [...(state.retiredNudges ?? []), state.nudge]
+          state.nudge = null
+        }
         const ownerAlert = (row: SavedRow) => row.item.audience === 'owner'
         if (enabled && !state.initializedAlerts && (projection.complete.size > 0 || rows.some(row => row.item.fresh))) {
           const overdue = rows.filter(row => ownerAlert(row) && row.item.fresh && waitAlertDue(row.item.since, row.lastAttempt, now))
