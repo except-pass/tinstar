@@ -70,6 +70,30 @@ export function parseWorkerLinks(value: unknown): WorkerLinks {
   return { status: 'valid', tasks }
 }
 
+/** Identities that can be compared when a declaration is not valid.
+ * Null means the text cannot prove which tasks it names: it does not parse,
+ * hides a key, has no tasks array, or has an entry without an unambiguous
+ * fm_home and task_id. A list is not a valid declaration and must not bind a
+ * card. Decision binding uses it so a readable other-task record is a non-match
+ * instead of unknown coverage that blocks every decision on the board.
+ */
+export function readableTaskIdentities(text: unknown): Array<{ fm_home: string; task_id: string }> | null {
+  if (typeof text !== 'string' || text.length > MAX_WORKER_LINK_CHARS) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(text) } catch { return null }
+  if (duplicateJsonKeys(text)) return null
+  const tasks = record(parsed).tasks
+  if (!Array.isArray(tasks)) return null
+  const identities: Array<{ fm_home: string; task_id: string }> = []
+  for (const entry of tasks) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+    const task = record(entry)
+    if (!identityString(task.fm_home) || !identityString(task.task_id)) return null
+    identities.push({ fm_home: task.fm_home, task_id: task.task_id })
+  }
+  return identities
+}
+
 /** Validate the wire property before concatenation; never silently drop an item. */
 export function readWorkerLinks(value: unknown): WorkerLinks {
   const p = record(value)

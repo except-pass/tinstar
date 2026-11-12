@@ -446,8 +446,13 @@ one validated `First Mate tasks` (`tinstar.fm-links.v1`) declaration containing
 the source's exact `fm_home` + `task_id`. This lookup is read-only and needs no
 First Mate code change. Zero or multiple matches refuse binding and name the
 searched identity; stale/partial card or source coverage and unreadable link
-records remain unknown, never evidence of no match. Blank properties retain
-their existing unlinked meaning. The same lookup supplies Decisions context
+records remain unknown, never evidence of no match. An invalid record is a
+non-match when its fully read rich-text property is within the parsing size limit,
+its raw JSON parses without duplicate object keys, and it contains a `tasks`
+array whose entries all have readable `fm_home` and `task_id` strings, with none
+naming the requested pair. Otherwise, including when an entry names the requested
+pair, it stays unknown. A match still requires the fully valid declaration.
+Blank properties retain their existing unlinked meaning. The same lookup supplies Decisions context
 and is checked again before answering or delivering a recorded answer. The
 published Notion request retains the exact identity, question and task generation;
 a card ID, title or bare decision key never substitutes for request identity.
