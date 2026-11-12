@@ -5,7 +5,7 @@ import type { ListedMessage } from '../../fleet/inbox'
 import type { WorkflowNote } from '../workflowContent'
 import { notionCard } from '../notion'
 import { queueSignals } from '../queueInputs'
-import { workerLinkRecord } from '../workerLinks'
+import { parseWorkerLinks, workerLinkRecord, WORKER_LINK_SCHEMA } from '../workerLinks'
 import { buildQueue } from '../queue'
 
 const cardId = '41450ce6d4228114a5a9cc54ba311d54'
@@ -59,12 +59,56 @@ function taskLinkFixture() {
   return { ...f, task, hold, request, card, bind }
 }
 
+function declare(card: ReturnType<typeof taskLinkFixture>['card'], tasks: unknown) {
+  const json = typeof tasks === 'string' ? tasks : JSON.stringify({ schema: WORKER_LINK_SCHEMA, tasks })
+  const property = card.properties['First Mate tasks']!
+  property.value = json
+  property.hasMore = false
+  property.workerLinks = parseWorkerLinks(json)
+}
+
 describe('canonical card binding from First Mate tasks', () => {
   it('binds exactly one validated home/task match and projects the same card in Decisions', () => {
     const f = taskLinkFixture()
     expect(f.bind()).toEqual({ source_request: f.request, source_question: f.hold.hold_reason, source_spawn_gen: f.task.identity.spawn_gen })
     expect(buildQueue(f.snapshot).items.find(item => item.sources.some(source => source.request?.id === f.request.id)))
       .toMatchObject({ cardIds: [cardId], readiness: 'ready-now' })
+  })
+  it('binds a valid unique match when other cards declare an invalid unrelated task', () => {
+    const f = taskLinkFixture()
+    for (const [id, task] of [['c'.repeat(32), 'kd-tariff-pge-prod-publish'], ['d'.repeat(32), 'kd-tariff-materiality-next']] as const) {
+      const stale = { ...structuredClone(f.card), id }
+      declare(stale, [{ fm_home: '/home/farm/fm-kdf', task_id: task, first_observed_spawn_gen: null }])
+      f.snapshot.intentions.data!.cards.push(stale)
+    }
+    expect(f.bind()).toEqual({ source_request: f.request, source_question: f.hold.hold_reason, source_spawn_gen: f.task.identity.spawn_gen })
+    expect(buildQueue(f.snapshot).items.find(item => item.sources.some(source => source.request?.id === f.request.id)))
+      .toMatchObject({ cardIds: [cardId], readiness: 'ready-now' })
+  })
+  it('refuses an invalid declaration that names the same task', () => {
+    const f = taskLinkFixture()
+    const competing = { ...structuredClone(f.card), id: 'e'.repeat(32) }
+    declare(competing, [{ fm_home: f.request.home, task_id: f.request.taskId, first_observed_spawn_gen: null }])
+    f.snapshot.intentions.data!.cards.push(competing)
+    expect(f.bind).toThrow(`link coverage is unknown on cards ${competing.id}`)
+    f.snapshot.intentions.data!.cards = [f.card]
+    declare(f.card, [{ fm_home: f.request.home, task_id: f.request.taskId, first_observed_spawn_gen: null }])
+    expect(f.bind).toThrow(`link coverage is unknown on cards ${f.card.id}`)
+  })
+  it('refuses unparseable task JSON and a declaration with an unreadable entry', () => {
+    const f = taskLinkFixture()
+    const broken = { ...structuredClone(f.card), id: 'f'.repeat(32) }
+    declare(broken, '{')
+    f.snapshot.intentions.data!.cards.push(broken)
+    expect(f.bind).toThrow(`link coverage is unknown on cards ${broken.id}`)
+    declare(broken, [
+      { fm_home: '/home/farm/fm-kdf', task_id: 'kd-tariff-pge-prod-publish', first_observed_spawn_gen: null },
+      { fm_home: f.request.home, task_id: null, first_observed_spawn_gen: null },
+    ])
+    expect(f.bind).toThrow(`link coverage is unknown on cards ${broken.id}`)
+    const hidden = `{"schema":${JSON.stringify(WORKER_LINK_SCHEMA)},"tasks":[{"fm_home":${JSON.stringify(f.request.home)},"task_id":${JSON.stringify(f.request.taskId)},"first_observed_spawn_gen":"g"}],"tasks":[{"fm_home":"/home/farm/fm-kdf","task_id":"other","first_observed_spawn_gen":null}]}`
+    declare(broken, hidden)
+    expect(f.bind).toThrow(`link coverage is unknown on cards ${broken.id}`)
   })
   it.each(['home', 'task'] as const)('refuses no match when the linked %s differs, naming the exact search', field => {
     const f = taskLinkFixture()

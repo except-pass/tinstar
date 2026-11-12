@@ -3,7 +3,7 @@ import type { SourceSnapshot } from './index'
 import { ageObservation } from './observation'
 import type { CardReference } from './references'
 import { declaredLinks } from './scene'
-import { isBlankWorkerLinks, FIRST_MATE_TASKS, WORKER_LINK_SCHEMA } from './workerLinks'
+import { isBlankWorkerLinks, readableTaskIdentities, FIRST_MATE_TASKS, WORKER_LINK_SCHEMA } from './workerLinks'
 
 /** Resolve request ownership without writing card links or guessing from titles. */
 export function decisionCard(request: FirstMateRequest, refs: CardReference[], intentions?: SourceSnapshot['intentions']) {
@@ -17,12 +17,23 @@ export function decisionCard(request: FirstMateRequest, refs: CardReference[], i
   if (!observation || observation.status !== 'fresh' || observation.coverage !== 'complete' || !observation.data || observation.data.hasMore) {
     return { cardId: null, reason: `request lacks one explicit canonical card link; ${searched}: card coverage is unknown (missing, stale or incomplete)` }
   }
+  const names = (tasks: Array<{ fm_home: string; task_id: string }>) =>
+    tasks.some(link => link.fm_home === request.home && link.task_id === request.taskId)
   const matches = new Set<string>(), unreadable: string[] = []
   for (const card of observation.data.cards) {
     const links = declaredLinks(card)
     if (links.status === 'valid') {
-      if (links.tasks.some(link => link.fm_home === request.home && link.task_id === request.taskId)) matches.add(card.id)
-    } else if (!isBlankWorkerLinks(links)) unreadable.push(card.id)
+      if (names(links.tasks)) matches.add(card.id)
+    } else if (!isBlankWorkerLinks(links)) {
+      // A readable declaration of other tasks cannot hide this one. Unreadable
+      // JSON, an unreadable entry, or an entry that names this task stays
+      // unknown: a match still needs a fully valid declaration, and one stale
+      // unrelated card must not block every decision on the board.
+      const property = card.properties[FIRST_MATE_TASKS]
+      const identities = links.status === 'invalid' && property?.type === 'rich_text' && !property.hasMore
+        ? readableTaskIdentities(property.value) : null
+      if (!identities || names(identities)) unreadable.push(card.id)
+    }
   }
   // An unreadable declaration could hide a competing card; it is not a nonmatch.
   if (unreadable.length) return { cardId: null, reason: `request lacks one explicit canonical card link; ${searched}: link coverage is unknown on cards ${unreadable.join(', ')}` }
