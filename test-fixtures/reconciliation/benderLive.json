@@ -1,0 +1,112 @@
+{
+  "cardId": "40450ce6d4228195b6a1cb3859f31336",
+  "title": "Farm CI: restrict workload VM office-network access to an allowlist",
+  "hold": {
+    "question": "Plan sent to parent (corr e1160a7ed674d2ab): pilot nftables allowlist on Bender when idle+fenced, one-command revert.",
+    "generation": "s1794428509.3020290.32651",
+    "kind": "firstmate",
+    "id": "desk-source:[\"/home/farm/fm-home\",\"bender-egress-pilot-decision\",\"hold\",\"workload-lan-egress-pilot-go\"]",
+    "field": "backlog.hold",
+    "observedAt": "2026-11-12T19:09:28Z",
+    "expiresAt": "2026-11-12T19:14:28.000Z",
+    "status": "fresh",
+    "coverage": "complete",
+    "request": {
+      "home": "/home/farm/fm-home",
+      "taskId": "bender-egress-pilot-decision",
+      "id": "workload-lan-egress-pilot-go",
+      "kind": "hold"
+    },
+    "responseAnchor": "desk-source:[\"/home/farm/fm-home\",\"bender-egress-pilot-decision\",\"hold\",\"workload-lan-egress-pilot-go\"]",
+    "readiness": "future-or-conditional",
+    "action": "Plan sent to parent (corr e1160a7ed674d2ab): pilot nftables allowlist on Bender when idle+fenced, one-command revert.",
+    "reasons": [
+      "Next action contains a future condition/prerequisite; it is retained in work context",
+      "Next action contains a future condition/prerequisite; it is retained in work context",
+      "Planned work or an agreed future start; no immediate owner decision",
+      "Published dependency/wait: Queued behind the KD and CI work (Will, 2026-10-25). Do not drop.",
+      "Card owner is outside the reconciled First Mate/Will request; verify accountability",
+      "Next action contains a future condition/prerequisite; it is retained in work context"
+    ]
+  },
+  "decision": {
+    "question": "Go for the Bender egress-allowlist pilot? go = apply on Bender per the report when idle+fenced, with the one-command revert ready; no-go = keep today\u2019s open office-network access.",
+    "generation": "s1794428509.3020290.32651",
+    "kind": "firstmate",
+    "id": "desk-source:[\"/home/farm/fm-home\",\"bender-egress-pilot-decision\",\"decision\",\"pilot-go\"]",
+    "field": "hints.open_decisions",
+    "observedAt": "2026-11-12T19:09:28Z",
+    "expiresAt": "2026-11-12T19:14:28.000Z",
+    "status": "fresh",
+    "coverage": "complete",
+    "request": {
+      "home": "/home/farm/fm-home",
+      "taskId": "bender-egress-pilot-decision",
+      "id": "pilot-go",
+      "kind": "decision"
+    },
+    "readiness": "future-or-conditional",
+    "action": "Go for the Bender egress-allowlist pilot? go = apply on Bender per the report when idle+fenced, with the one-command revert ready; no-go = keep today\u2019s open office-network access.",
+    "reasons": [
+      "Next action contains a future condition/prerequisite; it is retained in work context",
+      "Planned work or an agreed future start; no immediate owner decision",
+      "Published dependency/wait: Queued behind the KD and CI work (Will, 2026-10-25). Do not drop.",
+      "Card owner is outside the reconciled First Mate/Will request; verify accountability",
+      "No owner-actionable record explicitly matches this request ID",
+      "Next action contains a future condition/prerequisite; it is retained in work context"
+    ]
+  },
+  "request": {
+    "id": "workload-lan-egress-pilot-go",
+    "action": "Decision",
+    "preserveAction": true,
+    "proposal": {
+      "schema": "tinstar.decision-proposal.v1",
+      "proposal_id": "bender-egress-pilot-go-p2",
+      "request_key": "[\"hold\",\"/home/farm/fm-home\",\"workload-lan-egress-pilot-go\"]",
+      "card_id": "40450ce6d4228195b6a1cb3859f31336",
+      "question": "Go for the Bender egress-allowlist pilot? It restricts only traffic from Bender's CI workload bridge (fpcibender) to the office LAN, allowing just the Sulley git mirror, Hulk's Docker and npm caches, bridge DNS and DHCP; public internet stays open. It runs once Bender is naturally idle and fenced, with a one-command revert ready.",
+      "rationale": "Today a CI workload VM on Bender can reach any office-network address. The pilot limits it to the three private services real jobs use (git mirror 192.168.1.214:8443, Docker cache 192.168.1.158:15000, npm cache 192.168.1.158:14873) plus DNS/DHCP, and rejects other private ranges; public internet access is unchanged. It is a single host, applied only when Bender is idle and drained, proven with a disposable VM and then natural jobs, and undone with one command (sudo -n /usr/local/lib/fp-ci/workload-lan.sh revert). The code paths it relies on are unchanged since Nov 2; live host state is rechecked at execution. Risk if wrong: a missed private dependency breaks checkout, installs or guest boot on Bender until reverted.",
+      "recommended_action_id": "go",
+      "actions": [
+        {
+          "id": "go",
+          "label": "Go: pilot on Bender",
+          "instruction": "Schedule the Bender egress-allowlist pilot per data/bender-egress-pilot-decision/report.md: apply only when Bender is naturally idle and fenced, keep the one-command revert ready, prove with disposable-VM probes and then natural jobs, no wider rollout without proof."
+        },
+        {
+          "id": "no-go",
+          "label": "No-go: keep open access",
+          "instruction": "Do not run the pilot; keep today's open office-network access for CI workloads."
+        }
+      ],
+      "references": [
+        {
+          "label": "Decision summary on Hulk: data/bender-egress-pilot-decision/report.md",
+          "url": "https://app.notion.com/p/40450ce6d4228195b6a1cb3859f31336"
+        }
+      ],
+      "source": {
+        "kind": "firstmate-request",
+        "id": "workload-lan-egress-pilot-go",
+        "revision": "2026-11-12T00:15:00Z"
+      },
+      "published_at": "2026-11-12T00:08:47+00:00",
+      "supersedes": null
+    },
+    "sourceRequest": {
+      "home": "/home/farm/fm-home",
+      "taskId": "bender-egress-pilot-decision",
+      "id": "workload-lan-egress-pilot-go",
+      "kind": "hold"
+    },
+    "sourceQuestion": "Plan sent to parent (corr e1160a7ed674d2ab): pilot nftables allowlist on Bender when idle+fenced, one-command revert.",
+    "sourceSpawnGen": "s1794428509.3020290.32651",
+    "requestedFrom": "Will",
+    "question": "Go for the Bender egress-allowlist pilot? It restricts only traffic from Bender's CI workload bridge (fpcibender) to the office LAN, allowing just the Sulley git mirror, Hulk's Docker and npm caches, bridge DNS and DHCP; public internet stays open. It runs once Bender is naturally idle and fenced, with a one-command revert ready.",
+    "since": "2026-11-12T01:20:00.000Z",
+    "sourceId": "41650ce6-d422-819f-b7c3-001d27125321",
+    "answered": false,
+    "cardId": "40450ce6d4228195b6a1cb3859f31336"
+  }
+}

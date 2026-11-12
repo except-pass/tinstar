@@ -1,4 +1,5 @@
 /** Reconstructed Bender state. No live source reads or writes. */
+import live from './benderLive.json'
 import { fixtureSources } from './scenes'
 import { queueSignals } from '../../src/server/reconciliation/queueInputs'
 export const benderCardId = '40450ce6d4228195b6a1cb3859f31336'
@@ -28,5 +29,26 @@ export function benderDecisionSources(now = Date.now()) {
     ...queueSignals({ hold_kind: 'captain', body_lines: [`Origin: ${benderTaskId}`] }),
   }]
   snapshot.fleet = [home]
+  return snapshot
+}
+
+/** Saved queue evidence plus the card/Origin facts supplied with the incident.
+ * Only observation times are renewed; this never reads a live home. */
+export function benderLiveSources(now = Date.now()) {
+  const snapshot = benderDecisionSources(now), home = snapshot.fleet[0]!, task = home.observation.data!.tasks[0]!
+  const card = snapshot.intentions.data!.cards[0]!
+  home.source = { ...home.source, home: live.hold.request.home, label: 'Hulk' }
+  home.observation.data!.fm_home = live.hold.request.home
+  task.identity.fm_home = live.hold.request.home
+  task.identity.spawn_gen = task.spawn_gen = live.decision.generation
+  card.properties.Owner!.value = 'Hulk'
+  card.properties.Name!.value = live.title
+  card.properties['First Mate tasks']!.value = JSON.stringify({ schema: 'tinstar.fm-links.v1', tasks: [
+    { fm_home: live.hold.request.home, task_id: live.decision.request.taskId, first_observed_spawn_gen: live.decision.generation },
+  ] })
+  task.queue!.decisions[0]!.summary = live.decision.question
+  const hold = home.observation.data!.backlog![0]!
+  hold.id = live.hold.request.id
+  hold.hold_reason = live.hold.question
   return snapshot
 }

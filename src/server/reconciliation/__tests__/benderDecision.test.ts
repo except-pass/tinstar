@@ -1,10 +1,11 @@
+import live from '../../../../test-fixtures/reconciliation/benderLive.json'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { buildQueue } from '../queue'
 import { reconcileScene } from '../scene'
 import { needsWill } from '../needsWill'
 import { requestAnchor } from '../../../shared/deskSource'
 import { fixtureProposal } from '../../../../test-fixtures/reconciliation/decisionProposal'
-import { benderCardId, benderDecisionSources, benderQuestion, benderTaskId } from '../../../../test-fixtures/reconciliation/benderDecision'
+import { benderCardId, benderDecisionSources, benderLiveSources, benderQuestion, benderTaskId } from '../../../../test-fixtures/reconciliation/benderDecision'
 const now = Date.parse('2026-11-12T01:27:00Z')
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now) })
 afterEach(() => vi.useRealTimers())
@@ -60,9 +61,10 @@ it('preserves an existing exact-hold queue key and recommendation binding', () =
   expect(queue.items[0]).toMatchObject({ id: key, readiness: 'ready-now' })
   expect(queue.items[0]!.sources.some(entry => entry.request?.kind === 'hold')).toBe(true)
 })
-it('keeps an unrelated same-task hold separate even with identical question text', () => {
+it('keeps a hold with a different origin separate even with identical question text', () => {
   const snapshot = benderDecisionSources(now)
   snapshot.fleet[0]!.observation.data!.backlog![0]!.id = 'other-approval'
+  snapshot.fleet[0]!.observation.data!.backlog![0]!.queue!.originTaskId = 'other-task'
   const queue = buildQueue(snapshot, new Map(), now)
   expect(queue.items).toHaveLength(2)
   expect(queue.items.find(item => item.decisionKeys.includes('pilot-go'))).toMatchObject({ readiness: 'ready-now' })
@@ -76,4 +78,45 @@ it('classifies an explicit owner decision without inventing a fleet answer route
   expect(queue.items).toHaveLength(1)
   expect(queue.items[0]).toMatchObject({ readiness: 'ready-now', id: requestAnchor({ ...source, id: 'pilot-go', kind: 'decision' }) })
   expect(queue.items[0]!.sources.every(entry => !entry.responseAnchor)).toBe(true)
+})
+
+
+it('reconciles the saved live Bender shape and retains its published typed recommendation', () => {
+  const snapshot = benderLiveSources(now), queue = buildQueue(snapshot, new Map(), now)
+  expect(queue.items).toHaveLength(1)
+  expect(queue.items[0]).toMatchObject({ id: live.request.proposal.request_key, readiness: 'ready-now', oneTouch: true,
+    cardIds: [live.cardId], decisionKeys: expect.arrayContaining(['pilot-go', live.hold.request.id]) })
+  expect(queue.items[0]!.sources.filter(entry => entry.request)).toHaveLength(3)
+  expect(queue.items[0]!.reasons).toEqual(['Explicit owner Decision action corroborated by an open keyed First Mate request'])
+  expect(queue.items[0]!.sources.find(entry => entry.request?.kind === 'hold')).toMatchObject({
+    question: live.hold.question, generation: live.hold.generation, responseAnchor: live.hold.responseAnchor, readiness: 'ready-now',
+  })
+  const blocks = [{ id: live.request.sourceId, type: 'comment', text: `Requested from: Will
+Question: ${live.request.question}
+Tin Star request: ${JSON.stringify({ id: live.request.id, action: live.request.action, source_request: live.request.sourceRequest,
+    source_question: live.request.sourceQuestion, source_spawn_gen: live.request.sourceSpawnGen, proposal: live.request.proposal })}` }]
+  const scene = { ...reconcileScene(snapshot, now), claimHistory: [], historyScope: 'fixture' }
+  const rows = needsWill(queue, scene, new Map([[live.cardId, { outcome: 'available', blocks }]]), null, new Map())
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ readiness: 'ready-now', oneTouch: true, proposalHistoryComplete: true,
+    currentProposalAnswerId: '58b2495c-da93-4369-a005-ec52156008b8', proposal: { value: live.request.proposal } })
+  const incomplete = needsWill(queue, scene, new Map([[live.cardId, { outcome: 'partial', blocks }]]), null, new Map())
+  expect(incomplete[0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false, proposalHistoryComplete: false })
+  expect(incomplete[0]!.reasons).toContain('Publication history is incomplete; refresh before choosing')
+})
+
+it.each(['unpublished label', 'different origin', 'ambiguous holds', 'structured hold', 'future hold', 'stale fleet', 'stale cards', 'coordination hold', 'conditional question'])('retains live identity and readiness limits: %s', condition => {
+  const snapshot = benderLiveSources(now), home = snapshot.fleet[0]!, hold = home.observation.data!.backlog![0]!
+  if (condition === 'unpublished label') home.source.label = 'Another home'
+  if (condition === 'different origin') hold.queue!.originTaskId = 'other-task'
+  if (condition === 'ambiguous holds') home.observation.data!.backlog!.push({ ...hold, id: 'another-hold' })
+  if (condition === 'structured hold') hold.blocked_by = 'dependency-1'
+  if (condition === 'future hold') hold.hold_until = '2026-12-01T00:00:00Z'
+  if (condition === 'stale fleet') home.observation.status = 'stale'
+  if (condition === 'stale cards') snapshot.intentions.status = 'stale'
+  if (condition === 'coordination hold') hold.hold_reason = 'Owner calls via separate requests: choose a release and approve a deploy'
+  if (condition === 'conditional question') home.observation.data!.tasks[0]!.queue!.decisions[0]!.summary = 'Choose the pilot after verification?'
+  const queue = buildQueue(snapshot, new Map(), now)
+  if (['unpublished label', 'different origin', 'ambiguous holds'].includes(condition)) expect(queue.items.length).toBeGreaterThan(1)
+  else expect(queue.items.every(item => item.readiness !== 'ready-now' && !item.oneTouch)).toBe(true)
 })
