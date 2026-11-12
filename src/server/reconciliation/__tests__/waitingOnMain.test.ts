@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fixtureSources, fixtureId } from '../../../../test-fixtures/reconciliation/scenes'
 import { inboxRequestId } from '../../../shared/ask'
-import { namesMain, mainWaitField, MAIN_WAIT_INTERVAL as FOUR_HOURS, MAIN_WAIT_NUDGE_INTERVAL as TWO_HOURS, waitAlertDue, type MainWaitItem } from '../../../shared/waitingOnMain'
+import { namesMain, waitDependency, MAIN_WAIT_INTERVAL as FOUR_HOURS, MAIN_WAIT_NUDGE_INTERVAL as TWO_HOURS, waitAlertDue, type MainWaitItem } from '../../../shared/waitingOnMain'
 import { MAIN_WAIT_CARD, MAIN_WAIT_OWNER, mainWaitCandidates, mainWaitComment, mainWaitNotifier, parentAskClosed, WaitingOnMain } from '../waitingOnMain'
 import { AskApi } from '../../ask/routes'
 import { NotionApi } from '../notionApi'
@@ -65,8 +65,8 @@ describe('Waiting on main', () => {
   it.each(['First Mate', ' first mate (MAIN) ', 'Main', 'main firstmate'])('matches the whole main identity %s', value => expect(namesMain(value)).toBe(true))
   it.each(['mainly', 'domain:', 'First Mate (hulk)', 'Will', 'main firstmates', 'via mainframe', 'firstmate maintainer', 'Firstmate', 'via main', 'First Mate: decide'])('does not match identity %s', value => expect(namesMain(value)).toBe(false))
   it.each(['First Mate: review', 'First Mate (main): fix ...', 'Main - choose', 'main firstmate: decide', 'waiting via main for review'])('matches routed text only when ID is empty: %s', value => {
-    expect(mainWaitField(value, '  ')).toBe('Waiting For')
-    expect(mainWaitField(value, 'Will')).toBeNull()
+    expect(namesMain(waitDependency(value, '  '))).toBe(true)
+    expect(waitDependency(value, 'Will')).toBe('Will')
   })
   it.each([
     ['Will', 'Will: press refresh tools, then the ChatGPT -> Tin Star -> Notion -> First Mate handoff proof'],
@@ -86,7 +86,7 @@ describe('Waiting on main', () => {
     const card = value.intentions.data!.cards.find(card => card.id === fixtureId(4))!
     card.properties['Waiting For']!.value = 'Review'
     card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: ' First Mate ', hasMore: false }
-    expect(mainWaitField('Review', ' First Mate ')).toBe('Waiting For ID')
+    expect(waitDependency('Review', ' First Mate ')).toBe('First Mate')
     expect(mainWaitCandidates(value, now).items).toHaveLength(2)
     card.properties.Status!.value = 'Done'
     value.fleet[1]!.source.parentHome = value.fleet[2]!.source.home
@@ -493,6 +493,32 @@ describe('Waiting on main', () => {
     expect(payload.waiting_on_first_mate).toContainEqual(expect.objectContaining({ card_id: card.id }))
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify.mock.calls[0]![0]).toEqual([expect.objectContaining({ key: fixtureId(6), audience: 'owner' })])
+  })
+  it.each([
+    ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', '', false, 'first-mate'],
+    ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', '', true, 'first-mate'],
+    ['Dependency: Legal | Unblocks when: Will approves | Follow-up: Will', '', false, null],
+    ['Dependency: Will | Unblocks when: approval | Follow-up: First Mate (hulk)', '', false, 'owner'],
+    ['Dependency: Will | Unblocks when: approval | Follow-up: Will\nDependency: First Mate (hulk) | Unblocks when: review | Follow-up: Will', '', true, 'first-mate'],
+    ['Will: approval\nFirst Mate (hulk) - review', '', false, 'first-mate'],
+    ['Dependency: First Mate (hulk) | Unblocks when: approval | Follow-up: Will', 'Will', false, 'owner'],
+    ['Dependency: Will | Unblocks when: approval | Follow-up: Will', 'First Mate (hulk)', true, 'first-mate'],
+  ] as const)('routes retained dependencies in %s with ID %s and tag %s', async (text, id, tagged, audience) => {
+    const value = snapshot()
+    const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
+    card.properties['Waiting For']!.value = text
+    card.properties['Waiting For ID'] = { id: 'id', type: 'rich_text', value: id, hasMore: false }
+    card.properties['Will action'] = { id: 'Will action', type: 'multi_select', value: tagged ? ['Decision'] : [], hasMore: false }
+    const candidate = mainWaitCandidates(value, now).items.find(row => row.key === card.id)
+    expect(candidate?.audience ?? null).toBe(audience)
+    const notify = vi.fn<ReturnType<typeof mainWaitNotifier>>(async () => 'mentioned' as const)
+    const service = new WaitingOnMain(async () => value, notify, await root(), async () => true, () => now)
+    await service.sweep()
+    const body = (await service.bridgeWork()).pending[0]!.body
+    const items = JSON.parse(body.split('\n').slice(1).join('\n')).waiting_on_first_mate
+    expect(items.some((row: { key: string }) => row.key === card.id)).toBe(audience === 'first-mate')
+    if (audience === 'owner') expect(notify).toHaveBeenCalledWith([expect.objectContaining({ key: card.id, audience: 'owner' })], now)
+    else expect(notify).not.toHaveBeenCalled()
   })
   it('loads a state file written before nudges existed and still nudges fresh waits', async () => {
     const directory = await root()

@@ -10,7 +10,7 @@ import { ageObservation } from './observation'
 import type { SourceSnapshot } from './index'
 import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
-import { mainHomeLabel, mainWaitField, nudgeDue, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead, type ParentResolution } from '../../shared/waitingOnMain'
+import { mainHomeLabel, waitDependency, nudgeDue, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead, type ParentResolution } from '../../shared/waitingOnMain'
 
 export const MAIN_WAIT_OWNER = '84d29212-4a5b-49f1-91bf-92b7adeff516'
 export const MAIN_WAIT_CARD = '41550ce6d42281239fd4f9f20c901b80'
@@ -51,12 +51,12 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')
     if (card.archived || card.in_trash || ['done', 'archived'].includes(value('Status').toLowerCase())) continue
     const wait = value('Waiting For'), id = value('Waiting For ID')
-    const dependency = id.trim() || wait.trim().split(/:| -/)[0]!.trim()
-    const main = namesMate(dependency) || !!mainWaitField(wait, id)
+    const dependencies = id.trim() ? [waitDependency('', id)] : wait.split('\n').map(entry => waitDependency(entry))
+    const main = dependencies.some(dependency => namesMate(dependency) || mainHomeLabel(dependency))
     const willAction = card.properties['Will action']?.value
     const willTags = (Array.isArray(willAction) ? willAction : typeof willAction === 'string' && willAction ? [willAction] : [])
       .some(tag => typeof tag === 'string' && !!tag.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(tag.trim()))
-    const namedWill = id.trim() ? /^will$/i.test(id.trim()) : /\bWill\b/.test(wait)
+    const namedWill = dependencies.some(dependency => /^will$/i.test(dependency))
     const ownerFieldsTruncated = ['Waiting For', 'Waiting For ID', 'Will action'].some(name => card.properties[name]?.hasMore)
     // A First Mate or mate wait never mentions the owner, even with a Will tag.
     const owner = !main && !ownerFieldsTruncated && (willTags || namedWill)

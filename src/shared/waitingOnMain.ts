@@ -1,13 +1,16 @@
 /** All supported textual names for the main First Mate live here. */
 const MAIN_NAME = String.raw`(?:first mate(?: \(main\))?|main|main firstmate)`
 export const MAIN_NAMES = new RegExp('^' + MAIN_NAME + '$', 'i')
-const MAIN_TEXT_PREFIX = new RegExp('^' + MAIN_NAME + '(?::| -)', 'i')
 export const namesMain = (value: unknown): boolean => typeof value === 'string' && MAIN_NAMES.test(value.trim())
 export const mainHomeLabel = namesMain
-/** A populated dependency ID is authoritative; prose mentions are not routing. */
-export function mainWaitField(waitingFor: string, waitingForId: string): 'Waiting For' | 'Waiting For ID' | null {
-  if (waitingForId.trim()) return namesMain(waitingForId) ? 'Waiting For ID' : null
-  return MAIN_TEXT_PREFIX.test(waitingFor.trim()) || /\bvia main\b/i.test(waitingFor) ? 'Waiting For' : null
+export function waitDependency(waitingFor: string, waitingForId = ''): string {
+  if (waitingForId.trim()) return waitingForId.trim()
+  const entry = waitingFor.trim()
+  const workflow = /^Dependency:\s*([^|]*)/i.exec(entry)
+  if (workflow) return workflow[1]!.trim()
+  const legacy = /^(.*?)(?::| -)/.exec(entry)
+  if (legacy) return legacy[1]!.trim()
+  return /\bvia main\b/i.test(entry) ? 'main' : entry
 }
 export const MAIN_WAIT_INTERVAL = 4 * 3600_000
 /** Inbox re-nudge gap, and how long an open nudge stays quiet on Overview. */

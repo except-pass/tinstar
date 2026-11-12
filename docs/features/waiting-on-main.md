@@ -18,8 +18,10 @@ independent of Overview filters.
 Cards match a trimmed, whole `Waiting For ID` of `First Mate`, `First Mate (main)`,
 `Main`, or `main firstmate`, case-insensitively. First Mate with any parenthesized home label, mate identities, and configured
 fleet labels also route to the inbox, even with a Will action tag. A populated
-dependency ID takes precedence over the wait text. With an empty ID, `Waiting For` must start with one of those names
-followed by `:` or ` -`, or contain `via main`. A prose mention alone never
+dependency ID takes precedence over the wait text. With an empty ID, each
+retained line is parsed separately: workflow entries use only `Dependency: X`
+before the first `|`, while legacy entries use `X: ...`, `X - ...`, or `via main`.
+Follow-up owners and unblock conditions do not name the dependency. A prose mention alone never
 matches; `Firstmate` and `firstmate maintainer` are different actors. Main identity matching
 lives in `src/shared/waitingOnMain.ts`; candidate audience classification lives
 in `src/server/reconciliation/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
