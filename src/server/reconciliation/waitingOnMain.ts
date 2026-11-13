@@ -51,17 +51,18 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')
     if (card.archived || card.in_trash || ['done', 'archived'].includes(value('Status').toLowerCase())) continue
     const wait = value('Waiting For'), id = value('Waiting For ID')
-    const dependencies = id.trim() ? [waitDependency('', id)] : wait.split('\n').map(entry => waitDependency(entry))
+    const textDependencies = wait.split('\n').map(entry => waitDependency(entry))
+    const dependencies = id.trim() ? [waitDependency('', id)] : textDependencies
     const main = dependencies.some(dependency => namesMate(dependency) || mainHomeLabel(dependency))
     const willAction = card.properties['Will action']?.value
     const willTags = (Array.isArray(willAction) ? willAction : typeof willAction === 'string' && willAction ? [willAction] : [])
       .some(tag => typeof tag === 'string' && !!tag.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(tag.trim()))
-    const namedWill = dependencies.some(dependency => /^will$/i.test(dependency))
+    const namedWill = [...dependencies, ...textDependencies].some(dependency => /^will$/i.test(dependency))
     const ownerFieldsTruncated = ['Waiting For', 'Waiting For ID', 'Will action'].some(name => card.properties[name]?.hasMore)
-    // A First Mate or mate wait never mentions the owner, even with a Will tag.
-    const owner = !main && !ownerFieldsTruncated && (willTags || namedWill)
+    // An owner signal takes precedence over mate routing, including a stale ID.
+    const owner = willTags || namedWill
     if (!main && !owner) continue
-    const truncated = main && ['Waiting For', 'Waiting For ID'].some(name => card.properties[name]?.hasMore)
+    const truncated = owner ? ownerFieldsTruncated : ['Waiting For', 'Waiting For ID'].some(name => card.properties[name]?.hasMore)
     if (truncated) { complete.delete('board'); unknown.push('Some card wait fields are truncated') }
     items.push({ id: `card:${card.id}`, source: 'board', kind: 'card', label: value('Name') || card.id, key: card.id,
       text: [wait, id].filter(Boolean).join(' · '), since: card.last_edited_time, ageBasis: 'at least',
@@ -167,11 +168,13 @@ const savedStateSchema = z.object({
 })
 type SavedState = z.infer<typeof savedStateSchema>
 type SavedRow = z.infer<typeof rowSchema>
-const waitIdentity = (item: MainWaitItem) => JSON.stringify([item.id, item.text, item.since, item.label, item.key, item.url, item.kind, item.ageBasis])
+// Age is delivery context, not a new wait. Keep the stored request/body intact
+// until the dependency or label changes, or the delivered wait is due again.
+const waitIdentity = (item: Pick<MainWaitItem, 'id' | 'text' | 'label'>) => JSON.stringify([item.id, item.text, item.label])
 function containsWait(nudge: z.infer<typeof nudgeSchema>, item: MainWaitItem) {
   if (nudge.items) return nudge.items.some(saved => waitIdentity(saved) === waitIdentity(item))
-  const payload = (body: string) => (JSON.parse(body.slice(body.indexOf('\n') + 1)).waiting_on_first_mate as Record<string, unknown>[])
-    .map(({ age: _age, ...wait }) => JSON.stringify(wait))
+  const payload = (body: string) => (JSON.parse(body.slice(body.indexOf('\n') + 1)).waiting_on_first_mate as Pick<MainWaitItem, 'id' | 'text' | 'label'>[])
+    .map(waitIdentity)
   return payload(nudge.body).includes(payload(mainWaitNudge([item], 0))[0]!)
 }
 const shownItem = (row: SavedRow): MainWaitItem => row.nudgeFirstAt == null ? row.item : { ...row.item, nudgedAt: new Date(row.nudgeFirstAt).toISOString() }

@@ -4,7 +4,10 @@ Overview does not show waits on First Mate by default. Each fresh wait sends
 First Mate one inbox nudge on the existing check-in and workflow-notice bridge.
 The note carries the card id, or the mate and key, plus the wait text and age.
 The same open item is nudged again at most every two hours after a successful
-announcement. Each request ID keeps an immutable payload and membership. When
+announcement. Age-only updates and unrelated card edits preserve the pending
+request and its original body across sweeps and restarts. Wait identity uses
+the item ID, wait text and label, so age changes do not reset the nudge clock.
+Each request ID keeps an immutable payload and membership. When
 due waits or their text change, the sweep retires the pending request and reserves
 a new ID. Closed, resolved, owner, and no-longer-fresh waits are excluded from
 the new batch; an empty batch sends nothing. Retired requests are never offered
@@ -29,9 +32,12 @@ independent of Overview filters.
 
 Cards match a trimmed, whole `Waiting For ID` of `First Mate`, `First Mate (main)`,
 `Main`, or `main firstmate`, case-insensitively. First Mate with any parenthesized home label, mate identities, and configured
-fleet labels also route to the inbox, even with a Will action tag. A populated
-dependency ID takes precedence over the wait text. With an empty ID, each
-retained line is parsed separately: workflow entries use only `Dependency: X`
+fleet labels also route to the inbox unless the card has an owner signal.
+An active `Will action` tag or a dependency naming Will in either the ID or
+wait text takes precedence over mate routing, including a stale mate ID.
+Empty tags and `none`, `no`, `false`, `n/a`, `answered` or `resolved` are not
+active owner signals. Otherwise, a populated dependency ID takes precedence
+over the wait text. Each retained text line is parsed separately: workflow entries use only `Dependency: X`
 before the first `|`, while legacy entries use `X: ...`, `X - ...`, or `via main`.
 Follow-up owners and unblock conditions do not name the dependency. A prose mention alone never
 matches; `Firstmate` and `firstmate maintainer` are different actors. Main identity matching
@@ -102,10 +108,9 @@ remain. Unknown items are never used to send an overdue notification.
 An independent server sweep runs at startup and every minute, even with no
 browser open. The existing paced `NotionApi` and integration key create a
 **Notion comment mentioning William Gathright**, user
-`84d29212-4a5b-49f1-91bf-92b7adeff516`, only for a wait that is his: a Will
-action tag, or Waiting For / Waiting For ID of Will. A wait on First Mate or a
-mate never mentions him, including when that card also has a Will action tag.
-That backstop is the inbox nudge instead. This uses Notion's owner inbox/push
+`84d29212-4a5b-49f1-91bf-92b7adeff516`, only for waits classified as his under
+the card classification rules above. Cards routed to First
+Mate use the inbox nudge instead. This uses Notion's owner inbox/push
 path; actual push delivery depends on the owner's Notion notification settings.
 Owner-wait alerts are comments on that card. The nudge is offered on the
 existing Ask bridge pull. No new notification service is involved.
