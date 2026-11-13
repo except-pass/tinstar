@@ -50,10 +50,9 @@ export class CardLeases {
     this.path = join(root, 'card-leases.sqlite')
     const db = this.database()
     try {
-      if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('leases','receipts','events')").get() as { n: number }).n !== 3) db.exec(`PRAGMA journal_mode=WAL;
+      if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('leases','receipts')").get() as { n: number }).n !== 2) db.exec(`PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS leases (card TEXT PRIMARY KEY, generation INTEGER NOT NULL, caller TEXT, holder TEXT, token_hash TEXT, expires INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS receipts (caller TEXT, operation TEXT, signature TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(caller, operation));
-        CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, card TEXT NOT NULL, generation INTEGER NOT NULL, kind TEXT NOT NULL, reason TEXT);`)
+        CREATE TABLE IF NOT EXISTS receipts (caller TEXT, operation TEXT, signature TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(caller, operation));`)
       chmodSync(this.path, 0o600)
     } finally { db.close() }
   }
@@ -107,10 +106,6 @@ export class CardLeases {
       return result
     })
   }
-  private event(db: SqliteDatabase, row: Row, kind: string, reason: string | null = null) {
-    db.prepare('INSERT INTO events(at,card,generation,kind,reason) VALUES(?,?,?,?,?)').run(this.now(), row.card, row.generation, kind, reason)
-    db.exec('DELETE FROM events WHERE id <= (SELECT MAX(id) - 1000 FROM events)')
-  }
   private token(caller: string, operation: string) {
     // Reconstruct an identical claim response after a lost response/restart,
     // without storing a plaintext token in a receipt or lease record.
@@ -123,7 +118,11 @@ export class CardLeases {
       if (previous) {
         if (previous.signature !== signature) return { outcome: 'operation-conflict' }
         const result = JSON.parse(previous.result)
-        return { ...result, ...(result.outcome === 'claimed' ? { lease_token: this.token(caller, operation) } : {}) }
+        if (result.outcome !== 'claimed') return result
+        const leaseToken = this.token(caller, operation)
+        const row = this.row(db, result.lease.card_id)
+        if (!this.active(row) || row.generation !== result.lease.generation || row.caller !== caller || row.token_hash !== hash(leaseToken)) throw new CardLeaseError(null)
+        return { ...result, lease: publicLease(row), lease_token: leaseToken }
       }
       if (token) {
         const row = db.prepare('SELECT * FROM leases WHERE token_hash = ? AND caller = ?').get(hash(token), caller) as unknown as Row | undefined
@@ -134,11 +133,9 @@ export class CardLeases {
       for (const card of cards) {
         const old = this.row(db, card)
         if (this.active(old)) { if (exact) throw new CardLeaseError(publicLease(old)); continue }
-        if (old?.caller) this.event(db, old, 'expiry')
         const leaseToken = this.token(caller, operation)
         const row: Row = { card, generation: (old?.generation ?? 0) + 1, caller, holder: `${holder} · chat ${hash(leaseToken).slice(0, 6)}`, token_hash: hash(leaseToken), expires: this.now() + leaseDuration }
         db.prepare('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)').run(row.card, row.generation, row.caller, row.holder, row.token_hash, row.expires)
-        this.event(db, row, 'claim')
         const result = { outcome: 'claimed', lease: publicLease(row) }
         db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(caller, operation, signature, JSON.stringify(result))
         return { ...result, lease_token: leaseToken }
@@ -146,24 +143,23 @@ export class CardLeases {
       return { outcome: 'no-unclaimed-card', message: 'No currently unclaimed actionable card in the covered queue; inspect source coverage and waiting requests' }
     })
   }
-  async release(caller: string, token: string, reason: string) {
+  async release(caller: string, token: string, _reason: string) {
     return this.transaction(db => {
       const row = db.prepare('SELECT * FROM leases WHERE token_hash = ? AND caller = ?').get(hash(token), caller) as unknown as Row | undefined
       if (!this.active(row)) throw new CardLeaseError(null)
-      this.clear(db, row, reason)
+      this.clear(db, row)
       return { outcome: 'released', card_id: row.card }
     })
   }
-  private clear(db: SqliteDatabase, row: Row, reason: string) {
+  private clear(db: SqliteDatabase, row: Row) {
     db.prepare('UPDATE leases SET generation = generation + 1, caller = NULL, holder = NULL, token_hash = NULL, expires = 0 WHERE card = ?').run(row.card)
-    this.event(db, row, 'release', reason)
   }
-  async ownerRelease(card: string, generation: number, reason: string) {
+  async ownerRelease(card: string, generation: number, _reason: string) {
     return this.transaction(db => {
       const row = this.row(db, card)
       if (!this.active(row)) return { outcome: 'already-released' }
       if (row.generation !== generation) return { outcome: 'claim-changed', message: 'Holder changed; reload before releasing' }
-      this.clear(db, row, reason)
+      this.clear(db, row)
       return { outcome: 'released', card_id: card }
     })
   }

@@ -40,6 +40,30 @@ it('claims durably, replays ambiguous claims, binds credentials and keeps tokens
   }
 })
 
+it.each([false, true])('replays only current claims with refreshed metadata (exact=%s)', async exact => {
+  let now = 1_000
+  const directory = root(), service = new CardLeases(directory, () => now)
+  const claim = (operation: string) => service.claim([card], caller, 'ChatGPT', operation, undefined, exact)
+  const first = await claim('first')
+  if (!('lease_token' in first) || !first.lease_token || !first.lease) throw new Error('Missing lease')
+  now += leaseDuration / 2
+  await withLeaseCaller(caller, first.lease_token, () => service.mutate(card, async () => undefined))
+  expect(await new CardLeases(directory, () => now).claim([card], caller, 'ChatGPT', 'first', undefined, exact)).toMatchObject({ outcome: 'claimed', lease_token: first.lease_token, lease: service.status(card) })
+  now += leaseDuration
+  await expect(claim('first')).rejects.toThrow('Claim lost')
+  const second = await claim('second')
+  if (!('lease_token' in second) || !second.lease_token || !second.lease) throw new Error('Missing lease')
+  await expect(claim('first')).rejects.toThrow('Claim lost')
+  await service.release(caller, second.lease_token, 'Finished')
+  await expect(claim('second')).rejects.toThrow('Claim lost')
+  const third = await claim('third')
+  if (!('lease' in third) || !third.lease) throw new Error('Missing lease')
+  await service.ownerRelease(card, third.lease.generation, 'Owner release')
+  await expect(claim('third')).rejects.toThrow('Claim lost')
+  await claim('fourth')
+  await expect(claim('third')).rejects.toThrow('Claim lost')
+})
+
 it('serializes simultaneous claim selection across independent service instances in original order', async () => {
   const directory = root(), first = new CardLeases(directory), second = new CardLeases(directory)
   const results = await Promise.all([first.claim([card, other], caller, 'ChatGPT', 'chat-1'), second.claim([card, other], caller, 'ChatGPT', 'chat-2')])
