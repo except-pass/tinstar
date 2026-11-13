@@ -1,3 +1,4 @@
+import { CardLeases, withLeaseCaller } from '../cardLeases'
 import { buildQueue } from '../queue'
 import { queueSignals } from '../queueInputs'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
@@ -327,6 +328,28 @@ describe('one-call approved implementation handoff', () => {
     expect(second).toMatchObject({ recovery: { code: 'append-unconfirmed', pending_batch_hashes: expect.any(Array) } })
     expect(f.requests.filter(row => row.method === 'PATCH' && row.url.includes('/children'))).toHaveLength(appendCount)
     expect((await f.reader.card(first.record.card_id)).properties.Status?.value).toBe('Backlog')
+  })
+  it.each([1, 2, 3])('retries a handoff after owner release refuses append stage %s', async stage => {
+    const f = await setup(), input = handoffInput({ target: { card_id: id } })
+    const leases = f.reader.leases = new CardLeases(f.root)
+    const first = await leases.claim([id], 'fixture-caller', 'ChatGPT', 'first')
+    if (!('lease_token' in first) || !first.lease_token || !first.lease) throw new Error('Missing lease')
+    const generation = first.lease.generation
+    const append = WorkflowContent.prototype.appendBlocks
+    let calls = 0
+    const spy = vi.spyOn(WorkflowContent.prototype, 'appendBlocks').mockImplementation(async function (this: WorkflowContent, ...args) {
+      if (++calls === stage) await leases.ownerRelease(id, generation, 'Owner release')
+      return append.apply(this, args)
+    })
+    try {
+      const result = await withLeaseCaller('fixture-caller', first.lease_token, () => f.workflow.submitHandoff(input, 'ChatGPT'))
+      expect(calls).toBe(stage)
+      expect(result).toMatchObject({ outcome: 'partially-saved', recovery: { pending_batch_hashes: [] } })
+      expect(f.requests.filter(row => row.method === 'PATCH' && row.url.includes('/children'))).toHaveLength(stage - 1)
+    } finally { spy.mockRestore() }
+    const second = await leases.claim([id], 'fixture-caller', 'ChatGPT', 'second')
+    if (!('lease_token' in second) || !second.lease_token) throw new Error('Missing lease')
+    expect(await withLeaseCaller('fixture-caller', second.lease_token, () => f.make().submitHandoff(input, 'ChatGPT'))).toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' } })
   })
   it('honors a definite 429 rejection without duplicating blocks and reports offline reads honestly', async () => {
     const f = await setup(), input = handoffInput({ target: { card_id: id } }); f.controls.append('rejected')

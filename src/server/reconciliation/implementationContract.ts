@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { CardLeaseError } from './cardLeases'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import type { SubmitHandoffInput } from '../../shared/workflow'
 import { heading, paragraph, WorkflowContent, NotionWriteError, type WorkflowCreateBlock, createBlockText } from './workflowContent'
@@ -140,7 +141,7 @@ export class ImplementationContracts {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
     try { await this.content.appendBlocks(id, children, atStart) }
     catch (error) {
-      if (error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
+      if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
       throw error
     }
   }
