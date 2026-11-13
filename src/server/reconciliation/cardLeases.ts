@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, linkSync, unlinkSync } from 'node:fs'
 import type { IncomingHttpHeaders } from 'node:http'
 import { join } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
@@ -34,12 +34,21 @@ export class CardLeases {
   constructor(root = getConfigRoot(), private now = Date.now) {
     mkdirSync(root, { recursive: true, mode: 0o700 })
     const secretPath = join(root, 'card-lease-key')
-    try { writeFileSync(secretPath, randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 }) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    try { this.secret = readFileSync(secretPath, 'utf8') }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      // Publish a complete key atomically: simultaneous first starts must not
+      // read an empty, newly opened key file before its creator writes it.
+      const candidate = join(root, `.card-lease-key-${randomBytes(12).toString('hex')}`)
+      writeFileSync(candidate, randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 })
+      try { linkSync(candidate, secretPath) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+      finally { unlinkSync(candidate) }
+    }
     chmodSync(secretPath, 0o600)
     this.secret = readFileSync(secretPath, 'utf8')
     this.path = join(root, 'card-leases.sqlite')
-    const db = new DatabaseSync(this.path)
+    const db = this.database()
     try {
       if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('leases','receipts','events')").get() as { n: number }).n !== 3) db.exec(`PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS leases (card TEXT PRIMARY KEY, generation INTEGER NOT NULL, caller TEXT, holder TEXT, token_hash TEXT, expires INTEGER NOT NULL);
@@ -48,21 +57,29 @@ export class CardLeases {
       chmodSync(this.path, 0o600)
     } finally { db.close() }
   }
+  private database(waitForRecovery = true) {
+    const db = new DatabaseSync(this.path)
+    // Concurrent open/last-close can briefly recover the WAL, even on a read.
+    // Use SQLite's busy handler for that short recovery/schema lock. Mutation
+    // transactions instead yield asynchronously while another writer awaits IO.
+    db.exec(`PRAGMA busy_timeout=${waitForRecovery ? 5000 : 0}`)
+    return db
+  }
   private row(db: SqliteDatabase, card: string) { return db.prepare('SELECT * FROM leases WHERE card = ?').get(card) as unknown as Row | undefined }
   private active(row?: Row): row is Row & { caller: string } { return !!row?.caller && row.expires > this.now() }
   status(card: string): CardLease | null {
-    const db = new DatabaseSync(this.path)
+    const db = this.database()
     try { const row = this.row(db, card); return this.active(row) ? publicLease(row) : null } finally { db.close() }
   }
   private async transaction<T>(perform: (db: SqliteDatabase) => Promise<T> | T): Promise<T> {
-    const db = new DatabaseSync(this.path)
+    const db = this.database(false)
     try {
       // Busy waits yield the event loop: another request may hold the writer
       // transaction while awaiting the provider. SQLite releases it on crash.
       for (;;) {
         try { db.exec('BEGIN IMMEDIATE'); break }
         catch (error) {
-          if ((error as { errcode?: number }).errcode !== 5) throw error
+          if ((((error as { errcode?: number }).errcode ?? 0) & 0xff) !== 5) throw error
           await new Promise(resolve => setTimeout(resolve, 20))
         }
       }
@@ -79,7 +96,7 @@ export class CardLeases {
     return matches ? row : undefined
   }
   assertWritable(card: string) {
-    const db = new DatabaseSync(this.path)
+    const db = this.database()
     try { this.check(db, card) } finally { db.close() }
   }
   async mutate<T>(card: string, perform: () => Promise<T>) {

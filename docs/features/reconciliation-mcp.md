@@ -451,7 +451,8 @@ holder. The release uses the existing private UI/origin handshake and verified
 `ask.ownerLogins` authority. It does not expose a conversation token.
 
 State is in `card-leases.sqlite` and `card-lease-key` under `getConfigRoot()`
-(`TINSTAR_CONFIG_HOME` is honored). Back up both with the config root. SQLite
+(`TINSTAR_CONFIG_HOME` is honored). Keep the key with a SQLite-consistent
+backup of the database. SQLite
 transactions arbitrate across processes and survive restart; monotonically
 increasing per-card generations fence old holders. Each source mutation holds
 the SQLite writer transaction until it returns, so a new generation cannot be

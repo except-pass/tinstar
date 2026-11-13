@@ -111,12 +111,20 @@ it('guards workflow and low-level content writes for Firstmate, mate and Clawson
 
 
 it('selects distinct cards across concurrent backend processes using the same durable store', async () => {
-  const directory = root(), service = new CardLeases(directory)
   const module = pathToFileURL(resolve('src/server/reconciliation/cardLeases.ts')).href
-  const run = (operation: string) => promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
-    `import { CardLeases } from ${JSON.stringify(module)}; const service = new CardLeases(${JSON.stringify(directory)}); const result = await service.claim(${JSON.stringify([card, other])}, 'fixture-caller', 'Fixture chat', ${JSON.stringify(operation)}); process.stdout.write(JSON.stringify({card: result.lease?.card_id}));`])
-  const results = await Promise.all([run('process-a'), run('process-b')])
-  expect(new Set(results.map(result => JSON.parse(result.stdout).card))).toEqual(new Set([card, other]))
-  expect(service.status(card)).toBeTruthy()
-  expect(new CardLeases(directory).status(other)).toBeTruthy()
-})
+  // Reopening after the last connection closes exercises WAL recovery as well
+  // as the writer race; a single open can miss SQLite's BUSY_RECOVERY result.
+  for (let round = 0; round < 5; round++) {
+    const directory = root()
+    const run = (operation: string) => promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+      `import { CardLeases } from ${JSON.stringify(module)}; const service = new CardLeases(${JSON.stringify(directory)}); const result = await service.claim(${JSON.stringify([card, other])}, 'fixture-caller', 'Fixture chat', ${JSON.stringify(operation)}); process.stdout.write(JSON.stringify({card: result.lease?.card_id}));`])
+    const results = await Promise.all([run('process-a'), run('process-b')])
+    expect(new Set(results.map(result => JSON.parse(result.stdout).card))).toEqual(new Set([card, other]))
+    const service = new CardLeases(directory)
+    expect(service.status(card)).toBeTruthy()
+    expect(new CardLeases(directory).status(other)).toBeTruthy()
+    const replay = await service.claim([card, other], 'fixture-caller', 'Fixture chat', 'process-a')
+    if (!('lease_token' in replay) || !replay.lease_token || !replay.lease) throw new Error('Missing replay')
+    await withLeaseCaller('fixture-caller', replay.lease_token, () => service.mutate(replay.lease!.card_id, async () => undefined))
+  }
+}, 20_000)
