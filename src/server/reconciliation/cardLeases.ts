@@ -5,8 +5,6 @@ import type { IncomingHttpHeaders } from 'node:http'
 import { join } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
 import { createRequire as createSqliteRequire } from 'node:module'
-// Load through Node: Vite 5 (used by Vitest 2) predates this built-in module.
-const { DatabaseSync }: typeof import('node:sqlite') = createSqliteRequire(import.meta.url)('node:sqlite')
 import { getConfigRoot } from '../configRoot'
 
 export const leaseDuration = 60 * 60 * 1000
@@ -57,6 +55,9 @@ export class CardLeases {
     } finally { db.close() }
   }
   private database(waitForRecovery = true) {
+    // Load only when opening a lease database; importing errors/types needs no SQLite.
+    // Load through Node because Vitest 2's Vite predates this built-in module.
+    const { DatabaseSync }: typeof import('node:sqlite') = createSqliteRequire(import.meta.url)('node:sqlite')
     const db = new DatabaseSync(this.path)
     // Concurrent open/last-close can briefly recover the WAL, even on a read.
     // Use SQLite's busy handler for that short recovery/schema lock. Mutation

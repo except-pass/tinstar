@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Locator } from '@playwright/test'
+import { expect, test, type Page, type Locator, type Request } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
@@ -6,6 +6,14 @@ import { join } from 'node:path'
 import { fixtureId, fixturePatternCoverageScene, fixtureReadinessScene, fixtureScene, fixtureSources, fixtureViewerWorkers } from '../test-fixtures/reconciliation/scenes'
 import { SceneReconciler } from '../src/server/reconciliation/scene'
 import type { FloorScene } from '../src/shared/reconciliationPresentation'
+
+// Lease status uses POST for a read; release and all other workflow operations
+// must still be counted as writes by the navigation regressions.
+function isMutation(req: Request) {
+  if (req.method() === 'GET' || new URL(req.url()).pathname === '/api/reconciliation/ui') return false
+  if (req.method() === 'POST' && new URL(req.url()).pathname === '/api/reconciliation/workflow' && req.postDataJSON()?.operation === 'lease') return false
+  return true
+}
 
 async function freePort() {
   const server = createServer()
@@ -133,7 +141,7 @@ test('shared task/worker grouping, nested order, filters, references and persist
   cards.find(c => c.id === fixtureId(4))!.properties['Next check-in']!.value = { start: '2026-11-05T12:00:00-05:00' }
   const scene = new SceneReconciler().reconcile(sources, proofNow), mutations: string[] = []
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
-  page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
+  page.on('request', req => { if (isMutation(req)) mutations.push(req.url()) })
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue() } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: fixtureViewerWorkers(), attention: [], errors: [] } } }))
@@ -329,7 +337,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
-  page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
+  page.on('request', req => { if (isMutation(req)) mutations.push(req.url()) })
   await page.goto(base)
   await selectAdvanced(page, 'Outer grouping', 'machine')
   await selectAdvanced(page, 'Inner grouping', 'status')
@@ -379,7 +387,7 @@ test('a decision whose card leaves the scene retains its source link without wri
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   const mutations: string[] = []
   let sceneReads = 0
-  page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) mutations.push(req.url()) })
+  page.on('request', req => { if (isMutation(req)) mutations.push(req.url()) })
   await page.route('**/api/reconciliation/scene*', route => { sceneReads++; return route.fulfill({ json: { ok: true, data: scene } }) })
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.goto(`${base}/?view=decisions`)
@@ -1029,7 +1037,7 @@ for (const width of [1440, 390]) test(`single-row toolbar scoped pattern coverag
   sources.fleet = []
   const scene = new SceneReconciler().reconcile(sources, now)
   const writes: string[] = []
-  page.on('request', req => { if (req.method() !== 'GET' && !req.url().includes('/api/reconciliation/ui')) writes.push(req.url()) })
+  page.on('request', req => { if (isMutation(req)) writes.push(req.url()) })
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
   await page.route('**/api/fleet', route => route.fulfill({ json: { ok: true, data: { ready: true, workers: [], attention: [], errors: [] } } }))
   await page.goto(base)
