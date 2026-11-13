@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 
 const exec = promisify(execFile), dirs: string[] = []
 // Assert application diagnostics independently of Node's experimental SQLite warning.
-const cli = (args: string[]) => exec(process.execPath, ['--disable-warning=ExperimentalWarning', resolve('node_modules/tsx/dist/cli.mjs'), resolve('scripts/worker-link-adapter.ts'), ...args], { timeout: 20_000 })
+const cli = (args: string[]) => exec(process.execPath, ['--disable-warning=ExperimentalWarning', '--import', 'tsx', resolve('scripts/worker-link-adapter.ts'), ...args], { timeout: 20_000 })
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))) })
 
 describe('coordinator adapter CLI', () => {
