@@ -1,4 +1,4 @@
-import { CardLeases } from './cardLeases'
+import { CardLeases, CardLeaseError } from './cardLeases'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -230,12 +230,20 @@ export class ReconciliationSources {
   }
   async getWork(input: unknown) {
     const args = getWorkSchema.parse(input)
+    let reconciliationWarning: string | undefined
     try {
       let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
       if (args.refresh) {
         this.context.invalidate(args.card_id)
-        await this.onWorkRefresh?.([card])
-        await this.workflow.reconcileDecisions(card.id, fleet)
+        try {
+          await this.onWorkRefresh?.([card])
+          await this.workflow.reconcileDecisions(card.id, fleet)
+        } catch (error) {
+          // A refresh may reconcile old receipts. Refusing that background
+          // write must not refuse a current source read by another chat.
+          if (!(error instanceof CardLeaseError)) throw error
+          reconciliationWarning = error.message
+        }
         card = await this.workReader.card(card.id, true)
       }
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: card.source?.collectionId ?? this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-source card' },
@@ -246,7 +254,7 @@ export class ReconciliationSources {
       const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
         ...(context ? { context } : {}) })
       // Explicit full-contract retrieval preserves bytes; routine reads remain bounded.
-      return { ...result, lease: this.leases.status(card.id), implementation_contract: args.implementation_contract
+      return { ...result, lease: this.leases.status(card.id), ...(reconciliationWarning ? { warnings: [reconciliationWarning] } : {}), implementation_contract: args.implementation_contract
         ? await this.workflow.readImplementationContract(card.id, args.implementation_contract)
         : { outcome: 'not-requested', complete_response: false, reader: 'get_work with implementation_contract {offset,limit,revision?}; concatenate exact chunks and verify manifest hash' } }
     } catch {

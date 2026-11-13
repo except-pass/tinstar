@@ -2520,6 +2520,11 @@ it('shares durable leases across real MCP chats, workflow writers and owner UI r
   expect((await call(a, 'claim_next_card', { operation_id: 'chat-a-repeat', lease_token: first.lease_token })).lease.card_id).toBe(first.lease.card_id)
   expect((await call(a, 'claim_card', { operation_id: 'another-card', card_id: next.lease.card_id, lease_token: first.lease_token })).outcome).toBe('already-holding')
   expect(await call(a, 'get_work', { card_id: next.lease.card_id, lease_token: first.lease_token })).toMatchObject({ outcome: 'available', lease: { holder: next.lease.holder } })
+  // A denied background repair during explicit refresh must leave reads available.
+  sources.onWorkRefresh = async cards => { for (const card of cards) sources.leases.assertWritable(card.id) }
+  expect(await call(a, 'get_work', { card_id: next.lease.card_id, lease_token: first.lease_token, refresh: true })).toMatchObject({ outcome: 'available', warnings: [`held by ${next.lease.holder} until ${next.lease.expires_at}`] })
+  sources.onWorkRefresh = undefined
+  expect(await call(a, 'claim_card', { card_id: next.lease.card_id, operation_id: 'held-exact' })).toMatchObject({ code: 'card-held' })
   const edit = { kind: 'edit', card_id: next.lease.card_id, operation_id: 'cross-chat', note: 'Conflicting cross chat update' }
   const before = f.requests.filter(row => row.method === 'PATCH' || row.method === 'POST' && new URL(row.url).pathname === '/v1/comments').length
   expect(await call(a, 'update_work', { ...edit, lease_token: first.lease_token })).toMatchObject({ outcome: 'not-saved', code: 'card-held', message: `held by ${next.lease.holder} until ${next.lease.expires_at}` })

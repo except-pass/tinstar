@@ -422,7 +422,8 @@ MCP and workflow request bodies remain bounded at 256 KiB. UI registration and s
 ## Session-scoped card leases
 
 For “next card”, call `claim_next_card(operation_id)` without a browser session.
-It chooses the first actionable unclaimed card from the existing Needs Will
+Generate a fresh UUID operation_id for the first attempt and reuse it only for
+an identical retry. It chooses the first actionable unclaimed card from the existing Needs Will
 selector, retaining its order and reporting source coverage. An unavailable
 source is not an empty queue. `claim_card(card_id, operation_id)` instead claims
 an exact active card on the configured board.
