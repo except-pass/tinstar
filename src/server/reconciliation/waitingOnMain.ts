@@ -1,3 +1,4 @@
+import type { CardLeases } from './cardLeases'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -127,7 +128,7 @@ export function mainWaitNudge(items: MainWaitItem[], now = Date.now()) {
 }
 
 /** Uses the existing paced Notion client/key; never routes a notice through main. */
-export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: NotionApi) {
+export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: NotionApi, leases?: CardLeases) {
   return async (item: MainWaitItem | MainWaitItem[], now: number): Promise<NonNullable<MainWaitItem['alert']>> => {
     if (!config) return 'failed'
     const headers = { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' }
@@ -137,8 +138,12 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
       const person = user.ok ? await user.json() as { id?: string; type?: string } : null
       mention = person?.id === MAIN_WAIT_OWNER && person.type === 'person'
     } catch { /* Missing user access falls back to a visible plain comment. */ }
-    const post = (withMention: boolean) => api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error',
+    const post = (withMention: boolean) => {
+      const parent = mainWaitComment(item, withMention, now).parent.page_id
+      const perform = () => api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error',
       signal: AbortSignal.timeout(5000), body: JSON.stringify(mainWaitComment(item, withMention, now)) })
+      return leases ? leases.mutate(parent.replaceAll('-', ''), perform) : perform()
+    }
     try {
       let response = await post(mention)
       // A definite validation/permission rejection saved no comment. Other

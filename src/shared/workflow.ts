@@ -4,13 +4,14 @@ import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
 import { cardIdSchema } from './workIdentity'
 export { cardIdSchema } from './workIdentity'
+export const leaseTokenSchema = z.string().min(1).max(256).optional()
 const identity = z.string().min(1).max(1024).refine(value => value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value), 'Use an exact nonempty identity')
 export const workerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('firstmate'), fm_home: identity, task_id: identity, first_observed_spawn_gen: identity }).strict(),
   z.object({ kind: z.literal('external'), system: identity, run_id: identity, reference: z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use an HTTP run reference'),
     card_id: cardIdSchema, observed_at: z.string().datetime({ offset: true }), state: z.literal('running'), evidence: z.string().min(12).max(2000) }).strict(),
 ])
-export const startWorkSchema = z.object({ card_id: cardIdSchema, operation_id: z.string().min(1).max(128), worker: workerSchema,
+export const startWorkSchema = z.object({ lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128), worker: workerSchema,
   expected: z.object({ owner: z.string().nullable(), status: z.string().nullable(), worker_links: z.string().nullable() }).strict().optional(),
 }).strict()
 export type StartWorkInput = z.infer<typeof startWorkSchema>
@@ -20,7 +21,7 @@ export const searchWorkSchema = z.object({ owner: z.string().min(1).max(200).opt
   offset: z.number().int().min(0).max(2000).default(0), limit: z.number().int().min(1).max(100).default(50), refresh: z.boolean().default(false),
 }).strict()
 export type SearchWorkInput = z.infer<typeof searchWorkSchema>
-export const getWorkSchema = z.object({ card_id: cardIdSchema, details: z.boolean().default(true), refresh: z.boolean().default(false),
+export const getWorkSchema = z.object({ lease_token: leaseTokenSchema, card_id: cardIdSchema, details: z.boolean().default(true), refresh: z.boolean().default(false),
   implementation_contract: z.object({ revision: z.string().max(128).optional(), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(20).default(10) }).strict().optional(),
 }).strict()
 // Ordinary properties are explicit; policy fields have operations so neither
@@ -38,7 +39,7 @@ export const ordinaryPropertiesSchema = z.object({
   'Next action': prose.optional(),
 }).strict()
 const contentSchema = z.object({ brief: prose.optional(), acceptance_criteria: prose.optional() }).strict()
-const base = { card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
+const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
   expected: z.record(z.unknown()).optional() }
 const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Progress', 'Waiting For', 'Done', 'Archived']),
   worker: workerSchema.optional(), disposition: prose.optional(), evidence: prose.optional(),
@@ -73,6 +74,7 @@ export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(1
 export type CreateWorkInput = z.infer<typeof createWorkSchema>
 const reference = z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use a durable HTTP reference')
 export const submitHandoffSchema = z.object({
+  lease_token: leaseTokenSchema,
   submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
   target: z.union([
     z.object({ card_id: cardIdSchema }).strict(),

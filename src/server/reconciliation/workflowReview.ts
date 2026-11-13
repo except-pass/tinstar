@@ -1,3 +1,4 @@
+import { CardLeaseError } from './cardLeases'
 import { createHash } from 'node:crypto'
 import { legacyReviewKey, isReviewStatus, reviewIdentity, reviewResponsePrefix, reviewSubmissionPrefix, reviewSubmissions } from '../../shared/reviews'
 import type { UpdateWorkInput, StartWorkResult } from '../../shared/workflow'
@@ -132,6 +133,7 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
     await deps.changed({ before, card, actor, operationId: input.operation_id, properties: state.desired, notes: [state.note] })
     return result('saved', 'review-saved', input.kind === 'submit_for_review' ? 'Review evidence and Owner/Status confirmed' : 'Explicit review response and resulting card status confirmed')
   } catch (error) {
+    if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message)
     return result(attempted || state ? 'partially-saved' : 'not-saved', error instanceof ReviewWriteError ? error.code : 'review-source-unavailable',
       error instanceof ReviewWriteError ? error.message : 'Review write/readback is unconfirmed. Retry the same submission to reconcile source; no acceptance or notification is claimed.')
   }

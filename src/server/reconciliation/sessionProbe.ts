@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingHttpHeaders } from 'node:http'
 import { join } from 'node:path'
+import { leaseCaller } from './cardLeases'
 
 const maxEntries = 128
 const maxNames = 64
@@ -36,7 +37,7 @@ export class SessionProbe {
     const logRecorded = recordProbeNames(this.root, 'backend', headers, meta)
     // Bind to the existing authenticated caller boundary, including credential
     // rotation. Client metadata and browser session IDs grant no authority.
-    const caller = digest(JSON.stringify([actor, headers.authorization, headers['x-tinstar-caller-authorization']]))
+    const caller = leaseCaller(actor, headers)
     if (token !== undefined) {
       const matches = this.issued.get(digest(token)) === caller
       return { outcome: matches ? 'recognized' : 'unknown-token', matches_known_token: matches, log_recorded: logRecorded,

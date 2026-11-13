@@ -1,3 +1,4 @@
+import { CardLeases } from './cardLeases'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -44,6 +45,7 @@ export type CheckInSnapshot = SourceSnapshot & { checkIns?: SourceSnapshot['inte
 export class ReconciliationSources {
   waitingOnMain?: (snapshot: SourceSnapshot) => Promise<MainWaitRead>
   reconcileReviewHandoffs?: (force?: boolean) => Promise<void>
+  readonly leases: CardLeases
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
@@ -66,8 +68,10 @@ export class ReconciliationSources {
   private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
+    this.leases = new CardLeases(receiptRoot)
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
+    this.workReader.leases = this.leases
     this.associations = new AssociationStore(receiptRoot)
     this.askStore = new AskStore(receiptRoot)
     const content = new WorkflowContent(this.workReader)
@@ -163,7 +167,7 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string) { return workReadback(await this.context.details(id)) }
+  async card(id: string) { return { ...workReadback(await this.context.details(id)), lease: this.leases.status(id) } }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */
@@ -242,7 +246,7 @@ export class ReconciliationSources {
       const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
         ...(context ? { context } : {}) })
       // Explicit full-contract retrieval preserves bytes; routine reads remain bounded.
-      return { ...result, implementation_contract: args.implementation_contract
+      return { ...result, lease: this.leases.status(card.id), implementation_contract: args.implementation_contract
         ? await this.workflow.readImplementationContract(card.id, args.implementation_contract)
         : { outcome: 'not-requested', complete_response: false, reader: 'get_work with implementation_contract {offset,limit,revision?}; concatenate exact chunks and verify manifest hash' } }
     } catch {
@@ -254,13 +258,13 @@ export class ReconciliationSources {
   async startWork(input: StartWorkInput, actor: string) {
     const result = await this.workflow.start(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
-    return workReadback(result)
+    return { ...workReadback(result), lease: this.leases.status(input.card_id) }
   }
 
   async updateWork(input: UpdateWorkInput, actor: string) {
     const result = await this.workflow.update(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
-    return workReadback(result)
+    return { ...workReadback(result), lease: this.leases.status(input.card_id) }
   }
   async createWork(input: CreateWorkInput, actor: string) {
     return workReadback(await this.workflow.create(input, actor))

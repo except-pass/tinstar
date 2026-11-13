@@ -1,3 +1,4 @@
+import { buildQueue } from '../queue'
 import { queueSignals } from '../queueInputs'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
 import { readerRepositories } from '../../../shared/actions'
@@ -2490,3 +2491,53 @@ it.each(['closed', 'rebound'].flatMap(change => ['work', 'ask'].map(producer => 
   expect(f.raw).toEqual(before)
   expect(f.comments).toHaveLength(comments)
 })
+
+
+it('shares durable leases across real MCP chats, workflow writers and owner UI release', async () => {
+  const f = fixture(), root = await mkdtemp(join(tmpdir(), 'card-leases-integration-')); roots.push(root)
+  const secondId = 'c'.repeat(32), second = structuredClone(f.raw)
+  second.id = secondId; second.url = `https://www.notion.so/${secondId}`; f.pages.set(secondId, second)
+  const sources = f.sources(root)
+  const queue = buildQueue(fixtureSources())
+  queue.needsWill = undefined
+  queue.items = [id, secondId].map(cardId => ({ id: cardId, title: 'Actionable fixture', action: 'Choose the next step', kind: 'decision', readiness: 'ready-now', reasons: [], cardIds: [cardId], executionIds: [], homeIds: [], decisionKeys: [], evidence: [], checkpoint: null, oneTouch: true, sources: [{ kind: 'notion', id: cardId, field: 'Will action', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString(), status: 'fresh', coverage: 'complete' }] }))
+  const mcp = new ReconciliationMcp({ leases: sources.leases, scene: async () => fixtureSources() as any, card: id => sources.card(id), queue: async () => queue, workerLinkReport: async () => ({} as any), getWork: input => sources.getWork(input), updateWork: (input, actor) => sources.updateWork(input, actor), authorizePulls: async req => req?.headers['tailscale-user-login'] === 'owner@example.test' }, root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  seedOriginAllowlist((server.address() as { port: number }).port)
+  const install = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+  const headers = { Authorization: `Bearer ${install}`, 'X-Tinstar-Caller': 'owner-chatgpt' }
+  const connect = async () => {
+    const client = new Client({ name: 'lease-chat', version: '1' }); clients.push(client)
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${url}/api/reconciliation/mcp`), { requestInit: { headers } }))
+    return client
+  }
+  const [a, b] = await Promise.all([connect(), connect()])
+  const call = async (client: Client, name: string, args: Record<string, unknown>) => JSON.parse((await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }> }).content[0]!.text)
+  const [first, next] = await Promise.all([call(a, 'claim_next_card', { operation_id: 'chat-a' }), call(b, 'claim_next_card', { operation_id: 'chat-b' })])
+  expect(new Set([first.lease.card_id, next.lease.card_id])).toEqual(new Set([id, secondId]))
+  expect((await call(a, 'claim_next_card', { operation_id: 'chat-a-repeat', lease_token: first.lease_token })).lease.card_id).toBe(first.lease.card_id)
+  expect((await call(a, 'claim_card', { operation_id: 'another-card', card_id: next.lease.card_id, lease_token: first.lease_token })).outcome).toBe('already-holding')
+  expect(await call(a, 'get_work', { card_id: next.lease.card_id, lease_token: first.lease_token })).toMatchObject({ outcome: 'available', lease: { holder: next.lease.holder } })
+  const edit = { kind: 'edit', card_id: next.lease.card_id, operation_id: 'cross-chat', note: 'Conflicting cross chat update' }
+  const before = f.requests.filter(row => row.method === 'PATCH' || row.method === 'POST' && new URL(row.url).pathname === '/v1/comments').length
+  expect(await call(a, 'update_work', { ...edit, lease_token: first.lease_token })).toMatchObject({ outcome: 'not-saved', code: 'card-held', message: `held by ${next.lease.holder} until ${next.lease.expires_at}` })
+  expect(await sources.updateWork(edit as UpdateWorkInput, 'mate')).toMatchObject({ outcome: 'not-saved', code: 'card-held' })
+  expect(f.requests.filter(row => row.method === 'PATCH' || row.method === 'POST' && new URL(row.url).pathname === '/v1/comments')).toHaveLength(before)
+  expect(await call(b, 'update_work', { ...edit, operation_id: 'holder-note', lease_token: next.lease_token })).toMatchObject({ outcome: 'saved' })
+  expect(await call(b, 'update_work', { ...edit, operation_id: 'holder-note', lease_token: next.lease_token })).toMatchObject({ outcome: 'saved' })
+  expect(f.comments.filter(comment => JSON.stringify(comment).includes('Conflicting cross chat update'))).toHaveLength(1)
+  expect(JSON.stringify(f.comments)).not.toContain(next.lease_token)
+  const restarted = f.sources(root)
+  expect(await restarted.updateWork(edit as UpdateWorkInput, 'Clawson')).toMatchObject({ outcome: 'not-saved', code: 'card-held' })
+  const ui = (operation: string, input: unknown, owner = false) => fetch(`${url}/api/reconciliation/workflow`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', ...(owner ? { 'tailscale-user-login': 'owner@example.test' } : {}) }, body: JSON.stringify({ operation, input }) })
+  const status = await (await ui('lease', { card_id: next.lease.card_id }, true)).json()
+  expect(status.data).toMatchObject({ lease: { holder: next.lease.holder }, can_release: true })
+  expect(JSON.stringify(status)).not.toContain(next.lease_token)
+  expect((await ui('release-lease', { card_id: next.lease.card_id, generation: next.lease.generation, reason: 'Owner release' })).status).toBe(403)
+  expect((await (await ui('release-lease', { card_id: next.lease.card_id, generation: next.lease.generation, reason: 'Owner release' }, true)).json()).data.outcome).toBe('released')
+  expect(await call(b, 'update_work', { ...edit, operation_id: 'stale-holder', lease_token: next.lease_token })).toMatchObject({ code: 'claim-lost' })
+  expect((await call(a, 'release_claim', { lease_token: first.lease_token, reason: 'Explicit abandoned' })).outcome).toBe('released')
+  expect(sources.leases.status(first.lease.card_id)).toBeNull()
+}, 30_000)

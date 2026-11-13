@@ -6,7 +6,7 @@ Tin Star exposes a real [MCP SDK Streamable HTTP](https://ts.sdk.modelcontextpro
 
 For ready request navigation and owner routing, see the [queue contract](reconciliation-queue.md).
 
-Use Node >=22.12. Configure fleet/Notion reads as described in [reconciliation-floor.md](reconciliation-floor.md). The configured list covers only those homes; a successful connection does not certify a whole-farm census. No extra source credentials or public listener are created by MCP.
+Use Node >=22.13. Configure fleet/Notion reads as described in [reconciliation-floor.md](reconciliation-floor.md). The configured list covers only those homes; a successful connection does not certify a whole-farm census. No extra source credentials or public listener are created by MCP.
 
 ```sh
 npm ci
@@ -418,3 +418,60 @@ The MCP Playwright test uses an official SDK client and actual browser pages; so
 Decisions uses the [S4 queue API](reconciliation-queue.md), which owns readiness, deduplication, PR checks, source coverage and ordering. The [Overview reference](overview.md) owns card presentation and floor navigation. Next/previous navigation traverses verified-ready requests; verification candidates can also be opened explicitly by item ID. Navigation mutates only presentation. An answered item removed by a fresh source read stays explicitly unavailable if selected; it is never silently replaced or restored. The [queue refresh contract](reconciliation-queue.md#progressive-display-and-refresh) owns progressive HTTP display, polling, save-triggered refresh and retained evidence behavior. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3. The live proof’s discovery bridge is development evidence, not a production credential deployment.
 
 MCP and workflow request bodies remain bounded at 256 KiB. UI registration and sync allow 16 MiB because a single accepted command expands into search focus, replay flash IDs, an acknowledgment state snapshot, and requested/rendered/visible delivery arrays. The browser sends one acknowledgment per poll to avoid multiplying those snapshots by a 32-item batch. Unsent updates coalesce per command in queue order, preserving the original commit timestamp and terminal delivery observations even when failed batches return to the queue. The large-reveal transport regression exercises a command below 256 KiB whose acknowledgment exceeds that limit, including 4097 targets and a maximum-length semantic ID.
+
+## Session-scoped card leases
+
+For “next card”, call `claim_next_card(operation_id)` without a browser session.
+It chooses the first actionable unclaimed card from the existing Needs Will
+selector, retaining its order and reporting source coverage. An unavailable
+source is not an empty queue. `claim_card(card_id, operation_id)` instead claims
+an exact active card on the configured board.
+
+Keep the returned `lease_token` in tool arguments across calls and later turns.
+Never print it in chat, card text, URLs or logs. Every later card read/change
+accepts `lease_token`; repeat `claim_next_card` with it to retrieve the held
+card rather than allocate another. Separate conversations start without a token.
+The authenticated caller includes the installation and facade caller credentials,
+exactly as for `session_probe`; a browser tab or actor label alone is not a chat.
+
+Leases last 60 minutes by the server clock. Successful holder changes renew
+that interval; passive reads, searches and UI polling do not. During a lease,
+other chats, UI edits, First Mate/mate updates and Clawson card writes are refused
+with `held by <holder> until <time>`. Reads stay available. A stale presented
+token cannot fall through to ordinary write access after expiry or release.
+Existing workflow checks, optimistic source checks and operation-id receipts
+still apply. Direct edits outside Tin Star (for example in Notion) remain outside
+this boundary.
+
+`release_claim(lease_token, reason)` returns a card without changing its workflow,
+owner, worker links or decisions. Lost tokens expire naturally. Card details show
+the holder and expiry; a verified configured owner can release there. UI release
+checks the displayed generation, so an old page cannot release a replacement
+holder. The release uses the existing private UI/origin handshake and verified
+`ask.ownerLogins` authority. It does not expose a conversation token.
+
+State is in `card-leases.sqlite` and `card-lease-key` under `getConfigRoot()`
+(`TINSTAR_CONFIG_HOME` is honored). Back up both with the config root. SQLite
+transactions arbitrate across processes and survive restart; monotonically
+increasing per-card generations fence old holders. Each source mutation holds
+the SQLite writer transaction until it returns, so a new generation cannot be
+issued while an old holder write remains in flight. This serializes source
+writes, including writes on unrelated cards; reads remain available through WAL.
+Process exit releases the database lock. Provider-side ambiguous writes retain
+the existing workflow readback/retry rules. Tokens are persisted only as hashes;
+a keyed derivation reconstructs the identical initial claim response for an
+operation-id replay without storing its plaintext token. Claim/release/expiry
+events are bounded to 1,000 entries and contain no token.
+
+Requires Node >=22.13 for built-in `node:sqlite` without a launch flag
+([Node CLI history](https://nodejs.org/api/cli.html#--no-experimental-sqlite)).
+After deployment, refresh connector discovery for the three new tools.
+Firstmate owns the guarded deploy and live proof: two separate ChatGPT chats
+holding distinct cards, one refused cross-chat change and one refused mate
+update. Local automated coverage does not substitute for that live proof.
+
+Follow-ups: admin force-claim/takeover, an active-claims dashboard, claim metrics,
+the five-conversation DEV load proof, and skip/cooldown semantics. The facade
+scope list and deploy approved-tool catalog currently duplicate tool names;
+a future simplification can derive these scope/catalog declarations from the
+shared registration metadata.

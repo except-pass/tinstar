@@ -37,7 +37,7 @@ describe('authenticated real MCP transport', () => {
     const identity = mcp.sessions.register(initialPresentation())
     client = new Client({ name: 'tinstar-test', version: '1' })
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
-    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['session_probe', 'search_work', 'get_work', 'get_work_views', 'get_workflow_rules', 'submit_handoff', 'start_work', 'create_work', 'update_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'present_view', 'next_queue_item', 'get_command', 'list_prs', 'get_pr', 'get_release_status'])
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['claim_next_card', 'claim_card', 'release_claim', 'session_probe', 'search_work', 'get_work', 'get_work_views', 'get_workflow_rules', 'submit_handoff', 'start_work', 'create_work', 'update_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'present_view', 'next_queue_item', 'get_command', 'list_prs', 'get_pr', 'get_release_status'])
     expect(parse(await client.callTool({ name: 'get_work_views', arguments: {} })).outcome).toBe('queue-source-unavailable')
     const sessions = parse(await client.callTool({ name: 'list_ui_sessions', arguments: {} }))
     expect(sessions.sessions[0].scene_id).toBe(identity.scene_id)

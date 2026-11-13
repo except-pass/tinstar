@@ -1,4 +1,6 @@
 [
+  "claim_card",
+  "claim_next_card",
   "create_work",
   "get_card_context",
   "get_command",
@@ -15,6 +17,7 @@
   "next_queue_item",
   "present_view",
   "read_record",
+  "release_claim",
   "search_work",
   "session_probe",
   "start_work",

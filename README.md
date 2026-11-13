@@ -65,7 +65,7 @@ For Decisions response delivery inspection, see the [queue reference](docs/featu
 For automatic Ask delivery on the designated Mac First Mate host, use the
 [Tin Star Ask LaunchAgent installer and runbook](docs/features/ask-puller-service.md).
 
-Requires Node.js 22.12 or newer, a working [First Mate](https://github.com/kunchenguid/firstmate) home, `tmux`, `ttyd`, and Python 3. Start Tinstar with:
+Requires Node.js 22.13 or newer, a working [First Mate](https://github.com/kunchenguid/firstmate) home, `tmux`, `ttyd`, and Python 3. Start Tinstar with:
 
 ```bash
 npx tinstar
