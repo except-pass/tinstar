@@ -115,7 +115,7 @@ returns `matches_known_token: true`; an unknown token returns false with a fresh
 probe instruction. Tokens are bound to the existing authenticated caller and
 credentials, kept only as hashes in backend memory, and limited to the latest
 256 issued tokens. Backend restart forgets them. This is a diagnostic lifetime,
-not the planned durable 60-minute card lease. Metadata does not authenticate a
+separate from the [durable card lease](#session-scoped-card-leases). Metadata does not authenticate a
 caller or bind a probe token to a conversation; copying a token to another
 conversation with the same caller would recognize it too.
 
@@ -461,8 +461,10 @@ issued while an old holder write remains in flight. This serializes source
 writes, including writes on unrelated cards; reads remain available through WAL.
 Process exit releases the database lock. Provider-side ambiguous writes retain
 the existing workflow readback/retry rules. Tokens are persisted only as hashes;
-a keyed derivation reconstructs the identical initial claim response for an
-operation-id replay without storing its plaintext token.
+a keyed derivation reconstructs the initial claim token for an operation-id
+replay without storing its plaintext token. A valid replay returns the current
+lease metadata, including any renewed expiry; an expired, released or replaced
+claim returns `claim-lost`.
 
 Requires Node >=22.13 for built-in `node:sqlite` without a launch flag
 ([Node CLI history](https://nodejs.org/api/cli.html#--no-experimental-sqlite)).
