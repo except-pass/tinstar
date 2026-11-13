@@ -4,9 +4,9 @@ import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import type { IncomingHttpHeaders } from 'node:http'
 import { join } from 'node:path'
 import type { DatabaseSync as SqliteDatabase } from 'node:sqlite'
-import { createRequire } from 'node:module'
+import { createRequire as createSqliteRequire } from 'node:module'
 // Load through Node: Vite 5 (used by Vitest 2) predates this built-in module.
-const { DatabaseSync }: typeof import('node:sqlite') = createRequire(import.meta.url)('node:sqlite')
+const { DatabaseSync }: typeof import('node:sqlite') = createSqliteRequire(import.meta.url)('node:sqlite')
 import { getConfigRoot } from '../configRoot'
 
 export const leaseDuration = 60 * 60 * 1000

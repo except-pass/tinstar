@@ -218,7 +218,7 @@ it('answers a typed published choice through the shared workflow without dismiss
   vi.stubGlobal('fetch', fetch)
   render(<Decisions />)
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Three copies' })) })
-  const workflowCalls = fetch.mock.calls.filter(([url]) => String(url).includes('/api/reconciliation/workflow'))
+  const workflowCalls = fetch.mock.calls.filter(([url, init]) => String(url).includes('/api/reconciliation/workflow') && JSON.parse(String(init?.body)).operation === 'update')
   const body = JSON.parse(String(workflowCalls[0]![1]!.body))
   expect(body).toMatchObject({ operation: 'update', input: { kind: 'answer_decision', card_id: fixtureId(5), request_id: 'published-mailbox', option_id: 'r3', answer: 'Three copies', next: { owner: 'Firstmate', status: 'Queued' } } })
   expect(screen.getByLabelText('Selected decision')).toHaveTextContent('Decision recorded · First Mate not yet updated')
