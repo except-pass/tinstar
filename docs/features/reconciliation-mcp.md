@@ -462,8 +462,7 @@ writes, including writes on unrelated cards; reads remain available through WAL.
 Process exit releases the database lock. Provider-side ambiguous writes retain
 the existing workflow readback/retry rules. Tokens are persisted only as hashes;
 a keyed derivation reconstructs the identical initial claim response for an
-operation-id replay without storing its plaintext token. Claim/release/expiry
-events are bounded to 1,000 entries and contain no token.
+operation-id replay without storing its plaintext token.
 
 Requires Node >=22.13 for built-in `node:sqlite` without a launch flag
 ([Node CLI history](https://nodejs.org/api/cli.html#--no-experimental-sqlite)).
