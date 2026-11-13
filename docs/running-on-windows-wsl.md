@@ -25,7 +25,7 @@ Everything below runs **inside WSL** unless noted. Nothing needs `sudo`.
 
 ## 1. Node.js 22+
 
-Tinstar needs Node ≥ 22.12. The official tarball is the most reliable install
+Tinstar needs Node ≥ 22.13. The official tarball is the most reliable install
 on WSL (the Windows Node on your `$PATH` is not usable from Linux, and `nvm`
 can misdetect a WSL2 kernel as "WSL 1" and refuse to install):
 

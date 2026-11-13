@@ -1,3 +1,4 @@
+import type { CardLeases } from './cardLeases'
 import type { ReconciliationConfig } from './config'
 import { notionObservation, readNotionCard, type WorkScope } from './notion'
 import { NotionApi } from './notionApi'
@@ -19,9 +20,11 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   return !matches || classifications.includes(false) ? false : classifications.includes(undefined) ? undefined : true
 }
 export class WorkReader {
+  leases?: CardLeases
   private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
   private cards = new Map<string, { until: number; value: Promise<WorkCard> }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
+  mutate<T>(id: string, perform: () => Promise<T>) { return this.leases ? this.leases.mutate(id, perform) : perform() }
   lastKnown(id: string) { return this.known.get(id) }
   readonly jira?: JiraAdapter
   constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira']) { if (jira) this.jira = new JiraAdapter(jira, api.fetch) }

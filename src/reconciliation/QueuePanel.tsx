@@ -1,3 +1,4 @@
+import { CardLeaseStatus } from './CardLeaseStatus'
 import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
 import { decodeRequestText } from './requestText'
 import { AskSurface } from '../ask/AskSurface'
@@ -46,7 +47,7 @@ export function QueuePanel({ scene, state, send, queue, error, now, workers, sub
   const next = actionable.filter(item => item.id !== selected?.id)
   return <section className="ov-queue" aria-label="Decision queue" data-queue-item-id={selected?.id ?? ''}>
     {unavailable && <p role="status">Card not on the floor right now. <a href={cardSourceUrl(unavailable)} target="_blank" rel="noreferrer">Read source card ↗</a></p>}
-    {cardId ? <AskSurface as="section" subject={{ cardId }}><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Decisions</button><h3>Card context</h3><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}</AskSurface> : <>
+    {cardId ? <AskSurface as="section" subject={{ cardId }}><button type="button" className="ov-back" onClick={() => send({ type: 'close-queue' })}>← Decisions</button><h3>Card context</h3><CardLeaseStatus key={cardId} cardId={cardId} /><p>{context?.outcome === 'partial' ? 'Some content omitted. Use the source link for the full card.' : context?.outcome === 'available' ? '' : context?.outcome === 'unavailable' ? 'Card unavailable. Try the source link.' : 'Reading card…'}</p>{context?.blocks?.map(block => <p {...askElement('description', 'Card text')} key={block.id}>{block.text}</p>)}</AskSurface> : <>
       {selected ? <details className="ov-selected-request" open={selected.cardIds.length > 0 ? true : undefined}><summary>{requestText(selected.title)}</summary><small className="ov-eyebrow">{ready(selected) ? selected.kind === 'merge' ? 'Review' : 'Decision' : 'Needs verification'}</small>{deskCards(selected, true)}<p>{selected.action ? requestText(selected.action) : 'Read the source request for context.'}</p>
         {!ready(selected) && <p>Confirm the next actor and prerequisites before acting.</p>}
         {selected.evidence.map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Read pull request' : e.kind === 'card' ? 'Read card' : 'Read evidence'} ↗</a>)}

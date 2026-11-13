@@ -1,3 +1,4 @@
+import { CardLeaseError } from './cardLeases'
 import { submitHandoffSchema, type SubmitHandoffInput, type CreateWorkInput, type UpdateWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { ContractError, ImplementationContracts, implementationContract, digest, canonical } from './implementationContract'
 import type { WorkflowChange } from './workflow'
@@ -119,6 +120,7 @@ export class HandoffOperations {
         await save()
         await this.deps.receipts.put(targetKey, input.submission_id, card.id)
         return await this.deps.exclusive(card.id, async () => {
+          this.deps.reader.leases?.assertWritable(card!.id)
           try {
             card = await this.deps.reader.card(card!.id, true)
             const before = card
@@ -166,12 +168,14 @@ export class HandoffOperations {
             this.deps.reader.confirm(card)
             return response()
           } catch (error) {
+        if (error instanceof CardLeaseError) return response(error.lease ? 'card-held' : 'claim-lost', error.message)
             if (card) card = await this.deps.reader.card(card.id, true).catch(() => card!)
             return response(error instanceof ContractError ? error.code : error instanceof NotionWriteError ? `notion-http-${error.status}` : 'save-unconfirmed',
               error instanceof ContractError ? error.message : 'Only listed readbacks are confirmed. The same-ID retry reconciles Notion before any further write; no offline work is queued.')
           }
         })
       } catch (error) {
+        if (error instanceof CardLeaseError) return response(error.lease ? 'card-held' : 'claim-lost', error.message)
         return response(error instanceof ContractError ? error.code : 'source-unavailable', error instanceof ContractError ? error.message : 'Current configured-board source or receipt unavailable; no further write attempted')
       }
     })

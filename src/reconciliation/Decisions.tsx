@@ -1,3 +1,4 @@
+import { CardLeaseStatus } from './CardLeaseStatus'
 import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
 import { SessionConnection } from './SessionConnection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -291,6 +292,7 @@ function DecisionCardContext({ id, showLink = true }: { id: string; showLink?: b
     return () => controller.abort()
   }, [id])
   return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
+    <CardLeaseStatus key={id} cardId={id} />
     {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
     {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
     {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}

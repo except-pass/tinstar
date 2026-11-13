@@ -37,12 +37,14 @@ export class WorkflowContent {
     if (!this.reader.jira) throw new Error('Jira is not configured')
     return this.reader.jira
   }
-  async patchProperties(id: string, properties: Record<string, unknown>) {
+  patchProperties(id: string, properties: Record<string, unknown>) { return this.reader.mutate(id, () => this.performPatchProperties(id, properties)) }
+  private async performPatchProperties(id: string, properties: Record<string, unknown>) {
     const jira = this.jira(id)
     if (jira) return jira.patch(id, properties)
     return this.request(`pages/${id}`, 'PATCH', { properties })
   }
-  async appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) {
+  appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) { return this.reader.mutate(id, () => this.performAppendBlocks(id, children, atStart)) }
+  private async performAppendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) {
     const jira = this.jira(id)
     if (jira) return jira.appendContract(id, children.map(block => ({ type: block.type, text: createBlockText(block) })))
     return this.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) })
@@ -104,7 +106,8 @@ export class WorkflowContent {
     }
     throw new Error('Body truncated; cannot safely locate the requested section')
   }
-  async section(id: string, name: string, text: string, expected?: string) {
+  section(id: string, name: string, text: string, expected?: string) { return this.reader.mutate(id, () => this.performSection(id, name, text, expected)) }
+  private async performSection(id: string, name: string, text: string, expected?: string) {
     const marker = sectionMarker(name), desired = sectionText(name, text)
     const jira = this.jira(id)
     if (jira) return jira.section(id, name, desired, expected)
@@ -118,7 +121,8 @@ export class WorkflowContent {
     const readback = await this.sections(id)
     if (readback.filter(block => block.text === desired).length !== 1) throw new Error('Section readback differs')
   }
-  async note(id: string, text: string, marker: string) {
+  note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker)) }
+  private async performNote(id: string, text: string, marker: string) {
     const before = await this.notes(id)
     if (before.some(note => workflowNoteHasMarker(note, marker))) return
     const jira = this.jira(id)

@@ -112,7 +112,7 @@ Proposed compatible route: each home's existing operator/return-channel transpor
 
 ## Run and configure
 
-Builds and tests run on Hulk. Use Node >=22.12 and the normal backend; no package version bump:
+Builds and tests run on Hulk. Use Node >=22.13 and the normal backend; no package version bump:
 
 ```sh
 npm ci

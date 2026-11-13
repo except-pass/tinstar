@@ -79,7 +79,7 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const reconciliation = new ReconciliationSources()
-  const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi))
+  const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi, reconciliation.leases))
   reconciliation.waitingOnMain = snapshot => mainWaits.refresh(snapshot)
   let mainWaitSweep: Promise<unknown> | undefined
   const sweepMainWaits = () => { mainWaitSweep ??= mainWaits.sweep().finally(() => { mainWaitSweep = undefined }) }

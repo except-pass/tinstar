@@ -26,7 +26,7 @@ shortening before Send.
 
 ## Installation and updates
 
-Install Tin Star normally with Node >=22.12 on Linux or macOS. On the **server
+Install Tin Star normally with Node >=22.13 on Linux or macOS. On the **server
 running Tin Star**, provisioning during the guarded floor deploy follows the
 [floor deploy runbook](floor-deploy.md). For other installations, enable local
 English transcription once:

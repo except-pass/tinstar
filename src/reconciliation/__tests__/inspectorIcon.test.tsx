@@ -240,7 +240,11 @@ it('keeps Inspector identity when another card save finishes and applies matchin
   const second = scene.cards.find(card => card.id === fixtureId(4))!
   const requests: Array<{ input: { card_id: string }; resolve: (response: Response) => void }> = []
   vi.mocked(apiFetch).mockImplementation((path, init) => {
-    if (String(path).endsWith('/workflow')) return new Promise<Response>(resolve => requests.push({ ...JSON.parse(String(init?.body)), resolve }))
+    if (String(path).endsWith('/workflow')) {
+      const request = JSON.parse(String(init?.body))
+      if (request.operation === 'lease') return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { lease: null, can_release: false } })))
+      return new Promise<Response>(resolve => requests.push({ ...request, resolve }))
+    }
     return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { outcome: 'available', blocks: [] } })))
   })
   observed.refresh = vi.fn(async () => {})

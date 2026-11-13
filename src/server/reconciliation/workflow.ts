@@ -1,3 +1,4 @@
+import { CardLeases, CardLeaseError, leaseFailure } from './cardLeases'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -47,7 +48,7 @@ export class WorkflowOperations {
   private decisionRefreshes = new Map<string, { until: number; revision: string; result: Promise<Awaited<ReturnType<WorkflowOperations['performDecisionReconcile']>>> }>()
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
-  constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource) { this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
+  constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource) { if (receiptRoot) reader.leases ??= new CardLeases(receiptRoot); this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
   private exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
     const result = (this.locks.get(key) ?? Promise.resolve()).catch(() => {}).then(perform)
     this.locks.set(key, result)
@@ -58,7 +59,27 @@ export class WorkflowOperations {
     return new ImplementationContracts(this.content).read(id, options).catch(error => ({ outcome: 'unavailable', complete_response: false,
       code: error instanceof ContractError ? error.code : 'source-unavailable', message: error instanceof ContractError ? error.message : 'Full specification read unavailable; no completeness claim' }))
   }
-  submitHandoff(input: SubmitHandoffInput, actor: string) {
+  private async guarded<T>(card: string | undefined, operation: string, perform: () => Promise<T>) {
+    try { if (card) this.reader.leases?.assertWritable(card); return await perform() }
+    catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, operation); throw error }
+  }
+  start(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
+    return this.guarded(input.card_id, input.operation_id, () => { const { lease_token: _token, ...clean } = input; return this.startUnchecked(clean, actor) })
+  }
+  update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
+    return this.guarded(input.card_id, input.operation_id, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) })
+  }
+  async submitHandoff(input: SubmitHandoffInput, actor: string) {
+    try {
+      if ('card_id' in input.target) this.reader.leases?.assertWritable(input.target.card_id)
+      const { lease_token: _token, ...clean } = input
+      return await this.performHandoff(clean, actor)
+    } catch (error) {
+      if (!(error instanceof CardLeaseError)) throw error
+      return { ...leaseFailure(error, input.submission_id), record: { state: 'not-saved' }, assignment: { state: 'unknown' }, delivery: { state: 'unknown' }, execution: { state: 'unknown' }, recovery: { code: 'card-held', message: error.message } }
+    }
+  }
+  private performHandoff(input: SubmitHandoffInput, actor: string) {
     return new HandoffOperations({ reader: this.reader, receipts: this.creations, contracts: new ImplementationContracts(this.content),
       exclusive: (id, perform) => this.exclusive(id, perform),
       create: (create, caller) => this.serialize('create', create, caller, () => this.performCreate(create, caller, { signature: JSON.stringify(create), properties: { Status: 'Backlog' } })),
@@ -105,7 +126,7 @@ export class WorkflowOperations {
     await this.onChange?.(change).catch(() => {})
   }
 
-  start(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
+  private startUnchecked(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
     const parsed = startWorkSchema.safeParse(input)
     const failed = (code: string, message: string): StartWorkResult => ({ outcome: 'not-saved', code, message, operation_id: input?.operation_id ?? '', saved_fields: [] })
     if (!parsed.success) return Promise.resolve(failed('invalid-input', parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')))
@@ -176,13 +197,7 @@ export class WorkflowOperations {
       if (card.source?.provider === 'jira') {
         saved = await this.content.patchProperties(input.card_id, Object.fromEntries(Object.entries(properties).filter(([field]) => !same(current.properties[field]?.value, desired[field])))) as WorkCard
       } else {
-        const config = this.reader.config!
-        const response = await this.reader.api.fetch(`https://api.notion.com/v1/pages/${input.card_id}`, { method: 'PATCH', redirect: 'error', signal: AbortSignal.timeout(15_000),
-          headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' }, body: JSON.stringify({ properties: Object.fromEntries(Object.entries(properties).filter(([field]) => !same(current.properties[field]?.value, desired[field]))) }) })
-        if (!response.ok) {
-          await response.body?.cancel()
-          if (response.status < 500) return result('not-saved', 'notion-rejected', `Notion rejected start work (HTTP ${response.status}); nothing confirmed saved`)
-        } else await response.body?.cancel()
+        await this.content.patchProperties(input.card_id, Object.fromEntries(Object.entries(properties).filter(([field]) => !same(current.properties[field]?.value, desired[field]))))
         saved = await this.reader.card(input.card_id, true)
       }
       this.reader.confirm(saved)
@@ -191,6 +206,8 @@ export class WorkflowOperations {
       return savedFields.length === fields.length ? result('saved', 'saved', 'Start work saved and confirmed', saved, savedFields)
         : result('partially-saved', 'readback-mismatch', 'Readback differs from the requested start; only listed fields are confirmed. Read the card and retry.', saved, savedFields)
     } catch (error) {
+      if (error instanceof CardLeaseError) throw error
+      if (error instanceof NotionWriteError && error.status < 500) return result('not-saved', 'notion-rejected', `Notion rejected start work (HTTP ${error.status}); nothing confirmed saved`)
       if (error instanceof WorkflowError && !attempted) return result('not-saved', error.code, error.message)
       if (error instanceof JiraMappingError) return result('not-saved', 'jira-incompatible', error.message)
       if (error instanceof JiraWriteError && error.method !== 'GET' && error.status < 500 && !error.partial) return result('not-saved', 'jira-rejected', `Jira rejected start work (HTTP ${error.status})`)
@@ -203,7 +220,7 @@ export class WorkflowOperations {
         : 'Current source read failed; start work was not submitted')
     }
   }
-  update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
+  private updateUnchecked(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     const parsed = updateWorkSchema.safeParse(input)
     if (!parsed.success) return Promise.resolve({ outcome: 'not-saved', code: 'invalid-input', message: parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '), operation_id: input?.operation_id ?? '', saved_fields: [] })
     if (isReviewOperation(parsed.data)) {
@@ -635,6 +652,7 @@ export class WorkflowOperations {
       await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
       return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
     } catch (error) {
+      if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message)
       if (card?.source?.provider === 'jira' && attempted) {
         const current = await this.reader.card(card.id, true).catch(() => undefined)
         if (current) {
@@ -749,6 +767,7 @@ export class WorkflowOperations {
       await this.changed({ card, actor, operationId: input.operation_id, properties: Object.fromEntries(fields.map(name => [name, card!.properties[name]?.value])), sections: Object.keys(input.content ?? {}), sectionTexts: children.map(createBlockText) })
       return result(complete ? 'saved' : 'partially-saved', complete ? 'saved' : 'readback-mismatch', complete ? 'Card and content created and confirmed' : 'Card created; only listed properties confirmed; refresh this card before correction', ['card', ...fields])
     } catch (error) {
+      if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message, saved)
       if (error instanceof WorkflowError) return result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message)
       if (error instanceof JiraMappingError && !attempted) return result('not-saved', 'jira-incompatible', error.message)
       return result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'create-unconfirmed' : 'source-unavailable', saved.length ? 'Card created; only listed steps confirmed saved. Current verification failed; retry identical input to retrieve the existing card.' : attempted ? 'Creation submitted but unconfirmed; retry identical input to find its receipt before creating again' : 'Current source unavailable; card not created')
