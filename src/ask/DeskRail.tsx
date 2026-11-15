@@ -16,8 +16,8 @@ export function DeskRail({ overlay = false, closeRequest = 0, openRequest, unrea
   useLayoutEffect(() => { onVisibilityChange?.(visible) }, [visible, onVisibilityChange])
   const open = () => setPreferences(value => value.collapsed ? { ...value, collapsed: false } : value)
   // Explicit open requests (queue navigation, PR header) never remount the inbox.
-  const handledRequest = useRef(0)
-  useEffect(() => { if (openRequest !== handledRequest.current) { handledRequest.current = openRequest; if (narrow) setMobileOpen(true); else setPreferences(value => ({ ...value, collapsed: false })) } }, [openRequest, narrow])
+  const handledRequest = useRef(0), opener = useRef<HTMLElement | null>(null)
+  useEffect(() => { if (openRequest !== handledRequest.current) { handledRequest.current = openRequest; opener.current = document.activeElement as HTMLElement | null; if (narrow) setMobileOpen(true); else setPreferences(value => ({ ...value, collapsed: false })) } }, [openRequest, narrow])
   useEffect(() => { setMobileOpen(false) }, [closeRequest])
   useEffect(() => { saveDeskPreferences(preferences) }, [preferences])
   useLayoutEffect(() => {
@@ -38,7 +38,7 @@ export function DeskRail({ overlay = false, closeRequest = 0, openRequest, unrea
   const close = () => {
     if (narrow) setMobileOpen(false)
     else setPreferences(value => ({ ...value, collapsed: true }))
-    trigger.current?.focus({ preventScroll: true }); onClose?.()
+    if (overlay) opener.current?.focus({ preventScroll: true }); else trigger.current?.focus({ preventScroll: true }); onClose?.()
   }
   const changeWidth = (next: number) => setPreferences(value => ({ ...value, width: clampDeskWidth(next, available) }))
   const countLabel = `${unread} unread answers, ${attention} need attention`

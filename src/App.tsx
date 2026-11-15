@@ -301,7 +301,7 @@ export default function App() {
 
   const activeIndex = current ? order.indexOf(current.key) : -1
 
-  return <div className="cockpit-shell">
+  return <div className={`cockpit-shell${overviewLocation.page === 'decisions' ? ' cockpit-shell--decision-desk' : ''}`}>
     <ActivityBar reviewOpen={panelMode === 'needs'} onReview={() => selectPanel('needs')} reviewCount={reviewQueue.queue?.reviews?.complete && !reviewQueue.error ? reviewQueue.queue.reviews.items.length : null} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? reviews.complete && !reviewQueue.error ? reviews.items.length + attention.filter(card => card.type === 'review').length : null : workers.length} onCollapse={() => setPanelMode(null)}>

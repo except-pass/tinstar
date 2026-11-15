@@ -25,7 +25,7 @@ if (!process.argv[2]) throw new Error('Task proof directory required')
 const output = resolve(process.argv[2]); await mkdir(output, { recursive: true })
 const root = await mkdtemp(join(output, 'isolated-ui-'))
 process.env.TINSTAR_CONFIG_HOME = root
-await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['preview-owner@example.test'] }, reconciliation: { fleet: [] } }), { mode: 0o600 })
+await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['preview-owner@example.test'], bridgeToken: 'isolated-ui-only-no-live-bridge-123456789' }, reconciliation: { fleet: [] } }), { mode: 0o600 })
 let scenario = 'normal', partition = 0
 function extendEvidence(value: unknown) {
   if (!value || typeof value !== 'object') return
