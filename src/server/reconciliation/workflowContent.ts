@@ -38,6 +38,7 @@ export class WorkflowContent {
     if (!this.reader.jira) throw new Error('Jira is not configured')
     return this.reader.jira
   }
+  recoverAppliedWrite(id: string) { return this.reader.leases?.recoverAppliedWrite(id, intent => this.reservationReadback(id, intent)) }
   patchProperties(id: string, properties: Record<string, unknown>) { return this.reader.mutate(id, () => this.performPatchProperties(id, properties), { kind: 'properties', properties }) }
   private async performPatchProperties(id: string, properties: Record<string, unknown>) {
     const jira = this.jira(id)
@@ -59,7 +60,7 @@ export class WorkflowContent {
       if (intent.kind === 'append') {
         const texts = (await this.sections(id, true, true)).map(block => block.text)
         const desired = intent.texts as string[]
-        return desired.every(text => texts.includes(text)) ? 'applied' : 'different'
+        return desired.every(text => texts.filter(actual => actual === text).length === 1) ? 'applied' : 'different'
       }
       const jira = this.jira(id)
       if (jira) {

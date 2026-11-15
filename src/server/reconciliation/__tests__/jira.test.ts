@@ -180,8 +180,10 @@ it('reports confirmed partial fields and keeps ambiguous writes unknown', async 
   f.controls.omitField = ''; f.controls.failTransition = true
   const partial = await f.workflow.update({ card_id: id, kind: 'assign', operation_id: 'transition-rejected', owner: 'Fixture coordinator', status: 'Queued' }, 'Fixture')
   expect(partial).toMatchObject({ outcome: 'partially-saved', saved_fields: expect.arrayContaining(['Owner']), card: { properties: { Status: { value: 'Todo' } } } })
+  expect(f.reader.leases!.pendingWrites()).toHaveLength(0)
   f.controls.failTransition = false; f.controls.lostEdit = true
   expect(await f.workflow.update({ card_id: id, kind: 'edit', operation_id: 'lost', properties: { Area: 'Product' } }, 'Fixture')).toMatchObject({ outcome: 'partially-saved', code: 'save-unconfirmed' })
+  expect(f.reader.leases!.pendingWrites()).toHaveLength(1)
   f.controls.failReads = true
   expect(await f.workflow.update({ card_id: id, kind: 'edit', operation_id: 'offline', note: 'Cannot silently succeed' }, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'source-unavailable' })
   expect(JSON.stringify(await f.sources.getWork({ card_id: id }))).not.toContain('private-token')
@@ -209,6 +211,7 @@ it('retains exact large contract versions in native attachments with the existin
   const uploads = f.requests.filter(request => request.path.endsWith('/attachments')).length
   expect(await contracts.write(id, contract, state, save)).toMatchObject({ outcome: 'available', verified: true })
   expect(f.requests.filter(request => request.path.endsWith('/attachments')).length).toBeGreaterThan(uploads)
+  expect(f.reader.leases!.pendingWrites()).toHaveLength(0)
   const read = await contracts.read(id, { offset: 0, limit: 1000 }) as any
   expect(read.chunks.map((chunk: any) => chunk.text).join('')).toBe(contract.text)
   expect(digest(read.chunks.map((chunk: any) => chunk.text).join(''))).toBe(contract.manifest.hash)

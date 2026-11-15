@@ -58,7 +58,16 @@ export class CardLeases {
     this.path = join(root, 'card-leases.sqlite')
     const db = this.database()
     try {
-      if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('leases','receipts')").get() as { n: number }).n !== 2) db.exec(`PRAGMA journal_mode=WAL;
+      // Changing journal mode can return BUSY without invoking SQLite's busy handler.
+      const deadline = Date.now() + 5000
+      for (;;) {
+        try { db.exec('PRAGMA journal_mode=WAL'); break }
+        catch (error) {
+          if ((((error as { errcode?: number }).errcode ?? 0) & 0xff) !== 5 || Date.now() >= deadline) throw error
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+        }
+      }
+      if ((db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('leases','receipts')").get() as { n: number }).n !== 2) db.exec(`
         CREATE TABLE IF NOT EXISTS leases (card TEXT PRIMARY KEY, generation INTEGER NOT NULL, caller TEXT, holder TEXT, token_hash TEXT, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS receipts (caller TEXT, operation TEXT, signature TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(caller, operation));`)
       db.exec(`CREATE TABLE IF NOT EXISTS source_write_reservations (card TEXT PRIMARY KEY, operation TEXT NOT NULL, generation INTEGER NOT NULL, intent TEXT, started INTEGER NOT NULL, source_operation TEXT);
@@ -113,9 +122,9 @@ export class CardLeases {
     try { return read(db) } finally { db.close() }
   }
   writeStorage<T>(write: (db: SqliteDatabase) => T | Promise<T>): Promise<T> { return this.transaction(write) }
-  private check(db: SqliteDatabase, card: string, inspection = false) {
+  private check(db: SqliteDatabase, card: string, inspection = false, validateOnly = false) {
     const pending = db.prepare('SELECT source_operation FROM source_write_reservations WHERE card = ?').get(card) as { source_operation: string | null } | undefined
-    if (pending && !(inspection && pending.source_operation && pending.source_operation === sourceOperationAccess.getStore())) throw new SourceWritePending()
+    if (pending && !validateOnly && !(inspection && pending.source_operation && pending.source_operation === sourceOperationAccess.getStore())) throw new SourceWritePending()
     const row = this.rowInStorage(db, card), context = access.getStore()
     const matches = context?.token && this.activeInStorage(row) && row.caller === context.caller && row.token_hash === leaseHash(context.token)
     if (this.activeInStorage(row) && !matches) throw new CardLeaseError(publicLease(row))
@@ -123,9 +132,10 @@ export class CardLeases {
     if (context?.token && !matches) throw new CardLeaseError(null)
     return matches ? row : undefined
   }
-  assertWritable(card: string) {
+  // Validation may inspect pending writes; every mutation still checks the fence.
+  assertWritable(card: string, validateOnly = false) {
     const db = this.database()
-    try { this.check(db, card, true) } finally { db.close() }
+    try { this.check(db, card, true, validateOnly) } finally { db.close() }
   }
   reservedInStorage(db: SqliteDatabase, card: string) {
     return !!db.prepare('SELECT 1 FROM source_write_reservations WHERE card = ?').get(card)
@@ -152,10 +162,10 @@ export class CardLeases {
         })
         return result
       } catch (error) {
-        // A provider rejection before an effect is definitive. Network errors,
+        // A rejected request is settled even if earlier requests succeeded. Network errors,
         // timeout and failed readback retain their fence, including after restart.
-        const rejection = error as { status?: number; method?: string; partial?: boolean }
-        const definite = rejection.status !== undefined && rejection.status >= 400 && rejection.status < 500 && rejection.method !== 'GET' && !rejection.partial
+        const rejection = error as { status?: number; method?: string }
+        const definite = rejection.status !== undefined && rejection.status >= 400 && rejection.status < 500 && rejection.method !== 'GET'
         if (!intent || !dispatch.dispatched || definite) await this.transaction(db => {
           db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, operation)
           this.auditInStorage(db, card, 'write-rejected', { operation })

@@ -59,10 +59,10 @@ export class WorkflowOperations {
     return new ImplementationContracts(this.content).read(id, options).catch(error => ({ outcome: 'unavailable', complete_response: false,
       code: error instanceof ContractError ? error.code : 'source-unavailable', message: error instanceof ContractError ? error.message : 'Full specification read unavailable; no completeness claim' }))
   }
-  private async guarded<T>(card: string | undefined, operation: string, actor: string, perform: () => Promise<T>) {
+  private async guarded<T>(card: string | undefined, operation: string, actor: string, perform: () => Promise<T>, checkBefore = true) {
     try {
       return await withSourceOperation(actor, operation, async () => {
-        if (card) { await this.reader.leases?.recoverAppliedWrite(card, intent => this.content.reservationReadback(card, intent)); this.reader.leases?.assertWritable(card) }
+        if (card) { await this.reader.leases?.recoverAppliedWrite(card, intent => this.content.reservationReadback(card, intent)); this.reader.leases?.assertWritable(card, !checkBefore) }
         return perform()
       })
     } catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, operation); throw error }
@@ -71,7 +71,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.startUnchecked(clean, actor) })
   }
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
-    return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) })
+    return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     return withSourceOperation(actor, input.submission_id, async () => {
@@ -622,6 +622,8 @@ export class WorkflowOperations {
         // Rebuild policy from validated input; a human-editable note never
         // supplies a raw PATCH plan or bypasses tracked-worker requirements.
         const plan = await this.updatePlan(planningCard, input, actor, notes)
+        if (card.source?.provider === 'jira') this.reader.jira?.validateProperties(plan.properties)
+        this.reader.leases?.assertWritable(card.id)
         requested = plan.desired
         const current = await this.reader.card(card.id, true)
         for (const [name, value] of Object.entries(plan.original)) {

@@ -157,6 +157,7 @@ export class JiraAdapter {
     }
     return { fields, properties: metadata, status }
   }
+  validateProperties(properties: Record<string, unknown>) { this.payload(properties) }
   async patch(id: string, properties: Record<string, unknown>) {
     // All input limits and available transitions are checked before any write.
     const payload = this.payload(properties), itemId = this.issueId(id)
