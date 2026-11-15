@@ -73,16 +73,20 @@ leases are presented as Ready.
 ## Read-only preparer evidence
 
 `ReconciliationSources.preparationEvidence(cardId)` projects already-observed
-board/fleet metadata and cached complete request/comment history. It does **not**
+board/fleet metadata and cached card-body and comment history. It does **not**
 refresh sources, call the mutating queue refresh, reconcile receipts, answer,
 repair source links, or take a lease. On a cold cache it honestly reports missing
 coverage. Existing source readers/view refreshes may separately populate caches;
-looking at this projection never renews their timestamps.
+looking at this projection never renews their timestamps. Both history caches
+must be resolved, complete and unexpired for readiness; the earlier cache expiry
+bounds their combined freshness. Missing, partial or expired history blocks
+readiness rather than establishing that a request is unanswered. Legacy paragraph
+answers and conflicting body publications remain part of that history.
 
 The dependency map checks request meaning, card closure/authorization context,
 answer history, and worker attempt/state. Linked PRs appear as unverified PR-head
-dependencies until an authorized reader provides current evidence. Card-body and
-PR/release proof collection are explicit omissions, not assumed verification.
+dependencies until an authorized reader provides current evidence. PR/release
+proof collection is an explicit omission, not assumed verification.
 Cross-channel Ask publication coverage is also not supplied by this cache-only
 projection: a typed proposal that needs that coverage is blocked with an explicit
 reason. Cached workflow history still rejects superseded/conflicting formal
