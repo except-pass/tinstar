@@ -1,4 +1,4 @@
-import type { CardLeases } from './cardLeases'
+import { sourceWriteDispatched, type CardLeases } from './cardLeases'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -140,9 +140,17 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
     } catch { /* Missing user access falls back to a visible plain comment. */ }
     const post = (withMention: boolean) => {
       const parent = mainWaitComment(item, withMention, now).parent.page_id
-      const perform = () => api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error',
-      signal: AbortSignal.timeout(5000), body: JSON.stringify(mainWaitComment(item, withMention, now)) })
-      return leases ? leases.mutate(parent.replaceAll('-', ''), perform) : perform()
+      const body = mainWaitComment(item, withMention, now)
+      const perform = async () => {
+        sourceWriteDispatched()
+        const response = await api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(5000), body: JSON.stringify(body) })
+        if (response.status >= 500) { await response.body?.cancel(); throw new Error('Notification save unconfirmed') }
+        return response
+      }
+      // This direct notifier also shares the canonical card fence. Ambiguous
+      // delivery must not expire into a race with a new reviewer write.
+      const text = body.rich_text.map(part => 'text' in part ? part.text.content : '').join('')
+      return leases ? leases.mutate(parent.replaceAll('-', ''), perform, { kind: 'note', text }) : perform()
     }
     try {
       let response = await post(mention)

@@ -1,4 +1,4 @@
-/** P1 measurement of existing lease locking, not a new lease implementation.
+/** Canonical lease contention measurement with simulated provider I/O.
  * Run: node --import tsx scripts/decision-desk-contention.ts /absolute/proof-dir
  * Only disposable local SQLite and simulated source I/O; no source APIs. */
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
@@ -41,7 +41,7 @@ try {
     summary.push({ simulated_source_delay_ms: delay, independent_instances: 6, rounds: 6, claim_samples: claims.length, write_samples: writes.length,
       claim_ms: { p50: percentile(claims, .5), p95: percentile(claims, .95), max: Math.max(...claims) }, source_write_ms: { p50: percentile(writes, .5), p95: percentile(writes, .95) }, raw_claim_ms: claims })
   }
-  const result = { head, measured_at: new Date().toISOString(), scope: 'Existing generic lease locking, one simulated source write plus five independent service instances; excludes HTTP and render. No live sources or preparation.', summary }
-  await writeFile(join(output, 'p1-contention.json'), JSON.stringify(result, null, 2) + '\n')
+  const result = { head, measured_at: new Date().toISOString(), scope: 'Canonical generic leases, one simulated source write plus five independent service instances; excludes HTTP and render. No live sources or preparation.', summary }
+  await writeFile(join(output, 'contention.json'), JSON.stringify(result, null, 2) + '\n')
   process.stdout.write(JSON.stringify(result, null, 2) + '\n')
 } finally { await rm(root, { recursive: true, force: true }) }

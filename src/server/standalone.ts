@@ -101,7 +101,7 @@ export function startServer(opts: ServerOptions) {
   // history readable; no scheduled writes until a separate owner activation.
   const pulls = new PullsApi(reconciliation, releases.store)
   const decisionBoard = reconciliation.mainWaitNotionConfig()?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
-  const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req))
+  const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req), reconciliation.preparedReviews, reconciliation.sourceWriteRecovery())
   reconciliation.authorizePulls = req => pulls.authorized(req)
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
   reconciliation.readPullReadiness = urls => pulls.readiness(urls)

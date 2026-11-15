@@ -1,4 +1,4 @@
-import { stopServer } from './serverProcess'
+import { stopServer, serverBase } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -46,7 +46,7 @@ test('quota rail shows a weekly calendar strip and a hover detail', async ({ pag
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try {
@@ -232,7 +232,7 @@ test('quota rail draws a signed-in Cursor against its usage cycle', async ({ pag
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try {

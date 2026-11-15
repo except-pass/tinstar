@@ -1,10 +1,12 @@
-import { stopServer } from './serverProcess'
+import { stopServer, serverBase } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
+import { once } from 'node:events'
 
 const repo = resolve(import.meta.dirname, '..')
 
@@ -16,7 +18,15 @@ test('activity strip switches panels, opens a worker, and restores overview on b
   const bin = join(root, 'bin')
   const socket = `shell-${process.pid}-${Date.now()}`
   const realTmux = execFileSync('which', ['tmux'], { encoding: 'utf8' }).trim()
-  const port = 47000 + Math.floor(Math.random() * 8000)
+  // Force the real backend's port fallback so every run covers the collision
+  // that previously left readiness polling and browser navigation on a dead URL.
+  const occupied = createServer()
+  occupied.listen(0, '127.0.0.1')
+  await once(occupied, 'listening')
+  const address = occupied.address()
+  if (!address || typeof address === 'string') throw new Error('Expected TCP listener')
+  const port = address.port
+  const terminalPort = 48000 + Math.floor(Math.random() * 8000)
   let server: ChildProcess | null = null
   const tmux = (...args: string[]) => execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
   try {
@@ -24,7 +34,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec '${realTmux}' -L '${socket}' -f /dev/null "$@"\n`)
     chmodSync(join(bin, 'tmux'), 0o755)
     writeFileSync(join(bin, 'quota-axi'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
-    writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home], ports: { start: port + 1000, count: 8 } } }))
+    writeFileSync(join(config, 'config.json'), JSON.stringify({ firstmate: { homes: [home], ports: { start: terminalPort, count: 8 } } }))
     writeFileSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh\ncat '${join(home, 'snapshot.json')}'\n`)
     chmodSync(join(home, 'bin', 'fm-fleet-snapshot.sh'), 0o755)
     mkdirSync(join(home, 'data', 'alpha'), { recursive: true })
@@ -50,7 +60,8 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
+    expect(new URL(base).port).not.toBe(String(port))
     for (let i = 0; i < 100; i++) {
       try {
         const body = await fetch(`${base}/api/fleet`).then(response => response.json()) as { data?: { workers?: unknown[] } }
@@ -157,6 +168,7 @@ test('activity strip switches panels, opens a worker, and restores overview on b
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
   } finally {
     await stopServer(server)
+    await new Promise<void>((resolve, reject) => occupied.close(error => error ? reject(error) : resolve()))
     try { execFileSync(realTmux, ['-L', socket, '-f', '/dev/null', 'kill-server'], { stdio: 'ignore' }) } catch { /* private server absent */ }
     rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   }

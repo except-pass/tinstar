@@ -1,4 +1,4 @@
-import { stopServer } from './serverProcess'
+import { stopServer, serverBase } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -46,7 +46,7 @@ test('the prompt composer docks under the terminal, sends into the pane, and acc
     delete env.TMUX
     delete env.TMUX_PANE
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try { return (await request.get(`${base}/api/fleet`, { timeout: 1000 }).then(response => response.json()) as { data?: { workers?: unknown[] } }).data?.workers?.length ?? 0 }

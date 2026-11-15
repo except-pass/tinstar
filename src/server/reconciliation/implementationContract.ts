@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CardLeaseError } from './cardLeases'
+import { CardLeaseError, withSourceOperation } from './cardLeases'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import type { SubmitHandoffInput } from '../../shared/workflow'
 import { heading, paragraph, WorkflowContent, NotionWriteError, type WorkflowCreateBlock, createBlockText } from './workflowContent'
@@ -86,6 +86,12 @@ export class ImplementationContracts {
       versions: inventory.versions.map(row => ({ version: row.version, revision_id: row.revision_id, hash: row.hash, block_id: row.block_id })) }
   }
   async write(id: string, contract: ReturnType<typeof implementationContract>, state: HandoffReceiptState, save: () => Promise<void>) {
+    return withSourceOperation(contract.manifest.actor, contract.manifest.submission_id, async () => {
+      await this.content.recoverAppliedWrite(id)
+      return this.performWrite(id, contract, state, save)
+    })
+  }
+  private async performWrite(id: string, contract: ReturnType<typeof implementationContract>, state: HandoffReceiptState, save: () => Promise<void>) {
     const { manifest, chunks } = contract
     let inventory = await this.inventory(id)
     const previous = inventory.versions.find(row => row.version === manifest.version)
@@ -139,7 +145,7 @@ export class ImplementationContracts {
   }
   private async append(id: string, children: WorkflowCreateBlock[], state: HandoffReceiptState, save: () => Promise<void>, atStart = false) {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
-    try { await this.content.appendBlocks(id, children, atStart) }
+    try { await this.content.appendBlocks(id, children, atStart, true) }
     catch (error) {
       if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
       throw error

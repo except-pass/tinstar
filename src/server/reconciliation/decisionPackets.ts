@@ -10,7 +10,7 @@ export class DecisionDeskConflict extends Error {}
 export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string; packet: DecisionPacket }
 export interface StoredDecisionPolicy { scope: string; version: number; values: typeof defaultDecisionPolicy | z.infer<typeof decisionPolicyUpdateSchema>['values']; updated_by: string | null; updated_at: string | null }
 type PacketRow = { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string; body: string }
-const unpack = (row: PacketRow): StoredDecisionPacket => { const { body, ...metadata } = row; return { ...metadata, packet: decisionPacketSchema.parse(JSON.parse(body)) } }
+const unpack = (row: PacketRow): StoredDecisionPacket => ({ id: row.id, version: row.version, content_hash: row.content_hash, prepared_by: row.prepared_by, published_at: row.published_at, expires_at: row.expires_at, packet: decisionPacketSchema.parse(JSON.parse(row.body)) })
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const packetContentHash = (packet: DecisionPacket) => hash(decisionMeaning({ ...packet, binding: JSON.parse(bindingMeaning(packet.binding)),
   references: [...packet.references].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b))),
@@ -21,7 +21,7 @@ export const packetContentHash = (packet: DecisionPacket) => hash(decisionMeanin
 export class DecisionPackets {
   private initialized?: Promise<void>
   constructor(readonly leases: CardLeases, private now = Date.now) {}
-  private initialize() {
+  initialize() {
     return this.initialized ??= this.leases.writeStorage(db => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS decision_packets (
@@ -115,7 +115,9 @@ export class DecisionPackets {
   }
   async read(id: string, evidence?: DecisionEvidence) {
     await this.initialize()
-    return this.leases.readStorage(db => {
+    return this.leases.readStorage(db => this.readInStorage(db, id, evidence))
+  }
+  readInStorage(db: DatabaseSync, id: string, evidence?: DecisionEvidence) {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) return null
       const stored = unpack(row), attestation = this.latestValidation(db, id)
@@ -127,8 +129,7 @@ export class DecisionPackets {
       const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id,
         reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : [])],
         valid_until: attestation?.valid_until && current.valid_until ? new Date(Math.min(Date.parse(attestation.valid_until), Date.parse(current.valid_until))).toISOString() : null }
-      return { ...stored, validation, ...decisionPacketReady(validation, stored.expires_at, !!lease?.caller && lease.expires > this.now(), this.now()) }
-    })
+      return { ...stored, validation, ...decisionPacketReady(validation, stored.expires_at, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id), this.now()) }
   }
   async ids(limit = 50) {
     await this.initialize()

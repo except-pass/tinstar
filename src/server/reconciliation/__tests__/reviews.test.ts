@@ -8,6 +8,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { WorkflowOperations } from '../workflow'
+import { CardLeases } from '../cardLeases'
+import { WorkflowContent } from '../workflowContent'
 import { WorkReader } from '../workReader'
 import { NotionApi } from '../notionApi'
 import { buildQueue } from '../queue'
@@ -58,13 +60,13 @@ async function fixture() {
     }
     throw new Error(`Unexpected request ${method} ${path}`)
   }) as typeof fetch
+  const reader = () => new WorkReader({ dataSourceId: board, token: 'fixture' }, new NotionApi(fetcher, 0))
   const restart = () => {
-    const reader = new WorkReader({ dataSourceId: board, token: 'fixture' }, new NotionApi(fetcher, 0))
-    const operations = new WorkflowOperations(reader, async () => [], root)
+    const operations = new WorkflowOperations(reader(), async () => [], root)
     operations.validateReview = vi.fn(async () => {})
     return operations
   }
-  return { root, raw, comments, patches, restart, children, rejectPatch: () => { rejectPatch = true }, failPatch: () => { patchLoss = true }, failNote: () => { noteLoss = true }, rejectNote: () => { rejectNote = true }, failRead: () => { readFailure = true } }
+  return { root, raw, comments, patches, restart, reader, children, rejectPatch: () => { rejectPatch = true }, failPatch: () => { patchLoss = true }, failNote: () => { noteLoss = true }, rejectNote: () => { rejectNote = true }, failRead: () => { readFailure = true } }
 }
 const submit = (operation_id = 'submit-one') => ({ kind: 'submit_for_review' as const, card_id: id, operation_id, review })
 
@@ -99,9 +101,18 @@ describe('durable shared review operations', () => {
     expect(f.comments).toHaveLength(1); expect(f.patches).toHaveLength(1)
     expect(f.raw.properties.Status.status.name).toBe('In review')
   })
-  it('reconciles successful ambiguous PATCH without replaying properties after restart', async () => {
+  it('retains an ambiguous PATCH fence until explicit settlement, then resumes without replaying properties after restart', async () => {
     const f = await fixture(); f.failPatch()
     expect(await f.restart().update(submit(), 'Firstmate')).toMatchObject({ outcome: 'partially-saved' })
+    expect(await f.restart().update(submit(), 'Firstmate')).toMatchObject({ outcome: 'partially-saved' })
+    expect(f.patches).toHaveLength(1); expect(f.comments).toHaveLength(0)
+    const leases = new CardLeases(f.root), content = new WorkflowContent(f.reader())
+    const pending = leases.pendingWrites()
+    expect(pending).toHaveLength(1)
+    // The fixture PATCH has completed and thrown after applying its properties.
+    // Mutable readback alone cannot establish that a real remote request settled.
+    expect(await leases.reconcileWrite(id, pending[0]!.operation, 'operator', 'Original transport settled after applying PATCH', intent => content.reservationReadback(id, intent)))
+      .toMatchObject({ outcome: 'reconciled', source_state: 'applied' })
     expect(await f.restart().update(submit(), 'Firstmate')).toMatchObject({ outcome: 'saved' })
     expect(f.patches).toHaveLength(1); expect(f.comments).toHaveLength(1)
   })

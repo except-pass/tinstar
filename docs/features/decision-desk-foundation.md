@@ -1,10 +1,11 @@
-# Decision Desk preparation foundation (P1)
+# Decision Desk backend foundation (P1–P2)
 
-This is the first backend slice of the Decision Desk sequence. It advances the
+P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 12 and 14** on [the Decision Desk card](https://www.notion.so/41950ce6d42281068ca9dc6d065fc210).
-P2–P6 follow: review sessions/prepared claims, submission coordination,
-preparation workers, the two-view UI, and integrated acceptance/activation.
+P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
+P3–P6 cover submission coordination, preparation workers, the two-view UI, and
+integrated acceptance/activation.
 Existing Decisions screens, generic claims, source answers, receipts and
 `search_work` filters/coverage retain their behavior.
 
@@ -16,10 +17,9 @@ flag. The preparer/runtime/spending and first activation decisions remain separa
 ## Storage and readiness
 
 `DecisionPackets` uses the **existing `CardLeases` database**,
-`card-leases.sqlite`, through its internal read/transaction helpers. The generic
-lease algorithm is unchanged. This puts future READY selection and canonical
-card reservation within one possible local transaction; P1 implements no such
-claim operation. No provider I/O belongs inside packet transactions.
+`card-leases.sqlite`, through its internal read/transaction helpers. P2 uses this shared boundary for atomic
+READY selection and canonical card reservation, as described below. No provider
+I/O belongs inside packet transactions.
 
 - `decision_packets` stores immutable packet bodies, schema, semantic hash,
   source-scoped version, publication operation identity, preparer and timestamps.
@@ -65,7 +65,7 @@ Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
 successful unexpired persisted validation, the latest packet version, unexpired
-packet freshness and **no active canonical review lease**. It evaluates lease
+packet freshness and **no active canonical review lease or source-write reservation**. It evaluates lease
 and expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
 leases are presented as Ready.
@@ -104,7 +104,8 @@ readback before writing. A recommendation never permits production/device writes
 Routes use the existing trusted loopback Tailscale owner authorization check,
 origin allowlist and `X-Tinstar-UI: 1` handshake. A caller-supplied owner name alone
 is not authorization outside that existing loopback/proxy trust boundary. No
-install, bridge or lease token is returned by these routes.
+install or bridge token is returned by these routes. Review capabilities are
+returned only by the [review operations below](#p2-registered-review-sessions-and-prepared-claims).
 
 | Method and path under `/api/reconciliation/decision-desk` | Result |
 |---|---|
@@ -115,9 +116,10 @@ install, bridge or lease token is returned by these routes.
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
 
-There is no packet mutation/answer/claim/worker endpoint in P1. Unsupported methods
-return 405. Source text is redacted at the API output boundary, independently of
-the exact source data used for validation. Existing `coverage.intentions` and
+Publication, answers and worker dispatch have no endpoint here. P2 review and
+source-write recovery routes are described below. Unsupported methods return 405.
+Public source-derived prose is redacted independently of exact internal validation
+data; review capabilities and source answer identities remain intact. Existing `coverage.intentions` and
 `search_work` scope fields are unchanged.
 
 ## Isolated proof and baseline screenshots
@@ -131,16 +133,16 @@ node --import tsx scripts/decision-desk-preview.ts /absolute/task-proof-dir
 
 The script creates a fresh private config root beneath that directory and binds
 an ephemeral loopback port. It enrolls no First Mate home, live credential,
-provider source transport or job dispatcher. `p1-preview.json` identifies the
-instance and synthetic source packet. API requests use the fixture owner
+provider source transport or job dispatcher. `preview.json` identifies the
+instance and five synthetic source packets. API requests use the fixture owner
 `preview-owner@example.test` and the UI handshake. Its SQLite/API code and current
 client bundle are real; its business evidence is explicitly controlled test data.
 Stop that script process after proof. Never aim this harness at a live config root.
 
 Open the returned URL with `?view=decisions` in
 `CHROME_DEVTOOLS_AXI_SESSION=tinstar-decision-desk-design`. Capture 390×844,
-768×1024 and 1440×900, label them **P1 baseline — unchanged Decisions UI,
-isolated fixtures**, and stop that AXI browser session afterward. P1 changes no
+768×1024 and 1440×900, label them **P2 baseline — unchanged Decisions UI,
+isolated fixtures**, and stop that AXI browser session afterward. P2 changes no
 screen. These images are the baseline for P5, not a claim of prototype fidelity
 or final Decision Desk acceptance.
 
@@ -154,11 +156,126 @@ It records HEAD and raw samples: six rounds at each simulated source-write delay
 (25ms and 1000ms), one writer plus five independent `CardLeases` instances,
 30 claim samples and six write samples per scenario. It measures lock contention,
 not HTTP/render latency or the future prepared path. Output is
-`p1-contention.json`; report actual p50/p95, sample counts and this scope in the
-implementation review description. It decides no lease redesign in P1.
+`contention.json`; report actual p50/p95, sample counts and this scope in the
+implementation review description. It measures the current per-card reservation implementation described below.
 
 Focused tests cover semantic hashing, source/card/options changes, partial/stale
 evidence, immutable retry/versioning, dependency invalidation/revalidation,
 expiry/held-card exclusion, restart persistence, concurrent policy-save conflicts,
 real owner-authenticated API calls and no source access/reconciliation from the
 evidence path. Run existing lease/proposal/workflow regressions as well.
+
+## P2: registered review sessions and prepared claims
+
+P2 advances backend acceptance criteria **4 and 5**, the **claim side of 8**,
+and parts of **1, 13 and 14**. **P3–P6 follow**: this is not delivery of the
+submit coordinator, preparation runner, multipart normalization, or desk screens.
+The existing Decisions screen, generic claims, source answers, receipt bridge,
+`search_work` owner/status filters and `coverage.intentions` stay compatible.
+
+A review session is a durable server-created resource, separate from browser
+presentation scenes. Owner-authenticated web clients explicitly POST
+`/api/reconciliation/decision-desk/sessions` with `operation_id`, a `label` and
+`device` (`phone`, `desktop`, or `other`). Creation returns a public session
+summary and an opaque `review_session_token`. Only its hash is stored. A
+same-input operation retry reconstructs the same capability; changed input
+conflicts. The resource expires after 24 hours, independently of the existing
+60-minute renewable canonical card lease. Explicitly create a new context after
+session expiry. GET on that path lists only the authenticated caller's actual,
+nonrevoked, unexpired resources and nonsecret held-card metadata. Public IDs and
+listing authorization never grant lease ownership.
+
+The browser must retain the capability in its review context's memory or
+session storage and send it in JSON bodies, never URLs, UI text, or DOM metadata.
+A duplicated tab that copies session storage resumes the same registered context;
+creating another independent context requires another explicit session-creation
+operation. P5 will wire these resources into the screen; P2 creates no implicit
+scene/tab/actor/last-seen identity and no cross-conversation navigation.
+
+POST `/api/reconciliation/decision-desk/claim` requires `operation_id` and the
+browser's `review_session_token`, with optional `card_id` for an exact claim.
+The matching MCP facade tools are:
+
+- `open_prepared_review_session` and `list_prepared_review_sessions`;
+- `claim_next_prepared_decision` and `claim_prepared_decision`;
+- `release_prepared_decision` with `action: release | skip` and a reason.
+
+MCP callers may explicitly open a context, or begin a claim without a capability
+and continue using its returned `lease_token`. The same token resumes the same
+held packet. There is no way to recognize an earlier conversation when a new
+request omits **both** continuity capabilities. It starts an independent context;
+only reuse of the same globally unique operation ID deliberately replays an
+identical operation. Credential rotation does not inherit old capabilities.
+Tokens belong only in tool arguments. No context token is returned by listing.
+
+Claim evaluates the current cache-only source projection, latest immutable packet
+version, durable invalidations, freshness, exact request/options and canonical
+lease/reservation in **one short lease-database transaction**. The projection
+never refreshes upstream, researches, reconciles receipts, writes a source, or
+launches a worker. Missing or expired evidence blocks claim. This uses P1's bounded
+observations, not a claim of instantaneous upstream change detection. Current
+source order comes from the existing pure queue comparator. Multiple packets for
+a card still share one canonical card fence. A repeated context claim returns its
+held version; an invalidated held packet is returned blocked. A different exact
+card request reports the existing hold rather than allocating another one.
+
+A claim carries packet ID/version and lease generation in its durable binding.
+Generic and prepared claims use the same canonical lease table and therefore
+exclude each other. `no-decision-requests` means verified absence in the covered
+scope; source/property coverage alone cannot prove that body/comment requests
+are absent. `no-prepared-decisions`, `no-ready-packet` and `source-unavailable`
+retain their different meanings. Unknown demand is not reported as zero.
+
+POST `/release` uses the same continuity data, a new `operation_id`, `reason`,
+and `action`. Release clears only the matching canonical hold. Skip performs the
+release and next claim together, excluding the whole skipped card for that one
+allocation; other contexts can immediately reclaim it in its original source
+order. A lost-response skip retry replays the original next allocation, never a
+later card. GET/read, release, skip, ordinary expiry and POST `/close-session`
+(with capability and reason) do not change source owner/status or answer a request.
+
+## Per-card source-write reservations and recovery
+
+Previously a source HTTP write held the database-wide writer transaction,
+blocking unrelated claims for its entire provider latency. P2 reserves only its
+canonical card, current generation and unique write operation in a short
+transaction, commits, performs provider I/O, then completes in another short
+transaction. Other cards remain claimable. Existing stale-token fencing and
+successful holder renewal remain in place. `lease_events` records claims,
+validation failures, releases with reasons, reservation/recovery identities and
+prepared-claim selection timings; capabilities and source prose never enter
+these events. Owner-authenticated GET `/api/reconciliation/decision-desk/review-events?after=0` exposes the bounded audit stream; `operation_key` dedupes retry metrics. These are server-side timings, excluding HTTP/rendering, and are
+not end-to-end claim-to-visible measurements.
+
+A timeout, ambiguous response or failed readback retains the reservation across
+restart and lease expiry. A new holder or operation cannot race the old write.
+A definitive provider rejection or a pre-write validation failure releases it.
+The original source operation can still inspect its existing recovery records.
+An immutable unique note/contract marker that fully reads back can reconcile its
+same-operation reservation automatically; mutable properties cannot, because a
+matching value might predate an older in-flight PATCH. Existing handoff partial
+append/history recovery remains authoritative and never blindly repeats a POST.
+
+For other unresolved writes, the authenticated owner has an explicit supported
+recovery route, with no timer-based unlock or record editing:
+
+1. GET `/api/reconciliation/decision-desk/source-writes` through the same owner
+   authorization, `X-Tinstar-UI: 1` handshake and origin checks as the desk APIs.
+2. Inspect the operation and establish that its earlier provider request has
+   settled. A process crash or an elapsed timeout alone is insufficient evidence
+   that a remote request stopped. Inspect full source history/markers and partial
+   effects; source availability remains required.
+3. POST `/api/reconciliation/decision-desk/reconcile-source-write` with
+   `card_id`, the reservation's `operation` UUID,
+   `earlier_request_settled: true`, and a concrete `reason` identifying that
+   evidence. The server reads source markers/current desired fields itself,
+   compares meaningful values, and audits actor/reason/generation/readback result
+   before clearing exactly that reservation. `different` may include partial
+   effects; it does not assert nothing was written. Unknown/incomplete source
+   readback or a locally running callback retains the fence. Recovery sends no
+   provider write. Re-read/retry the original source-bound workflow afterward.
+
+This owner recovery is a deliberate audited supersession, not approval for
+production/device effects or another answer. An unresolved write is never
+released just because its age crossed a threshold. Future P3 submission recovery
+will use the same source-bound answer markers and operation continuity.

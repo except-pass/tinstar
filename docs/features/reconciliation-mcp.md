@@ -178,7 +178,7 @@ ChatGPT retaining tokens. A successful live later-turn test proves explicit
 argument continuity only; it does not certify automatic metadata identity.
 If a thread loses its token, record the failure. Restart/eviction yields unknown
 by design; do not restart the backend between the live continuity calls.
-Card-lease implementation remains gated on the live result and separate go-ahead.
+Durable claims use the separate [session-scoped card lease contract](#session-scoped-card-leases).
 
 | Tool | Result |
 | --- | --- |
@@ -455,12 +455,9 @@ State is in `card-leases.sqlite` and `card-lease-key` under `getConfigRoot()`
 (`TINSTAR_CONFIG_HOME` is honored). Keep the key with a SQLite-consistent
 backup of the database. SQLite
 transactions arbitrate across processes and survive restart; monotonically
-increasing per-card generations fence old holders. Each source mutation holds
-the SQLite writer transaction until it returns, so a new generation cannot be
-issued while an old holder write remains in flight. This serializes source
-writes, including writes on unrelated cards; reads remain available through WAL.
-Process exit releases the database lock. Provider-side ambiguous writes retain
-the existing workflow readback/retry rules. Tokens are persisted only as hashes;
+increasing per-card generations fence old holders. Source mutations use
+[per-card reservations and recovery](decision-desk-foundation.md#per-card-source-write-reservations-and-recovery);
+provider latency no longer holds the database writer lock. Tokens are persisted only as hashes;
 a keyed derivation reconstructs the initial claim token for an operation-id
 replay without storing its plaintext token. A valid replay returns the current
 lease metadata, including any renewed expiry; an expired, released or replaced
@@ -473,8 +470,10 @@ Firstmate owns the guarded deploy and live proof: two separate ChatGPT chats
 holding distinct cards, one refused cross-chat change and one refused mate
 update. Local automated coverage does not substitute for that live proof.
 
-Follow-ups: admin force-claim/takeover, an active-claims dashboard, claim metrics,
-the five-conversation DEV load proof, and skip/cooldown semantics. The facade
+Prepared-only claims, registered review contexts, skip and claim timing audit
+are documented in the [Decision Desk reference](decision-desk-foundation.md#p2-registered-review-sessions-and-prepared-claims).
+Follow-ups: admin force-claim/takeover, an active-claims dashboard,
+the five-conversation DEV load proof, and generic skip/cooldown semantics. The facade
 scope list and deploy approved-tool catalog currently duplicate tool names;
 a future simplification can derive these scope/catalog declarations from the
 shared registration metadata.

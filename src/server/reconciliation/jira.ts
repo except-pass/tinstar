@@ -1,3 +1,4 @@
+import { sourceWriteDispatched } from './cardLeases'
 import { isDeepStrictEqual } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { JiraConfig } from './config'
@@ -58,6 +59,7 @@ export class JiraAdapter {
     if (config.url !== 'https://fortresspower-jira.atlassian.net' || config.projectId !== '10638') throw new Error('Jira pilot is restricted to TSSPIKE 10638')
   }
   private async response(path: string, init: RequestInit = {}) {
+    if ((init.method ?? 'GET') !== 'GET') sourceWriteDispatched()
     const response = await this.fetcher(`${this.config.url}/rest/api/3/${path}`, { ...init,
       redirect: 'error', signal: init.signal ?? AbortSignal.timeout(20_000), headers: { Accept: 'application/json',
         Authorization: `Basic ${Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64')}`,
@@ -155,6 +157,7 @@ export class JiraAdapter {
     }
     return { fields, properties: metadata, status }
   }
+  validateProperties(properties: Record<string, unknown>) { this.payload(properties) }
   async patch(id: string, properties: Record<string, unknown>) {
     // All input limits and available transitions are checked before any write.
     const payload = this.payload(properties), itemId = this.issueId(id)
