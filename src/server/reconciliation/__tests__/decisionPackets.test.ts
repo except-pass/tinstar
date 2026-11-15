@@ -8,6 +8,7 @@ import { decisionPacketSchema, validateDecisionPacket } from '../../../shared/de
 import { projectDecisionEvidence } from '../decisionEvidence'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { ReconciliationSources } from '../index'
+import { CardContextReader } from '../cardContext'
 
 const roots: string[] = []
 const now = Date.parse('2026-11-15T18:00:00Z')
@@ -184,4 +185,42 @@ it('indexes all material invalidation causes without touching unrelated dependen
   }
   expect((await packets.events()).filter(event => event.type === 'invalidation').map(event => JSON.parse(String(event.detail)).cause)).toEqual(causes)
   expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
+})
+
+it.each(['answer', 'conflict', 'unanswered'] as const)('projects cached body %s alongside comment requests without source access', async kind => {
+  const fixture = preparedDecisionFixture(now)
+  const request = fixture.history.context.blocks[0]!
+  const bodyText = kind === 'answer' ? 'Tin Star answer: "preview-question"' : kind === 'conflict' ? request.text.replace('Authorize preview only', 'Authorize production') : 'Background'
+  const fetcher = vi.fn(async (input: URL | RequestInfo) => new Response(JSON.stringify({ has_more: false, results:
+    new URL(String(input)).pathname === '/v1/comments'
+      ? [{ id: request.id, rich_text: [{ plain_text: request.text }] }]
+      : [{ id: 'body-history', type: 'paragraph', paragraph: { rich_text: [{ plain_text: bodyText }] } }],
+  })))
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+  const reader = new CardContextReader({ token: 'fixture', dataSourceId: fixture.cardId }, fetcher)
+  await reader.commentDetails(fixture.cardId)
+  expect(reader.cachedDecisionHistory(fixture.cardId)).toBeUndefined()
+  await reader.get(fixture.cardId)
+  fetcher.mockClear()
+  const history = reader.cachedDecisionHistory(fixture.cardId)!
+  expect(history.context.blocks).toHaveLength(2)
+  clock.mockRestore()
+  const projected = projectDecisionEvidence(fixture.snapshot, fixture.cardId, history, now)
+  expect(projected.requests.find(row => row.binding?.request_id === 'preview-question')?.answered).toBe(kind === 'answer')
+  if (kind === 'conflict') expect(projected.reasons).toContain('Decision publication history is contradictory or incomplete')
+  expect(validateDecisionPacket(fixture.packet, projected, now).valid).toBe(kind === 'unanswered')
+  expect(fetcher).not.toHaveBeenCalled()
+})
+
+it.each(['body-partial', 'comments-partial', 'comments-unknown', 'expired', 'unknown-time'] as const)('blocks readiness with %s cached history', kind => {
+  const fixture = preparedDecisionFixture(now)
+  if (kind === 'body-partial') fixture.history.context.outcome = 'partial'
+  if (kind === 'comments-partial') fixture.history.context.commentsOutcome = 'partial'
+  if (kind === 'comments-unknown') delete fixture.history.context.commentsOutcome
+  if (kind === 'expired') fixture.history.expires_at = new Date(now).toISOString()
+  if (kind === 'unknown-time') fixture.history.observed_at = 'unknown'
+  const evidence = projectDecisionEvidence(fixture.snapshot, fixture.cardId, fixture.history, now)
+  expect(evidence.reasons).toContain('Complete cached decision history is unavailable')
+  expect(evidence.requests[0]!.dependencies.find(row => row.kind === 'answer')!.status).toBe('unknown')
+  expect(validateDecisionPacket(fixture.packet, evidence, now).valid).toBe(false)
 })

@@ -36,3 +36,28 @@ it('reads checkpoint comments without a writer and retains body evidence if comm
   expect(await reader.checkpoints('b'.repeat(32))).toMatchObject({ outcome: 'partial', blocks: [{ id: 'paragraph', text: 'Card checkpoint paragraph' }] })
   expect(vi.mocked(fetcher).mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true)
 })
+
+it('retains the older body or comment expiry without refreshing cached history', async () => {
+  const start = Date.parse('2026-11-15T18:00:00Z')
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(start)
+  try {
+    for (const first of ['body', 'comments']) {
+      clock.mockReturnValue(start)
+      const fetcher = vi.fn(async () => new Response(JSON.stringify({ results: [], has_more: false })))
+      const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+      if (first === 'body') await reader.get('card')
+      else await reader.commentDetails('card')
+      expect(reader.cachedDecisionHistory('card')).toBeUndefined()
+      clock.mockReturnValue(start + 10_000)
+      if (first === 'body') await reader.commentDetails('card')
+      else await reader.get('card')
+      fetcher.mockClear()
+      clock.mockReturnValue(start + 31_000)
+      expect(reader.cachedDecisionHistory('card')).toMatchObject({
+        observed_at: new Date(start).toISOString(), expires_at: new Date(start + 30_000).toISOString(),
+        context: { outcome: 'available', commentsOutcome: 'available', blocks: [] },
+      })
+      expect(fetcher).not.toHaveBeenCalled()
+    }
+  } finally { clock.mockRestore() }
+})

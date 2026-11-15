@@ -17,7 +17,9 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const reasons: string[] = []
   if (!card) reasons.push('Canonical card is not in the observed configured board')
   if (card?.archived || card?.in_trash || ['Done', 'Archived'].includes(String(card?.properties.Status?.value))) reasons.push('Source card is closed')
-  if (!history || history.context.outcome !== 'available' || (history.context.commentsOutcome ?? history.context.outcome) !== 'available') reasons.push('Complete cached decision history is unavailable')
+  const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
+  const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
+  if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const rows = decisionRequests(history?.context.blocks ?? [])
   let currentRequests: string[] = []
   try { currentRequests = decisionProposals((history?.context.blocks ?? []).map(({ id, text }) => ({ id, text }))).map(row => row.id) }
@@ -60,7 +62,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
         return [key, value]
       }))]) : null),
     { ...base('answer', row.id, decisionMeaning(decisionRecordRows(history?.context.blocks ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
-      status: history?.context.outcome === 'available' ? 'fresh' as const : 'unknown' as const, coverage: history?.context.outcome === 'available' ? 'complete' as const : 'unknown' as const,
+      status: freshHistory ? 'fresh' as const : 'unknown' as const, coverage: completeHistory ? 'complete' as const : 'unknown' as const,
       observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }]
     if (row.sourceRequest) {
       const home = snapshot.fleet.find(home => home.source.home === row.sourceRequest!.home)
@@ -73,5 +75,5 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
   return { card_id: cardId, requests, reasons, observed_at: observation.observedAt,
-    omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Card body, cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
+    omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }

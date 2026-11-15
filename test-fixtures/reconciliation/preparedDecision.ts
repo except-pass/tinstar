@@ -14,7 +14,7 @@ export function preparedDecisionFixture(now = Date.now()) {
   home.tasks[0]!.queue = { decisions: [{ key: 'preview-go', verb: 'needs-decision', summary: question }], completed: false, holdKind: null, originTaskId: null }
   home.backlog!.push({ id: 'preview-go', title: question, state: 'held', kind: 'ship', repo: null, hold_reason: question, hold_until: null, blocked_by: null, captain_actionable: true, pr_url: null,
     queue: { decisions: [], completed: false, holdKind: 'captain', originTaskId: 'linked-worker' }, cardReferences: [{ pageId: cardId, basis: 'explicit', source: 'fixture' }] })
-  const history: CachedDecisionHistory = { observed_at: new Date(now).toISOString(), expires_at: new Date(now + 60_000).toISOString(), context: { outcome: 'available', blocks: [{
+  const history: CachedDecisionHistory = { observed_at: new Date(now).toISOString(), expires_at: new Date(now + 60_000).toISOString(), context: { outcome: 'available', commentsOutcome: 'available', blocks: [{
     id: 'fixture-source-note', type: 'comment', text: `Operation: request_decision\nRequested from: Will\nQuestion: ${question}\nTin Star request: ${JSON.stringify({ id: 'preview-question', action: 'Decision', preserve_action: false,
       source_request: sourceRequest, source_question: question, source_spawn_gen: 'attempt-1', options: [{ id: 'preview', label: 'Authorize preview only' }, { id: 'defer', label: 'Defer research' }] })}`,
   }] } }

@@ -17,7 +17,7 @@ export interface CardContextRead {
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
   private commentCache = new Map<string, { until: number; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
-  private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead> }>()
+  private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch, private jira?: JiraAdapter) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
@@ -31,8 +31,16 @@ export class CardContextReader {
   /** Read the cached observation with its original conservative freshness;
    * looking at evidence never refreshes it or fetches source history. */
   cachedDecisionHistory(id: string) {
-    const cached = this.commentCache.get(id)
-    return cached?.resolved ? { context: cached.resolved, observed_at: new Date(cached.until - 30_000).toISOString(), expires_at: new Date(cached.until).toISOString() } : undefined
+    const body = this.cache.get(id), comments = this.commentCache.get(id)
+    if (!body?.resolved || !comments?.resolved) return undefined
+    const until = Math.min(body.until, comments.until)
+    const context: CardContextRead = {
+      ...body.resolved, commentsOutcome: comments.resolved.outcome,
+      blocks: [...body.resolved.blocks, ...comments.resolved.blocks],
+      outcome: body.resolved.outcome === 'available' && comments.resolved.outcome === 'available' ? 'available' : 'partial',
+      omissions: [body.resolved.omissions, comments.resolved.omissions].filter(Boolean).join(' '),
+    }
+    return { context, observed_at: new Date(until - 30_000).toISOString(), expires_at: new Date(until).toISOString() }
   }
   details(id: string, force = false): Promise<CardContextRead> {
     if (force) this.invalidate(id)
@@ -105,7 +113,9 @@ export class CardContextReader {
     if (cached && cached.until > Date.now() && (revision === undefined || revision === cached.revision)) return cached.value
     if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
     const value = this.read(id).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
-    this.cache.set(id, { until: Date.now() + 30_000, revision, value })
+    const entry = { until: Date.now() + 30_000, revision, value, resolved: undefined as CardContextRead | undefined }
+    this.cache.set(id, entry)
+    void value.then(result => { entry.resolved = result }).catch(() => {})
     return value
   }
   async read(id: string): Promise<CardContextRead> {
