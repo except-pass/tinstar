@@ -42,7 +42,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     if (!item || item.readiness !== 'ready-now') issues.push(...(item?.reasons ?? ['Exact source request is not uniquely present in the observed queue']))
     if (row.sourceRequest) {
       try {
-        const live = bindDecision(snapshot.fleet, row.sourceRequest, cardId, snapshot.intentions)
+        const live = bindDecision(snapshot.fleet, row.sourceRequest, cardId, snapshot.intentions, now)
         if (live.source_question !== row.sourceQuestion || live.source_spawn_gen !== row.sourceSpawnGen) issues.push('Source question or worker generation changed')
       } catch (error) { issues.push(error instanceof Error ? error.message : 'Source binding cannot be verified') }
     }

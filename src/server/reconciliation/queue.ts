@@ -189,7 +189,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (request.kind !== 'decision' || !request.id || !request.taskId || entry.card.type === 'blocked') continue
       const task = home.observation.data?.tasks.find(task => task.id === request.taskId)
       const hold = home.observation.data?.backlog?.find(row => row.id === entry.matchedHoldId)
-      const canonical = decisionCard(request, [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])], intentions)
+      const canonical = decisionCard(request, [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])], intentions, now)
       if (!canonical.cardId) continue
       const taskHolds = homeRequests[index]!.filter(candidate => candidate.ownerReady && candidate.request.kind === 'hold' &&
         candidate.request.taskId === request.taskId)
@@ -271,7 +271,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const exactBinding = request.kind === 'hold' ? [...ownerDecisions].find(([, binding]) =>
         binding.request.home === request.home && binding.taskHoldId === request.id &&
         (request.taskId === null || request.taskId === binding.request.taskId)) : undefined
-      const canonical = exactBinding ? { cardId: exactBinding[0] } : decisionCard(request, refs, intentions)
+      const canonical = exactBinding ? { cardId: exactBinding[0] } : decisionCard(request, refs, intentions, now)
       const known = canonical.cardId ? [cards.get(canonical.cardId)].filter((card): card is Card => !!card) : []
       const canonicalRelationship = known.length === 1
       const binding = canonical.cardId ? ownerDecisions.get(canonical.cardId) : undefined

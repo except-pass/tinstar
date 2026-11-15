@@ -28,10 +28,10 @@ export const requestKey = (request: FirstMateRequest) => requestAnchor(request)
 
 export class DecisionSourceError extends Error {}
 
-function sourceContext(fleet: SourceSnapshot['fleet'], request: FirstMateRequest) {
+function sourceContext(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, now = Date.now()) {
   const homes = fleet.filter(home => home.source.home === request.home)
   if (homes.length !== 1) throw new DecisionSourceError('originating home is missing or ambiguous')
-  const observation = ageObservation(homes[0]!.observation)
+  const observation = ageObservation(homes[0]!.observation, now)
   if (observation.status !== 'fresh' || observation.coverage !== 'complete' || !observation.data) throw new DecisionSourceError('originating source is stale or incomplete')
   const { tasks } = observation.data
   const backlog = observation.data.backlog ?? []
@@ -46,14 +46,14 @@ function sourceContext(fleet: SourceSnapshot['fleet'], request: FirstMateRequest
   const refs = [...(task?.cardReferences ?? []), ...(hold?.cardReferences ?? [])]
   return { refs, binding: { source_request: request, source_question: entry.card.headline, source_spawn_gen: task?.identity.spawn_gen ?? null } satisfies DecisionBinding }
 }
-function validateContext(context: NonNullable<ReturnType<typeof sourceContext>>, request: FirstMateRequest, cardId: string, intentions?: SourceSnapshot['intentions']) {
-  const canonical = decisionCard(request, context.refs, intentions)
+function validateContext(context: NonNullable<ReturnType<typeof sourceContext>>, request: FirstMateRequest, cardId: string, intentions: SourceSnapshot['intentions'] | undefined, now = Date.now()) {
+  const canonical = decisionCard(request, context.refs, intentions, now)
   if (canonical.cardId !== cardId) throw new DecisionSourceError(canonical.reason ?? `request is bound to canonical card ${canonical.cardId}, not ${cardId}`)
   return context.binding
 }
-export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string, intentions?: SourceSnapshot['intentions']): DecisionBinding {
-  const context = sourceContext(fleet, request)
-  const binding = context && validateContext(context, request, cardId, intentions)
+export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateRequest, cardId: string, intentions?: SourceSnapshot['intentions'], now = Date.now()): DecisionBinding {
+  const context = sourceContext(fleet, request, now)
+  const binding = context && validateContext(context, request, cardId, intentions, now)
   if (!binding) throw new DecisionSourceError('request is no longer open')
   return binding
 }

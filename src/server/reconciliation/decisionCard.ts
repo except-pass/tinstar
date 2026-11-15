@@ -6,14 +6,14 @@ import { declaredLinks } from './scene'
 import { isBlankWorkerLinks, readableTaskIdentities, FIRST_MATE_TASKS, WORKER_LINK_SCHEMA } from './workerLinks'
 
 /** Resolve request ownership without writing card links or guessing from titles. */
-export function decisionCard(request: FirstMateRequest, refs: CardReference[], intentions?: SourceSnapshot['intentions']) {
+export function decisionCard(request: FirstMateRequest, refs: CardReference[], intentions?: SourceSnapshot['intentions'], now = Date.now()) {
   if (refs.some(ref => ref.basis === 'explicit')) {
     const ids = new Set(refs.map(ref => ref.pageId))
     return ids.size === 1 ? { cardId: refs[0]!.pageId } : { cardId: null, reason: 'request lacks one explicit canonical card link' }
   }
   const searched = `${FIRST_MATE_TASKS} (${WORKER_LINK_SCHEMA}) for fm_home=${JSON.stringify(request.home)} + task_id=${JSON.stringify(request.taskId)}`
   if (!request.taskId) return { cardId: null, reason: `request lacks one explicit canonical card link; ${searched}: task identity is unknown` }
-  const observation = intentions && ageObservation(intentions)
+  const observation = intentions && ageObservation(intentions, now)
   if (!observation || observation.status !== 'fresh' || observation.coverage !== 'complete' || !observation.data || observation.data.hasMore) {
     return { cardId: null, reason: `request lacks one explicit canonical card link; ${searched}: card coverage is unknown (missing, stale or incomplete)` }
   }

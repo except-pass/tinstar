@@ -49,6 +49,23 @@ it.each(['card', 'request', 'revision', 'option', 'question', 'answered', 'parti
   expect(result.valid).toBe(false); expect(result.reasons.length).toBeGreaterThan(0)
 })
 
+it.each(['explicit', 'declared'] as const)('uses the projection clock for %s source binding freshness', kind => {
+  const fixture = preparedDecisionFixture(now)
+  if (kind === 'declared') {
+    for (const home of fixture.snapshot.fleet) {
+      for (const task of home.observation.data?.tasks ?? []) task.cardReferences = []
+      for (const row of home.observation.data?.backlog ?? []) row.cardReferences = []
+    }
+  }
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 86_400_000)
+  try {
+    const evidence = projectDecisionEvidence(fixture.snapshot, fixture.cardId, fixture.history, now)
+    expect(validateDecisionPacket(fixture.packet, evidence, now)).toMatchObject({ valid: true })
+    const expired = projectDecisionEvidence(fixture.snapshot, fixture.cardId, fixture.history, now + 86_400_000)
+    expect(validateDecisionPacket(fixture.packet, expired, now + 86_400_000).valid).toBe(false)
+  } finally { clock.mockRestore() }
+})
+
 it('publishes immutable versions with idempotent operation identity and survives restart', async () => {
   const { packet, evidence } = preparedDecisionFixture(now), { packets, root, leases } = await store()
   const first = await packets.publish(packet, evidence, 'fixture-preparer', 'publish-one')
