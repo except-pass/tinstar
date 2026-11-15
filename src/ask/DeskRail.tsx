@@ -26,7 +26,7 @@ export function DeskRail({ overlay = false, closeRequest = 0, openRequest, unrea
     const reflow = () => { setNarrow(overlay || (query?.matches ?? window.innerWidth <= 850)); update() }
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
     if (host.current?.parentElement) observer?.observe(host.current.parentElement)
-    query?.addEventListener?.('change', reflow); window.addEventListener('resize', reflow); update()
+    query?.addEventListener?.('change', reflow); window.addEventListener('resize', reflow); reflow()
     return () => { observer?.disconnect(); query?.removeEventListener?.('change', reflow); window.removeEventListener('resize', reflow) }
   }, [overlay])
   const previousVisible = useRef(visible), previousNarrow = useRef(narrow)

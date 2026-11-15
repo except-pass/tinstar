@@ -47,6 +47,13 @@ async function makePartition(name: string) {
     f.packet.authorization.scope = 'Authorize one isolated DEV rehearsal using disposable fixture data only.'
     f.packet.authorization.permitted_follow_up = 'Collect readback receipts and screenshots, then return the evidence for review.'
     f.packet.references = [{ label: 'Fixture source card (synthetic)', url: `https://www.notion.so/${f.cardId}` }]
+    if (name === 'no-requests') {
+      f.evidence.requests = []; f.history.context.blocks = []; fixture.comments.set(f.cardId, [])
+      for (const home of f.snapshot.fleet) { for (const task of home.observation.data?.tasks ?? []) if (task.queue) task.queue.decisions = []; for (const hold of home.observation.data?.backlog ?? []) hold.captain_actionable = false }
+      const card = f.snapshot.intentions.data!.cards.find(card => card.id === f.cardId)!
+      card.properties['Will action']!.value = []; card.properties['Next action']!.value = null
+      fixture.pages.get(f.cardId)!.properties['Will action'] = { id: 'Will action', type: 'multi_select', multi_select: [] }
+    }
     if (name === 'source-unavailable') f.evidence.reasons.push('Source evidence unavailable in the isolated fixture')
     if (name === 'low-confidence') { f.packet.confidence = 'Low'; f.packet.uncertainty = ['Device and production behavior have not been verified.', 'The rehearsal does not establish customer rollout readiness.'] }
     if (name === 'high-risk') { f.packet.risk.rating = 'High'; f.packet.risk.explanation = 'An incorrect rehearsal recipient could expose synthetic operational messages.'; f.packet.reversibility.rating = 'Difficult'; f.packet.reversibility.residual_exposure = 'Delivered test communications cannot be recalled.' }

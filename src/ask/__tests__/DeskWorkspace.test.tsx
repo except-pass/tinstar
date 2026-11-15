@@ -373,7 +373,7 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
 }, 30_000)
 
 
-it.each([390, 1440])('routes manual decisions without closing Discuss at %spx', async width => {
+it.each([390, 1440])('keeps manual decision focus while Discuss uses the responsive review overlay at %spx', async width => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   source.queue = fixtureQueue()
   function QueueProbe() {
@@ -388,10 +388,11 @@ it.each([390, 1440])('routes manual decisions without closing Discuss at %spx', 
   await act(async () => {})
   fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
-  expect(screen.getByLabelText('Discuss')).toBeVisible()
+  if (width === 390) expect(screen.getByLabelText('Discuss')).toBeVisible()
+  else expect(screen.getByLabelText('Discuss')).not.toBeVisible()
   expect(screen.getByTestId('page')).toHaveTextContent('decisions')
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
-  fireEvent.click(within(screen.getByLabelText('Discuss')).getByRole('button', { name: width === 390 ? 'Close Discuss' : 'Collapse Discuss' }))
+  if (width === 390) fireEvent.click(within(screen.getByLabelText('Discuss')).getByRole('button', { name: 'Close Discuss' }))
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
   fireEvent.click(screen.getByRole('button', { name: 'Visit Overview' }))
   expect(screen.getByTestId('page')).toHaveTextContent('overview')
