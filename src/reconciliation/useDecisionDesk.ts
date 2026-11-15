@@ -11,8 +11,9 @@ function load(): ReviewContext {
   try { return JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh() } catch { return fresh() }
 }
 const requestKey = (packet: DeskPacket) => `${packet.packet.binding.card_id}:${packet.packet.binding.request_id}`
-export function useDecisionDesk(initialCard?: string) {
+export function useDecisionDesk(initialCard?: string, targetPending = false) {
   const initialTarget = useRef(initialCard)
+  initialTarget.current = initialCard
   const context = useRef<ReviewContext>(load())
   const lock = useRef(false), mounted = useRef(true)
   const visibleMeasure = useRef<{ name: string; started: number } | null>(null)
@@ -91,6 +92,7 @@ export function useDecisionDesk(initialCard?: string) {
   }, [refresh])
   useEffect(() => {
     mounted.current = true
+    if (targetPending) return () => { mounted.current = false }
     void run(async () => {
       await ensureSession()
       // Server recovery is authoritative after reload. Never generate a new
@@ -115,15 +117,15 @@ export function useDecisionDesk(initialCard?: string) {
       persist()
     })
     return () => { mounted.current = false }
-  }, [accept, claimNext, ensureSession, persist, run])
+  }, [accept, claimNext, ensureSession, persist, run, targetPending])
   // Cached-source revalidation, never research. Visibility/focus avoid an
   // unattended polling loop; the lease expiry is also enforced locally.
   useEffect(() => {
-    const check = () => { if (!document.hidden && !lock.current && !(claimRef.current?.packet && context.current.attempts[requestKey(claimRef.current.packet)])) void run(async () => { await claimNext(claimRef.current?.packet?.packet.binding.card_id, true) }) }
+    const check = () => { if (!targetPending && !document.hidden && !lock.current && !(claimRef.current?.packet && context.current.attempts[requestKey(claimRef.current.packet)])) void run(async () => { await claimNext(claimRef.current?.packet?.packet.binding.card_id, true) }) }
     window.addEventListener('focus', check)
     const timer = setInterval(check, 30_000)
     return () => { window.removeEventListener('focus', check); clearInterval(timer) }
-  }, [claimNext, run])
+  }, [claimNext, run, targetPending])
   const select = (packet: DeskPacket, option: string) => {
     if (context.current.attempts[requestKey(packet)]) return
     context.current.selections[requestKey(packet)] = option; persist()

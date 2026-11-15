@@ -3,11 +3,13 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Decisions } from '../Decisions'
 import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({}) }))
+const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.value }))
 vi.mock('../DecisionSourceContext', () => ({ DecisionSourceContext: () => <p>Canonical source context</p>, DecisionCardContext: () => <p>Canonical source evidence</p> }))
 let leaseToken: string
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
+  workspace.value = {}
   sessionStorage.clear(); submits = []; outcome = 'not-saved'; leaseToken = 'secret-lease'
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
@@ -125,4 +127,16 @@ it('reconciles an ambiguous original operation after reload even when its own pa
   fireEvent.click(screen.getByRole('button', { name: 'Confirm retained save status' }))
   await screen.findByText('No prepared decisions ready.')
   expect(submits[1]).toEqual(first)
+})
+
+it('waits for an exact source-return binding instead of claiming a substitute from an older scene selection', async () => {
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'exact-return' } }, state: { selection: { kind: 'card', id: 'another-card' } } }
+  const view = render(<Decisions />)
+  await screen.findByText('Requested source request is not ready for review.')
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))).toHaveLength(0)
+  workspace.value = { ...workspace.value, queue: { items: [{ id: 'exact-return', cardIds: [packet.packet.binding.card_id] }] } }
+  view.rerender(<Decisions />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  const claim = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/claim'))!
+  expect(JSON.parse(String(claim[1]?.body)).card_id).toBe(packet.packet.binding.card_id)
 })
