@@ -1,3 +1,4 @@
+import { sourceWriteDispatched, type SourceWriteIntent } from './cardLeases'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
@@ -28,7 +29,7 @@ export const sectionText = (name: string, text: string) => `${sectionMarker(name
 
 /** Raw internal content is used for exact write preconditions/receipts only.
  * Conversational readbacks still pass through the application's redactor. */
-export class NotionWriteError extends Error { constructor(readonly status: number) { super(`Notion HTTP ${status}`) } }
+export class NotionWriteError extends Error { constructor(readonly status: number, readonly method = 'PATCH') { super(`Notion HTTP ${status}`) } }
 export class ManagedSectionConflict extends Error {}
 export class WorkflowContent {
   constructor(private reader: WorkReader) {}
@@ -37,25 +38,61 @@ export class WorkflowContent {
     if (!this.reader.jira) throw new Error('Jira is not configured')
     return this.reader.jira
   }
-  patchProperties(id: string, properties: Record<string, unknown>) { return this.reader.mutate(id, () => this.performPatchProperties(id, properties)) }
+  patchProperties(id: string, properties: Record<string, unknown>) { return this.reader.mutate(id, () => this.performPatchProperties(id, properties), { kind: 'properties', properties }) }
   private async performPatchProperties(id: string, properties: Record<string, unknown>) {
     const jira = this.jira(id)
     if (jira) return jira.patch(id, properties)
     return this.request(`pages/${id}`, 'PATCH', { properties })
   }
-  appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) { return this.reader.mutate(id, () => this.performAppendBlocks(id, children, atStart)) }
+  appendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false, readbackCanSettle = false) { return this.reader.mutate(id, () => this.performAppendBlocks(id, children, atStart), { kind: 'append', readback_can_settle: readbackCanSettle, texts: children.map(createBlockText) }) }
   private async performAppendBlocks(id: string, children: WorkflowCreateBlock[], atStart = false) {
     const jira = this.jira(id)
     if (jira) return jira.appendContract(id, children.map(block => ({ type: block.type, text: createBlockText(block) })))
     return this.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) })
   }
+  /** Recovery reads only; never resend a timed-out write on absence alone. */
+  async reservationReadback(id: string, intent: SourceWriteIntent | null): Promise<'applied' | 'different' | 'unknown'> {
+    if (!intent) return 'unknown'
+    try {
+      if (intent.kind === 'note') return (await this.notes(id)).some(note => note.text === intent.text) ? 'applied' : 'different'
+      if (intent.kind === 'section') return (await this.sections(id, true, true)).some(block => block.text === intent.text) ? 'applied' : 'different'
+      if (intent.kind === 'append') {
+        const texts = (await this.sections(id, true, true)).map(block => block.text)
+        const desired = intent.texts as string[]
+        return desired.every(text => texts.includes(text)) ? 'applied' : 'different'
+      }
+      const jira = this.jira(id)
+      if (jira) {
+        const card = await jira.read(id)
+        const matches = Object.entries(intent.properties as Record<string, Record<string, unknown>>).every(([name, wire]) => {
+          const kind = Object.keys(wire)[0]!, value = wire[kind]
+          const expected = ['title', 'rich_text'].includes(kind) ? plainText(value) : kind === 'select' || kind === 'status' ? (value as { name?: string } | null)?.name ?? null : kind === 'multi_select' || kind === 'relation' ? (value as Array<{ id?: string; name?: string }>).map(item => kind === 'relation' ? item.id : item.name).sort() : value
+          const actual = card.properties[name]?.value
+          return JSON.stringify(Array.isArray(actual) ? [...actual].sort() : actual) === JSON.stringify(expected)
+        })
+        return matches ? 'applied' : 'different'
+      }
+      const page = await this.request(`pages/${id}`)
+      const desired = intent.properties as Record<string, Record<string, unknown>>
+      // Compare only requested provider values; generated IDs/formatting do not
+      // change the operation's meaning. Text uses the existing rich-text reader.
+      const matches = Object.entries(desired).every(([name, value]) => Object.entries(value).every(([kind, expected]) => {
+        const actual = page.properties?.[name]?.[kind]
+        if (kind === 'rich_text' || kind === 'title') return plainText(actual) === plainText(expected)
+        const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).filter(key => key !== 'id' && key !== 'color').sort().map(key => [key, normalize((v as Record<string, unknown>)[key])])) : v
+        return JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected))
+      }))
+      return matches ? 'applied' : 'different'
+    } catch { return 'unknown' }
+  }
   async request(path: string, method = 'GET', body?: unknown) {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
+    if (method !== 'GET') sourceWriteDispatched()
     const response = await this.reader.api.fetch(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(20_000),
       headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
-    if (!response.ok) { await response.body?.cancel(); throw new NotionWriteError(response.status) }
+    if (!response.ok) { await response.body?.cancel(); throw new NotionWriteError(response.status, method) }
     const stream = response.body?.getReader()
     if (!stream) throw new Error('Notion response missing')
     const chunks: Uint8Array[] = []; let bytes = 0
@@ -106,7 +143,7 @@ export class WorkflowContent {
     }
     throw new Error('Body truncated; cannot safely locate the requested section')
   }
-  section(id: string, name: string, text: string, expected?: string) { return this.reader.mutate(id, () => this.performSection(id, name, text, expected)) }
+  section(id: string, name: string, text: string, expected?: string) { return this.reader.mutate(id, () => this.performSection(id, name, text, expected), { kind: 'section', name, text: sectionText(name, text) }) }
   private async performSection(id: string, name: string, text: string, expected?: string) {
     const marker = sectionMarker(name), desired = sectionText(name, text)
     const jira = this.jira(id)
@@ -121,7 +158,7 @@ export class WorkflowContent {
     const readback = await this.sections(id)
     if (readback.filter(block => block.text === desired).length !== 1) throw new Error('Section readback differs')
   }
-  note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker)) }
+  note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker), { kind: 'note', readback_can_settle: true, marker, text: `${text}\n${marker}` }) }
   private async performNote(id: string, text: string, marker: string) {
     const before = await this.notes(id)
     if (before.some(note => workflowNoteHasMarker(note, marker))) return

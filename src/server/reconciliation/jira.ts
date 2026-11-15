@@ -1,3 +1,4 @@
+import { sourceWriteDispatched } from './cardLeases'
 import { isDeepStrictEqual } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import type { JiraConfig } from './config'
@@ -66,6 +67,7 @@ export class JiraAdapter {
     return response
   }
   private async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<Record<string, any>> {
+    if (method !== 'GET') sourceWriteDispatched()
     const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
     return response.status === 204 ? {} : this.json(response)
   }

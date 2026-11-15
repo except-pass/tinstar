@@ -1,3 +1,5 @@
+import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
+import { DecisionDeskConflict } from './decisionPackets'
 import { CardLeases, CardLeaseError, leaseCaller, leaseFailure, withLeaseCaller } from './cardLeases'
 import { decisionItems, hasQueue } from '../../shared/reconciliationQueue'
 import { renderedObservationSchema, deliverySchema } from '../../shared/presentationObservation'
@@ -59,6 +61,7 @@ const commandInput = {
 }
 export interface PresentationReaders {
   leases?: CardLeases
+  preparedReviews?: PreparedReviews
   authorizePulls?(req?: IncomingMessage): Promise<boolean>
   searchWork?(input: unknown): Promise<unknown>
   getWork?(input: unknown): Promise<unknown>
@@ -125,6 +128,22 @@ export class ReconciliationMcp {
       try { return result(await this.leases.release(caller, input.lease_token, input.reason)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
+    const preparedCall = async (perform: (reviews: PreparedReviews) => Promise<unknown>) => {
+      if (!this.readers.preparedReviews) return { outcome: 'unavailable', message: 'Prepared review storage unavailable' }
+      try { return await perform(this.readers.preparedReviews) }
+      catch (error) {
+        if (error instanceof CardLeaseError) return leaseFailure(error)
+        if (error instanceof DecisionDeskConflict) return { outcome: 'operation-conflict', message: error.message }
+        throw error
+      }
+    }
+    const preparedInstructions = 'Prepared packets only; no research, receipt delivery or source writes. Supply the same review_session_token or lease_token to resume one held card. Keep capabilities in tool arguments only, never visible prose or URLs. A request with neither capability cannot identify an earlier conversation; only an identical operation_id replays that operation. Generate a unique operation_id for each new operation and reuse it for an identical lost-response retry. Stale packets block review. Browser scene IDs and auth actor names never identify conversations. '
+    const reviewAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    catalog.registerTool('open_prepared_review_session', { description: 'Explicitly register an independent review context; keep the returned capability across successive cards. ' + preparedInstructions, inputSchema: reviewSessionInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.create(caller, input))))
+    catalog.registerTool('list_prepared_review_sessions', { description: 'List only real registered contexts authorized for this authenticated caller. No scene identity or invented conversation deep links; metadata never grants control of a held lease.', inputSchema: {}, annotations: readAnnotations }, async () => result(await preparedCall(reviews => reviews.list(caller))))
+    catalog.registerTool('claim_next_prepared_decision', { description: 'Atomically claim the first Ready, unleased packet in existing source queue order. ' + preparedInstructions, inputSchema: preparedClaimInput.omit({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
+    catalog.registerTool('claim_prepared_decision', { description: 'Atomically claim a Ready packet for an exact canonical card; conflicting holds are reported without reallocating. ' + preparedInstructions, inputSchema: preparedClaimInput.required({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
+    catalog.registerTool('release_prepared_decision', { description: 'Release with an audited reason, or skip and atomically claim next excluding this card for this operation. Never answers or changes source owner/status. ' + preparedInstructions, inputSchema: preparedReleaseInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.release(caller, actor, input))))
     catalog.registerTool('session_probe', { description: 'Read-only conversation continuity experiment; never claims or changes a card. Omit session_token once to receive an opaque token, then pass it explicitly on successive calls and later turns in this conversation. Independently start each conversation without a token. Keep tokens in tool arguments only, never visible prose, card text or URLs. Reports whether the existing authenticated caller issued that token in this backend process (bounded to 256 tokens; restart forgets them). Logs only metadata/header names, never values. Does not infer conversation identity from browser tabs, actor or transport.', inputSchema: { session_token: z.string().min(1).max(256).optional() }, annotations: readAnnotations }, async (input, extra) => result(this.sessionProbe.call(actor, request?.headers ?? {}, extra._meta, input.session_token)))
     catalog.registerTool('search_work', { description: 'Find configured-board work by owner, status, initiative, epic or checkpoint. Independent of browser filters; default scope excludes Done/Archived. Paginated bounded property reads share UI links and Smart Search patterns (unknown is not none). No scene/window required. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: searchWorkSchema, annotations: readAnnotations }, async input => result(await this.readers.searchWork?.(input) ?? { outcome: 'unavailable' }))
     catalog.registerTool('get_work', { description: 'Read an exact configured-board card, bounded body/comments, linked worker/PR evidence and freshness. Explicit refresh also reconciles previously recorded source decision answers. Routine body reads are not the full specification. For exact approved contract chunks request implementation_contract {revision?,offset?,limit?}; follow next_offset, concatenate chunks, verify manifest SHA-256, length and version. Previous versions remain readable. No scene/window required. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: getWorkSchema, annotations: { ...readAnnotations, readOnlyHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await cardCall(input, async clean => await this.readers.getWork?.(clean)) ?? { outcome: 'unavailable' }))

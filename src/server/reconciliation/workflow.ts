@@ -1,4 +1,4 @@
-import { CardLeases, CardLeaseError, leaseFailure } from './cardLeases'
+import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -59,25 +59,34 @@ export class WorkflowOperations {
     return new ImplementationContracts(this.content).read(id, options).catch(error => ({ outcome: 'unavailable', complete_response: false,
       code: error instanceof ContractError ? error.code : 'source-unavailable', message: error instanceof ContractError ? error.message : 'Full specification read unavailable; no completeness claim' }))
   }
-  private async guarded<T>(card: string | undefined, operation: string, perform: () => Promise<T>) {
-    try { if (card) this.reader.leases?.assertWritable(card); return await perform() }
-    catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, operation); throw error }
+  private async guarded<T>(card: string | undefined, operation: string, actor: string, perform: () => Promise<T>) {
+    try {
+      return await withSourceOperation(actor, operation, async () => {
+        if (card) { await this.reader.leases?.recoverAppliedWrite(card, intent => this.content.reservationReadback(card, intent)); this.reader.leases?.assertWritable(card) }
+        return perform()
+      })
+    } catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, operation); throw error }
   }
   start(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
-    return this.guarded(input.card_id, input.operation_id, () => { const { lease_token: _token, ...clean } = input; return this.startUnchecked(clean, actor) })
+    return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.startUnchecked(clean, actor) })
   }
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
-    return this.guarded(input.card_id, input.operation_id, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) })
+    return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) })
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
-    try {
-      if ('card_id' in input.target) this.reader.leases?.assertWritable(input.target.card_id)
-      const { lease_token: _token, ...clean } = input
-      return await this.performHandoff(clean, actor)
-    } catch (error) {
-      if (!(error instanceof CardLeaseError)) throw error
-      return { ...leaseFailure(error, input.submission_id), record: { state: 'not-saved' }, assignment: { state: 'unknown' }, delivery: { state: 'unknown' }, execution: { state: 'unknown' }, recovery: { code: 'card-held', message: error.message } }
-    }
+    return withSourceOperation(actor, input.submission_id, async () => {
+      try {
+        if ('card_id' in input.target) {
+          await this.reader.leases?.recoverAppliedWrite(input.target.card_id, intent => this.content.reservationReadback((input.target as { card_id: string }).card_id, intent))
+          this.reader.leases?.assertWritable(input.target.card_id)
+        }
+        const { lease_token: _token, ...clean } = input
+        return await this.performHandoff(clean, actor)
+      } catch (error) {
+        if (!(error instanceof CardLeaseError)) throw error
+        return { ...leaseFailure(error, input.submission_id), record: { state: 'not-saved' }, assignment: { state: 'unknown' }, delivery: { state: 'unknown' }, execution: { state: 'unknown' }, recovery: { code: 'card-held', message: error.message } }
+      }
+    })
   }
   private performHandoff(input: SubmitHandoffInput, actor: string) {
     return new HandoffOperations({ reader: this.reader, receipts: this.creations, contracts: new ImplementationContracts(this.content),

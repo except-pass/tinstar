@@ -1,4 +1,4 @@
-/** Isolated P1 storage/API and unchanged-UI proof harness. Explicit fixtures,
+/** Isolated foundation/session/claim API and unchanged-UI proof harness. Explicit fixtures,
  * never a production service or preparer. Build client first, then:
  * node --import tsx scripts/decision-desk-preview.ts /absolute/task-proof-dir
  * Creates its own fresh config root, enrolls no home, uses no live credentials.
@@ -8,6 +8,7 @@ import { createReadStream } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { resolve, join, extname } from 'node:path'
 import { CardLeases } from '../src/server/reconciliation/cardLeases'
+import { PreparedReviews } from '../src/server/reconciliation/preparedReviews'
 import { DecisionPackets } from '../src/server/reconciliation/decisionPackets'
 import { DecisionDeskApi } from '../src/server/reconciliation/decisionDeskApi'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
@@ -33,14 +34,22 @@ const readScene = async () => {
 }
 const auth = new PullsApi({ scene: readScene }, new AssociationStore(root), root)
 const initial = fixture()
-const published = await packets.publish(initial.packet, initial.evidence, 'isolated-preview-fixture', 'initial-fixture')
-const api = new DecisionDeskApi(packets, 'isolated-fixture-board', () => fixture().evidence, req => auth.authorized(req))
+const fixtures = Array.from({ length: 5 }, (_, index) => {
+  const source = preparedDecisionFixture()
+  const card = index === 0 ? source.cardId : (index + 200).toString(16).padStart(32, '0')
+  return JSON.parse(JSON.stringify(source).replaceAll(source.cardId, card)) as typeof source
+})
+const published = []
+for (const [index, source] of fixtures.entries()) published.push(await packets.publish(source.packet, source.evidence, 'isolated-preview-fixture', `initial-fixture-${index}`))
+const evidence = (card: string) => fixtures.find(source => source.cardId === card)!.evidence
+const reviews = new PreparedReviews(packets, 'isolated-fixture-board', evidence, () => ({ card_ids: fixtures.map(source => source.cardId), coverage: 'complete', requests: fixtures.length }))
+const api = new DecisionDeskApi(packets, 'isolated-fixture-board', evidence, req => auth.authorized(req), reviews)
 const queue = async () => {
   const f = fixture(), scene = new SceneReconciler().reconcile(f.snapshot), result = buildQueue(f.snapshot)
   result.needsWill = needsWill(result, scene, new Map([[f.cardId, f.history.context]]), null, new Map(), false)
   return result
 }
-const mcp = new ReconciliationMcp({ scene: readScene, card: async () => fixture().history.context, queue, workerLinkReport: async () => ({ outcome: 'unavailable', reason: 'No live worker scope in this isolated fixture' }) }, root)
+const mcp = new ReconciliationMcp({ leases: packets.leases, preparedReviews: reviews, scene: readScene, card: async () => fixture().history.context, queue, workerLinkReport: async () => ({ outcome: 'unavailable', reason: 'No live worker scope in this isolated fixture' }) }, root)
 const clientDir = resolve('dist/client')
 const server = createServer(async (req, res) => {
   try {
@@ -63,7 +72,7 @@ const server = createServer(async (req, res) => {
 await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
 const port = (server.address() as { port: number }).port
 seedOriginAllowlist(port)
-const manifest = { url: `http://127.0.0.1:${port}`, config_root: root, packet_id: published.id, card_id: initial.cardId, fixtures: true, source_writes: 'No live source transport or worker dispatch is enrolled', baseline: 'Current Decisions UI, P1 makes no screen changes' }
-await writeFile(join(output, 'p1-preview.json'), JSON.stringify(manifest, null, 2) + '\n')
+const manifest = { url: `http://127.0.0.1:${port}`, config_root: root, packet_ids: published.map(packet => packet.id), card_ids: fixtures.map(source => source.cardId), card_id: initial.cardId, fixtures: true, source_writes: 'No live source transport or worker dispatch is enrolled', baseline: 'Current Decisions UI; P2 adds backend review resources and claims, no screen changes' }
+await writeFile(join(output, 'preview.json'), JSON.stringify(manifest, null, 2) + '\n')
 process.stdout.write(JSON.stringify(manifest, null, 2) + '\n')
 process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)) })

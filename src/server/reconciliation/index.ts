@@ -1,4 +1,5 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
+import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { projectDecisionEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
@@ -49,6 +50,7 @@ export class ReconciliationSources {
   reconcileReviewHandoffs?: (force?: boolean) => Promise<void>
   readonly leases: CardLeases
   readonly decisionPackets: DecisionPackets
+  readonly preparedReviews: PreparedReviews
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
@@ -73,6 +75,20 @@ export class ReconciliationSources {
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
+    this.preparedReviews = new PreparedReviews(this.decisionPackets, config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board', id => this.preparationEvidence(id), () => {
+      const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
+      const complete = queue.coverage.intentions.status === 'fresh' && queue.coverage.intentions.coverage === 'complete' && queue.coverage.fleet.length > 0 && queue.coverage.fleet.every(home => home.status === 'fresh' && home.coverage === 'complete')
+      const cards = snapshot.intentions.data?.cards.filter(card => !card.archived && !card.in_trash && !['Done', 'Archived'].includes(String(card.properties.Status?.value))) ?? []
+      // Property coverage alone cannot prove there are no body/comment asks.
+      // Absence is certified only when all active card histories are cached and
+      // fresh as well; otherwise the empty response discloses unknown demand.
+      const historiesComplete = cards.every(card => {
+        const history = this.context.cachedDecisionHistory(card.id)
+        return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
+      })
+      const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
+      return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' : 'unknown', requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
+    })
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -185,6 +201,11 @@ export class ReconciliationSources {
     const [fleet, checkIns] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({ owner: 'Firstmate', statuses: ['In Progress', 'Waiting For'] }, force)])
     return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
       fleet, intentions: ageObservation(this.workReader.declarations()), checkIns: ageObservation({ ...checkIns, data: checkIns.data ? { ...checkIns.data, cards: checkIns.data.cards.filter(card => !card.source?.synthetic) } : null }) }
+  }
+
+  sourceWriteRecovery() {
+    const content = new WorkflowContent(this.workReader)
+    return { list: () => this.leases.pendingWrites(), reconcile: (card: string, operation: string, actor: string, reason: string) => this.leases.reconcileWrite(card, operation, actor, reason, intent => content.reservationReadback(card, intent)) }
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }

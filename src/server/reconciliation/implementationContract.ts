@@ -139,7 +139,7 @@ export class ImplementationContracts {
   }
   private async append(id: string, children: WorkflowCreateBlock[], state: HandoffReceiptState, save: () => Promise<void>, atStart = false) {
     state.pending = children.map(block => digest(createBlockText(block))); await save()
-    try { await this.content.appendBlocks(id, children, atStart) }
+    try { await this.content.appendBlocks(id, children, atStart, true) }
     catch (error) {
       if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status < 500) { delete state.pending; await save() }
       throw error
