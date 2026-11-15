@@ -1,10 +1,11 @@
-# Decision Desk preparation foundation (P1)
+# Decision Desk backend foundation (P1–P2)
 
-This is the first backend slice of the Decision Desk sequence. It advances the
+P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 12 and 14** on [the Decision Desk card](https://www.notion.so/41950ce6d42281068ca9dc6d065fc210).
-P2–P6 follow: review sessions/prepared claims, submission coordination,
-preparation workers, the two-view UI, and integrated acceptance/activation.
+P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
+P3–P6 cover submission coordination, preparation workers, the two-view UI, and
+integrated acceptance/activation.
 Existing Decisions screens, generic claims, source answers, receipts and
 `search_work` filters/coverage retain their behavior.
 
@@ -16,10 +17,9 @@ flag. The preparer/runtime/spending and first activation decisions remain separa
 ## Storage and readiness
 
 `DecisionPackets` uses the **existing `CardLeases` database**,
-`card-leases.sqlite`, through its internal read/transaction helpers. The generic
-lease algorithm is unchanged. This puts future READY selection and canonical
-card reservation within one possible local transaction; P1 implements no such
-claim operation. No provider I/O belongs inside packet transactions.
+`card-leases.sqlite`, through its internal read/transaction helpers. P2 uses this shared boundary for atomic
+READY selection and canonical card reservation, as described below. No provider
+I/O belongs inside packet transactions.
 
 - `decision_packets` stores immutable packet bodies, schema, semantic hash,
   source-scoped version, publication operation identity, preparer and timestamps.
@@ -65,7 +65,7 @@ Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
 successful unexpired persisted validation, the latest packet version, unexpired
-packet freshness and **no active canonical review lease**. It evaluates lease
+packet freshness and **no active canonical review lease or source-write reservation**. It evaluates lease
 and expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
 leases are presented as Ready.
@@ -104,7 +104,8 @@ readback before writing. A recommendation never permits production/device writes
 Routes use the existing trusted loopback Tailscale owner authorization check,
 origin allowlist and `X-Tinstar-UI: 1` handshake. A caller-supplied owner name alone
 is not authorization outside that existing loopback/proxy trust boundary. No
-install, bridge or lease token is returned by these routes.
+install or bridge token is returned by these routes. Review capabilities are
+returned only by the [review operations below](#p2-registered-review-sessions-and-prepared-claims).
 
 | Method and path under `/api/reconciliation/decision-desk` | Result |
 |---|---|
@@ -115,9 +116,10 @@ install, bridge or lease token is returned by these routes.
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
 
-There is no packet mutation/answer/claim/worker endpoint in P1. Unsupported methods
-return 405. Source text is redacted at the API output boundary, independently of
-the exact source data used for validation. Existing `coverage.intentions` and
+Publication, answers and worker dispatch have no endpoint here. P2 review and
+source-write recovery routes are described below. Unsupported methods return 405.
+Public source-derived prose is redacted independently of exact internal validation
+data; review capabilities and source answer identities remain intact. Existing `coverage.intentions` and
 `search_work` scope fields are unchanged.
 
 ## Isolated proof and baseline screenshots
@@ -131,16 +133,16 @@ node --import tsx scripts/decision-desk-preview.ts /absolute/task-proof-dir
 
 The script creates a fresh private config root beneath that directory and binds
 an ephemeral loopback port. It enrolls no First Mate home, live credential,
-provider source transport or job dispatcher. `p1-preview.json` identifies the
-instance and synthetic source packet. API requests use the fixture owner
+provider source transport or job dispatcher. `preview.json` identifies the
+instance and five synthetic source packets. API requests use the fixture owner
 `preview-owner@example.test` and the UI handshake. Its SQLite/API code and current
 client bundle are real; its business evidence is explicitly controlled test data.
 Stop that script process after proof. Never aim this harness at a live config root.
 
 Open the returned URL with `?view=decisions` in
 `CHROME_DEVTOOLS_AXI_SESSION=tinstar-decision-desk-design`. Capture 390×844,
-768×1024 and 1440×900, label them **P1 baseline — unchanged Decisions UI,
-isolated fixtures**, and stop that AXI browser session afterward. P1 changes no
+768×1024 and 1440×900, label them **P2 baseline — unchanged Decisions UI,
+isolated fixtures**, and stop that AXI browser session afterward. P2 changes no
 screen. These images are the baseline for P5, not a claim of prototype fidelity
 or final Decision Desk acceptance.
 
@@ -154,8 +156,8 @@ It records HEAD and raw samples: six rounds at each simulated source-write delay
 (25ms and 1000ms), one writer plus five independent `CardLeases` instances,
 30 claim samples and six write samples per scenario. It measures lock contention,
 not HTTP/render latency or the future prepared path. Output is
-`p1-contention.json`; report actual p50/p95, sample counts and this scope in the
-implementation review description. It decides no lease redesign in P1.
+`contention.json`; report actual p50/p95, sample counts and this scope in the
+implementation review description. It measures the current per-card reservation implementation described below.
 
 Focused tests cover semantic hashing, source/card/options changes, partial/stale
 evidence, immutable retry/versioning, dependency invalidation/revalidation,

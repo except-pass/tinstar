@@ -24,9 +24,9 @@ async function policyBody(req: IncomingMessage) {
   } finally { clearTimeout(timeout) }
 }
 
-/** Owner-authenticated storage/read API only. Publication stays an internal
- * service operation until the preparer capability contract is chosen. Nothing
- * here launches research, takes a review lease or changes a source card. */
+/** Owner-authenticated storage, review-lease and source-write recovery API.
+ * Publication stays internal until the preparer capability contract is chosen.
+ * These routes never launch research or write source cards. */
 export class DecisionDeskApi {
   constructor(private packets: DecisionPackets, private scope: string, private evidence: (cardId: string) => DecisionEvidence,
     private authorized: (req: IncomingMessage) => Promise<boolean>, private reviews?: PreparedReviews,
