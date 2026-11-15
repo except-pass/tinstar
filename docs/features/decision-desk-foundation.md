@@ -1,11 +1,11 @@
-# Decision Desk backend foundation (P1–P2)
+# Decision Desk backend foundation (P1–P3)
 
 P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 12 and 14** on [the Decision Desk card](https://www.notion.so/41950ce6d42281068ca9dc6d065fc210).
 P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
-P3–P6 cover submission coordination, preparation workers, the two-view UI, and
-integrated acceptance/activation.
+P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
+P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
 Existing Decisions screens, generic claims, source answers, receipts and
 `search_work` filters/coverage retain their behavior.
 
@@ -65,8 +65,9 @@ Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
 successful unexpired persisted validation, the latest packet version, unexpired
-packet freshness and **no active canonical review lease or source-write reservation**. It evaluates lease
-and expiry at read time; there is no permanent Ready flag. Reading without current
+packet freshness and **no active canonical review lease or source-write reservation**.
+[P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery) defines
+additional answer/research exclusions. It evaluates lease and expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
 leases are presented as Ready.
 
@@ -96,8 +97,8 @@ The schema/index also supports release/other evidence dependencies for future
 preparers, without claiming those observations have already been collected.
 
 This is bounded observation of upstream systems, not a distributed lock over
-Notion/First Mate/GitHub. The later submission coordinator must force exact source
-readback before writing. A recommendation never permits production/device writes.
+Notion/First Mate/GitHub. Submit-time source verification is described in
+[P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery). A recommendation never permits production/device writes.
 
 ## Owner-authenticated API
 
@@ -116,8 +117,9 @@ returned only by the [review operations below](#p2-registered-review-sessions-an
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
 
-Publication, answers and worker dispatch have no endpoint here. P2 review and
-source-write recovery routes are described below. Unsupported methods return 405.
+Publication and worker dispatch have no endpoint here. Review and source-write
+recovery routes are described below; answer submission is owned by the
+[P3 API contract](#p3-durable-source-bound-submit-and-recovery). Unsupported methods return 405.
 Public source-derived prose is redacted independently of exact internal validation
 data; review capabilities and source answer identities remain intact. Existing `coverage.intentions` and
 `search_work` scope fields are unchanged.
@@ -168,8 +170,9 @@ evidence path. Run existing lease/proposal/workflow regressions as well.
 ## P2: registered review sessions and prepared claims
 
 P2 advances backend acceptance criteria **4 and 5**, the **claim side of 8**,
-and parts of **1, 13 and 14**. **P3–P6 follow**: this is not delivery of the
-submit coordinator, preparation runner, multipart normalization, or desk screens.
+and parts of **1, 13 and 14**. Submission coordination is covered by
+[P3 below](#p3-durable-source-bound-submit-and-recovery); preparation workers,
+multipart normalization and desk screens remain later slices.
 The existing Decisions screen, generic claims, source answers, receipt bridge,
 `search_work` owner/status filters and `coverage.intentions` stay compatible.
 
@@ -198,7 +201,8 @@ The matching MCP facade tools are:
 
 - `open_prepared_review_session` and `list_prepared_review_sessions`;
 - `claim_next_prepared_decision` and `claim_prepared_decision`;
-- `release_prepared_decision` with `action: release | skip` and a reason.
+- `release_prepared_decision` for release/skip; the [P3 contract](#p3-durable-source-bound-submit-and-recovery)
+  also defines research withdrawal and the optional reason.
 
 MCP callers may explicitly open a context, or begin a claim without a capability
 and continue using its returned `lease_token`. The same token resumes the same
@@ -277,5 +281,133 @@ recovery route, with no timer-based unlock or record editing:
 
 This owner recovery is a deliberate audited supersession, not approval for
 production/device effects or another answer. An unresolved write is never
-released just because its age crossed a threshold. Future P3 submission recovery
-will use the same source-bound answer markers and operation continuity.
+released just because its age crossed a threshold. P3 submission recovery
+uses the same source-bound answer markers and operation continuity.
+
+
+## P3: durable source-bound submit and recovery
+
+This is **P3 of six**, backend only. It advances criteria **8, 9**, the
+**single-request part of 10**, the backend state portions of **11 and 13**, and
+instrumentation for **14**. **P4–P6 follow**. It introduces no screen, runner,
+research dispatch, spend, activation flag, multipart grouping/required-part
+policy, or production rollout. Generic claims, `update_work`, `answer_decision`
+and `search_work` keep their existing caller contracts.
+
+Owner-authenticated POST `/api/reconciliation/decision-desk/submit` takes:
+
+```json
+{
+  "operation_id": "a-unique-stable-attempt-id",
+  "review_session_token": "opaque-context-capability",
+  "lease_token": "opaque-held-card-capability",
+  "packet_id": "published-packet-uuid",
+  "packet_version": 1,
+  "request_id": "exact-existing-source-request-id",
+  "option_id": "exact-source-option-id",
+  "next": { "owner": "Firstmate", "status": "Queued" }
+}
+```
+
+The context capability is optional when the current lease identifies it. Keep
+capabilities in request bodies/tool arguments only. The server derives the exact
+answer label and source tuple from the held immutable packet; callers cannot
+supply an alternate answer or infer subrequest IDs. `next` uses the existing
+workflow vocabulary and must match the packet's bounded next owner/status.
+Existing optional `resolve_wait` and `next.wait` semantics remain explicit.
+
+The server durably retains selection/operation/context before source I/O. It
+requires the matching active canonical generation before writing, forces exact
+complete source-history reads and refreshes the source snapshot, compares request,
+card and declared dependency meaning, then uses the existing workflow answer
+writer. Source observations retain their actual freshness; this is bounded
+observation, not atomic universal invalidation across providers. Material unknown
+or changed PR/worker evidence blocks submit. P1's unsupported external evidence
+stays unknown; P3 does not invent PR-head proof.
+
+The desk persistence entry point returns independently of downstream worker
+reconciliation. Desk property writes recheck current values inside the existing
+per-card reservation so simultaneous same-ID retries do not repeat a PATCH;
+intervening external property edits are preserved. This adds no writer registry. Legacy `update_work` still returns its existing pending-worker
+result. Desk success requires an exact authoritative answer receipt readback,
+never just an intent, delivered inbox note, property match or list of saved
+fields. It returns `recorded-awaiting-worker-acknowledgment` and schedules the
+existing receipt bridge asynchronously after local release/next commits, so
+receipt writes cannot race that step. In one short local transaction, the
+coordinator records release and binds the next Ready packet. Allocation failure
+cannot roll back release of a source-confirmed answer. A crash between source
+confirmation and release/next is reconciled by the same operation ID.
+
+Results are explicit:
+
+| Outcome | Recovery/meaning |
+|---|---|
+| `not-saved` | Selection and lease retained. Correct the source problem, retry the same ID; never advance. |
+| `save-unconfirmed` | Same-ID receipt reconciliation only. Immutable note markers can settle automatically; ambiguous mutable properties use the existing audited source-write recovery API above. |
+| `source-unavailable` | Current source coverage/history cannot verify the answer; selection/lease retained, no write. Refresh evidence before deciding. |
+| `packet-invalidated` | Choice retained for reference; no write. Refresh/re-prepare and reclaim a valid packet. |
+| `lease-lost` | Reclaim/revalidate before any write. An old capability never falls through to unleased access. |
+| `answer-conflict` | A different source answer/intent exists. Inspect authoritative source effects; no selected answer is written. |
+| `confirmation-required` | High risk/difficult rollback requires the returned selected option and explicit authorization scope, with adverse impact, reversibility and next action available for P5's modal. No write on cancellation. |
+| `recorded` | Source answer confirmed; next packet held. Worker acknowledgment may remain pending. |
+| `recorded-empty` | Source answer confirmed, previous lease released, and `next.outcome` explains empty/unavailable scope. Use a new claim for a later empty-buffer retry; a failed next allocation may retry the same submit ID. |
+| `recorded-releasing` | Answer already confirmed; retry the same ID to finish local release/next, never submit a new answer. |
+
+A confirmed historical submit replay never releases a newer holder. Selections
+before any write can be superseded with a new operation; saving/unconfirmed
+attempts require their original operation. Pending source intent is excluded
+from Ready even after ordinary review expiry. No timer silently erases uncertain
+source effects. Closing or idle expiry never changes Notion owner/status.
+
+POST `/api/reconciliation/decision-desk/submission-state` with the real
+`review_session_token` restores unresolved operation IDs, selections, next input,
+per-operation state and recovery details only to the authenticated context.
+An explicit replacement context may also supply `original_lease_token` to prove
+access to an older retained selection. After reclaim, submit accepts a fresh
+packet version only when its source binding/revision and authorization are
+identical, preserving the source operation ID. Transfer to a different review
+context also requires that original capability. A changed source revision cannot
+be rescued by an old selection or operation.
+MCP exposes `submit_prepared_decision` and `get_prepared_submission_state` with
+these same semantics; no scene ID or invented conversation identity is used.
+
+POST `/release` (or MCP `release_prepared_decision`) accepts `action: research`
+and an optional concise `reason`. It permanently withdraws that packet for
+re-preparation, audits the reason and releases/claims next in one transaction.
+The next allocation excludes the current card once. Skip preserves canonical
+order and does not withdraw the packet. Neither operation writes a source answer,
+rejects a request, changes source owner/status, or launches research. An unresolved
+answer must be reconciled before releasing it into another reviewer.
+
+Each packet/submit still answers **one independent exact source request**. On a
+card with several requests, confirmed progress is recorded by request identity,
+and a later failure returns earlier confirmed progress with `card_progress:
+partial`. This does not declare the card or a multipart bundle complete. Source
+owners retain the existing next-state policy: if one independent answer queues
+the card, a remaining ask may need source rerouting/current evidence and a new
+packet before it is eligible. P3 does not invent an aggregate transition policy.
+
+`decision_desk_confirmed_answers` dedupes confirmed source requests/revisions,
+scoped to Decision Desk recording. GET `/metrics` returns `reviewed_today_utc`,
+its configured-board scope and `recording_started_at`; it asserts no historical
+all-work total. Packet `answer-confirmed` events record source-readback duration;
+lease audit `prepared-submit-to-next` events record result, duration and readback
+portion, with hashed operation identities and no lease capabilities. Retry/restart
+never increments confirmed throughput twice. Worker receipt lag remains separate
+from durable answer success.
+
+For isolated API evidence at a committed head:
+
+```bash
+node --import tsx scripts/decision-desk-submit-preview.ts /absolute/task-proof-dir
+```
+
+This self-contained proof creates a fresh config root/database plus a disposable
+Notion-compatible HTTP source with persistent JSON state and synthetic credentials.
+It tests owner-authenticated HTTP and real MCP SDK submit, selection recovery,
+five independent contexts, skip/research effects and 30 filled-buffer
+submit/readback-to-next timings. It reports its head, actual samples, p50/p95,
+source delay and the scope/limitations in `api-proof.json`, then closes both
+servers. It uses no live root, tokens, board or bridge. These fixture measurements
+are not production latency or P6 integrated acceptance. No P3 screen changed;
+first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.

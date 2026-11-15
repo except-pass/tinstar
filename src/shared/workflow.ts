@@ -50,6 +50,8 @@ const checkpointSchema = z.object({ assessment: prose, evidence: prose, next_act
 export const decisionOptionsSchema = z.array(z.object({ id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters'), label }).strict()).min(1).max(5)
   .refine(options => new Set(options.map(option => option.id)).size === options.length, 'Option ids must be unique')
 const reviewRecovery = z.object({ reason: prose, confirmed_absent: z.literal(true) }).strict().optional()
+export const answerDecisionSchema = z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose, option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
+    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict()
 export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('submit_for_review'), retry_missing_note: reviewRecovery, review: reviewEvidenceSchema }).strict(),
   z.object({ ...base, kind: z.literal('accept_review'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
@@ -60,8 +62,7 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('wait'), dependency: prose, unblocks_when: prose, follow_up_by: label, note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(), proposal: decisionProposalSchema.optional(),
     action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose, option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
-    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict(),
+  answerDecisionSchema,
   z.object({ ...base, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
   z.object({ ...base, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
 ])

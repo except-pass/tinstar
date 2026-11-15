@@ -73,6 +73,39 @@ export class WorkflowOperations {
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
+  /** Desk-only persistence boundary. Legacy update() still waits for its
+   * existing reconciliation result; desk advancement never waits for a worker. */
+  answerPrepared(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string): Promise<StartWorkResult> {
+    return this.guarded(input.card_id, input.operation_id, actor, () => this.exclusive(input.card_id, () => this.performUpdate(input, actor, true)), false)
+  }
+  async observePreparedAnswer(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string) {
+    // Full notes, not a property timestamp or cached UI history. An absent
+    // marker in truncated/unavailable history cannot authorize a second write.
+    await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
+    const notes = await this.content.notes(input.card_id)
+    const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
+    const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
+    const matches = (value: unknown) => {
+      const parsed = updateWorkSchema.safeParse(value)
+      return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
+    }
+    const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
+    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
+    let desired: Record<string, unknown> | undefined
+    if (!conflict && !answers.length && own) {
+      const card = await this.reader.card(input.card_id, true)
+      const planning = { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([key, property]) => [key,
+        key in own.original ? { ...property, value: own.original[key] } : property])) }
+      desired = (await this.updatePlan(planning, input, actor, notes)).desired
+    }
+    return { state: conflict ? 'conflict' as const : answers.length ? 'confirmed' as const : own ? 'pending' as const : 'absent' as const,
+      original: own?.original as Record<string, unknown> | undefined, desired }
+  }
+  async preparedHistory(cardId: string) {
+    const [notes, sections] = await Promise.all([this.content.notes(cardId), this.content.sections(cardId, false, true)])
+    return [...notes.map(note => ({ ...note, type: 'comment' })), ...sections]
+  }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     return withSourceOperation(actor, input.submission_id, async () => {
       try {
@@ -537,7 +570,7 @@ export class WorkflowOperations {
     if (Array.isArray(value) && Array.isArray(actual)) return same([...value].sort(), [...actual].sort())
     return same(actual, value)
   }
-  private async performUpdate(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
+  private async performUpdate(input: UpdateWorkInput, actor: string, prepared = false): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined
     let requested: Record<string, unknown> = {}
@@ -581,7 +614,7 @@ export class WorkflowOperations {
           const effects = decisionEffects(first.input, source)
           if (!same(effects, decisionEffects(input, source)) || intents.some(intent => !same(effects, decisionEffects(intent.input, source)))) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer intent or effects')
           if (first.actor !== actor || first.input.operation_id !== input.operation_id) {
-            const recovered = await this.performUpdate(first.input, first.actor)
+            const recovered = await this.performUpdate(first.input, first.actor, prepared)
             return { ...recovered, operation_id: input.operation_id }
           }
         }
@@ -638,7 +671,14 @@ export class WorkflowOperations {
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
         if (Object.keys(missing).length) {
           attempted = true
-          const patched = await this.content.patchProperties(card.id, missing)
+          const recheck = prepared ? async () => {
+            const latest = await this.reader.card(input.card_id, true)
+            for (const name of Object.keys(missing)) {
+              if (name !== 'Last touched by' && !this.matches(latest, name, plan.original[name]) && !this.matches(latest, name, plan.desired[name])) throw new WorkflowError('conflict', `${name} changed before the reserved answer write; unrelated work was preserved`)
+            }
+            return Object.keys(missing).every(name => this.matches(latest, name, plan.desired[name]))
+          } : undefined
+          const patched = await this.content.patchProperties(card.id, missing, recheck)
           card = card.source?.provider === 'jira' ? patched as WorkCard : await this.reader.card(card.id, true)
         }
         this.reader.confirm(card)
