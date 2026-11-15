@@ -1,4 +1,4 @@
-import { stopServer } from './serverProcess'
+import { stopServer, serverBase } from './serverProcess'
 import { installDeskAttention } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect, type APIRequestContext } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -110,7 +110,7 @@ if name == 'fm-captain-hold.sh' and (state / 'fail-hold').exists():
     delete env.TMUX
     delete env.TMUX_PANE
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], { cwd: repo, env, stdio: 'ignore' })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
     await expect.poll(async () => {
       if (server?.exitCode !== null) throw new Error(`server exited: ${server?.exitCode}`)
       try { return (await request.get(`${base}/api/fleet`, { timeout: 1000 }).then(response => response.json()) as { data?: { attention?: unknown[] } }).data?.attention?.length ?? 0 }

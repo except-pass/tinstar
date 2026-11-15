@@ -1,4 +1,4 @@
-import { stopServer } from './serverProcess'
+import { stopServer, serverBase } from './serverProcess'
 import { openWorkerSwitcher } from './shellNavigation'
 import { test, expect, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
@@ -77,7 +77,7 @@ test('mouse wheel scrolls the worker terminal to earlier output', async ({ page 
     server = spawn(process.execPath, ['--import', 'tsx', 'src/server/standalone.ts', '--port', String(port), '--no-open'], {
       cwd: repo, env, stdio: 'ignore',
     })
-    const base = `http://127.0.0.1:${port}`
+    const base = await serverBase(config)
     for (let i = 0; i < 100; i++) {
       try {
         const body = await fetch(`${base}/api/fleet`).then(response => response.json()) as { data?: { workers: unknown[] } }
