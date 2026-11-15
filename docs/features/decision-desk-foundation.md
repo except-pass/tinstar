@@ -1,11 +1,11 @@
-# Decision Desk backend foundation (P1–P2)
+# Decision Desk backend foundation (P1–P3)
 
 P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 12 and 14** on [the Decision Desk card](https://www.notion.so/41950ce6d42281068ca9dc6d065fc210).
 P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
-P3–P6 cover submission coordination, preparation workers, the two-view UI, and
-integrated acceptance/activation.
+P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
+P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
 Existing Decisions screens, generic claims, source answers, receipts and
 `search_work` filters/coverage retain their behavior.
 
@@ -65,8 +65,9 @@ Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
 successful unexpired persisted validation, the latest packet version, unexpired
-packet freshness and **no active canonical review lease or source-write reservation**. It evaluates lease
-and expiry at read time; there is no permanent Ready flag. Reading without current
+packet freshness and **no active canonical review lease or source-write reservation**.
+[P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery) defines
+additional answer/research exclusions. It evaluates lease and expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
 leases are presented as Ready.
 
@@ -96,8 +97,8 @@ The schema/index also supports release/other evidence dependencies for future
 preparers, without claiming those observations have already been collected.
 
 This is bounded observation of upstream systems, not a distributed lock over
-Notion/First Mate/GitHub. The later submission coordinator must force exact source
-readback before writing. A recommendation never permits production/device writes.
+Notion/First Mate/GitHub. Submit-time source verification is described in
+[P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery). A recommendation never permits production/device writes.
 
 ## Owner-authenticated API
 
@@ -116,8 +117,9 @@ returned only by the [review operations below](#p2-registered-review-sessions-an
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
 
-Publication, answers and worker dispatch have no endpoint here. P2 review and
-source-write recovery routes are described below. Unsupported methods return 405.
+Publication and worker dispatch have no endpoint here. Review and source-write
+recovery routes are described below; answer submission is owned by the
+[P3 API contract](#p3-durable-source-bound-submit-and-recovery). Unsupported methods return 405.
 Public source-derived prose is redacted independently of exact internal validation
 data; review capabilities and source answer identities remain intact. Existing `coverage.intentions` and
 `search_work` scope fields are unchanged.
@@ -168,8 +170,9 @@ evidence path. Run existing lease/proposal/workflow regressions as well.
 ## P2: registered review sessions and prepared claims
 
 P2 advances backend acceptance criteria **4 and 5**, the **claim side of 8**,
-and parts of **1, 13 and 14**. **P3–P6 follow**: this is not delivery of the
-submit coordinator, preparation runner, multipart normalization, or desk screens.
+and parts of **1, 13 and 14**. Submission coordination is covered by
+[P3 below](#p3-durable-source-bound-submit-and-recovery); preparation workers,
+multipart normalization and desk screens remain later slices.
 The existing Decisions screen, generic claims, source answers, receipt bridge,
 `search_work` owner/status filters and `coverage.intentions` stay compatible.
 
@@ -198,7 +201,8 @@ The matching MCP facade tools are:
 
 - `open_prepared_review_session` and `list_prepared_review_sessions`;
 - `claim_next_prepared_decision` and `claim_prepared_decision`;
-- `release_prepared_decision` with `action: release | skip` and a reason.
+- `release_prepared_decision` for release/skip; the [P3 contract](#p3-durable-source-bound-submit-and-recovery)
+  also defines research withdrawal and the optional reason.
 
 MCP callers may explicitly open a context, or begin a claim without a capability
 and continue using its returned `lease_token`. The same token resumes the same
