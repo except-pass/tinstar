@@ -124,8 +124,9 @@ export async function writeReview(input: ReviewOperation, actor: string, deps: D
     attempted = true
     try { await deps.content.note(card.id, state.note, marker) }
     catch (error) {
-      // A rejected request has no side effect. Network loss/5xx remains ambiguous.
-      if (error instanceof NotionWriteError && error.status >= 400 && error.status < 500) await deps.receipts.putReview(receiptKey, signature, card.id, { ...state, note_pending: false })
+      // Lease rejection happens before dispatch; definite provider rejection also
+      // has no side effect. Network loss/5xx remains ambiguous.
+      if (error instanceof CardLeaseError || error instanceof NotionWriteError && error.status >= 400 && error.status < 500) await deps.receipts.putReview(receiptKey, signature, card.id, { ...state, note_pending: false })
       throw error
     }
     saved.push('note')
