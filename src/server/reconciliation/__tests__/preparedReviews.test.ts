@@ -244,6 +244,8 @@ it('redacts public held packets and session titles without changing exact identi
   expect(stored!.packet).toEqual(fixtures[0]!.packet)
   const skip = { operation_id: 'skip-redaction', lease_token: first.lease_token, reason: 'Next', action: 'skip' }
   for (const result of [await reviews.release('owner', 'Browser', skip), await reviews.release('owner', 'Browser', skip)]) {
+    expect(result.outcome).toBe('skipped')
+    if (!('next' in result)) throw new Error('Skipped prepared release must include the next claim')
     expect(result.next!.packet!.packet.background).not.toContain('example-secret')
     expect(result.next!.lease_token).toBeTruthy()
   }
