@@ -1,0 +1,79 @@
+import { decisionPacketBindingSchema, decisionMeaning, type DecisionDependencyObservation, type DecisionEvidence } from '../../shared/decisionPacket'
+import { decisionRequestRevision } from '../../shared/decisionProposal'
+import { requestAnchor } from '../../shared/deskSource'
+import { decisionRequests, decisionRecordRows } from '../../shared/workflowRequests'
+import type { SourceSnapshot } from './index'
+import type { CardContextRead } from './cardContext'
+import { bindDecision, decisionProposals } from './decisionResolution'
+import { buildQueue } from './queue'
+
+export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
+
+/** No I/O, refresh, reconciliation or source writes. A future preparer can
+ * inspect already-observed evidence without accidentally repairing an answer.
+ * PR/release details are not asserted from a link: they need their own reads. */
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number): DecisionEvidence {
+  const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
+  const reasons: string[] = []
+  if (!card) reasons.push('Canonical card is not in the observed configured board')
+  if (card?.archived || card?.in_trash || ['Done', 'Archived'].includes(String(card?.properties.Status?.value))) reasons.push('Source card is closed')
+  const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
+  const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
+  if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
+  const rows = decisionRequests(history?.context.blocks ?? [])
+  let currentRequests: string[] = []
+  try { currentRequests = decisionProposals((history?.context.blocks ?? []).map(({ id, text }) => ({ id, text }))).map(row => row.id) }
+  catch { reasons.push('Decision publication history is contradictory or incomplete') }
+  const queue = buildQueue(snapshot, new Map(), now)
+  const items = queue.items.filter(item => item.cardIds.includes(cardId))
+  const observation = snapshot.intentions
+  const base = (kind: DecisionDependencyObservation['kind'], key: string, revision: string | null, source = observation): DecisionDependencyObservation => ({ kind, key, revision,
+    status: source.status, coverage: source.coverage, observed_at: source.observedAt, expires_at: source.expiresAt })
+  const requests = rows.map(row => {
+    const issues: string[] = []
+    if (!currentRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
+    if (row.proposal) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
+    if (!row.sourceRequest) issues.push('Request has no exact First Mate source binding')
+    if (!row.options?.length) issues.push('Source-supported option identities are unavailable')
+    if (!row.question) issues.push('Exact source question is unavailable')
+    const anchor = row.sourceRequest ? requestAnchor(row.sourceRequest) : row.id
+    const matches = items.filter(item => item.sources.some(source => source.request && source.request.home !== null && requestAnchor(source.request) === anchor))
+    const item = matches.length === 1 ? matches[0] : undefined
+    if (!item || item.readiness !== 'ready-now') issues.push(...(item?.reasons ?? ['Exact source request is not uniquely present in the observed queue']))
+    if (row.sourceRequest) {
+      try {
+        const live = bindDecision(snapshot.fleet, row.sourceRequest, cardId, snapshot.intentions, now)
+        if (live.source_question !== row.sourceQuestion || live.source_spawn_gen !== row.sourceSpawnGen) issues.push('Source question or worker generation changed')
+      } catch (error) { issues.push(error instanceof Error ? error.message : 'Source binding cannot be verified') }
+    }
+    const proposal = row.proposal ? { ...row.proposal, published_at: undefined } : null
+    const revision = decisionMeaning([item ? decisionRequestRevision(item) : null, row.id, row.sourceId, row.question, row.options?.slice().sort((a, b) => a.id.localeCompare(b.id)), proposal])
+    const binding = decisionPacketBindingSchema.safeParse({ card_id: cardId, request_key: item?.id, source_request: row.sourceRequest,
+      request_id: row.id, source_id: row.sourceId, source_question: row.sourceQuestion, source_spawn_gen: row.sourceSpawnGen,
+      source_revision: revision, options: row.options })
+    if (!binding.success) issues.push(`Incomplete source binding: ${binding.error.issues.map(issue => issue.path.join('.')).join(', ')}`)
+    const dependencies = [base('request', anchor, revision), base('card', cardId, card ? decisionMeaning([card.archived, card.in_trash,
+      Object.fromEntries(['Name', 'Owner', 'Status', 'Will action', 'Waiting For', 'Waiting For ID', 'Next action', 'Start Date', 'First Mate tasks', 'Link', 'Evidence'].map(key => {
+        let value = card.properties[key]?.value
+        if (key === 'Will action' && Array.isArray(value)) value = [...value].sort()
+        if (key === 'First Mate tasks' && typeof value === 'string') {
+          try { const links = JSON.parse(value); value = { ...links, tasks: Array.isArray(links.tasks) ? [...links.tasks].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b))) : links.tasks } } catch { /* Invalid link meaning stays visible and blocks canonical binding. */ }
+        }
+        return [key, value]
+      }))]) : null),
+    { ...base('answer', row.id, decisionMeaning(decisionRecordRows(history?.context.blocks ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
+      status: freshHistory ? 'fresh' as const : 'unknown' as const, coverage: completeHistory ? 'complete' as const : 'unknown' as const,
+      observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }]
+    if (row.sourceRequest) {
+      const home = snapshot.fleet.find(home => home.source.home === row.sourceRequest!.home)
+      const task = home?.observation.data?.tasks.find(task => task.id === row.sourceRequest!.taskId)
+      dependencies[0] = { ...dependencies[0]!, status: home?.observation.status ?? 'unknown', coverage: home?.observation.coverage ?? 'unknown', observed_at: home?.observation.observedAt ?? null, expires_at: home?.observation.expiresAt ?? null }
+      if (row.sourceRequest.taskId) dependencies.push({ ...base('worker', decisionMeaning([row.sourceRequest.home, row.sourceRequest.taskId]), task ? decisionMeaning([task.identity, task.current_state.state, task.endpoint.exists, task.endpoint.status, task.pr.head]) : null),
+        status: home?.observation.status ?? 'unknown', coverage: home?.observation.coverage ?? 'unknown', observed_at: home?.observation.observedAt ?? null, expires_at: home?.observation.expiresAt ?? null })
+    }
+    for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
+    return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
+  })
+  return { card_id: cardId, requests, reasons, observed_at: observation.observedAt,
+    omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
+}

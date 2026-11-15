@@ -1,4 +1,6 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
+import { DecisionPackets } from './decisionPackets'
+import { projectDecisionEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -46,6 +48,7 @@ export class ReconciliationSources {
   waitingOnMain?: (snapshot: SourceSnapshot) => Promise<MainWaitRead>
   reconcileReviewHandoffs?: (force?: boolean) => Promise<void>
   readonly leases: CardLeases
+  readonly decisionPackets: DecisionPackets
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
@@ -69,6 +72,7 @@ export class ReconciliationSources {
 
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.leases = new CardLeases(receiptRoot)
+    this.decisionPackets = new DecisionPackets(this.leases)
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -113,6 +117,12 @@ export class ReconciliationSources {
       fleet: this.fleet.map(({ source, observation }) => ({ source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' },
         observation: observation.peek() ?? { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
+  }
+
+  /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
+   * refreshes sources, reconciles receipts, or changes source work. */
+  preparationEvidence(cardId: string) {
+    return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now())
   }
 
   /** The same queue, progressively displayed from known sources. Operational

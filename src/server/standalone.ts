@@ -11,6 +11,7 @@ import { DomainReadTools } from './reconciliation/domainReads'
 import { authorizePrReadGrant } from './reconciliation/prReadGrant'
 import { AskApi } from './ask/routes'
 import { ReconciliationSources, handleReconciliationRequest } from './reconciliation'
+import { DecisionDeskApi } from './reconciliation/decisionDeskApi'
 import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
 import { WaitingOnMain, mainWaitNotifier } from './reconciliation/waitingOnMain'
 import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
@@ -99,6 +100,8 @@ export function startServer(opts: ServerOptions) {
   // The coordinator writer's completion policy is obsolete. Keep its audit/Desk
   // history readable; no scheduled writes until a separate owner activation.
   const pulls = new PullsApi(reconciliation, releases.store)
+  const decisionBoard = reconciliation.mainWaitNotionConfig()?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
+  const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req))
   reconciliation.authorizePulls = req => pulls.authorized(req)
   reconciliation.readPulls = async req => await pulls.authorized(req) ? pulls.read() : null
   reconciliation.readPullReadiness = urls => pulls.readiness(urls)
@@ -179,6 +182,7 @@ export function startServer(opts: ServerOptions) {
       if (await handleCockpitRequest(fleet, req, res)) return
       if (await actions.handle(req, res)) return
       if (await asks.handle(req, res)) return
+      if (await decisionDesk.handle(req, res)) return
       if (await reconciliationMcp.handle(req, res)) return
       if (await releases.handle(req, res)) return
       if (await pulls.handle(req, res)) return

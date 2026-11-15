@@ -87,6 +87,14 @@ export class CardLeases {
       catch (error) { db.exec('ROLLBACK'); throw error }
     } finally { db.close() }
   }
+  /** Internal packet storage uses this same database/transaction boundary so a
+   * later prepared claim can check readiness and reserve the canonical card in
+   * one transaction. These helpers do not change generic lease behavior. */
+  readStorage<T>(read: (db: SqliteDatabase) => T): T {
+    const db = this.database()
+    try { return read(db) } finally { db.close() }
+  }
+  writeStorage<T>(write: (db: SqliteDatabase) => T | Promise<T>): Promise<T> { return this.transaction(write) }
   private check(db: SqliteDatabase, card: string) {
     const row = this.row(db, card), context = access.getStore()
     const matches = context?.token && this.active(row) && row.caller === context.caller && row.token_hash === hash(context.token)
