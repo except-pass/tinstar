@@ -61,7 +61,7 @@ it.each(['request', 'worker', 'source-unavailable'] as const)('blocks changed %s
     return e
   } }
   const result = await new PreparedSubmissions(f.backend.reviews, source).submit('owner', 'Reviewer', 'owner-actor', f.input)
-  expect(result).toMatchObject({ outcome: 'packet-invalidated', selection: { option_id: 'preview' } })
+  expect(result).toMatchObject({ outcome: kind === 'source-unavailable' ? 'source-unavailable' : 'packet-invalidated', selection: { option_id: 'preview' } })
   expect(f.backend.leases.status(f.claim.lease!.card_id)).toBeTruthy()
   expect(f.fixture.writes).toHaveLength(0)
 })
@@ -341,3 +341,47 @@ it('deduplicates one held submit across independent backend processes sharing th
     sourceServer.closeAllConnections(); await new Promise<void>(resolve => sourceServer.close(() => resolve()))
   }
 }, 30_000)
+
+it('reclaims an expired lease and a fresh research version for the same source revision, preserving the original source operation', async () => {
+  const f = await setup()
+  f.fixture.controls.loseIntent = true
+  expect(await f.submit()).toMatchObject({ outcome: 'save-unconfirmed' })
+  f.backend.leases.readStorage(db => {
+    db.prepare('UPDATE leases SET expires = ? WHERE card = ?').run(Date.now() - 1, f.claim.lease!.card_id)
+    db.prepare('UPDATE decision_packets SET expires_at = ? WHERE id = ?').run(new Date(Date.now() - 1).toISOString(), f.input.packet_id)
+  })
+  // Same-ID reconciliation settles the immutable marker before explicit reclaim.
+  expect(await f.submit()).toMatchObject({ outcome: 'lease-lost' })
+  await f.backend.packets.publish(f.fixture.fixtures[0]!.packet, f.fixture.fixtures[0]!.evidence, 'fixture', 'refreshed-research')
+  const fresh = await f.backend.reviews.claim('owner', 'Reviewer', { operation_id: 'reclaim', review_session_token: f.session.review_session_token })
+  expect(fresh.packet!.version).toBe(2)
+  expect(await f.submit({ ...f.input, packet_id: fresh.packet!.id, packet_version: fresh.packet!.version, lease_token: fresh.lease_token! })).toMatchObject({ outcome: 'recorded' })
+  expect(f.fixture.comments.get(f.claim.lease!.card_id)!.filter(note => plainText(note.rich_text).startsWith('Tin Star decision intent:'))).toHaveLength(1)
+})
+
+it('requires the original capability to transfer retained input into a different real review context', async () => {
+  const f = await setup()
+  f.fixture.controls.reject = true
+  await f.submit()
+  const newSession = await f.backend.reviews.create('owner', { operation_id: 'replacement-session', label: 'Explicit replacement' })
+  expect(await f.backend.submissions.recover('owner', { review_session_token: newSession.review_session_token })).toEqual({ submissions: [] })
+  expect(await f.backend.submissions.recover('owner', { review_session_token: newSession.review_session_token, original_lease_token: f.input.lease_token })).toMatchObject({ submissions: [{ operation_id: f.input.operation_id }] })
+  await f.backend.reviews.close('owner', f.session.review_session_token, 'Explicit replacement')
+  const held = await f.backend.reviews.claim('owner', 'Reviewer', { operation_id: 'replacement-claim', review_session_token: newSession.review_session_token })
+  f.fixture.controls.reject = false
+  const retry = { ...f.input, review_session_token: newSession.review_session_token, lease_token: held.lease_token! }
+  expect(await f.submit(retry)).toMatchObject({ outcome: 'lease-lost' })
+  expect(await f.backend.submissions.submit('owner', 'Reviewer', 'owner-actor', { ...retry, original_lease_token: f.input.lease_token })).toMatchObject({ outcome: 'recorded' })
+})
+
+it('commits research withdrawal and release when the next allocation is unavailable, then retries next safely', async () => {
+  const f = await setup()
+  f.fixture.controls.queueUnavailable = true
+  const input = { operation_id: 'research-outage', lease_token: f.claim.lease_token, action: 'research' }
+  expect(await f.backend.reviews.release('owner', 'Reviewer', input)).toMatchObject({ outcome: 'research-requested', next: { outcome: 'next-unavailable' } })
+  expect(f.backend.leases.status(f.claim.lease!.card_id)).toBeNull()
+  expect(await f.backend.packets.read(f.input.packet_id, f.fixture.fixtures[0]!.evidence)).toMatchObject({ ready: false })
+  f.fixture.controls.queueUnavailable = false
+  expect(await f.backend.reviews.release('owner', 'Reviewer', input)).toMatchObject({ outcome: 'research-requested', next: { lease: { card_id: f.fixture.fixtures[1]!.cardId } } })
+  expect(f.fixture.writes).toHaveLength(0)
+})

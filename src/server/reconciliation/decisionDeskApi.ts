@@ -8,7 +8,7 @@ import { PreparedReviews, reviewSessionInput, preparedClaimInput, preparedReleas
 import { CardLeaseError, leaseFailure, leaseHash } from './cardLeases'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
 import type { DecisionEvidence } from '../../shared/decisionPacket'
-import { preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
+import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { workReadback } from './workReadback'
 
 async function policyBody(req: IncomingMessage) {
@@ -46,7 +46,7 @@ export class DecisionDeskApi {
     try {
       const caller = leaseHash(JSON.stringify(['web-review', req.headers['tailscale-user-login'], this.scope]))
       if (this.submissions && url.pathname.endsWith('/submission-state') && req.method === 'POST') {
-        const input = preparedClaimInput.omit({ operation_id: true, card_id: true }).required({ review_session_token: true }).parse(await policyBody(req))
+        const input = preparedRecoveryInput.required({ review_session_token: true }).parse(await policyBody(req))
         return ok(res, await this.submissions.recover(caller, input), { headers })
       }
       if (this.submissions && url.pathname.endsWith('/submit') && req.method === 'POST') return ok(res, await this.submissions.submit(caller, 'Browser review', req.headers['tailscale-user-login'], preparedSubmitInput.parse(await policyBody(req))), { headers })

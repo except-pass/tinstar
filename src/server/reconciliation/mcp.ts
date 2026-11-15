@@ -1,4 +1,4 @@
-import { preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
+import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
 import { DecisionDeskConflict } from './decisionPackets'
 import { CardLeases, CardLeaseError, leaseCaller, leaseFailure, withLeaseCaller } from './cardLeases'
@@ -141,7 +141,7 @@ export class ReconciliationMcp {
     }
     const preparedInstructions = 'Prepared packets only; no research, receipt delivery or source writes. Supply the same review_session_token or lease_token to resume one held card. Keep capabilities in tool arguments only, never visible prose or URLs. A request with neither capability cannot identify an earlier conversation; only an identical operation_id replays that operation. Generate a unique operation_id for each new operation and reuse it for an identical lost-response retry. Stale packets block review. Browser scene IDs and auth actor names never identify conversations. '
     const reviewAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-    catalog.registerTool('get_prepared_submission_state', { description: 'Restore this authenticated review context retained operation IDs, selections and per-request progress after refresh/restart. Capabilities belong in arguments only. Expired leases require explicit reclaim and validation before any source write.', inputSchema: preparedClaimInput.omit({ operation_id: true, card_id: true }), annotations: readAnnotations }, async input => {
+    catalog.registerTool('get_prepared_submission_state', { description: 'Restore this authenticated review context retained operation IDs, selections and per-request progress after refresh/restart. Capabilities belong in arguments only. Expired leases require explicit reclaim and validation before any source write.', inputSchema: preparedRecoveryInput, annotations: readAnnotations }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
       try { return result(await this.readers.preparedSubmissions.recover(caller, input)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }

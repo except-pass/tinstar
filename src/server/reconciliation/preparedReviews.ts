@@ -203,11 +203,24 @@ export class PreparedReviews {
     if (!binding || !this.leases.activeInStorage(row) || row.caller !== caller || row.generation !== binding.generation || row.token_hash !== binding.token_hash || leaseHash(input.lease_token) !== binding.token_hash) throw new CardLeaseError(null)
     return { session_id: session.id, binding, lease: publicLease(row) }
   }
-  continueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string) {
+  continueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string) {
     const session = db.prepare('SELECT * FROM decision_review_sessions WHERE id = ? AND caller = ? AND scope = ?').get(sessionId, caller, this.scope) as unknown as Session | undefined
     if (!session || session.revoked || session.expires <= this.now()) throw new CardLeaseError(null)
     const token = this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation]))
-    return this.claimInStorage(db, caller, holder, { operation_id: operation, review_session_token: token })
+    return this.claimInStorage(db, caller, holder, { operation_id: operation, review_session_token: token }, excludeCard)
+  }
+  tryContinueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string): PreparedClaimResult {
+    // Next-allocation failures must not undo an already recorded release or
+    // research withdrawal. Retry uses the same deterministic claim operation.
+    db.exec('SAVEPOINT prepared_next')
+    try {
+      const result = this.continueInStorage(db, caller, holder, sessionId, operation, excludeCard)
+      db.exec('RELEASE prepared_next')
+      return result
+    } catch {
+      db.exec('ROLLBACK TO prepared_next'); db.exec('RELEASE prepared_next')
+      return { outcome: 'next-unavailable' }
+    }
   }
   /** After source confirmation, release only our recorded generation. A crash
    * retry must never release a later reviewer or roll back a durable answer. */
@@ -227,9 +240,7 @@ export class PreparedReviews {
       const previous = this.receipt(db, caller, parsed.operation_id, signature)
       if (previous) {
         if (!previous.next_operation_id) return previous
-        const previousSession = db.prepare('SELECT * FROM decision_review_sessions WHERE id = ? AND caller = ?').get(previous.session_id!, caller) as unknown as Session
-        const token = this.leases.capability(caller, JSON.stringify(['review-session', this.scope, previousSession.operation]))
-        return { ...previous, next: this.claimInStorage(db, caller, holder, { operation_id: previous.next_operation_id, review_session_token: token }, previous.card_id) }
+        return { ...previous, next: this.tryContinueInStorage(db, caller, holder, previous.session_id!, previous.next_operation_id, previous.card_id) }
       }
       const session = this.session(db, caller, parsed)
       if (!session) throw new CardLeaseError(null)
@@ -243,7 +254,7 @@ export class PreparedReviews {
       }
       this.leases.releaseInStorage(db, row, parsed.reason, caller)
       db.prepare('DELETE FROM decision_review_bindings WHERE session_id = ?').run(session.id)
-      const next = parsed.action !== 'release' ? this.claimInStorage(db, caller, holder, { operation_id: `skip-next:${parsed.operation_id}`, review_session_token: parsed.review_session_token ?? this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation])) }, row.card) : null
+      const next = parsed.action !== 'release' ? this.tryContinueInStorage(db, caller, holder, session.id, `skip-next:${parsed.operation_id}`, row.card) : null
       // Tokens never enter operation storage; replay resolves the next binding.
       const result = { session_id: session.id, outcome: parsed.action === 'research' ? 'research-requested' : parsed.action === 'skip' ? 'skipped' : 'released', card_id: row.card, next_operation_id: parsed.action !== 'release' ? `skip-next:${parsed.operation_id}` : null }
       this.record(db, caller, parsed.operation_id, signature, result)

@@ -89,7 +89,8 @@ export class WorkflowOperations {
       const parsed = updateWorkSchema.safeParse(value)
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
     }
-    const conflict = intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
+    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
     const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
     let desired: Record<string, unknown> | undefined
     if (!conflict && !answers.length && own) {

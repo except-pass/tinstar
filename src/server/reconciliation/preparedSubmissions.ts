@@ -1,20 +1,22 @@
 import { z } from 'zod'
 import type { DatabaseSync } from 'node:sqlite'
-import { decisionMeaning, type DecisionEvidence } from '../../shared/decisionPacket'
-import { updateWorkSchema, type UpdateWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { bindingMeaning, decisionMeaning, type DecisionEvidence } from '../../shared/decisionPacket'
+import { answerDecisionSchema, type UpdateWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { CardLeaseError, leaseHash, withLeaseCaller } from './cardLeases'
 import { DecisionDeskConflict, type StoredDecisionPacket } from './decisionPackets'
 import { PreparedReviews, type PreparedBinding, type PreparedClaimResult } from './preparedReviews'
 import { workReadback } from './workReadback'
 
 type Answer = Extract<UpdateWorkInput, { kind: 'answer_decision' }>
-const answerSchema = updateWorkSchema.options[8]
+const answerSchema = answerDecisionSchema
 export const preparedSubmitInput = z.object({
   operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256),
   packet_id: z.string().uuid(), packet_version: z.number().int().positive(), request_id: z.string().min(1).max(128), option_id: z.string().min(1).max(128),
   next: answerSchema.shape.next, resolve_wait: z.string().trim().min(1).max(12000).optional(),
+  original_lease_token: z.string().min(1).max(256).optional(),
   confirmation: z.object({ option_id: z.string(), scope: z.string() }).strict().optional(),
 }).strict()
+export const preparedRecoveryInput = z.object({ review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), original_lease_token: z.string().min(1).max(256).optional() }).strict()
 type Input = z.infer<typeof preparedSubmitInput>
 export interface PreparedAnswerSource {
   observe(input: Answer, actor: string): Promise<{ state: 'absent' | 'pending' | 'confirmed' | 'conflict'; original?: Record<string, unknown>; desired?: Record<string, unknown> }>
@@ -58,7 +60,7 @@ export class PreparedSubmissions {
     return db.prepare('SELECT * FROM decision_desk_submissions WHERE caller = ? AND scope = ? AND operation = ?').get(caller, this.reviews.scope, operation) as unknown as Attempt | undefined
   }
   private signature(input: Input) {
-    const { review_session_token: _session, lease_token: _lease, confirmation: _confirmation, ...meaning } = input
+    const { review_session_token: _session, lease_token: _lease, original_lease_token: _original, packet_id: _packet, packet_version: _version, confirmation: _confirmation, ...meaning } = input
     return decisionMeaning(meaning)
   }
   private selection(input: Input) {
@@ -91,11 +93,21 @@ export class PreparedSubmissions {
         // Completed operation replay is authorized by its original capability,
         // even after advance/expiry; it cannot release or write a newer card.
         if (prior) {
-          if (JSON.parse(prior.binding).token_hash !== leaseHash(input.lease_token)) {
+          const oldBinding: PreparedBinding = JSON.parse(prior.binding)
+          const oldSelection: PreparedSubmitResult['selection'] = JSON.parse(prior.selection)
+          if (oldBinding.token_hash !== leaseHash(input.lease_token) || oldSelection.packet_id !== input.packet_id || oldSelection.packet_version !== input.packet_version) {
+            if (prior.confirmed !== null) throw new DecisionDeskConflict('A recorded operation cannot be rebound to another packet')
             const held = this.reviews.submissionInStorage(db, caller, input)
-            if (held.session_id !== prior.session_id || held.binding.packet_id !== input.packet_id || held.binding.packet_version !== input.packet_version) throw new CardLeaseError(null)
-            prior.binding = JSON.stringify(held.binding)
-            db.prepare('UPDATE decision_desk_submissions SET binding = ? WHERE caller = ? AND scope = ? AND operation = ?').run(prior.binding, caller, prior.scope, prior.operation)
+            // A fresh research version can recover the same source operation,
+            // never a changed question/options/request revision or broader scope.
+            const oldPacket = this.reviews.packets.readInStorage(db, oldBinding.packet_id)
+            const fresh = this.reviews.packets.readInStorage(db, held.binding.packet_id)
+            const sameContext = held.session_id === prior.session_id || input.original_lease_token && leaseHash(input.original_lease_token) === oldBinding.token_hash
+            if (!sameContext || held.binding.packet_id !== input.packet_id || held.binding.packet_version !== input.packet_version || !oldPacket || !fresh ||
+              bindingMeaning(oldPacket.packet.binding) !== bindingMeaning(fresh.packet.binding) || decisionMeaning(oldPacket.packet.authorization) !== decisionMeaning(fresh.packet.authorization)) throw new CardLeaseError(null)
+            prior.binding = JSON.stringify(held.binding); prior.session_id = held.session_id; prior.selection = JSON.stringify(this.selection(input))
+            db.prepare('UPDATE decision_desk_submissions SET binding = ?,session_id = ?,selection = ? WHERE caller = ? AND scope = ? AND operation = ?').run(prior.binding, prior.session_id, prior.selection, caller, prior.scope, prior.operation)
+            this.leases.auditInStorage(db, held.binding.card, 'prepared-submit-reclaimed', { operation_key: leaseHash(JSON.stringify([caller, input.operation_id])), packet_id: fresh.id, packet_version: fresh.version, generation: held.binding.generation })
           }
           return prior
         }
@@ -131,10 +143,6 @@ export class PreparedSubmissions {
     const confirmation = { option_id: input.option_id, selected_option: answer.answer, scope: stored.packet.authorization.scope,
       adverse_impact: stored.packet.risk.explanation, blast_radius: stored.packet.risk.blast_radius,
       reversibility: stored.packet.reversibility, next: stored.packet.authorization }
-    if ((stored.packet.risk.rating === 'High' || stored.packet.reversibility.rating === 'Difficult') &&
-      (input.confirmation?.option_id !== input.option_id || input.confirmation.scope !== confirmation.scope)) {
-      return this.response(attempt, 'confirmation-required', 'Confirm the selected option and its explicit authorization scope before saving.', { confirmation: workReadback(confirmation) })
-    }
     try {
       const observation = await withLeaseCaller(caller, input.lease_token, () => this.source.observe(answer, actor))
       if (observation.state === 'conflict') {
@@ -147,12 +155,19 @@ export class PreparedSubmissions {
           const held = this.reviews.submissionInStorage(db, caller, input)
           if (decisionMeaning(held.binding) !== decisionMeaning(binding)) throw new CardLeaseError(null)
         })
+        if ((stored.packet.risk.rating === 'High' || stored.packet.reversibility.rating === 'Difficult') &&
+          (input.confirmation?.option_id !== input.option_id || input.confirmation.scope !== confirmation.scope)) {
+          return this.response(attempt, 'confirmation-required', 'Confirm the selected option and its explicit authorization scope before saving.', { confirmation: workReadback(confirmation) })
+        }
         const evidence = await this.source.evidence(stored, observation.original, observation.desired)
         const current = await this.reviews.packets.read(stored.id, evidence)
         if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now() || Date.parse(current.expires_at) <= this.now()) {
+          const request = evidence.requests.find(request => request.binding?.request_id === input.request_id)
+          const unavailable = evidence.reasons.some(reason => /unavailable|incomplete|unknown|partial/i.test(reason)) || !request?.binding || request.dependencies.some(dependency => dependency.status !== 'fresh' || dependency.coverage !== 'complete')
+          const outcome = unavailable ? 'source-unavailable' : 'packet-invalidated'
           await this.reviews.packets.validate(stored.id, evidence, caller)
-          await this.state(attempt, observation.state === 'pending' ? 'blocked-recovery' : 'packet-invalidated', { reasons: current?.validation.reasons })
-          return this.response(attempt, 'packet-invalidated', 'Packet invalidated — source revision changed. Refresh research before deciding.', { reasons: current?.validation.reasons, observed_at: evidence.observed_at })
+          await this.state(attempt, observation.state === 'pending' ? 'blocked-recovery' : unavailable ? 'not-saved' : 'packet-invalidated', { reasons: current?.validation.reasons })
+          return this.response(attempt, outcome, unavailable ? 'Source verification is unavailable or stale. Your selection is retained; refresh evidence before deciding.' : 'Packet invalidated — source revision changed. Refresh research before deciding.', { reasons: workReadback(current?.validation.reasons), observed_at: evidence.observed_at })
         }
         await this.state(attempt, 'saving', {})
         const result = await withLeaseCaller(caller, input.lease_token, () => this.source.write(answer, actor))
@@ -194,33 +209,25 @@ export class PreparedSubmissions {
           this.reviews.finishInStorage(db, attempt.caller, binding, 'Decision source answer confirmed')
           db.prepare("UPDATE decision_desk_submissions SET state = 'recorded',finished = ? WHERE caller = ? AND scope = ? AND operation = ?").run(this.now(), attempt.caller, attempt.scope, attempt.operation)
         }
-        // Savepoint keeps release durable even if allocation is unavailable.
-        db.exec('SAVEPOINT desk_next')
-        try {
-          const result = this.reviews.continueInStorage(db, attempt.caller, holder, attempt.session_id, `submit-next:${leaseHash(attempt.operation)}`)
-          db.exec('RELEASE desk_next')
-          this.leases.auditInStorage(db, binding.card, 'prepared-submit-to-next', { operation_key: leaseHash(JSON.stringify([attempt.caller, attempt.operation])), outcome: result.outcome, duration_ms: this.now() - attempt.created, source_readback_ms: row.confirmed - attempt.created })
-          return result
-        } catch {
-          db.exec('ROLLBACK TO desk_next'); db.exec('RELEASE desk_next')
-          return { outcome: 'next-unavailable' }
-        }
+        const result = this.reviews.tryContinueInStorage(db, attempt.caller, holder, attempt.session_id, `submit-next:${leaseHash(attempt.operation)}`)
+        this.leases.auditInStorage(db, binding.card, 'prepared-submit-to-next', { operation_key: leaseHash(JSON.stringify([attempt.caller, attempt.operation])), outcome: result.outcome, duration_ms: this.now() - attempt.created, source_readback_ms: row.confirmed - attempt.created })
+        return result
       })
       return this.response(attempt, next.lease ? 'recorded' : 'recorded-empty', 'Recorded; awaiting worker acknowledgment.', { source_state: 'recorded-awaiting-worker-acknowledgment', next })
     } catch {
       return this.response(attempt, 'recorded-releasing', 'Decision recorded; releasing the previous lease is pending. Retry the same operation ID.', { source_state: 'recorded-awaiting-worker-acknowledgment' })
     }
   }
-  async recover(caller: string, input: { review_session_token?: string; lease_token?: string }) {
+  async recover(caller: string, input: z.infer<typeof preparedRecoveryInput>) {
     await this.initialize()
     return this.leases.readStorage(db => {
       const sessionId = this.reviews.contextInStorage(db, caller, input)
-      const rows = db.prepare(`SELECT * FROM decision_desk_submissions WHERE caller = ? AND scope = ? AND session_id = ?
-        AND finished IS NULL AND state != 'superseded' ORDER BY created DESC LIMIT 20`).all(caller, this.reviews.scope, sessionId) as unknown as Attempt[]
+      const rows = db.prepare(`SELECT * FROM decision_desk_submissions WHERE caller = ? AND scope = ? AND (session_id = ? OR json_extract(binding,'$.token_hash') = ?)
+        AND finished IS NULL AND state != 'superseded' ORDER BY created DESC LIMIT 20`).all(caller, this.reviews.scope, sessionId, input.original_lease_token ? leaseHash(input.original_lease_token) : '') as unknown as Attempt[]
       return { submissions: rows.map(row => {
         const answer: Answer = JSON.parse(row.answer)
         return { operation_id: row.operation, selection: JSON.parse(row.selection), state: row.state,
-          next: answer.next, resolve_wait: answer.resolve_wait, confirmed_at: row.confirmed === null ? null : new Date(row.confirmed).toISOString(),
+          next: workReadback(answer.next), resolve_wait: workReadback(answer.resolve_wait), confirmed_at: row.confirmed === null ? null : new Date(row.confirmed).toISOString(),
           detail: workReadback(JSON.parse(row.detail)), recovery: 'Retry the original operation ID and selection after reclaiming/revalidating an expired lease. Ambiguous provider writes use the existing audited source-write reconciliation API.' }
       }) }
     })
