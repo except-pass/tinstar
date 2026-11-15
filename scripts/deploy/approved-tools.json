@@ -7,6 +7,7 @@
   "get_card_context",
   "get_command",
   "get_pr",
+  "get_prepared_submission_state",
   "get_queue",
   "get_release_status",
   "get_scene",
@@ -14,8 +15,8 @@
   "get_work_views",
   "get_worker_link_report",
   "get_workflow_rules",
-  "list_prs",
   "list_prepared_review_sessions",
+  "list_prs",
   "list_ui_sessions",
   "next_queue_item",
   "open_prepared_review_session",
@@ -27,5 +28,6 @@
   "session_probe",
   "start_work",
   "submit_handoff",
+  "submit_prepared_decision",
   "update_work"
 ]

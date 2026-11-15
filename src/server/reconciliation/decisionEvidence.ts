@@ -77,3 +77,19 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   return { card_id: cardId, requests, reasons, observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
+
+/** Forced-submit projection can discount only this operation's own readback-
+ * verified partial property effects. Other concurrent edits remain visible. */
+export function projectPreparedSubmitEvidence(snapshot: SourceSnapshot, cardId: string, blocks: CardContextRead['blocks'],
+  original?: Record<string, unknown>, desired?: Record<string, unknown>, now = Date.now()) {
+  const copy = structuredClone(snapshot)
+  const card = copy.intentions.data?.cards.find(card => card.id === cardId)
+  if (card && original && desired) for (const [name, value] of Object.entries(original)) {
+    const actual = card.properties[name]?.value
+    if (name === 'Last touched by' || decisionMeaning(actual) === decisionMeaning(value) || name in desired && decisionMeaning(actual) === decisionMeaning(desired[name])) {
+      if (card.properties[name]) card.properties[name] = { ...card.properties[name]!, value }
+    }
+  }
+  return projectDecisionEvidence(copy, cardId, { context: { outcome: 'available', commentsOutcome: 'available', blocks },
+    observed_at: new Date(now).toISOString(), expires_at: new Date(now + 30_000).toISOString() }, now)
+}

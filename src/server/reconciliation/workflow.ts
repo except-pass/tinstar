@@ -73,6 +73,38 @@ export class WorkflowOperations {
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
+  /** Desk-only persistence boundary. Legacy update() still waits for its
+   * existing reconciliation result; desk advancement never waits for a worker. */
+  answerPrepared(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string): Promise<StartWorkResult> {
+    return this.guarded(input.card_id, input.operation_id, actor, () => this.exclusive(input.card_id, () => this.performUpdate(input, actor)), false)
+  }
+  async observePreparedAnswer(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string) {
+    // Full notes, not a property timestamp or cached UI history. An absent
+    // marker in truncated/unavailable history cannot authorize a second write.
+    await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
+    const notes = await this.content.notes(input.card_id)
+    const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
+    const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
+    const matches = (value: unknown) => {
+      const parsed = updateWorkSchema.safeParse(value)
+      return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
+    }
+    const conflict = intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
+    let desired: Record<string, unknown> | undefined
+    if (!conflict && !answers.length && own) {
+      const card = await this.reader.card(input.card_id, true)
+      const planning = { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([key, property]) => [key,
+        key in own.original ? { ...property, value: own.original[key] } : property])) }
+      desired = (await this.updatePlan(planning, input, actor, notes)).desired
+    }
+    return { state: conflict ? 'conflict' as const : answers.length ? 'confirmed' as const : own ? 'pending' as const : 'absent' as const,
+      original: own?.original as Record<string, unknown> | undefined, desired }
+  }
+  async preparedHistory(cardId: string) {
+    const [notes, sections] = await Promise.all([this.content.notes(cardId), this.content.sections(cardId, false, true)])
+    return [...notes.map(note => ({ ...note, type: 'comment' })), ...sections]
+  }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     return withSourceOperation(actor, input.submission_id, async () => {
       try {

@@ -10,10 +10,10 @@ import { DecisionDeskConflict, DecisionPackets } from './decisionPackets'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
 export const preparedClaimInput = z.object({ operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), card_id: cardIdSchema.optional() }).strict()
-export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card_id: true }).shape, reason: z.string().trim().min(1).max(1000), action: z.enum(['release', 'skip']).default('release') }).strict()
+export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card_id: true }).shape, reason: z.string().trim().min(1).max(1000).default('No reason supplied'), action: z.enum(['release', 'skip', 'research']).default('release') }).strict()
 type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }
-interface Binding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
+export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
 export interface PreparedQueue { card_ids: string[]; coverage: 'complete' | 'unknown'; requests: number | null }
 export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: ReturnType<DecisionPackets['readInStorage']>; session_id?: string; packet_version?: number; message?: string; coverage?: string }
 const sessionLifetime = 24 * 60 * 60 * 1000
@@ -63,7 +63,7 @@ export class PreparedReviews {
     })
   }
   private summary(db: DatabaseSync, session: Session) {
-    const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as Binding | undefined
+    const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as PreparedBinding | undefined
     const row = binding ? this.leases.rowInStorage(db, binding.card) : undefined
     const held = this.leases.activeInStorage(row) && row.generation === binding?.generation && row.caller === session.caller
     const packet = held ? db.prepare('SELECT body FROM decision_packets WHERE id = ?').get(binding!.packet_id) as { body: string } | undefined : undefined
@@ -83,7 +83,7 @@ export class PreparedReviews {
     return session
   }
   private held(db: DatabaseSync, session: Session, leaseToken?: string) {
-    const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as Binding | undefined
+    const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as PreparedBinding | undefined
     if (!binding) { if (leaseToken) throw new CardLeaseError(null); return null }
     const row = this.leases.rowInStorage(db, binding.card)
     const current = this.leases.activeInStorage(row) && row.caller === session.caller && row.generation === binding.generation && row.token_hash === binding.token_hash
@@ -131,7 +131,7 @@ export class PreparedReviews {
       throw error
     }
   }
-  private claimInStorage(db: DatabaseSync, caller: string, holder: string, input: ClaimInput, excludeCard?: string): PreparedClaimResult {
+  claimInStorage(db: DatabaseSync, caller: string, holder: string, input: ClaimInput, excludeCard?: string): PreparedClaimResult {
     const signature = JSON.stringify(['claim', input.card_id ?? null, input.review_session_token ? leaseHash(input.review_session_token) : null, input.lease_token ? leaseHash(input.lease_token) : null, excludeCard ?? null])
     const previous = this.receipt(db, caller, input.operation_id, signature)
     let session = this.session(db, caller, input)
@@ -188,6 +188,37 @@ export class PreparedReviews {
     this.record(db, caller, input.operation_id, signature, result)
     return result
   }
+  contextInStorage(db: DatabaseSync, caller: string, input: Pick<ClaimInput, 'review_session_token' | 'lease_token'>) {
+    const session = this.session(db, caller, input)
+    if (!session) throw new CardLeaseError(null)
+    return session.id
+  }
+  /** Internal submit authority: require the exact active canonical generation,
+   * without treating a same-operation source reservation as a lost review. */
+  submissionInStorage(db: DatabaseSync, caller: string, input: Pick<ClaimInput, 'review_session_token' | 'lease_token'>) {
+    const session = this.session(db, caller, input)
+    if (!session || !input.lease_token) throw new CardLeaseError(null)
+    const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as PreparedBinding | undefined
+    const row = binding ? this.leases.rowInStorage(db, binding.card) : undefined
+    if (!binding || !this.leases.activeInStorage(row) || row.caller !== caller || row.generation !== binding.generation || row.token_hash !== binding.token_hash || leaseHash(input.lease_token) !== binding.token_hash) throw new CardLeaseError(null)
+    return { session_id: session.id, binding, lease: publicLease(row) }
+  }
+  continueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string) {
+    const session = db.prepare('SELECT * FROM decision_review_sessions WHERE id = ? AND caller = ? AND scope = ?').get(sessionId, caller, this.scope) as unknown as Session | undefined
+    if (!session || session.revoked || session.expires <= this.now()) throw new CardLeaseError(null)
+    const token = this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation]))
+    return this.claimInStorage(db, caller, holder, { operation_id: operation, review_session_token: token })
+  }
+  /** After source confirmation, release only our recorded generation. A crash
+   * retry must never release a later reviewer or roll back a durable answer. */
+  finishInStorage(db: DatabaseSync, caller: string, binding: PreparedBinding, reason: string) {
+    const row = this.leases.rowInStorage(db, binding.card)
+    if (row && row.caller === caller && row.generation === binding.generation && row.token_hash === binding.token_hash) {
+      if (this.leases.reservedInStorage(db, binding.card)) throw new SourceWritePending()
+      this.leases.releaseInStorage(db, row, reason, caller)
+    }
+    db.prepare('DELETE FROM decision_review_bindings WHERE session_id = ? AND generation = ? AND packet_id = ?').run(binding.session_id, binding.generation, binding.packet_id)
+  }
   async release(caller: string, holder: string, input: unknown) {
     const parsed = preparedReleaseInput.parse(input)
     await this.initialize()
@@ -205,11 +236,16 @@ export class PreparedReviews {
       const held = this.held(db, session, parsed.lease_token)
       if (!held) throw new CardLeaseError(null)
       const row = this.leases.rowInStorage(db, held.lease.card_id)!
+      if (this.packets.pendingAnswerInStorage(db, held.packet!.id)) throw new SourceWritePending()
+      if (parsed.action === 'research') {
+        if (this.leases.reservedInStorage(db, row.card)) throw new SourceWritePending()
+        db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(held.packet!.id, 'research-requested', caller, new Date(this.now()).toISOString(), JSON.stringify({ reason: parsed.reason }))
+      }
       this.leases.releaseInStorage(db, row, parsed.reason, caller)
       db.prepare('DELETE FROM decision_review_bindings WHERE session_id = ?').run(session.id)
-      const next = parsed.action === 'skip' ? this.claimInStorage(db, caller, holder, { operation_id: `skip-next:${parsed.operation_id}`, review_session_token: parsed.review_session_token ?? this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation])) }, row.card) : null
+      const next = parsed.action !== 'release' ? this.claimInStorage(db, caller, holder, { operation_id: `skip-next:${parsed.operation_id}`, review_session_token: parsed.review_session_token ?? this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation])) }, row.card) : null
       // Tokens never enter operation storage; replay resolves the next binding.
-      const result = { session_id: session.id, outcome: parsed.action === 'skip' ? 'skipped' : 'released', card_id: row.card, next_operation_id: parsed.action === 'skip' ? `skip-next:${parsed.operation_id}` : null }
+      const result = { session_id: session.id, outcome: parsed.action === 'research' ? 'research-requested' : parsed.action === 'skip' ? 'skipped' : 'released', card_id: row.card, next_operation_id: parsed.action !== 'release' ? `skip-next:${parsed.operation_id}` : null }
       this.record(db, caller, parsed.operation_id, signature, result)
       return { ...result, next }
     })

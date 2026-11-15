@@ -126,10 +126,16 @@ export class DecisionPackets {
       const latest = db.prepare('SELECT id FROM decision_packets WHERE source_key = (SELECT source_key FROM decision_packets WHERE id = ?) ORDER BY version DESC LIMIT 1').get(id) as { id: string }
       const lease = db.prepare('SELECT caller,expires FROM leases WHERE card = ?').get(stored.packet.binding.card_id) as { caller: string | null; expires: number } | undefined
       const current = evidence ? validateDecisionPacket(stored.packet, evidence, this.now()) : { valid: false, reasons: ['Current source evidence not supplied'], valid_until: null }
-      const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id,
-        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : [])],
+      const withdrawn = !!db.prepare("SELECT 1 FROM decision_packet_events WHERE packet_id = ? AND type IN ('research-requested','answer-confirmed') LIMIT 1").get(id)
+      const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
+        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
         valid_until: attestation?.valid_until && current.valid_until ? new Date(Math.min(Date.parse(attestation.valid_until), Date.parse(current.valid_until))).toISOString() : null }
-      return { ...stored, validation, ...decisionPacketReady(validation, stored.expires_at, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id), this.now()) }
+      const pending = this.pendingAnswerInStorage(db, id)
+      return { ...stored, validation, ...decisionPacketReady(validation, stored.expires_at, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
+  }
+  pendingAnswerInStorage(db: DatabaseSync, id: string) {
+    const event = db.prepare("SELECT detail FROM decision_packet_events WHERE packet_id = ? AND type = 'answer-attempt' ORDER BY sequence DESC LIMIT 1").get(id) as { detail: string } | undefined
+    return event ? ['saving', 'save-unconfirmed', 'blocked-recovery'].includes(JSON.parse(event.detail).state) : false
   }
   async ids(limit = 50) {
     await this.initialize()

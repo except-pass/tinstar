@@ -8,6 +8,7 @@ import { PreparedReviews, reviewSessionInput, preparedClaimInput, preparedReleas
 import { CardLeaseError, leaseFailure, leaseHash } from './cardLeases'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
 import type { DecisionEvidence } from '../../shared/decisionPacket'
+import { preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { workReadback } from './workReadback'
 
 async function policyBody(req: IncomingMessage) {
@@ -26,14 +27,15 @@ async function policyBody(req: IncomingMessage) {
 
 /** Owner-authenticated storage, review-lease and source-write recovery API.
  * Publication stays internal until the preparer capability contract is chosen.
- * These routes never launch research or write source cards. */
+ * Only submit writes source answers through the existing workflow writer.
+ * Other routes never launch research or change source workflow. */
 export class DecisionDeskApi {
   constructor(private packets: DecisionPackets, private scope: string, private evidence: (cardId: string) => DecisionEvidence,
     private authorized: (req: IncomingMessage) => Promise<boolean>, private reviews?: PreparedReviews,
-    private recovery?: { list(): unknown; reconcile(card: string, operation: string, actor: string, reason: string): Promise<unknown> }) {}
+    private recovery?: { list(): unknown; reconcile(card: string, operation: string, actor: string, reason: string): Promise<unknown> }, private submissions?: PreparedSubmissions) {}
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['review-events', 'sessions', 'claim', 'release', 'close-session', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
+    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['submit', 'submission-state', 'metrics', 'review-events', 'sessions', 'claim', 'release', 'close-session', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
     if (!paths.includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin', 'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI' }
@@ -43,6 +45,12 @@ export class DecisionDeskApi {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     try {
       const caller = leaseHash(JSON.stringify(['web-review', req.headers['tailscale-user-login'], this.scope]))
+      if (this.submissions && url.pathname.endsWith('/submission-state') && req.method === 'POST') {
+        const input = preparedClaimInput.omit({ operation_id: true, card_id: true }).required({ review_session_token: true }).parse(await policyBody(req))
+        return ok(res, await this.submissions.recover(caller, input), { headers })
+      }
+      if (this.submissions && url.pathname.endsWith('/submit') && req.method === 'POST') return ok(res, await this.submissions.submit(caller, 'Browser review', req.headers['tailscale-user-login'], preparedSubmitInput.parse(await policyBody(req))), { headers })
+      if (this.submissions && url.pathname.endsWith('/metrics') && req.method === 'GET') return ok(res, await this.submissions.metrics(), { headers })
       if (url.pathname.endsWith('/review-events') && req.method === 'GET') return ok(res, workReadback(this.packets.leases.events(z.coerce.number().int().nonnegative().parse(url.searchParams.get('after') ?? 0))), { headers })
       if (url.pathname.endsWith('/sessions')) {
         if (!this.reviews) return fail(res, 'BACKEND_UNAVAILABLE', 'Review sessions unavailable', { headers })
@@ -89,7 +97,7 @@ export class DecisionDeskApi {
     } catch (error) {
       if (error instanceof CardLeaseError) return ok(res, leaseFailure(error), { headers })
       if (error instanceof DecisionDeskConflict) return fail(res, 'CONFLICT', error.message, { headers })
-      if (error instanceof z.ZodError || error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid Decision Desk request; settings were not saved', { headers })
+      if (error instanceof z.ZodError || error instanceof SyntaxError) return fail(res, 'BAD_REQUEST', 'Invalid Decision Desk request; no operation was started', { headers })
       return fail(res, 'BACKEND_UNAVAILABLE', 'Decision Desk storage unavailable; settings were not confirmed saved', { headers })
     }
   }

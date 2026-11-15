@@ -1,7 +1,8 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
+import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
-import { projectDecisionEvidence } from './decisionEvidence'
+import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -51,6 +52,7 @@ export class ReconciliationSources {
   readonly leases: CardLeases
   readonly decisionPackets: DecisionPackets
   readonly preparedReviews: PreparedReviews
+  readonly preparedSubmissions: PreparedSubmissions
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
   authorizePulls?: (req?: IncomingMessage) => Promise<boolean>
@@ -97,6 +99,21 @@ export class ReconciliationSources {
     const content = new WorkflowContent(this.workReader)
     this.proposalSource = new ProposalSource(this.askStore, async id => [...await content.notes(id), ...await content.sections(id)])
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
+    this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, {
+      observe: (input, actor) => this.workflow.observePreparedAnswer(input, actor),
+      evidence: async (stored, original, desired) => {
+        // Forced exact history and source observation on every submit, without
+        // queue()/get_work reconciliation or research in the critical path.
+        const [snapshot, blocks] = await Promise.all([this.snapshot(true), this.workflow.preparedHistory(stored.packet.binding.card_id)])
+        return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks, original, desired)
+      },
+      write: (input, actor) => this.workflow.answerPrepared(input, actor),
+      scheduleReconciliation: card => {
+        this.context.invalidate(card)
+        // Existing bridge/receipt closure proceeds independently of desk next.
+        void this.workflow.reconcileDecisions(card).catch(() => {})
+      },
+    })
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.fetch, this.workReader.jira)
