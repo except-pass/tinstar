@@ -13,14 +13,14 @@ import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliatio
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
-async function setup(count = 5, clock = { now: Date.now() }) {
+async function setup(count = 5, clock = { now: Date.now() }, transform = (fixture: ReturnType<typeof preparedDecisionFixture>) => fixture) {
   const root = await mkdtemp(join(tmpdir(), 'prepared-review-')); roots.push(root)
   const leases = new CardLeases(root, () => clock.now), packets = new DecisionPackets(leases, () => clock.now)
   const fixtures = Array.from({ length: count }, (_, index) => {
     const fixture = preparedDecisionFixture(clock.now), card = (index + 100).toString(16).padStart(32, '0')
     // Keep all exact request/dependency meanings identical between fixture and
     // evidence while making canonical card/request identities independent.
-    return JSON.parse(JSON.stringify(fixture).replaceAll(fixture.cardId, card)) as typeof fixture
+    return transform(JSON.parse(JSON.stringify(fixture).replaceAll(fixture.cardId, card)) as typeof fixture)
   })
   for (const [index, fixture] of fixtures.entries()) await packets.publish(fixture.packet, fixture.evidence, 'fixture', `packet-${index}`)
   const evidence = vi.fn((card: string) => fixtures.find(row => row.cardId === card)!.evidence)
@@ -212,4 +212,39 @@ it('does not match tokenless claims to a similarly named explicit session creati
   const independent = await reviews.claim('owner', 'Owner', { operation_id: 'initial' })
   expect(independent.lease!.card_id).not.toBe(held.lease!.card_id)
   expect(independent.session_id).not.toBe(opened.session.id)
+})
+
+
+it('redacts public held packets and session titles without changing exact identities or stored validation', async () => {
+  const secret = 'password=example-secret'
+  const { reviews, packets, fixtures } = await setup(2, { now: Date.now() }, fixture => {
+    const changed = JSON.parse(JSON.stringify(fixture).replaceAll('preview', secret)) as typeof fixture
+    changed.packet.title = secret
+    changed.packet.background = secret
+    return changed
+  })
+  const opened = await session(reviews, 'redaction')
+  const input = { operation_id: 'claim-redaction', review_session_token: opened.review_session_token }
+  const first = await reviews.claim('owner', 'Browser', input)
+  for (const result of [first, await reviews.claim('owner', 'Browser', input),
+    await reviews.claim('owner', 'Browser', { operation_id: 'resume-redaction', lease_token: first.lease_token })]) {
+    expect(result.outcome).not.toBe('packet-invalidated')
+    expect(result.lease_token).toBe(first.lease_token)
+    expect(result.packet!.packet.background).not.toContain('example-secret')
+    expect(result.packet!.packet.question).not.toContain('example-secret')
+    expect(result.packet!.packet.binding.source_question).not.toContain('example-secret')
+    expect(result.packet!.packet.binding.options).toEqual(fixtures[0]!.packet.binding.options.map(option => ({ ...option, label: option.label.replace(secret, 'password=[credential omitted]') })))
+    expect(result.packet!.packet.binding.source_request).toEqual(fixtures[0]!.packet.binding.source_request)
+    expect(result.packet!.packet.recommended_option_id).toBe(fixtures[0]!.packet.recommended_option_id)
+  }
+  expect(JSON.stringify(await reviews.list('owner'))).not.toContain('example-secret')
+  expect(JSON.stringify(await session(reviews, 'redaction'))).not.toContain('example-secret')
+  const stored = await packets.read(first.packet!.id, fixtures[0]!.evidence)
+  expect(stored!.validation.valid).toBe(true)
+  expect(stored!.packet).toEqual(fixtures[0]!.packet)
+  const skip = { operation_id: 'skip-redaction', lease_token: first.lease_token, reason: 'Next', action: 'skip' }
+  for (const result of [await reviews.release('owner', 'Browser', skip), await reviews.release('owner', 'Browser', skip)]) {
+    expect(result.next!.packet!.packet.background).not.toContain('example-secret')
+    expect(result.next!.lease_token).toBeTruthy()
+  }
 })

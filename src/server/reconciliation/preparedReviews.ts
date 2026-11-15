@@ -1,3 +1,4 @@
+import { workReadback } from './workReadback'
 import { performance } from 'node:perf_hooks'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
@@ -66,8 +67,8 @@ export class PreparedReviews {
     const row = binding ? this.leases.rowInStorage(db, binding.card) : undefined
     const held = this.leases.activeInStorage(row) && row.generation === binding?.generation && row.caller === session.caller
     const packet = held ? db.prepare('SELECT body FROM decision_packets WHERE id = ?').get(binding!.packet_id) as { body: string } | undefined : undefined
-    return { id: session.id, label: session.label, device: session.device, created_at: new Date(session.created).toISOString(), expires_at: new Date(session.expires).toISOString(),
-      held: held ? { lease: publicLease(row), packet_id: binding!.packet_id, packet_version: binding!.packet_version, title: packet ? JSON.parse(packet.body).title as string : null } : null }
+    return { id: session.id, label: workReadback(session.label), device: session.device, created_at: new Date(session.created).toISOString(), expires_at: new Date(session.expires).toISOString(),
+      held: held ? { lease: publicLease(row), packet_id: binding!.packet_id, packet_version: binding!.packet_version, title: packet ? workReadback(JSON.parse(packet.body).title as string) : null } : null }
   }
   async list(caller: string) {
     await this.initialize()
@@ -93,7 +94,18 @@ export class PreparedReviews {
     // Ready normally excludes leases; held validation instead ignores only this
     // context's canonical lease, never source freshness or a pending source write.
     const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || Date.parse(stored.expires_at) <= this.now() || this.leases.reservedInStorage(db, binding.card)
-    return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token, packet: stored, session_id: session.id, packet_version: binding.packet_version }
+    return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token, packet: stored ? {
+      ...workReadback(stored), packet: {
+        ...workReadback(stored.packet), recommended_option_id: stored.packet.recommended_option_id,
+        binding: {
+          ...workReadback(stored.packet.binding), card_id: stored.packet.binding.card_id,
+          request_key: stored.packet.binding.request_key, source_request: stored.packet.binding.source_request,
+          request_id: stored.packet.binding.request_id, source_id: stored.packet.binding.source_id,
+          source_spawn_gen: stored.packet.binding.source_spawn_gen,
+          options: stored.packet.binding.options.map(option => ({ id: option.id, label: workReadback(option.label) })),
+        },
+      },
+    } : null, session_id: session.id, packet_version: binding.packet_version }
   }
   private receipt(db: DatabaseSync, caller: string, operation: string, signature: string) {
     const previous = db.prepare('SELECT signature,result FROM decision_review_operations WHERE caller = ? AND scope = ? AND operation = ?').get(caller, this.scope, operation) as { signature: string; result: string } | undefined

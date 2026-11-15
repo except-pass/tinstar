@@ -1,3 +1,4 @@
+import { CardLeases, leaseDuration } from '../cardLeases'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -385,4 +386,20 @@ it('retains partial fields when HTTP 429 interrupts the read before a transition
   expect(result.saved_fields).not.toContain('Status')
   expect(f.seed.fields.status.name).toBe('To Do')
   expect(f.requests.filter(request => request.path.endsWith('/transitions') && request.method === 'POST')).toHaveLength(0)
+})
+
+
+it('retains the card fence after an attachment upload loses its response', async () => {
+  const f = await fixture()
+  const clock = { now: Date.now() }
+  const leases = new CardLeases(f.root, () => clock.now)
+  const id = `${jiraCardPrefix}${f.seed.id}`
+  f.controls.lostAttachment = true
+  await expect(leases.mutate(id, () => f.reader.jira!.appendContract(id, [{ type: 'paragraph', text: 'Bounded contract' }]),
+    { kind: 'note', marker: 'attachment-fence' })).rejects.toThrow('lost attachment response')
+  expect(f.attachments.size).toBe(1)
+  expect(leases.pendingWrites()).toHaveLength(1)
+  clock.now += leaseDuration * 2
+  expect(await leases.claim([id], 'other', 'Other', 'competing')).toMatchObject({ outcome: 'no-unclaimed-card' })
+  await expect(leases.mutate(id, async () => {})).rejects.toThrow('Source write unresolved')
 })
