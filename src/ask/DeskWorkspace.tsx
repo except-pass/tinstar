@@ -108,12 +108,12 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
         if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
-      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} /></div>
+      <div className="desk-workspace">{children}<WorkspaceRail overlay={decisionsActive} closeRequest={closeRequest} openRequest={openRequest} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>
 }
-function WorkspaceRail({ closeRequest, openRequest }: {
-  closeRequest: number; openRequest: number
+function WorkspaceRail({ overlay, closeRequest, openRequest }: {
+  overlay?: boolean; closeRequest: number; openRequest: number
 }) {
   const { now } = useDeskWorkspace()
   const controls = useAskControls()
@@ -132,7 +132,7 @@ function WorkspaceRail({ closeRequest, openRequest }: {
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
   const attention = groups.filter(group => group.attention && !group.unread).length
-  return <DeskRail onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
+  return <DeskRail overlay={overlay} onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
     <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
     <AskDesk now={now} view={view} />
   </DeskRail>

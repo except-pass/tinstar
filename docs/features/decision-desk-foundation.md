@@ -411,3 +411,42 @@ source delay and the scope/limitations in `api-proof.json`, then closes both
 servers. It uses no live root, tokens, board or bridge. These fixture measurements
 are not production latency or P6 integrated acceptance. No P3 screen changed;
 first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
+
+## P5 — Review and Preparation UI
+
+The existing Decisions entry uses the prepared-review APIs for one real,
+server-registered review context. Session capabilities, exact selections and
+submission operation IDs are retained in session storage and sent only as API
+arguments. Duplicate browser contexts with cloned storage resume that same real
+session; a distinct context must explicitly create a new session. The rail lists
+actual server contexts and explains that other contexts must be resumed in their
+original browser. Discuss remains available as an explicitly opened overlay.
+
+Review uses the approved three/two/one-column layout, source-bound radio choices,
+scoped high-risk confirmation and readback-confirmed submit/next. Expired leases,
+invalidated evidence and unavailable sources block submission. Definite and
+unconfirmed saves retain the selection and operation; retries use the same ID.
+Preparation saves the effective versioned queue policy. No preparation runner is
+configured in P5, and no setting starts or schedules one. Unknown source totals
+are unavailable, not zero. The cached-source `/snapshot` projection supplies full
+latest-packet inventory/counts and pending rows without researching or mutating
+source cards; it is separate from the bounded publication inventory.
+
+**Multipart boundary:** P5 reviews each independently identified source request
+separately through P3. Same-card requests are not inferred to form a bundle.
+Combined A/B/C submission and its partial-save screen remain outstanding pending
+owner fork C (source grouping, required parts, aggregate transitions and retaining
+one lease across parts). Firstmate confirmed this scope in task instruction
+`001.msg` on 2026-11-15. Recorded progress is per source request, never a claim that
+an unspecified bundle is complete. P4 (preparer runner) and P6 (integrated
+acceptance/activation evidence) follow.
+
+The isolated running-UI harness is
+`scripts/decision-desk-ui-preview.ts <task-proof-directory>`, after `npm run
+build:all`. It creates a fresh config root and SQLite database, uses a disposable
+Notion-compatible source adapter, and serves preview-only fault controls outside
+production routes. No live home, token, board, bridge or preparer is enrolled.
+Browser proof uses a named `chrome-devtools-axi` session which must be stopped
+after capture. Browser Performance measures distinguish claim API/visible and
+submit API/visible timings, with outcomes separating filled-buffer, empty and
+unavailable cases; source prose and capability tokens are never measure names.

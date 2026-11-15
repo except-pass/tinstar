@@ -2,11 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { clampDeskWidth, defaultDeskWidth, deskWidthLimit, loadDeskPreferences, minimumDeskWidth, saveDeskPreferences } from './deskPreferences'
 import './desk.css'
 
-export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onClose, onVisibilityChange, children }: {
-  closeRequest?: number; openRequest: number; unread: number; attention: number; onClose?: () => void; onVisibilityChange?: (visible: boolean) => void; children: ReactNode
+export function DeskRail({ overlay = false, closeRequest = 0, openRequest, unread, attention, onClose, onVisibilityChange, children }: {
+  overlay?: boolean; closeRequest?: number; openRequest: number; unread: number; attention: number; onClose?: () => void; onVisibilityChange?: (visible: boolean) => void; children: ReactNode
 }) {
   const [preferences, setPreferences] = useState(loadDeskPreferences)
-  const [narrow, setNarrow] = useState(() => window.matchMedia?.('(max-width:850px)').matches ?? false)
+  const [narrow, setNarrow] = useState(() => overlay || (window.matchMedia?.('(max-width:850px)').matches ?? false))
   const [mobileOpen, setMobileOpen] = useState(false)
   const [available, setAvailable] = useState(window.innerWidth - 62)
   const host = useRef<HTMLDivElement>(null), panel = useRef<HTMLElement>(null), trigger = useRef<HTMLButtonElement>(null), closeButton = useRef<HTMLButtonElement>(null)
@@ -23,12 +23,12 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
   useLayoutEffect(() => {
     const update = () => setAvailable(host.current?.parentElement?.clientWidth || window.innerWidth - 62)
     const query = window.matchMedia?.('(max-width:850px)')
-    const reflow = () => { setNarrow(query?.matches ?? window.innerWidth <= 850); update() }
+    const reflow = () => { setNarrow(overlay || (query?.matches ?? window.innerWidth <= 850)); update() }
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null
     if (host.current?.parentElement) observer?.observe(host.current.parentElement)
     query?.addEventListener?.('change', reflow); window.addEventListener('resize', reflow); update()
     return () => { observer?.disconnect(); query?.removeEventListener?.('change', reflow); window.removeEventListener('resize', reflow) }
-  }, [])
+  }, [overlay])
   const previousVisible = useRef(visible), previousNarrow = useRef(narrow)
   useLayoutEffect(() => {
     if (visible && narrow && (!previousVisible.current || !previousNarrow.current)) closeButton.current?.focus({ preventScroll: true })
@@ -42,7 +42,7 @@ export function DeskRail({ closeRequest = 0, openRequest, unread, attention, onC
   }
   const changeWidth = (next: number) => setPreferences(value => ({ ...value, width: clampDeskWidth(next, available) }))
   const countLabel = `${unread} unread answers, ${attention} need attention`
-  return <div ref={host} className={`desk-host${narrow ? ' is-narrow' : ''}${visible ? ' is-open' : ' is-closed'}`} style={{ '--desk-width': `${width}px` } as React.CSSProperties}>
+  return <div ref={host} className={`desk-host${overlay ? ' is-overlay' : ''}${narrow ? ' is-narrow' : ''}${visible ? ' is-open' : ' is-closed'}`} style={{ '--desk-width': `${width}px` } as React.CSSProperties}>
     <button ref={trigger} type="button" className="desk-trigger" aria-controls="global-desk" aria-expanded={visible} aria-label={`Open Discuss, ${countLabel}`} onClick={() => { if (narrow) setMobileOpen(true); else open() }}>Discuss{unread + attention > 0 && <span aria-hidden="true">{unread + attention}</span>}</button>
     {narrow && visible && <button className="desk-backdrop" type="button" aria-label="Close Discuss" onClick={close} />}
     <div className="desk-divider" hidden={narrow || !visible} role="separator" tabIndex={0} aria-label="Resize Discuss" aria-orientation="vertical" aria-controls="global-desk" aria-valuemin={minimumDeskWidth} aria-valuemax={Math.floor(deskWidthLimit(available))} aria-valuenow={Math.round(width)} aria-valuetext={`${Math.round(width)} pixels`} onDoubleClick={() => changeWidth(defaultDeskWidth)} onKeyDown={event => {

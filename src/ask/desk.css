@@ -36,3 +36,11 @@
   .global-desk .desk-tabs button{min-height:44px}
 }
 @media(max-width:850px){.global-desk>header,.global-desk .desk-tabs{height:44px}.global-desk .desk-tabs button{min-height:44px}}
+
+/* Decision Desk keeps its three-column review composition; Discuss remains an
+   explicitly opened dialog rather than a fourth permanent rail. */
+.desk-host.is-overlay{width:0;position:static}
+.desk-host.is-overlay .desk-trigger{display:block;writing-mode:horizontal-tb;position:absolute;inset:auto 12px 12px auto;z-index:20;padding:10px;min-height:44px}
+.desk-host.is-overlay.is-open .desk-trigger{visibility:hidden}
+.desk-host.is-overlay .global-desk{position:fixed;right:0;top:0;bottom:0;width:min(390px,calc(100vw - 48px));max-width:100vw;z-index:51;box-shadow:-12px 0 35px #0009}
+.desk-host.is-overlay .desk-backdrop{display:block;position:fixed;inset:0;background:#0005;border:0;z-index:50}

@@ -74,6 +74,43 @@ export class PreparedReviews {
     await this.initialize()
     return this.leases.readStorage(db => ({ sessions: (db.prepare('SELECT * FROM decision_review_sessions WHERE caller = ? AND scope = ? AND revoked IS NULL AND expires > ? ORDER BY created,id').all(caller, this.scope, this.now()) as unknown as Session[]).map(session => this.summary(db, session)) }))
   }
+  /** Complete cached-source UI projection; never dispatches research or writes source. */
+  async snapshot() {
+    await this.initialize()
+    return this.leases.readStorage(db => {
+      const queue = this.queue(), now = this.now()
+      const rows = db.prepare(`SELECT id FROM decision_packets p WHERE version =
+        (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`).all() as Array<{ id: string }>
+      const current = rows.map(row => {
+        const stored = this.packets.readInStorage(db, row.id)!
+        return this.packets.readInStorage(db, row.id, this.evidence(stored.packet.binding.card_id))!
+      }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id))
+      const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
+      const ready = current.filter(stored => stored.ready)
+      const pending = queue.card_ids.flatMap(card => {
+        const evidence = this.evidence(card)
+        return evidence.requests.filter(request => !request.answered).map(request => {
+          const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
+          return { card_id: card, request_id: request.binding?.request_id ?? null,
+            title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
+            state: packet?.ready ? 'Ready' : held.has(card) ? 'Leased' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
+            reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
+        })
+      })
+      const verified = queue.coverage === 'complete'
+      return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: queue.coverage,
+        counts: { ready: verified ? new Set(ready.map(packet => packet.packet.binding.card_id)).size : null,
+          leased: verified ? held.size : null, preparing: 0,
+          needs_repreparation: verified ? current.filter(packet => !packet.ready && !held.has(packet.packet.binding.card_id)).length : null,
+          to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
+          requests: queue.requests },
+        runner: { configured: false, explanation: 'No preparation runner is configured. Pending work is not being prepared.' },
+        ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
+        recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
+          ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],
+        pending, omissions: verified ? [] : ['Source coverage is incomplete or unavailable; queue totals cannot be verified.'] }
+    })
+  }
   private session(db: DatabaseSync, caller: string, input: Pick<ClaimInput, 'review_session_token' | 'lease_token'>): Session | undefined {
     let session: Session | undefined
     if (input.review_session_token) session = db.prepare('SELECT * FROM decision_review_sessions WHERE token_hash = ? AND caller = ? AND scope = ?').get(leaseHash(input.review_session_token), caller, this.scope) as unknown as Session | undefined

@@ -35,7 +35,7 @@ export class DecisionDeskApi {
     private recovery?: { list(): unknown; reconcile(card: string, operation: string, actor: string, reason: string): Promise<unknown> }, private submissions?: PreparedSubmissions) {}
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['submit', 'submission-state', 'metrics', 'review-events', 'sessions', 'claim', 'release', 'close-session', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
+    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['snapshot', 'submit', 'submission-state', 'metrics', 'review-events', 'sessions', 'claim', 'release', 'close-session', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
     if (!paths.includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin', 'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI' }
@@ -45,6 +45,7 @@ export class DecisionDeskApi {
     if (req.headers['x-tinstar-ui'] !== '1') return fail(res, 'FORBIDDEN', 'UI handshake required', { headers })
     try {
       const caller = leaseHash(JSON.stringify(['web-review', req.headers['tailscale-user-login'], this.scope]))
+      if (this.reviews && url.pathname.endsWith('/snapshot') && req.method === 'GET') return ok(res, workReadback(await this.reviews.snapshot()), { headers })
       if (this.submissions && url.pathname.endsWith('/submission-state') && req.method === 'POST') {
         const input = preparedRecoveryInput.required({ review_session_token: true }).parse(await policyBody(req))
         return ok(res, await this.submissions.recover(caller, input), { headers })
