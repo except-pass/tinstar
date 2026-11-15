@@ -29,15 +29,18 @@ const fixture = decisionSubmitFixture(40)
 fixture.controls.delayMs = 10
 const listen = async (server: Server) => { await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); return `http://127.0.0.1:${(server.address() as { port: number }).port}` }
 const servers: Server[] = []
+const persistSource = () => writeFile(join(root, 'isolated-source-state.json'), JSON.stringify({ pages: [...fixture.pages], comments: [...fixture.comments] }))
+await persistSource()
 const sourceServer = createServer(async (req, res) => {
   const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
+  const mutation = req.method !== 'GET' && !new URL(req.url ?? '/', 'http://fixture').pathname.endsWith('/query')
   try {
     const response = await fixture.fetcher(`https://api.notion.com${req.url}`, { method: req.method, ...(chunks.length ? { body: Buffer.concat(chunks).toString() } : {}) })
     // Persist source effects before returning, including lost-response faults.
-    await writeFile(join(root, 'isolated-source-state.json'), JSON.stringify({ pages: [...fixture.pages], comments: [...fixture.comments] }))
+    if (mutation) await persistSource()
     res.writeHead(response.status, { 'Content-Type': 'application/json' }); res.end(await response.text())
   } catch {
-    await writeFile(join(root, 'isolated-source-state.json'), JSON.stringify({ pages: [...fixture.pages], comments: [...fixture.comments] }))
+    if (mutation) await persistSource()
     res.destroy()
   }
 })

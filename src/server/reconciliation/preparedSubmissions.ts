@@ -188,7 +188,6 @@ export class PreparedSubmissions {
           db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'answer-confirmed', caller, new Date(confirmed).toISOString(), JSON.stringify({ request_id: answer.request_id, operation_key: leaseHash(JSON.stringify([caller, attempt.operation])), duration_ms: confirmed - attempt.created }))
         }
       })
-      try { this.source.scheduleReconciliation?.(binding.card) } catch { /* Source recording is independent of bridge availability. */ }
       return this.finish(attempt, holder)
     } catch (error) {
       if (error instanceof DecisionDeskConflict) return this.response(attempt, 'not-saved', error.message)
@@ -213,6 +212,9 @@ export class PreparedSubmissions {
         this.leases.auditInStorage(db, binding.card, 'prepared-submit-to-next', { operation_key: leaseHash(JSON.stringify([attempt.caller, attempt.operation])), outcome: result.outcome, duration_ms: this.now() - attempt.created, source_readback_ms: row.confirmed - attempt.created })
         return result
       })
+      // Dispatch only after release/next commits: receipt writes must not race
+      // the canonical release transaction or delay advancement on a slow worker.
+      try { this.source.scheduleReconciliation?.(binding.card) } catch { /* Source recording is independent of bridge availability. */ }
       return this.response(attempt, next.lease ? 'recorded' : 'recorded-empty', 'Recorded; awaiting worker acknowledgment.', { source_state: 'recorded-awaiting-worker-acknowledgment', next })
     } catch {
       return this.response(attempt, 'recorded-releasing', 'Decision recorded; releasing the previous lease is pending. Retry the same operation ID.', { source_state: 'recorded-awaiting-worker-acknowledgment' })

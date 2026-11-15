@@ -76,7 +76,7 @@ export class WorkflowOperations {
   /** Desk-only persistence boundary. Legacy update() still waits for its
    * existing reconciliation result; desk advancement never waits for a worker. */
   answerPrepared(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string): Promise<StartWorkResult> {
-    return this.guarded(input.card_id, input.operation_id, actor, () => this.exclusive(input.card_id, () => this.performUpdate(input, actor)), false)
+    return this.guarded(input.card_id, input.operation_id, actor, () => this.exclusive(input.card_id, () => this.performUpdate(input, actor, true)), false)
   }
   async observePreparedAnswer(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string) {
     // Full notes, not a property timestamp or cached UI history. An absent
@@ -570,7 +570,7 @@ export class WorkflowOperations {
     if (Array.isArray(value) && Array.isArray(actual)) return same([...value].sort(), [...actual].sort())
     return same(actual, value)
   }
-  private async performUpdate(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
+  private async performUpdate(input: UpdateWorkInput, actor: string, prepared = false): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined
     let requested: Record<string, unknown> = {}
@@ -614,7 +614,7 @@ export class WorkflowOperations {
           const effects = decisionEffects(first.input, source)
           if (!same(effects, decisionEffects(input, source)) || intents.some(intent => !same(effects, decisionEffects(intent.input, source)))) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer intent or effects')
           if (first.actor !== actor || first.input.operation_id !== input.operation_id) {
-            const recovered = await this.performUpdate(first.input, first.actor)
+            const recovered = await this.performUpdate(first.input, first.actor, prepared)
             return { ...recovered, operation_id: input.operation_id }
           }
         }
@@ -671,7 +671,14 @@ export class WorkflowOperations {
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
         if (Object.keys(missing).length) {
           attempted = true
-          const patched = await this.content.patchProperties(card.id, missing)
+          const recheck = prepared ? async () => {
+            const latest = await this.reader.card(input.card_id, true)
+            for (const name of Object.keys(missing)) {
+              if (name !== 'Last touched by' && !this.matches(latest, name, plan.original[name]) && !this.matches(latest, name, plan.desired[name])) throw new WorkflowError('conflict', `${name} changed before the reserved answer write; unrelated work was preserved`)
+            }
+            return Object.keys(missing).every(name => this.matches(latest, name, plan.desired[name]))
+          } : undefined
+          const patched = await this.content.patchProperties(card.id, missing, recheck)
           card = card.source?.provider === 'jira' ? patched as WorkCard : await this.reader.card(card.id, true)
         }
         this.reader.confirm(card)

@@ -227,8 +227,10 @@ it('keeps ambiguous operations out of Ready and cannot skip them into another re
 
 it('retains durable success even when the asynchronous worker bridge throws', async () => {
   const f = await setup()
-  const submissions = new PreparedSubmissions(f.backend.reviews, { ...f.backend.source, scheduleReconciliation: () => { throw new Error('Bridge unavailable') } })
+  const leaseAtDispatch: unknown[] = []
+  const submissions = new PreparedSubmissions(f.backend.reviews, { ...f.backend.source, scheduleReconciliation: () => { leaseAtDispatch.push(f.backend.leases.status(f.claim.lease!.card_id)); throw new Error('Bridge unavailable') } })
   expect(await submissions.submit('owner', 'Reviewer', 'owner-actor', f.input)).toMatchObject({ outcome: 'recorded', source_state: 'recorded-awaiting-worker-acknowledgment' })
+  expect(leaseAtDispatch).toEqual([null])
 })
 
 it('tracks two independently identified requests on one card with their own vocabulary; a later timeout reports prior durable progress only', async () => {
@@ -307,7 +309,7 @@ it('reconciles a source answer saved before a readback outage, including restart
 })
 
 
-it('deduplicates one held submit across independent backend processes sharing the durable store', async () => {
+it.each([1, 2, 3])('deduplicates one held submit across independent backend processes sharing the durable store (round %i)', async () => {
   const f = await setup()
   const sourceServer = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))

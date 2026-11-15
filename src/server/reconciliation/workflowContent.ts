@@ -39,7 +39,14 @@ export class WorkflowContent {
     return this.reader.jira
   }
   recoverAppliedWrite(id: string) { return this.reader.leases?.recoverAppliedWrite(id, intent => this.reservationReadback(id, intent)) }
-  patchProperties(id: string, properties: Record<string, unknown>) { return this.reader.mutate(id, () => this.performPatchProperties(id, properties), { kind: 'properties', properties }) }
+  patchProperties(id: string, properties: Record<string, unknown>, alreadyApplied?: () => Promise<boolean>) {
+    return this.reader.mutate(id, async () => {
+      // Desk retries can compute the same PATCH before either acquires this
+      // reservation. Recheck inside it to avoid duplicate provider effects.
+      if (alreadyApplied && await alreadyApplied()) return this.reader.card(id, true)
+      return this.performPatchProperties(id, properties)
+    }, { kind: 'properties', properties })
+  }
   private async performPatchProperties(id: string, properties: Record<string, unknown>) {
     const jira = this.jira(id)
     if (jira) return jira.patch(id, properties)

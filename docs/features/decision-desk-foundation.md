@@ -322,11 +322,14 @@ or changed PR/worker evidence blocks submit. P1's unsupported external evidence
 stays unknown; P3 does not invent PR-head proof.
 
 The desk persistence entry point returns independently of downstream worker
-reconciliation. Legacy `update_work` still returns its existing pending-worker
+reconciliation. Desk property writes recheck current values inside the existing
+per-card reservation so simultaneous same-ID retries do not repeat a PATCH;
+intervening external property edits are preserved. This adds no writer registry. Legacy `update_work` still returns its existing pending-worker
 result. Desk success requires an exact authoritative answer receipt readback,
 never just an intent, delivered inbox note, property match or list of saved
 fields. It returns `recorded-awaiting-worker-acknowledgment` and schedules the
-existing receipt bridge asynchronously. In one short local transaction, the
+existing receipt bridge asynchronously after local release/next commits, so
+receipt writes cannot race that step. In one short local transaction, the
 coordinator records release and binds the next Ready packet. Allocation failure
 cannot roll back release of a source-confirmed answer. A crash between source
 confirmation and release/next is reconciled by the same operation ID.
