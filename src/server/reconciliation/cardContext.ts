@@ -28,6 +28,12 @@ export class CardContextReader {
     const cached = this.commentCache.get(id)
     return cached && cached.until > Date.now() ? cached.resolved : undefined
   }
+  /** Read the cached observation with its original conservative freshness;
+   * looking at evidence never refreshes it or fetches source history. */
+  cachedDecisionHistory(id: string) {
+    const cached = this.commentCache.get(id)
+    return cached?.resolved ? { context: cached.resolved, observed_at: new Date(cached.until - 30_000).toISOString(), expires_at: new Date(cached.until).toISOString() } : undefined
+  }
   details(id: string, force = false): Promise<CardContextRead> {
     if (force) this.invalidate(id)
     return Promise.all([this.get(id), this.commentDetails(id, force)]).then(([body, comments]): CardContextRead => ({
