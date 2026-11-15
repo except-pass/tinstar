@@ -2,6 +2,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
+// These tests isolate workspace/legacy source routing. Prepared Review has its
+// own API/client tests and running-UI proof; it must never manufacture a packet
+// from the generic queue fixtures used by this suite.
+vi.mock('../../reconciliation/Decisions', async () => { const { DecisionSourceContext } = await import('../../reconciliation/DecisionSourceContext'); return { Decisions: DecisionSourceContext } })
 import { observeTargets } from '../../reconciliation/presentationVisibility'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
@@ -90,7 +94,7 @@ it('opens a delivered decision conversation in Waiting with one composer', async
   const full = await screen.findByRole('button', { name: 'Full conversation ↗' })
   fireEvent.click(full)
   await act(async () => {})
-  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Discuss' })).getByRole('button', { name: 'Close Discuss' }))
   fireEvent.click(full)
   await act(async () => {})
   expect(screen.getByRole('button', { name: 'Waiting 1' })).toHaveAttribute('aria-pressed', 'true')

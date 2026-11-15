@@ -11,7 +11,8 @@ function load(): ReviewContext {
   try { return JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh() } catch { return fresh() }
 }
 const requestKey = (packet: DeskPacket) => `${packet.packet.binding.card_id}:${packet.packet.binding.request_id}`
-export function useDecisionDesk() {
+export function useDecisionDesk(initialCard?: string) {
+  const initialTarget = useRef(initialCard)
   const context = useRef<ReviewContext>(load())
   const lock = useRef(false), mounted = useRef(true)
   const visibleMeasure = useRef<{ name: string; started: number } | null>(null)
@@ -47,10 +48,11 @@ export function useDecisionDesk() {
       deskCall<{ sessions: DeskSession[] }>('sessions'),
     ])
     if (!mounted.current) return
-    if (values[0].status === 'fulfilled') setSnapshot(values[0].value)
+    if (values[0].status === 'fulfilled' && values[0].value?.counts && Array.isArray(values[0].value.ready)) setSnapshot(values[0].value)
     else setSnapshot(null)
-    if (values[1].status === 'fulfilled') setPolicy(values[1].value)
-    if (values[2].status === 'fulfilled') setSessions(values[2].value.sessions)
+    if (values[1].status === 'fulfilled' && values[1].value?.values) setPolicy(values[1].value)
+    else setPolicy(null)
+    if (values[2].status === 'fulfilled' && Array.isArray(values[2].value?.sessions)) setSessions(values[2].value.sessions)
   }, [])
   const ensureSession = useCallback(async () => {
     if (context.current.token) return
@@ -58,6 +60,7 @@ export function useDecisionDesk() {
     const response = await deskCall<{ session: DeskSession; review_session_token: string }>('sessions', {
       operation_id: context.current.create, label: 'Browser review', device: matchMedia('(max-width:660px)').matches ? 'phone' : 'desktop',
     })
+    if (!response.review_session_token || !response.session?.id) throw new Error('Review session could not be verified. Backend unavailable.')
     context.current.token = response.review_session_token; context.current.id = response.session.id; persist()
   }, [persist])
   const claimNext = useCallback(async (cardId?: string, revalidate = false) => {
@@ -67,6 +70,8 @@ export function useDecisionDesk() {
     const value = await deskCall<DeskClaim>('claim', { operation_id: context.current.claimOperation,
       review_session_token: context.current.token, ...(context.current.lease && !revalidate ? { lease_token: context.current.lease } : {}), ...(cardId ? { card_id: cardId } : {}),
     })
+    if (!value?.outcome) throw new Error('Prepared claim could not be verified. Backend unavailable.')
+    if (value.outcome === 'already-holding') setNotice('This session already holds a different decision. Finish or skip it before switching.')
     visibleMeasure.current = { name: `decision-desk.claim-visible.${value.outcome}`, started }
     if (!value.packet && claimRef.current?.packet && (value.code === 'claim-lost' || value.code === 'card-held' || value.code === 'source-write-pending' || Object.keys(context.current.attempts).length > 0)) {
       accept({ ...claimRef.current, outcome: value.code === 'card-held' ? 'card-held' : 'lease-lost', code: value.code, message: value.message })
@@ -96,7 +101,7 @@ export function useDecisionDesk() {
         const packet = await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(retained.selection.packet_id)}`)
         accept({ outcome: 'lease-lost', packet, lease_token: context.current.lease })
       }
-      const response = await claimNext(claimRef.current?.packet?.packet.binding.card_id, true)
+      const response = await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true)
       const held = response.packet ? response : claimRef.current
       for (const attempt of recovered.submissions) {
         if (held?.lease_token && held.packet && attempt.selection.request_id === held.packet.packet.binding.request_id) {

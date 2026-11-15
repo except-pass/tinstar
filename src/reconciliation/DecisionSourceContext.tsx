@@ -280,7 +280,7 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
   </aside>
 }
 
-function DecisionCardContext({ id, showLink = true }: { id: string; showLink?: boolean }) {
+export function DecisionCardContext({ id, showLink = true, readOnly = false }: { id: string; showLink?: boolean; readOnly?: boolean }) {
   const { scene, refreshAfterMutation, send } = useDeskWorkspace()
   const card = scene?.cards.find(card => card.id === id)
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
@@ -292,12 +292,12 @@ function DecisionCardContext({ id, showLink = true }: { id: string; showLink?: b
     return () => controller.abort()
   }, [id])
   return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
-    <CardLeaseStatus key={id} cardId={id} />
+    {!readOnly && <CardLeaseStatus key={id} cardId={id} />}
     {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
     {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
     {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
-    {card && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
-    <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>
+    {card && !readOnly && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    {!readOnly && <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>}
   </section>
 }
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {

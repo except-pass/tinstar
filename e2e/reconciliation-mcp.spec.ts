@@ -1,3 +1,4 @@
+import { installDecisionDesk } from './fixtures/decisionDesk'
 import { buildWorkerLinkReport } from '../src/server/reconciliation/workerLinkReport'
 import { test, expect, type Page } from '@playwright/test'
 import { createServer, type Server } from 'node:http'
@@ -95,6 +96,7 @@ test('session code remains accessible after reveal with Discuss open', async ({ 
 })
 
 test.beforeEach(async ({ page }) => {
+  await installDecisionDesk(page)
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
 })
 
@@ -226,7 +228,8 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   let nextAck = await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: beforeNext.state.revision })
   if (nextAck.outcome === 'queued') await expect.poll(async () => { nextAck = await call('get_command', { scene_id: first, command_id: 'next' }); return nextAck.outcome }).toBe('applied')
   expect(nextAck.outcome).toBe('applied')
-  await expect(page.getByLabel('Selected decision')).toHaveAttribute('data-decision-id', queue.items[1]!.id)
+  await expect(page.locator('.dd-identifiers')).toHaveAttribute('data-decision-id', queue.items[0]!.id)
+  await expect(page.getByText('This session already holds a different decision. Finish or skip it before switching.')).toBeVisible()
   expect((await call('get_queue', { scene_id: first })).items[0].readiness).toBe('ready-now')
   await present(page, { type: 'clear-transient' }, 'clear-flash-before-navigation')
   await present(page, { type: 'set-status-filter', filter: { preset: 'custom', statuses: ['Waiting For'] } }, 'hide-desk-task')
@@ -237,7 +240,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   expect(navigation.ack.state.queueItemId).toBe(queue.items[1]!.id)
   expect(navigation.ack.state.statusFilter).toEqual({ preset: 'custom', statuses: ['Waiting For'] })
   await expect(page).toHaveURL(/view=decisions/)
-  await expect(page.locator(`.decisions-row[data-card-id="${linkedCardId}"]`).first()).toHaveClass(/selected/)
+  await expect(page.locator(`.dd-identifiers[data-semantic-id="card:${linkedCardId}"]`)).toBeVisible()
   expect(await windowId(page)).toBe(first)
   // Return manually before exercising the Overview organizer race.
   await page.getByRole('button', { name: 'Overview', exact: true }).click()
@@ -280,184 +283,73 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   }
 })
 
-test('Decisions shares conditional selection and visible MCP flashes on desktop and phone in the same scene', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 800 })
-  // Put the conditional target far below the fold without changing source identity.
-  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { ...queue, items: [
-    ...queue.items.filter(item => !item.cardIds.includes(dirtId)),
-    ...Array.from({ length: 35 }, (_, index) => ({ ...queue.items[0]!, id: `unlinked:${index}`, cardIds: [], title: `Additional request ${index}`, evidence: [] })),
-    queue.items.find(item => item.cardIds.includes(dirtId))!,
-  ] } } }))
+test('Decisions preserves one leased request through presentation navigation on desktop and phone', async ({ page }) => {
   await page.goto(`${base}/?view=decisions`)
-  let scene_id = await windowId(page)
-  const row = page.locator(`.decisions-row[data-card-id="${dirtId}"]`)
-  const search = page.getByRole('searchbox', { name: 'Search decisions' })
-  await search.fill('Dirt Computing')
-  await expect(row).toContainText('Waiting on a prerequisite')
-  await row.click()
-  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: dirtId })
-  await expect(page.getByLabel('Selected decision')).toContainText(dirtTitle)
-  const revision = (await call('get_scene', { scene_id })).state.revision
-  const missing = await call('present_view', { scene_id, command_id: 'decisions-missing', expected_revision: revision, action: { type: 'flash', targets: [{ kind: 'card', id: 'missing' }] } })
-  expect(missing.outcome).toBe('unknown-id')
-  await page.getByRole('button', { name: 'Overview', exact: true }).click()
-  expect(await windowId(page)).toBe(scene_id)
-  await page.goBack()
-  await expect(search).toHaveValue('Dirt Computing')
-  expect(await windowId(page)).toBe(scene_id)
-  await page.goForward()
-  await expect(page.getByRole('region', { name: 'Overview', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Decisions', exact: true }).click()
-  expect(await windowId(page)).toBe(scene_id)
-  await page.reload()
-  scene_id = await windowId(page)
-  await expect(row).toHaveAttribute('aria-pressed', 'true')
-  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: dirtId })
-  const list = page.getByLabel('Decision requests')
-  await list.evaluate(node => { node.scrollTop = 0 })
-  await expect(row).not.toBeInViewport()
-  await present(page, { type: 'focus', target: { kind: 'card', id: fixtureId(1) } }, 'decisions-focus-other')
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'decisions-visible-flash')
-  await expect(row).toHaveClass(/flashed/)
-  await expect(row).toBeInViewport()
-  await expect(row).toHaveAttribute('aria-pressed', 'false')
-  await expect(page).toHaveURL(/view=decisions/)
-  const directory = process.env.TINSTAR_MCP_PROOF
-  if (directory) await page.screenshot({ path: join(directory, 'decisions-desktop-flash.png'), fullPage: true })
-  await expect(row).not.toHaveClass(/flashed/, { timeout: 6000 })
-  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBe(0)
+  const sceneId = await windowId(page)
+  const held = page.locator('.dd-identifiers')
+  await expect(held).toHaveAttribute('data-semantic-id', `card:${fixtureId(1)}`)
+  await present(page, { type: 'navigate-card', cardId: dirtId }, 'desk-other-held')
+  await expect(held).toHaveAttribute('data-semantic-id', `card:${fixtureId(1)}`)
+  await expect(page.getByText('This session already holds a different decision. Finish or skip it before switching.')).toBeVisible()
   await page.setViewportSize({ width: 390, height: 844 })
-  await row.click()
-  await expect(page.getByLabel('Selected decision')).toBeVisible()
-  await expect(list).toBeHidden()
-  await page.getByRole('button', { name: /All decisions/ }).click()
-  await expect(list).toBeVisible()
-  await expect(page.getByLabel('Selected decision')).toBeHidden()
-  await search.fill('no matching title')
-  await present(page, { type: 'focus', target: { kind: 'card', id: dirtId } }, 'decisions-phone-focus')
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'decisions-phone-flash')
-  await expect(row).toBeInViewport()
-  await expect(row).toHaveClass(/selected.*flashed/)
-  await expect(search).toHaveValue('no matching title')
+  await expect(page.locator('.dd-rail')).toBeHidden()
+  await expect(page.locator('.dd-inspector')).toBeHidden()
+  await expect(page.locator('.dd-inline-evidence')).toBeVisible()
+  expect(await windowId(page)).toBe(sceneId)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  if (directory) {
-    await page.screenshot({ path: join(directory, 'decisions-phone-flash.png'), fullPage: true })
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(join(directory, 'decisions-mcp-transcript.json'), JSON.stringify(transcript, null, 2))
-  }
-  // A manual click advances the same revision and owns the shared focus.
-  await search.fill('Build live')
-  await page.locator(`.decisions-row[data-card-id="${fixtureId(1)}"]`).click()
-  await expect.poll(async () => (await call('get_scene', { scene_id })).state.selection).toEqual({ kind: 'card', id: fixtureId(1) })
 })
 
-test('Decisions header controls remain separate at workbench viewport sizes', async ({ page }) => {
+test('Decision Desk header tabs stay separate at all review viewport sizes', async ({ page }) => {
   await page.goto(`${base}/?view=decisions`)
   await windowId(page)
-  for (const [width, height, pane] of [[1040, 900, 'desktop'], [1440, 900, 'desktop'], [390, 844, 'queue'], [390, 844, 'detail']] as const) {
+  for (const [width, height] of [[390, 844], [430, 932], [768, 1024], [1440, 900], [1920, 1080]] as const) {
     await page.setViewportSize({ width, height })
-    if (pane === 'detail') await page.locator('.decisions-row').first().click()
-    const connection = page.locator('.decisions-top .session-connection > summary')
-    const source = page.locator('.decisions-source > summary')
-    const brand = page.getByRole('heading', { name: 'Decisions', exact: true })
-    const boxes = await Promise.all([brand.boundingBox(), connection.boundingBox(), source.boundingBox()])
-    for (const box of boxes) {
-      expect(box).not.toBeNull()
-      expect(box!.x).toBeGreaterThanOrEqual(0)
-      expect(box!.x + box!.width).toBeLessThanOrEqual(width)
-    }
-    expect(boxes[0]!.x + boxes[0]!.width).toBeLessThanOrEqual(boxes[1]!.x)
-    expect(boxes[1]!.x + boxes[1]!.width).toBeLessThanOrEqual(boxes[2]!.x)
-    await source.click()
-    await expect(page.getByRole('heading', { name: 'Source health' })).toBeVisible()
-    await source.click()
-    await connection.click()
-    await expect(page.getByRole('button', { name: 'Copy session ID', exact: true })).toBeVisible()
-    await connection.click()
-    const directory = process.env.TINSTAR_MCP_PROOF
-    if (directory) await page.screenshot({ path: join(directory, `fixed-workbench-${width}-${pane}.png`) })
+    const brand = await page.locator('.dd-brand').boundingBox(), tabs = await page.getByRole('navigation', { name: 'Decision Desk views' }).boundingBox()
+    expect(brand).not.toBeNull(); expect(tabs).not.toBeNull()
+    expect(brand!.x + brand!.width).toBeLessThanOrEqual(tabs!.x)
+    expect(tabs!.x + tabs!.width).toBeLessThanOrEqual(width)
+    await expect(page.getByRole('button', { name: 'Review', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Preparation', exact: true })).toBeVisible()
   }
 })
 
-test('Decisions reports unavailable sources and never acknowledges a flash without a visible source row', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
-  await page.addInitScript(() => sessionStorage.setItem('tinstar-decision-request', 'retained-request'))
+test('Decision Desk reports unavailable sources without claiming a visible decision', async ({ page }) => {
+  await page.route('**/api/reconciliation/decision-desk/**', route => route.fulfill({ status: 503, json: { ok: false, error: { message: 'Fixture backend unavailable' } } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ status: 503, json: { ok: false } }))
   await page.goto(`${base}/?view=decisions`)
   const scene_id = await windowId(page)
-  await page.getByText('Some sources need verification', { exact: true }).click()
-  await expect(page.getByRole('status').filter({ hasText: 'Requests could not refresh' })).toBeVisible()
-  await expect(page.locator('.decisions-row')).toHaveCount(0)
-  await expect(page.getByText('Decision sources are unavailable.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Decision Desk unavailable.' })).toBeVisible()
+  await expect(page.locator('.dd-identifiers')).toHaveCount(0)
+  await expect(page.getByRole('radio')).toHaveCount(0)
+  await expect(page.getByText('Queue metrics unavailable: the backend or source coverage could not be verified.')).toBeVisible()
   const current = await call('get_scene', { scene_id })
-  let ack = await call('present_view', { scene_id, command_id: 'decisions-unavailable-flash', expected_revision: current.state.revision, action: { type: 'flash', targets: [{ kind: 'card', id: dirtId }] } })
-  if (ack.outcome === 'queued') await expect.poll(async () => { ack = await call('get_command', { scene_id, command_id: 'decisions-unavailable-flash' }); return ack.outcome }).toBe('queue-source-unavailable')
+  let ack = await call('present_view', { scene_id, command_id: 'desk-unavailable-flash', expected_revision: current.state.revision, action: { type: 'flash', targets: [{ kind: 'card', id: dirtId }] } })
+  if (ack.outcome === 'queued') await expect.poll(async () => { ack = await call('get_command', { scene_id, command_id: 'desk-unavailable-flash' }); return ack.outcome }).toBe('queue-source-unavailable')
   expect(ack.outcome).toBe('queue-source-unavailable')
-  await expect(page).toHaveURL(/view=decisions/)
-  const directory = process.env.TINSTAR_MCP_PROOF
-  if (directory) await page.screenshot({ path: join(directory, 'decisions-unavailable.png'), fullPage: true })
 })
 
-test('Decisions restores replaced and cleared flashes and keeps manual scroll ownership', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
-  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: { ...queue, items: [
-    ...queue.items.filter(item => !item.cardIds.includes(dirtId)),
-    ...Array.from({ length: 35 }, (_, index) => ({ ...queue.items[0]!, id: `scroll-request:${index}`, cardIds: [], title: `Scroll request ${index}`, evidence: [] })),
-    queue.items.find(item => item.cardIds.includes(dirtId))!,
-  ] } } }))
+test('Decision Desk presentation flashes cannot submit or discard a selected source option', async ({ page }) => {
+  const writes: string[] = []
+  page.on('request', req => { if (req.url().includes('/decision-desk/submit')) writes.push(req.url()) })
   await page.goto(`${base}/?view=decisions`)
   await windowId(page)
-  const list = page.getByLabel('Decision requests')
-  const row = page.locator(`.decisions-row[data-card-id="${dirtId}"]`)
-  const positions = () => list.evaluate(node => {
-    const result: number[][] = []
-    for (let element: HTMLElement | null = node as HTMLElement; element; element = element.parentElement) result.push([element.scrollTop, element.scrollLeft])
-    return result
-  })
-  await list.evaluate(node => { node.scrollTop = 40 })
-  const original = await positions()
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-first')
-  await expect(row).toBeInViewport()
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-replaced')
-  await expect(row).toBeInViewport()
-  await present(page, { type: 'clear-transient' }, 'scroll-cleared')
-  await expect.poll(positions).toEqual(original)
-  const restoredAfterClear = await positions()
-  await present(page, { type: 'flash', targets: [{ kind: 'card', id: dirtId }], durationMs: 4000 }, 'scroll-manual')
-  await expect(row).toBeInViewport()
-  await list.dispatchEvent('wheel', { deltaY: -100 })
-  await list.evaluate(node => { node.scrollTop = 120 })
-  const owned = await positions()
-  await present(page, { type: 'clear-transient' }, 'scroll-owned-clear')
-  await expect.poll(positions).toEqual(owned)
-  const directory = process.env.TINSTAR_MCP_PROOF
-  if (directory) {
-    const { writeFile } = await import('node:fs/promises')
-    await writeFile(join(directory, 'decisions-scroll-transcript.json'), JSON.stringify({ original, restoredAfterClear, manualOwned: owned, final: await positions(), mcp: transcript }, null, 2))
-  }
+  const option = page.getByRole('radio', { name: /Authorize preview only/ })
+  await option.check()
+  await present(page, { type: 'flash', targets: [{ kind: 'card', id: fixtureId(1) }], durationMs: 1000 }, 'desk-safe-flash')
+  await present(page, { type: 'clear-transient' }, 'desk-safe-clear')
+  await expect(option).toBeChecked()
+  expect(writes).toEqual([])
 })
 
-test('Decisions shows unknown actions, unlinked requests and stale coverage honestly', async ({ page }) => {
-  const altered = structuredClone(queue)
-  altered.items = [
-    { ...altered.items[0]!, id: 'unknown-action-proof', cardIds: [fixtureId(4)], action: null, readiness: 'needs-readiness-verification', oneTouch: false },
-    { ...altered.items[0]!, id: 'unlinked-proof', title: 'Unlinked recovery request', cardIds: [], evidence: [] },
-  ]
-  altered.coverage.intentions.status = 'stale'
-  const ownershipScene = structuredClone(scene)
-  ownershipScene.cards.find(card => card.id === fixtureId(4))!.nextAction = 'Will'
-  await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: ownershipScene } }))
-  await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: altered } }))
+test('Preparation explains blocked source requests without inventing answer choices', async ({ page }) => {
+  await page.route('**/api/reconciliation/decision-desk/snapshot', route => route.fulfill({ json: { ok: true, data: {
+    counts: { ready: null, leased: null, preparing: 0, needs_repreparation: null, to_prepare: null, requests: null }, coverage: 'unknown', omissions: ['Source evidence is stale or unavailable.'],
+    runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [{ card_id: fixtureId(4), request_id: null, title: 'Unlinked recovery request', state: 'Blocked', reasons: ['Exact source request and supported options are unavailable.'] }],
+  } } }))
   await page.goto(`${base}/?view=decisions`)
-  await windowId(page)
-  await page.getByText('Some sources need verification', { exact: true }).click()
-  await expect(page.getByText('Some evidence is stale or unavailable. Retained requests do not establish that all work is clear.')).toBeVisible()
-  await page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`).click()
-  await expect(page.getByLabel('Selected decision')).toContainText('This request needs verification before you act.')
-  await expect(page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`)).not.toContainText('Will')
-  await page.getByLabel('Decision requests').getByText('Unlinked recovery request', { exact: true }).click()
-  await expect(page.getByLabel('Selected decision').getByRole('heading', { level: 2 })).toHaveText('Unlinked recovery request')
-  await expect(page.getByLabel('Selected decision').getByRole('link', { name: 'Read Notion card' })).toHaveCount(0)
-  const directory = process.env.TINSTAR_MCP_PROOF
-  if (directory) await page.screenshot({ path: join(directory, 'decisions-stale-unlinked.png'), fullPage: true })
+  await page.getByRole('button', { name: 'Preparation', exact: true }).click()
+  await expect(page.getByText('Unlinked recovery request')).toBeVisible()
+  await page.getByText('Evidence & next action').click()
+  await expect(page.getByText('Exact source request and supported options are unavailable.')).toBeVisible()
+  await expect(page.getByRole('radio')).toHaveCount(0)
 })

@@ -1,3 +1,4 @@
+import { installDecisionDesk } from './fixtures/decisionDesk'
 import { expect, test, type Page, type Locator, type Request } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -10,6 +11,7 @@ import type { FloorScene } from '../src/shared/reconciliationPresentation'
 // Lease status uses POST for a read; release and all other workflow operations
 // must still be counted as writes by the navigation regressions.
 function isMutation(req: Request) {
+  if (['sessions', 'claim', 'submission-state'].some(path => new URL(req.url()).pathname === `/api/reconciliation/decision-desk/${path}`)) return false
   if (req.method() === 'GET' || new URL(req.url()).pathname === '/api/reconciliation/ui') return false
   if (req.method() === 'POST' && new URL(req.url()).pathname === '/api/reconciliation/workflow' && req.postDataJSON()?.operation === 'lease') return false
   return true
@@ -333,6 +335,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   await page.clock.install({ time: now })
   await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 })
   if (mobile) await page.emulateMedia({ reducedMotion: 'reduce' })
+  await installDecisionDesk(page)
   const scene = fixtureScene({ now, size: 120 }), mutations: string[] = []
   const { fixtureQueue } = await import('../test-fixtures/reconciliation/scenes')
   await page.route('**/api/reconciliation/scene*', route => route.fulfill({ json: { ok: true, data: scene } }))
@@ -353,9 +356,9 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   const saved = await page.evaluate(() => localStorage.getItem('tinstar.floor.preferences'))
   await page.locator('.ov-workspace').evaluate(el => { el.scrollTop = el.scrollHeight })
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
-  const decision = page.locator(`.decisions-row[data-card-id="${fixtureId(1)}"]`).first()
-  await decision.click()
-  await page.getByText('Evidence and delivery details', { exact: true }).click()
+  await expect(page.locator('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${fixtureId(1)}`)
+  if (mobile) await page.locator('.dd-inline-evidence>summary').click()
+  await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
   const deskCard = page.getByRole('button', { name: 'Open related work' })
   await deskCard.focus()
   await page.keyboard.press('Enter')
@@ -381,6 +384,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
 
 
 test('a decision whose card leaves the scene retains its source link without writes', async ({ page }) => {
+  await installDecisionDesk(page)
   const now = Date.parse('2026-11-04T17:00:00Z')
   await page.clock.install({ time: now })
   const scene = fixtureScene({ now })
@@ -391,16 +395,15 @@ test('a decision whose card leaves the scene retains its source link without wri
   await page.route('**/api/reconciliation/scene*', route => { sceneReads++; return route.fulfill({ json: { ok: true, data: scene } }) })
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.goto(`${base}/?view=decisions`)
-  const row = page.locator('.decisions-row[data-card-id]').first()
-  const id = await row.getAttribute('data-card-id')
+  const row = page.locator('.dd-identifiers')
+  const id = (await row.getAttribute('data-semantic-id'))?.replace('card:', '')
   expect(id).toBeTruthy()
   scene.cards = scene.cards.filter(card => card.id !== id)
   const beforeRefresh = sceneReads
   // useFloorScene polls the active Decisions surface every thirty seconds.
   await page.clock.fastForward(30_001)
   await expect.poll(() => sceneReads).toBeGreaterThan(beforeRefresh)
-  await row.click()
-  await expect(page.getByLabel('Selected decision').getByRole('link', { name: 'Read Notion card' })).toHaveAttribute('href', `https://www.notion.so/${id}`)
+  await expect(page.getByRole('link', { name: 'Synthetic source card', exact: false }).first()).toHaveAttribute('href', `https://www.notion.so/${id}`)
   await expect(page.getByRole('button', { name: 'Open related work' })).toHaveCount(0)
   expect(mutations).toEqual([])
 })

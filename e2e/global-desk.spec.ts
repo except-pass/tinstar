@@ -1,3 +1,4 @@
+import { installDecisionDesk } from './fixtures/decisionDesk'
 import { expect, test } from '@playwright/test'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
@@ -45,11 +46,12 @@ test.beforeEach(async ({ page }) => {
                   : path === '/api/pulls' ? { pulls: [], repositories: [], warnings: [], associationsComplete: true } : {}
     await route.fulfill({ json: { ok: true, data } })
   })
+  await installDecisionDesk(page)
 })
 test('one persistent Desk across sections with pointer/keyboard sizing and reload preferences', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(base)
-  const desk = page.getByRole('complementary', { name: 'Discuss' }), separator = page.getByRole('separator', { name: 'Resize Discuss' })
+  const desk = page.locator('#global-desk'), separator = page.locator('[role=separator][aria-label="Resize Discuss"]')
   await desk.getByRole('navigation', { name: 'Discuss views' }).getByRole('button', { name: /^Waiting/ }).click()
   await expect(desk.getByText('Independent question 0')).toBeVisible()
   await desk.evaluate(element => { (element as HTMLElement).dataset.mountWitness = 'same-desk' })
@@ -62,7 +64,8 @@ test('one persistent Desk across sections with pointer/keyboard sizing and reloa
     await nav.getByRole('button', { name: section === 'Releases' ? /^Releases/ : section, exact: section !== 'Releases' }).click()
     await expect(desk).toHaveAttribute('data-mount-witness', 'same-desk')
     await expect(separator).toHaveAttribute('aria-valuenow', '440')
-    await expect(desk.getByText('Independent question 1')).toBeVisible()
+    if (section === 'Decisions') await expect(desk).toBeHidden()
+    else await expect(desk.getByText('Independent question 1')).toBeVisible()
   }
   await separator.focus(); await page.keyboard.press('ArrowLeft')
   await expect(separator).toHaveAttribute('aria-valuenow', '456')
@@ -471,9 +474,8 @@ test('retained worker note exposes targeted retry and reply after its worker lea
   })
   await page.goto(base)
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
-  await page.getByText('Some sources need verification', { exact: true }).click()
-  await page.getByText('Technical diagnostics', { exact: true }).click()
-  await page.getByText('Retained worker notes', { exact: true }).click()
+  await page.getByRole('button', { name: 'Preparation', exact: true }).click()
+  await page.getByText('Source delivery details', { exact: true }).click()
   const retained = page.locator('.cockpit-messages')
   await expect(retained).toContainText('Delivery failed')
   await retained.getByText('Delivery details').click()
@@ -487,6 +489,7 @@ test('retained worker note exposes targeted retry and reply after its worker lea
 
 test('formal decisions remain in Decisions and never enter conversation tab counts', async ({ page }, testInfo) => {
   let queue = fixtureQueue()
+  const prepared = await installDecisionDesk(page)
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: queue } }))
   await page.goto(base)
   const tabs = page.getByRole('navigation', { name: 'Discuss views' })
@@ -495,12 +498,12 @@ test('formal decisions remain in Decisions and never enter conversation tab coun
   await expect(page.locator('.global-desk .ov-queue')).toHaveCount(0)
   await expect(page.locator('.ask-desk article')).toHaveCount(2)
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
-  await expect(page.locator('.decisions-row')).not.toHaveCount(0)
+  await expect(page.locator('.dd-identifiers')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('separate-decisions.png') })
   queue = { ...queue, items: queue.items.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, expiresAt: '2020-01-01T00:00:00Z' })) })) }
+  prepared.invalidate()
   await page.reload()
-  await page.locator('.decisions-row').first().click()
-  await expect(page.getByLabel('Selected decision')).toContainText('needs verification')
+  await expect(page.getByText('Packet invalidated — source revision changed. Refresh research before deciding.')).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
 })
 
@@ -661,38 +664,32 @@ test('a new reply anchors only when the reader is already at the latest exchange
   await expect(page.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
 })
 
-test('phone workbench navigation and Full conversation return preserve the exact request and one visible composer', async ({ page }) => {
+test('phone source conversation return preserves the exact leased request and one visible composer', async ({ page }) => {
   const item = fixtureQueue().items[0]!
   const record = askItemSchema.parse({ request_id: '00000000-0000-4000-8000-000000000010', conversation_id: '10000000-0000-4000-8000-000000000010',
     question: 'Explain this request', input_mode: 'text', context: {
       anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Fixture decision', url: null, observed_at: null },
-      target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: 'Build' },
-      return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: 'Build' } },
+      target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: '' },
+      return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: '' } },
     }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered',
     reply: { summary: 'Evidence for this exact request', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null,
   })
   await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${base}/?view=decisions`)
-  await page.locator('.decisions-row').first().click()
-  const detail = page.getByLabel('Selected decision')
-  await expect(detail).toHaveAttribute('data-decision-id', item.id)
-  await detail.getByRole('button', { name: 'Next decision →' }).click()
-  await expect(detail).not.toHaveAttribute('data-decision-id', item.id)
-  await detail.getByRole('button', { name: '← Previous' }).click()
-  await expect(detail).toHaveAttribute('data-decision-id', item.id)
-  await detail.getByRole('button', { name: 'Full conversation ↗' }).click()
+  const identity = page.locator('.dd-identifiers')
+  await expect(identity).toHaveAttribute('data-decision-id', item.id)
+  await page.locator('.dd-inline-evidence>summary').click()
+  await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
+  await page.getByRole('button', { name: 'Open source conversation in Discuss' }).click()
   const desk = page.getByRole('dialog', { name: 'Discuss' })
   await expect(desk.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
-  await expect(detail.locator('.ask-composer')).toHaveCount(0)
+  await expect(page.locator('.dd-source-context .ask-composer')).toHaveCount(0)
   await desk.getByRole('button', { name: 'Return to source' }).click()
   await expect(desk).toBeHidden()
-  await expect(detail).toBeVisible()
-  await expect(detail).toHaveAttribute('data-decision-id', item.id)
-  await expect(page.locator('.decisions-search input')).toHaveValue('Build')
-  await expect(detail.locator('.ask-composer')).toHaveCount(1)
+  await expect(identity).toHaveAttribute('data-decision-id', item.id)
+  await expect(page.locator('.dd-source-context .ask-composer')).toHaveCount(1)
   await page.reload()
-  await expect(detail).toBeVisible()
-  await expect(detail).toHaveAttribute('data-decision-id', item.id)
-  await expect(page.locator('.decisions-search input')).toHaveValue('Build')
+  await expect(identity).toHaveAttribute('data-decision-id', item.id)
+  await expect(page.getByRole('radio')).toHaveCount(2)
 })

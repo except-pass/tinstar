@@ -4,7 +4,7 @@ import type { PresentationDelivery } from '../shared/presentationObservation'
  * Never focus another browser tab. A fresh heartbeat alone proves no rendering. */
 export function observeTargets(targets: string[], surface: 'overview' | 'decisions' | 'other'): PresentationDelivery {
   const foreground = document.visibilityState === 'visible' && document.hasFocus()
-  const root = document.querySelector(surface === 'decisions' ? '.decisions' : '.ov')
+  const root = document.querySelector(surface === 'decisions' ? '.decision-desk, .decisions' : '.ov')
   const nodes = [...root?.querySelectorAll<HTMLElement>('[data-semantic-id], .decisions-row[data-card-id]') ?? []]
   const rendered = targets.filter(id => nodes.some(node => node.dataset.semanticId === id || `card:${node.dataset.cardId}` === id))
   const visible = targets.filter(id => nodes.some(node => {
@@ -29,7 +29,7 @@ export function observeTargets(targets: string[], surface: 'overview' | 'decisio
   }
 }
 export function revealTargets(targets: string[], surface: 'overview' | 'decisions' | 'other') {
-  const root = document.querySelector(surface === 'decisions' ? '.decisions' : '.ov')
+  const root = document.querySelector(surface === 'decisions' ? '.decision-desk, .decisions' : '.ov')
   const nodes = [...root?.querySelectorAll<HTMLElement>('[data-semantic-id], .decisions-row[data-card-id]') ?? []].filter(node => targets.includes(node.dataset.semanticId ?? `card:${node.dataset.cardId}`))
   // An open card detail can cover its board row; focus that actual selected
   // representation rather than repeatedly scrolling a row behind the detail.

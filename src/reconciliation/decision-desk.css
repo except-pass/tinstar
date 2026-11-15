@@ -9,3 +9,5 @@
 .dd-source-context .ask-context-composer{margin:12px 0}.dd-source-context textarea{width:100%;min-height:88px;background:#0d1420;color:#ebf3fa;border:1px solid #304154;border-radius:8px;padding:12px}.dd-source-context .ask-context-composer button{min-height:44px}
 
 .cockpit-shell .decision-desk :focus-visible{outline:2px solid #78e3bd;outline-offset:3px}
+
+.dd-main{display:flex;flex-direction:column}.dd-main>.dd-actions{margin-top:auto}

@@ -37,7 +37,7 @@ function extendEvidence(value: unknown) {
 async function makePartition(name: string) {
   scenario = name
   const taskRoot = await mkdtemp(join(root, `${++partition}-${name}-`))
-  const fixture = decisionSubmitFixture(name === 'recorded-empty' ? 1 : 3)
+  const fixture = decisionSubmitFixture(name === 'recorded-empty' ? 1 : name === 'preparation' ? 5 : 3)
   for (const f of fixture.fixtures) {
     extendEvidence(f.snapshot); extendEvidence(f.history); extendEvidence(f.evidence)
     f.packet.title = 'Fixture · Authorize an isolated release rehearsal?'
@@ -47,6 +47,7 @@ async function makePartition(name: string) {
     f.packet.authorization.scope = 'Authorize one isolated DEV rehearsal using disposable fixture data only.'
     f.packet.authorization.permitted_follow_up = 'Collect readback receipts and screenshots, then return the evidence for review.'
     f.packet.references = [{ label: 'Fixture source card (synthetic)', url: `https://www.notion.so/${f.cardId}` }]
+    if (name === 'source-unavailable') f.evidence.reasons.push('Source evidence unavailable in the isolated fixture')
     if (name === 'low-confidence') { f.packet.confidence = 'Low'; f.packet.uncertainty = ['Device and production behavior have not been verified.', 'The rehearsal does not establish customer rollout readiness.'] }
     if (name === 'high-risk') { f.packet.risk.rating = 'High'; f.packet.risk.explanation = 'An incorrect rehearsal recipient could expose synthetic operational messages.'; f.packet.reversibility.rating = 'Difficult'; f.packet.reversibility.residual_exposure = 'Delivered test communications cannot be recalled.' }
     if (name === 'long-content') {
@@ -80,9 +81,9 @@ async function makePartition(name: string) {
     }
   }
   const review = new PreparedReviews(backend.packets, 'isolated-ui-board', card => fixture.fixtures.find(f => f.cardId === card)!.evidence,
-    () => ({ card_ids: name === 'no-requests' ? [] : fixture.fixtures.map(f => f.cardId), coverage: name === 'source-unavailable' ? 'unknown' : 'complete', requests: name === 'no-requests' ? 0 : name === 'source-unavailable' ? null : fixture.fixtures.reduce((sum, f) => sum + f.evidence.requests.filter(r => !r.answered).length, 0) }))
+    () => { if (fixture.controls.queueUnavailable) throw new Error('Isolated next allocation unavailable'); return ({ card_ids: name === 'no-requests' ? [] : fixture.fixtures.map(f => f.cardId), coverage: name === 'source-unavailable' ? 'unknown' : 'complete', requests: name === 'no-requests' ? 0 : name === 'source-unavailable' ? null : fixture.fixtures.reduce((sum, f) => sum + f.evidence.requests.filter(r => !r.answered).length, 0) }) })
   const submissions = new PreparedSubmissions(review, backend.source)
-  if (name === 'no-prepared') for (const id of await backend.packets.ids()) await backend.packets.leases.writeStorage(db => db.prepare("INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,'research-requested','fixture',?,?)").run(id, new Date().toISOString(), JSON.stringify({ reason: 'Fixture pending research' })))
+  if (name === 'no-prepared' || name === 'preparation') for (const id of (await backend.packets.ids())) await backend.packets.leases.writeStorage(db => db.prepare("INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,'research-requested','fixture',?,?)").run(id, new Date().toISOString(), JSON.stringify({ reason: 'Fixture pending research' })))
   if (name === 'save-failed') fixture.controls.reject = true
   if (name === 'save-unconfirmed') fixture.controls.loseIntent = true
   const scene = async () => {
@@ -101,11 +102,14 @@ const server = createServer(async (req, res) => {
     if (path === '/__preview/scenario' && req.method === 'POST') {
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk))
       const { name } = JSON.parse(Buffer.concat(chunks).toString())
-      if (!['normal', 'independent-requests', 'low-confidence', 'high-risk', 'invalidated', 'lease-lost', 'save-failed', 'save-unconfirmed', 'recorded-empty', 'no-requests', 'no-prepared', 'backend-unavailable', 'source-unavailable', 'long-content'].includes(name)) throw new Error('Unknown fixture')
+      if (!['normal', 'preparation', 'independent-requests', 'low-confidence', 'high-risk', 'invalidated', 'lease-lost', 'save-failed', 'save-unconfirmed', 'recorded-empty', 'next-unavailable', 'no-requests', 'no-prepared', 'backend-unavailable', 'source-unavailable', 'long-content'].includes(name)) throw new Error('Unknown fixture')
       current = await makePartition(name); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ fixture: true, scenario, root: current.taskRoot })); return
     }
+    if (path === '/__preview/state' && req.method === 'GET') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ scenario, source_writes: current.fixture.writes.length, source_answers: [...current.fixture.comments.values()].flat().filter(note => JSON.stringify(note).includes('Operation: answer_decision')).length })); return }
+    if (path === '/__preview/resolve' && req.method === 'POST') { current.fixture.controls.reject = false; current.fixture.controls.loseIntent = false; current.fixture.controls.evidenceChanged = false; res.end('Fixture fault cleared'); return }
     if (path === '/__preview/fault' && req.method === 'POST') {
-      if (scenario === 'invalidated') current.first.evidence.requests[0]!.binding!.source_revision = 'changed-source-revision'
+      if (scenario === 'invalidated') { current.first.evidence.requests[0]!.binding!.source_revision = 'changed-source-revision'; current.fixture.controls.evidenceChanged = true }
+      if (scenario === 'next-unavailable') current.fixture.controls.queueUnavailable = true
       if (scenario === 'lease-lost') await current.backend.leases.writeStorage(db => db.prepare('UPDATE leases SET expires = ?').run(Date.now() - 1))
       res.end('Fixture fault applied'); return
     }

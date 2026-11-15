@@ -1,3 +1,4 @@
+import { installDecisionDesk } from './fixtures/decisionDesk'
 import { stopServer, serverBase } from './serverProcess'
 import { installDeskAttention } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect, type APIRequestContext } from '@playwright/test'
@@ -127,13 +128,13 @@ for (const kind of ['keyed', 'held-work'] as const) test(`Decisions keeps ${kind
   const { base, notes, calls, stop } = await startCockpit(request, ['firstmate'], kind)
   try {
     await installDeskAttention(page, base)
+    await installDecisionDesk(page)
     await page.goto(base)
     await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
-    await page.locator('.decisions-row').first().click()
-    const desk = page.getByLabel('Selected decision')
-    await expect(desk.getByRole('heading', { level: 2 })).toBeVisible()
-    await desk.getByText('Evidence and delivery details', { exact: true }).click()
-    await expect(desk.getByRole('link', { name: 'Open source terminal' })).toHaveAttribute('href', /worker=alpha/)
+    await expect(page.locator('.dd-identifiers')).toBeVisible()
+    await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
+    const desk = page.locator('.dd-source-context')
+    await expect(desk).toContainText('Discussion is bound to source request preview-question')
     await expect(desk.getByRole('textbox')).toHaveCount(1)
     await expect(desk.getByRole('button', { name: 'Record voice question' })).toHaveCount(1)
     await expect(desk.getByRole('slider')).toHaveCount(0)

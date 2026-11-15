@@ -4,10 +4,11 @@ import { Decisions } from '../Decisions'
 import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({}) }))
-vi.mock('../DecisionSourceContext', () => ({ DecisionSourceContext: () => <p>Canonical source context</p> }))
+vi.mock('../DecisionSourceContext', () => ({ DecisionSourceContext: () => <p>Canonical source context</p>, DecisionCardContext: () => <p>Canonical source evidence</p> }))
+let leaseToken: string
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
-  sessionStorage.clear(); submits = []; outcome = 'not-saved'
+  sessionStorage.clear(); submits = []; outcome = 'not-saved'; leaseToken = 'secret-lease'
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
@@ -19,7 +20,7 @@ beforeEach(() => {
     let data: unknown
     if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', label: 'Browser review', device: 'desktop', held: null }] }
     else if (path === 'submission-state') data = { submissions: [] }
-    else if (path === 'claim') data = { outcome: 'held', packet, lease_token: 'secret-lease', lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
+    else if (path === 'claim') data = { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
     else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [] }
     else if (path === 'policy') { if (body) policy = { version: policy.version + 1, values: body.values }; data = policy }
     else if (path === 'metrics') data = { reviewed_today_utc: 0, scope: 'test', recording_started_at: new Date().toISOString() }
@@ -88,4 +89,40 @@ it('shows unavailable metrics honestly and persists effective policy through the
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save queue policy' })))
   expect(policy.values).toEqual({ target_ready: 16, max_preparers: 3, automatic_replenishment: false })
   await screen.findByText('Queue policy saved. No preparation runner is configured.')
+})
+
+it('blocks a lost lease, preserves the selection and reclaims before retrying the original source operation', async () => {
+  outcome = 'lease-lost'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByText('Lease expired or lost. Re-claim and revalidate before writing. Your selection is retained.')
+  expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeDisabled()
+  expect(screen.getByRole('alert')).toHaveClass('dd-danger')
+  leaseToken = 'replacement-capability'
+  fireEvent.click(screen.getByRole('button', { name: 'Re-claim & revalidate' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+  await waitFor(() => expect(submits).toHaveLength(2))
+  expect(submits[1]).toMatchObject({ operation_id: submits[0]!.operation_id, option_id: 'preview', lease_token: 'replacement-capability', original_lease_token: 'secret-lease' })
+})
+it('reviews one independently identified source request and never invents a multipart group', async () => {
+  await ready()
+  expect(screen.getAllByRole('group', { name: 'Choose one source option' })).toHaveLength(1)
+  expect(screen.queryByText(/Submit A\/B/)).toBeNull()
+  expect(screen.getByText('Request preview-question', { selector: '.dd-choices .dd-caption' })).toBeVisible()
+})
+
+it('reconciles an ambiguous original operation after reload even when its own partial source effects invalidate the displayed packet', async () => {
+  outcome = 'save-unconfirmed'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Confirm save status' })
+  const first = submits[0]!
+  cleanup(); packet.validation.valid = false
+  await ready()
+  expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeDisabled()
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm retained save status' }))
+  await screen.findByText('No prepared decisions ready.')
+  expect(submits[1]).toEqual(first)
 })
