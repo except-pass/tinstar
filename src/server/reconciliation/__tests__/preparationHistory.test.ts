@@ -70,7 +70,7 @@ it('loads cold history for automatic admission only after replenishment is turne
 it('warms cold claim history through MCP without blocking and claims only after history loads', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, root, cardIds, reconcile } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -214,7 +214,7 @@ it('explains queue cards whose complete history has no recorded decision request
 it('returns a 64-card snapshot under two seconds while shared capped history reads remain blocked', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, cardIds, reads, posts, reconcile } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -252,7 +252,7 @@ it('returns a 64-card snapshot under two seconds while shared capped history rea
 it('reads only the Prepare now card and shares concurrent requests for it', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, cardId, requestId, reads } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -265,4 +265,30 @@ it('reads only the Prepare now card and shares concurrent requests for it', asyn
   expect((await second).outcome).toMatch(/dispatched|already-preparing/)
   expect(details).toHaveBeenCalledTimes(1)
   expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(1)
+}, 20_000)
+
+it.each(['comments', 'body'] as const)('loads a late %s request on a 13-page contract without treating code or nested specs as missing history', async historySurface => {
+  const { sources, cardId, requestId, reads, posts } = await setup({ largeContract: true, historySurface, commentCount: 601 })
+  const snapshot = await loadedSnapshot(sources)
+  expect(snapshot.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'available' }))
+  expect(sources.preparationEvidence(cardId)).toMatchObject({ reasons: [], requests: [{ reasons: [], answered: false }] })
+  expect(reads.filter(read => read.path === `/v1/blocks/${cardId}/children`)).toHaveLength(13)
+  expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(7)
+  expect(reads.some(read => read.path.includes('nested-spec'))).toBe(false)
+  expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare large contract' })).toMatchObject({ outcome: 'dispatched' })
+  expect(posts).toHaveLength(1)
+  expect((await sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
+}, 20_000)
+
+it('refreshes just an explicitly requested expired card after a sweep outlives the 30-second cache', async () => {
+  const { sources, cardId, requestId, reads } = await setup({ cards: 46, largeContract: true })
+  await loadedSnapshot(sources)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000)
+  try {
+    const before = reads.length
+    expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Fresh exact card after long sweep' })).toMatchObject({ outcome: 'dispatched' })
+    const freshReads = reads.slice(before)
+    expect(freshReads).toHaveLength(14)
+    expect(freshReads.every(read => read.path === `/v1/blocks/${cardId}/children` || read.path === '/v1/comments')).toBe(true)
+  } finally { clock.mockRestore() }
 }, 20_000)

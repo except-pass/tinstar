@@ -180,6 +180,9 @@ export class ReconciliationSources {
 
   private async preparationCandidates(cardId?: string) {
     if (cardId) {
+      // A paced board sweep can outlive property/fleet freshness too. Only an
+      // explicit Prepare now waits for source observations, then its own card.
+      await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
       await this.preparationHistory.read(cardId)
     } else this.warmPreparationHistory()
@@ -461,7 +464,8 @@ export class ReconciliationSources {
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
-      const context = this.context.cachedDecisionHistory(id)?.context ?? this.context.cachedComments(id)
+      const history = this.context.cachedDecisionHistory(id)
+      const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))
     for (const id of ids) {

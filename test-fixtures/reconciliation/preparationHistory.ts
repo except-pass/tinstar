@@ -10,6 +10,7 @@ import type { ReconciliationConfig } from '../../src/server/reconciliation/confi
 export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: {
   cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number
   answered?: boolean; independentRequest?: boolean
+  largeContract?: boolean; historySurface?: 'comments' | 'body' | 'none'; commentCount?: number
   wrapFetch?: (fixtureFetch: typeof fetch) => typeof fetch
 } = {}) {
   const fixture = preparedDecisionFixture()
@@ -20,6 +21,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   let historyText = fixture.history.context.blocks[0]!.text
   for (const [index, home] of fixture.snapshot.fleet.entries()) historyText = historyText.replaceAll(home.source.home, homes[index]!.source.home)
   const extraNotes: string[] = []
+  const publishedNotes: Array<{ id: string; rich_text: unknown[] }> = []
   if (options.answered) extraNotes.push(`Operation: answer_decision\nAnswer: Defer the preview.\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify({ request_id: 'preview-question', answer: 'Defer the preview.', next: { owner: 'Firstmate', status: 'Queued' } })}\nTin Star answer: preview-question`)
   if (options.independentRequest) {
     const home = homes[1]!, task = home.observation.data!.tasks[0]!
@@ -60,10 +62,40 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     if (url.pathname === `/v1/data_sources/${dataSourceId}/query` && method === 'POST') return Response.json({ results: pages, has_more: false })
     const page = pages.find(page => url.pathname === `/v1/pages/${page.id}`)
     if (page && method === 'GET') return Response.json(page)
-    if (pages.some(page => url.pathname === `/v1/blocks/${page.id}/children`) && method === 'GET') return Response.json({ results: [{ id: 'background', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Decision background in the card body.' }] } }], has_more: false })
-    if (url.pathname === '/v1/comments' && method === 'GET' && pages.some(page => url.searchParams.get('block_id') === page.id)) return commentsAvailable
-      ? Response.json({ results: [requestText, ...extraNotes].map((text, index) => ({ id: `request-comment-${index}`, rich_text: [{ plain_text: text }] })), has_more: false })
-      : new Response('', { status: 403 })
+    if (page && method === 'PATCH') {
+      const input = JSON.parse(String(init?.body))
+      Object.assign(page.properties, input.properties)
+      page.last_edited_time = new Date().toISOString()
+      return Response.json(page)
+    }
+    if (url.pathname === '/v1/comments' && method === 'POST') {
+      const input = JSON.parse(String(init?.body))
+      const note = { id: `published-comment-${publishedNotes.length}`, rich_text: input.rich_text }
+      publishedNotes.push(note)
+      return Response.json(note)
+    }
+    if (pages.some(page => url.pathname === `/v1/blocks/${page.id}/children`) && method === 'GET') {
+      const offset = Number(url.searchParams.get('start_cursor') ?? 0)
+      const count = options.largeContract ? 1205 : 1
+      const results = Array.from({ length: Math.min(100, count - offset) }, (_, index) => {
+        const number = offset + index
+        if (number === count - 1 && options.historySurface === 'body') return { id: 'legacy-body-request', type: 'paragraph', paragraph: { rich_text: [{ plain_text: requestText }] } }
+        if (options.largeContract && number % 3 === 0) return { id: `contract-${number}`, type: 'code', code: { rich_text: [{ plain_text: 'Implementation contract chunk: isolated specification evidence.' }] } }
+        if (options.largeContract && number % 3 === 1) return { id: `nested-spec-${number}`, type: 'toggle', has_children: true, toggle: { rich_text: [{ plain_text: 'Nested implementation details, not a workflow publication' }] } }
+        return { id: `background-${number}`, type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Decision background in the card body.' }] } }
+      })
+      return Response.json({ results, has_more: offset + results.length < count, next_cursor: String(offset + results.length) })
+    }
+    // General card prose traverses nested specs; workflow publication reads do not.
+    if (url.pathname.startsWith('/v1/blocks/nested-spec-')) return Response.json({ results: [], has_more: false })
+    if (url.pathname === '/v1/comments' && method === 'GET' && pages.some(page => url.searchParams.get('block_id') === page.id)) {
+      if (!commentsAvailable) return new Response('', { status: 403 })
+      const offset = Number(url.searchParams.get('start_cursor') ?? 0)
+      const texts = [...Array.from({ length: options.commentCount ?? 0 }, () => 'A historical status note.'),
+        ...(options.historySurface === 'none' || options.historySurface === 'body' ? [] : [requestText]), ...extraNotes]
+      const comments = [...texts.map((text, index) => ({ id: `request-comment-${index}`, rich_text: [{ plain_text: text }] })), ...publishedNotes]
+      return Response.json({ results: comments.slice(offset, offset + 100), has_more: offset + 100 < comments.length, next_cursor: String(offset + 100) })
+    }
     throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`)
   }
   const fleet = []
@@ -82,6 +114,8 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const sources = new ReconciliationSources(config, fetcher, new NotionApi(fetcher, options.intervalMs ?? 0), root, secret)
   await sources.snapshot()
   return { sources, cardId: card.id, cardIds: pages.map(page => page.id), requestId: 'preview-question', reads, config,
+    sourceRequest: { home: homes[1]!.source.home, taskId: 'linked-worker', id: 'preview-go', kind: 'decision' as const },
+    publishedNotes,
     denyComments: () => { commentsAvailable = false },
     allowComments: () => { commentsAvailable = true },
     removeOptions: () => { requestText = historyText.replace(/,"options":\[.*\]/, '') },
