@@ -255,6 +255,15 @@ describe('authenticated real MCP transport', () => {
     const call = async (name: string, args: Record<string, unknown>) => parse(await client!.callTool({ name, arguments: args }))
     const first = await call('claim_next_card', { operation_id: 'zero-ready' })
     expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: a }, readiness: 'needs-readiness-verification', readiness_reasons: ['A Will action tag/owner alone does not establish a concrete owner-only next action'] })
+    const repeated = await call('claim_next_card', { operation_id: 'repeat-first', lease_token: first.lease_token })
+    expect(repeated).toMatchObject({ outcome: 'held', lease: first.lease, lease_token: first.lease_token, readiness: first.readiness, readiness_reasons: first.readiness_reasons })
+    const queued = needsWill
+    needsWill = []
+    const replayed = await call('claim_next_card', { operation_id: 'zero-ready' })
+    expect(replayed).toMatchObject({ outcome: 'claimed', lease: first.lease, lease_token: first.lease_token, readiness: 'unknown', readiness_reasons: ['Current queue readiness evidence is unavailable for this card'] })
+    const missingRepeat = await call('claim_next_card', { operation_id: 'repeat-missing', lease_token: first.lease_token })
+    expect(missingRepeat).toMatchObject({ outcome: 'held', lease: first.lease, lease_token: first.lease_token, readiness: 'unknown', readiness_reasons: replayed.readiness_reasons })
+    needsWill = queued
     const skipped = await call('claim_next_card', { operation_id: 'skip-held' })
     expect(skipped).toMatchObject({ outcome: 'claimed', lease: { card_id: b }, readiness: 'needs-readiness-verification', readiness_reasons: ['Publication history is incomplete; refresh before choosing'] })
     expect((await call('release_claim', { lease_token: first.lease_token, reason: 'Finished first' })).outcome).toBe('released')

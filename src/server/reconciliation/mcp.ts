@@ -118,12 +118,19 @@ export class ReconciliationMcp {
     }
     const claim = async (input: { operation_id: string; lease_token?: string; card_id?: string }) => {
       try {
+        const enrich = async (claimed: Awaited<ReturnType<CardLeases['claim']>>, queue?: QueueRead) => {
+          const claimedId = 'lease' in claimed && claimed.lease ? claimed.lease.card_id : undefined
+          if (!input.card_id && claimedId && !queue) queue = await (this.readers.workViews?.() ?? this.readers.queue()).catch(() => undefined)
+          const readiness = !input.card_id && claimedId
+            ? (queue && hasQueue(queue) ? claimNextCards(queue).find(card => card.id === claimedId) : undefined)
+            : undefined
+          return { ...claimed, ...(!input.card_id && claimedId ? { readiness: readiness?.readiness ?? 'unknown', readiness_reasons: readiness?.reasons ?? ['Current queue readiness evidence is unavailable for this card'] } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? queue.warnings : undefined } : {}), ...(claimedId ? { card: await this.readers.getWork?.({ card_id: claimedId, details: true }) } : {}) }
+        }
         if (input.lease_token) {
           const held = await this.leases.claim(input.card_id ? [input.card_id] : [], caller, actor, input.operation_id, input.lease_token, !!input.card_id)
-          return { ...held, ...('lease' in held && held.lease ? { card: await this.readers.getWork?.({ card_id: held.lease.card_id, details: true }) } : {}) }
+          return await enrich(held)
         }
         let cards: string[], queue: QueueRead | undefined
-        const readinessByCard = new Map<string, { readiness: string; reasons: string[] }>()
         const activeCard = async (id: string) => {
           // Exact source validation must precede a lease grant. Read-only
           // claims must not wait for get_work(refresh)'s receipt recovery.
@@ -142,7 +149,6 @@ export class ReconciliationMcp {
           if (!hasQueue(queue)) return queue
           cards = []
           for (const card of claimNextCards(queue)) {
-            readinessByCard.set(card.id, card)
             cards.push(card.id)
           }
         }
@@ -158,10 +164,7 @@ export class ReconciliationMcp {
           // already held and therefore skipped by the loop above.
           return this.leases.claim([], caller, actor, input.operation_id)
         }
-        const claimed = await select()
-        const claimedId = 'lease' in claimed && claimed.lease ? claimed.lease.card_id : undefined
-        const claimedReadiness = claimedId ? readinessByCard.get(claimedId) : undefined
-        return { ...claimed, ...(claimedReadiness ? { readiness: claimedReadiness.readiness, readiness_reasons: claimedReadiness.reasons } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? queue.warnings : undefined } : {}), ...('lease' in claimed && claimed.lease ? { card: await this.readers.getWork?.({ card_id: claimed.lease.card_id, details: true }) } : {}) }
+        return await enrich(await select(), queue)
       } catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, input.operation_id); throw error }
     }
 
