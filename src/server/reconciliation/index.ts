@@ -41,6 +41,7 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
+import { decisionRequests } from '../../shared/workflowRequests'
 import { reconcileDecision, type DecisionResolution } from './decisionResolution'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
@@ -460,7 +461,7 @@ export class ReconciliationSources {
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
-      const context = this.context.cachedComments(id)
+      const context = this.context.cachedDecisionHistory(id)?.context ?? this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))
     for (const id of ids) {
@@ -478,6 +479,12 @@ export class ReconciliationSources {
       }
     }
     queue.needsWill = needsWill(queue, scene, contexts, null, new Map(), false)
+    // needsWill exposes open requests for the Desk. Claims also need cached
+    // answers so a still-published property ask cannot resurrect one.
+    for (const item of queue.needsWill) for (const id of item.cardIds) {
+      item.requests.push(...decisionRequests(this.context.cachedClaimBlocks(id)).filter(request => request.answered)
+        .map(request => ({ ...request, cardId: id })))
+    }
     if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
     queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
     return workReadback(queue)

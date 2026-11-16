@@ -135,11 +135,13 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
   }
 }
 
-/** Claim admission is stricter than visibility. A planned work status alone
- * does not postpone a concrete decision that Will can answer now. Other
- * readiness restrictions (including source-local ones) still apply. */
+/** Candidate selection cannot require Desk preparation/history: the exact
+ * card's property ask may be claimable while that history is still loading. */
 type ClaimItem = QueueItem & Partial<Pick<NeedsWillItem, 'requests' | 'proposalHistoryComplete' | 'pulls'>>
 export function claimRequestCandidate(item: ClaimItem) {
+  return item.kind === 'decision' || item.kind === 'merge'
+}
+function verifiedClaimRequest(item: ClaimItem) {
   if (item.proposalHistoryComplete === false || item.decisionResolution && item.decisionResolution.state !== 'resolved') return false
   if (item.kind === 'merge') return item.readiness === 'ready-now'
   // Decisions can be immediate while the work itself is planned. Recompute
@@ -151,6 +153,23 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const current = word(card, 'Next action') ?? word(card, 'Next Action')
   const actions = prop(card, 'Will action')
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
+  if (card.archived || card.in_trash || complete(word(card, 'Status')) || future(date(card, 'Start Date'), now)) return null
+  // Retain known answers even when the rest of the history is incomplete.
+  // A property ask must not resurrect an already answered structured request;
+  // an answer bound to another source does not close an independent request.
+  if (item.requests?.some(request => request.cardId === card.id && request.answered &&
+    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action)) &&
+    (!request.sourceRequest || !item.sources.some(source => source.kind === 'firstmate' && source.request) ||
+      item.sources.some(source => source.request && source.request.home !== null &&
+        requestAnchor(source.request) === requestAnchor(request.sourceRequest!))))) return null
+  const propertyAsk = normalize(word(card, 'Owner') ?? '') === 'will' &&
+    normalize(word(card, 'Status') ?? '') === 'waiting for' &&
+    !card.properties['Will action']?.hasMore && tags.some(tag => ['decision', 'do', 'merge', 'elevated command'].includes(tag)) &&
+    /^Will:\s*\S/.test(word(card, 'Waiting For') ?? '') &&
+    word(card, 'Waiting For Type') === 'Actor' && word(card, 'Waiting For ID') === 'Will'
+  if (propertyAsk) return { readiness: 'ready-now' as const, reasons: [
+    ...item.reasons, 'Current Will property ask is actionable for claims; Desk preparation history is not required',
+  ] }
   const decisionRequest = tags.length > 0 && tags.every(tag => ['decision', 'approval', 'approve'].includes(tag))
   const requests = item.proposalHistoryComplete === true ? item.requests?.filter(request => request.cardId === card.id && !request.answered &&
     request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action))) ?? [] : []
@@ -159,11 +178,10 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const wait = word(card, 'Waiting For')
   const ownerWait = !!wait && /\bWill\b/.test(wait)
   const ownerRequest = !!concrete && (normalize(word(card, 'Owner') ?? '') === 'will' || decisionRequest || !!request || ownerWait)
-  if (!claimRequestCandidate(item) || item.readiness !== 'ready-now' && !ownerRequest) return null
+  if (!verifiedClaimRequest(item) || item.readiness !== 'ready-now' && !ownerRequest) return null
   // Approval tags can describe an immediate decision. Commands and releases
   // must retain their existing prerequisite/authority verification.
   if (item.readiness !== 'ready-now' && tags.some(tag => !['decision', 'approval', 'approve'].includes(tag))) return null
-  if (card.archived || card.in_trash || complete(word(card, 'Status'))) return null
   if (item.sources.some(source => !['fresh', 'partial'].includes(source.status) || source.coverage === 'unknown' ||
     !!source.expiresAt && !(Date.parse(source.expiresAt) > now) ||
     source.kind === 'firstmate' && source.readiness !== 'ready-now' ||

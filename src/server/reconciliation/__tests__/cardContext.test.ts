@@ -1,5 +1,19 @@
 import { expect, it, vi } from 'vitest'
 import { CardContextReader } from '../cardContext'
+it.each(['body', 'comments'])('retains known answer blocks for claims when only %s history has loaded', async first => {
+  const fetcher = vi.fn(async () => Response.json({ results: [{ id: 'answer', type: 'paragraph',
+    paragraph: { rich_text: [{ plain_text: 'Tin Star answer: "decision"' }] },
+    rich_text: [{ plain_text: 'Tin Star answer: "decision"' }],
+  }], has_more: false }))
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+  if (first === 'body') await reader.get('card')
+  else await reader.commentDetails('card')
+  fetcher.mockClear()
+  expect(reader.cachedDecisionHistory('card')).toBeUndefined()
+  expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' }))
+  expect(fetcher).not.toHaveBeenCalled()
+})
+
 it('reads bounded card prose with explicit omissions, coalesces reads and omits code/credential literals', async () => {
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ results: [
     { id: 'prose', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Commitment: show the actual source. secret_123456789012345678901234' }] } },

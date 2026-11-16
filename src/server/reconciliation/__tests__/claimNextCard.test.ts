@@ -12,6 +12,10 @@ import { needsWill } from '../needsWill'
 import { SceneReconciler } from '../scene'
 import type { WorkCard } from '../workReader'
 import { decisionItems } from '../../../shared/reconciliationQueue'
+import { ReconciliationSources } from '../index'
+import { CardContextReader, type CardContextRead } from '../cardContext'
+import { hasQueue } from '../../../shared/reconciliationQueue'
+import { claimCardReadiness } from '../queue'
 
 const roots: string[] = [], clients: Client[] = []
 afterEach(async () => {
@@ -62,6 +66,99 @@ async function fixture(cards: WorkCard[]) {
   return { leases, queue, current, currentCard, workViews, call, connect, advance: () => { now += leaseDuration } }
 }
 const claim = (operation_id: string) => ({ operation_id })
+const propertyAsks = [
+  ['41950ce6d42281d7bf0de08d4e39b9e9', 'Decision'],
+  ['41550ce6d422818eb238d870dad40a3f', 'Do'],
+  ['41a50ce6d42281c3a9e3ee1cc6463b57', 'Merge'],
+  ['41950ce6d42281e0b79ccfe2a76af710', 'Elevated command'],
+] as const
+function propertyAsk(id: string = propertyAsks[0][0], action: string = 'Decision', values: Record<string, unknown> = {}) {
+  return card(id, { Status: 'Waiting For', 'Will action': [action], 'Next action': '',
+    'Waiting For': 'Will: choose the next step', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will', ...values })
+}
+
+it.each(propertyAsks)('claims property ask %s (%s) without a request record, including while history loads', async (id, action) => {
+  const f = await fixture([propertyAsk(id, action)])
+  for (const complete of [true, false]) {
+    f.queue.needsWill![0]!.proposalHistoryComplete = complete
+    expect(f.queue.needsWill![0]!.requests).toEqual([])
+    const result = await f.call('claim_next_card', claim(`property-${complete}`))
+    expect(result).toMatchObject({ outcome: 'claimed', lease: { card_id: id }, readiness: 'ready-now',
+      readiness_reasons: expect.arrayContaining([expect.stringContaining('Will property ask')]) })
+    await f.call('release_claim', { lease_token: result.lease_token, reason: 'Property claim checked' })
+  }
+})
+
+it.each(['Done', 'archived', 'in_trash', 'future', 'answered', 'owner', 'status', 'tag', 'wait', 'type', 'actor-id'])('skips a %s property ask', async mode => {
+  const f = await fixture([propertyAsk()]), current = f.current.get(propertyAsks[0][0])!
+  f.queue.needsWill![0]!.proposalHistoryComplete = false
+  if (mode === 'archived' || mode === 'in_trash') current[mode] = true
+  else if (mode === 'future') current.properties['Start Date'] = { id: 'start', type: 'date', value: { start: '2099-01-01' }, hasMore: false }
+  else if (mode === 'answered') f.queue.needsWill![0]!.requests.push({ id: 'answered', cardId: current.id, action: 'Decision',
+    preserveAction: false, options: undefined, requestedFrom: 'Will', question: 'Choose the next step', since: null, sourceId: 'answer', answered: true })
+  else {
+    const [key, value] = ({ Done: ['Status', 'Done'], owner: ['Owner', 'Firstmate'], status: ['Status', 'Backlog'],
+      tag: ['Will action', ['Approval']], wait: ['Waiting For', 'Review pending'], type: ['Waiting For Type', 'Event'],
+      'actor-id': ['Waiting For ID', 'Firstmate'] } as Record<string, [string, unknown]>)[mode]!
+    current.properties[key]!.value = value
+  }
+  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.leases.status(current.id)).toBeNull()
+})
+
+it('does not resurrect an answered structured request with complete history and a concrete Next action', async () => {
+  const f = await fixture([card()])
+  f.queue.needsWill![0]!.requests.push({ id: 'answered', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: false,
+    options: undefined, requestedFrom: 'Will', question: 'Approve the security exception', since: null, sourceId: 'answer', answered: true })
+  expect(await f.call('claim_next_card', claim('answered-record'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+})
+
+it('fences a source write while reading a property ask', async () => {
+  const f = await fixture([propertyAsk()])
+  f.queue.needsWill![0]!.proposalHistoryComplete = false
+  f.currentCard.mockImplementationOnce(async id => {
+    const before = structuredClone(f.current.get(id)!)
+    await f.leases.mutate(id, async () => { f.current.get(id)!.properties.Status!.value = 'Done' })
+    return before
+  })
+  expect(await f.call('claim_next_card', claim('property-write-race'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.leases.status(propertyAsks[0][0])).toBeNull()
+})
+
+it.each(['loading', 'answered-comment', 'answered-body'])('uses the property census with %s history and retains known answers', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'claim-property-census-')); roots.push(root)
+  const ask = propertyAsk(), snapshot = fixtureSources()
+  snapshot.fleet = []; snapshot.intentions.data!.cards = [ask]
+  const context: CardContextRead = { outcome: 'available', blocks: [
+    { id: 'request', type: 'paragraph', text: 'Requested from: Will\nQuestion: Choose the next step\nTin Star request: {"id":"decision","action":"Decision"}' },
+    { id: 'answer', type: 'paragraph', text: 'Tin Star answer: "decision"' },
+  ] }
+  vi.spyOn(CardContextReader.prototype, 'details').mockImplementation(() => new Promise(() => {}))
+  vi.spyOn(CardContextReader.prototype, 'cachedComments').mockReturnValue(mode === 'answered-comment' ? context : undefined)
+  vi.spyOn(CardContextReader.prototype, 'cachedClaimBlocks').mockReturnValue(mode === 'loading' ? [] : context.blocks)
+  vi.spyOn(CardContextReader.prototype, 'cachedDecisionHistory').mockReturnValue(mode === 'answered-body' ? {
+    context, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(),
+  } : undefined)
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] }, fetch, undefined, root)
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  const queue = await sources.claimQueue()
+  expect(hasQueue(queue)).toBe(true)
+  if (!hasQueue(queue)) throw new Error('Expected property census')
+  const item = queue.needsWill![0]!
+  if (mode === 'loading') {
+    expect(item.proposalHistoryComplete).toBe(false)
+    expect(item.readiness).not.toBe('ready-now')
+    expect(claimCardReadiness(item, ask)).toMatchObject({ readiness: 'ready-now' })
+  } else {
+    expect(item.requests).toContainEqual(expect.objectContaining({ id: 'decision', answered: true }))
+    expect(claimCardReadiness(item, ask)).toBeNull()
+  }
+})
+
+it.each(propertyAsks)('also supports an explicit claim of property ask %s (%s)', async (id, action) => {
+  const f = await fixture([propertyAsk(id, action)])
+  expect(await f.call('claim_card', { ...claim(`exact-${action}`), card_id: id })).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+})
 
 it('skips both reported parked SEC cards, even when the stale queue still lists a freshly Done card', async () => {
   const f = await fixture([...secIds.map(id => card(id, { Status: 'Backlog', 'Next action': parked })), card()])
