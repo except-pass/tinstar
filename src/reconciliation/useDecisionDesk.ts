@@ -131,7 +131,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
     })
     if (!value?.outcome) throw new Error('Prepared claim could not be verified. Backend unavailable.')
     const retainedClaim = value.outcome === 'held' || value.outcome === 'already-holding' || !!value.lease_token && value.lease_token === context.current.lease
-    const mismatchedRequest = !!value.packet && !!(exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)
+    const mismatchedRequest = !!value.packet && !!(cardId && value.packet.packet.binding.card_id !== cardId || exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)
     if (!pending && !retainedClaim && value.packet && mismatchedRequest) {
       const refused: DeskClaim = { outcome: 'requested-unavailable', message: 'The requested decision is not ready or is held. No substitute decision is shown.', lease_token: value.lease_token }
       const operation = `return-release:${context.current.claimOperation}`

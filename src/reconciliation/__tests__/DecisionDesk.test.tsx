@@ -736,13 +736,13 @@ it('keeps a completed Discuss target consumed across the Workbench and Desk mode
   expect(screen.queryByText('Requested source request is not ready for review.')).toBeNull()
 })
 
-it.each(['claimed', 'held', 'already-holding', 'card-held', 'mismatch', 'no-prepared-decisions'])('consumes a one-shot target after %s; refresh and unrelated revisions never re-target', async firstOutcome => {
+it.each(['claimed', 'held', 'already-holding', 'card-held', 'mismatch', 'card-only-mismatch', 'no-prepared-decisions'])('consumes a one-shot target after %s; refresh and unrelated revisions never re-target', async firstOutcome => {
   const original = structuredClone(packet)
   const next = structuredClone(packet)
   next.id = '00000000-0000-4000-8000-000000000002'
   next.packet.binding.card_id = 'b'.repeat(32)
   next.packet.binding.request_key = 'request-b'
-  const target = { id: 'one-shot-intent', cardId: original.packet.binding.card_id, requestKey: original.packet.binding.request_key }
+  const target = { id: 'one-shot-intent', cardId: original.packet.binding.card_id, requestKey: firstOutcome === 'card-only-mismatch' ? undefined : original.packet.binding.request_key }
   workspace.value = { decisionTarget: target }
   const claims: Record<string, unknown>[] = [], releases: Record<string, unknown>[] = []
   const fallback = vi.mocked(fetch).getMockImplementation()!
@@ -754,7 +754,7 @@ it.each(['claimed', 'held', 'already-holding', 'card-held', 'mismatch', 'no-prep
       if (claims.length > 1) data = { outcome: 'held', packet: next, lease_token: 'next-lease' }
       else if (firstOutcome === 'card-held') data = { outcome: 'not-saved', code: 'card-held', lease: { holder: 'Other real context' } }
       else if (firstOutcome === 'no-prepared-decisions') data = { outcome: firstOutcome }
-      else data = { outcome: firstOutcome === 'mismatch' ? 'claimed' : firstOutcome, packet: ['mismatch', 'already-holding'].includes(firstOutcome) ? next : original, lease_token: 'first-lease' }
+      else data = { outcome: firstOutcome.includes('mismatch') ? 'claimed' : firstOutcome, packet: ['mismatch', 'card-only-mismatch', 'already-holding'].includes(firstOutcome) ? next : original, lease_token: 'first-lease' }
     } else if (String(url).endsWith('/release')) { releases.push(input); data = { outcome: 'released' } }
     else return fallback(url, init)
     return new Response(JSON.stringify({ ok: true, data }))
@@ -764,8 +764,8 @@ it.each(['claimed', 'held', 'already-holding', 'card-held', 'mismatch', 'no-prep
   await waitFor(() => expect(screen.queryByText('Decision Desk operation in progress.')).toBeNull())
   expect(claims).toHaveLength(1)
   expect(claims[0]).toMatchObject({ card_id: target.cardId })
-  expect(releases).toHaveLength(firstOutcome === 'mismatch' ? 1 : 0)
-  const blocked = ['already-holding', 'card-held', 'mismatch', 'no-prepared-decisions'].includes(firstOutcome)
+  expect(releases).toHaveLength(firstOutcome.includes('mismatch') ? 1 : 0)
+  const blocked = ['already-holding', 'card-held', 'mismatch', 'card-only-mismatch', 'no-prepared-decisions'].includes(firstOutcome)
   if (blocked) {
     expect(screen.getByRole('button', { name: 'Claim next prepared decision' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Try this decision again' })).toBeVisible()
