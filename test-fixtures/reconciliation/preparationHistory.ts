@@ -16,8 +16,8 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const fixture = preparedDecisionFixture()
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
   card.properties.Area = { id: 'Area', type: 'select', value: 'Engineering', hasMore: false }
-  card.properties.Status!.value = options.independentRequest ? 'In Progress' : options.cardStatus ?? 'Waiting For'
-  for (const [name, value] of Object.entries({ Owner: 'Will', 'Waiting For': 'Will: Choose the bounded preview route?', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) {
+  card.properties.Status!.value = options.cardStatus ?? 'Waiting For'
+  if (card.properties.Status!.value === 'Waiting For') for (const [name, value] of Object.entries({ Owner: 'Will', 'Waiting For': 'Will: Choose the bounded preview route?', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) {
     card.properties[name] = { id: name, type: name === 'Waiting For' ? 'rich_text' : 'select', value, hasMore: false }
   }
   const dataSourceId = 'f'.repeat(32)
