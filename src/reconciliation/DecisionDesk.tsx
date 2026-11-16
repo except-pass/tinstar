@@ -22,7 +22,7 @@ export function DecisionDesk() {
   const originKey = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' ? workspace.origin.target.id : null
   const target = originKey ?? workspace.state?.queueItemId
   const navigation = workspace.state?.navigation
-  const targetIdentity = JSON.stringify([originKey, workspace.state?.queueItemId, workspace.state?.queueCardId, workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : null, navigation?.revision])
+  const targetIdentity = JSON.stringify([workspace.decisionReturnRevision, originKey, workspace.state?.queueItemId, workspace.state?.queueCardId, workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : null, navigation?.revision])
   const ignoreTarget = workspace.consumedDecisionTarget === targetIdentity
   const newestNavigation = navigation?.revision === workspace.state?.revision ? navigation?.cardId : undefined
   const requested = ignoreTarget ? undefined : originKey ? entries.find(item => item.id === originKey)?.cardIds[0]
