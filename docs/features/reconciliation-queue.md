@@ -5,7 +5,8 @@
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
 MCP `get_work_views` and `claim_next_card` refresh the source census for each
-request and read the same bounded request histories (up to 20 candidate cards).
+request and refresh the same bounded request histories (up to 20 candidate cards),
+bypassing previously cached history.
 Foreground history waits have a ten-second budget; unfinished reads continue
 warming the shared cache. The response reports how many histories were inspected
 and leaves the remaining rows at verification-required readiness with unknown age.
@@ -14,9 +15,8 @@ history through the display's shared background refresh, rather than waiting for
 a board-wide recovery pass inside the connector's 60-second deadline. All request
 and review rows remain present. Warnings disclose unconfirmed recovery and missing
 review evidence; per-review `evidenceWarning` still requires reading the canonical
-card before accepting. Pending decision deliveries remain visible. `claim_card`
-and each next-card candidate get a fresh exact configured-board read before the
-lease is granted; competing claims still use the atomic lease store. Exact
+card before accepting. Pending decision deliveries remain visible. Claim admission
+and atomic allocation follow the [session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases). Exact
 workflow writes retain their existing fresh source, history and lease validation.
 Fresh tool reads, recorded workflow changes, and lease claim/release invalidate
 the display cache, including results still being computed. Pending answers use

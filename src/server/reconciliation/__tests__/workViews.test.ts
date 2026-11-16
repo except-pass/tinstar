@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ReconciliationSources } from '../index'
 import { CardContextReader } from '../cardContext'
+import { claimCardReadiness } from '../queue'
+import { CardLeases } from '../cardLeases'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
@@ -34,7 +36,7 @@ it('returns the full fresh census with bounded history while shared operational 
     expect(first.reviews.complete).toBe(true)
     expect(first.coverage.intentions).toMatchObject({ status: 'fresh', coverage: 'complete' })
     expect(history).toHaveBeenCalledTimes(20)
-    expect(history.mock.calls.every(([, force]) => force === false)).toBe(true)
+    expect(history.mock.calls.every(([, force]) => force === true)).toBe(true)
     expect(first.warnings).toContainEqual(expect.stringContaining('20 of 78'))
     expect(first.warnings).toContainEqual(expect.stringContaining('reconciliation and uncached review submission history refresh in the background'))
     expect(first.reviews.items.every(item => !!item.evidenceWarning)).toBe(true)
@@ -77,3 +79,34 @@ it('bounds slow history waits while retaining every request with honest readines
     expect(result.needsWill![0]!.proposalHistoryComplete).toBe(false)
   } finally { await rm(root, { recursive: true, force: true }) }
 }, 2000)
+
+
+it('refreshes cached request history after another process answers a decision', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'work-views-history-'))
+  const snapshot = fixtureSources({ now: Date.now() })
+  snapshot.fleet = []
+  const card = snapshot.intentions.data!.cards[0]!
+  snapshot.intentions.data!.cards = [card]
+  card.properties.Owner!.value = 'Will'
+  card.properties.Status!.value = 'Backlog'
+  card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  card.properties['Next action'] = { id: 'next', type: 'rich_text', value: '', hasMore: false }
+  const notes = [{ id: 'request', rich_text: [{ plain_text: 'Tin Star request: {"id":"approval","action":"Decision"}\nRequested from: Will\nQuestion: Approve the exception?' }] }]
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ results: notes, has_more: false })))
+  const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { token: 'fixture-token', dataSourceId: 'a'.repeat(32) } }, fetcher, undefined, root)
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  vi.spyOn(sources.workflow, 'reconcileReviews').mockImplementation(() => new Promise(() => {}))
+  try {
+    const first = await sources.workViews()
+    expect(first.needsWill![0]!.requests).toMatchObject([{ id: 'approval', answered: false }])
+    expect(claimCardReadiness(first.needsWill![0]!, card)).not.toBeNull()
+    const other = new CardLeases(root)
+    await other.mutate(card.id, async () => {
+      notes.push({ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "approval"' }] })
+    })
+    const second = await sources.workViews()
+    expect(second.needsWill![0]!.proposalHistoryComplete).toBe(true)
+    expect(second.needsWill![0]!.requests).toEqual([])
+    expect(claimCardReadiness(second.needsWill![0]!, card)).toBeNull()
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

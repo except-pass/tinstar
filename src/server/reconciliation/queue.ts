@@ -65,11 +65,12 @@ const date = (card: Card, name: string) => text(record(prop(card, name)).start)
 const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
 const complete = (value: unknown) => ['done', 'archived', 'completed', 'answered', 'resolved', 'merged'].includes(normalize(String(value)))
 const future = (value: string | null, now: number) => !!value && Date.parse(value) > now
-const fresh = (observation: Observation<unknown>) => (observation.status === 'fresh' || observation.status === 'partial') && !!observation.data
+const fresh = (observation: Pick<Observation<unknown>, 'status' | 'data'>) => (observation.status === 'fresh' || observation.status === 'partial') && !!observation.data
 const source = (kind: QueueSource['kind'], id: string, field: string, observation: Observation<unknown>): QueueSource => ({
   kind, id, field, observedAt: observation.observedAt, expiresAt: observation.expiresAt, status: observation.status, coverage: observation.coverage,
 })
 const rank: Record<QueueReadiness, number> = { 'ready-now': 0, 'needs-readiness-verification': 1, 'future-or-conditional': 2 }
+const noRequest = /^\s*parked\b|\bno (?:active |current )?(?:decision|approval|request|action)|\bno .* requested\b/i
 const unique = <T>(items: T[]) => [...new Set(items)]
 const safeUrl = (value: string | null) => {
   try { const url = new URL(value!); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null } catch { return null }
@@ -114,24 +115,79 @@ function restrictAction(item: QueueItem, value: string | null, context: ActionCo
   }
   return restricted
 }
-function context(item: QueueItem, card: Card, observation: SourceSnapshot['intentions'], now: number, ownerDecision = false) {
+function context(item: QueueItem, card: Card, observation: Pick<Observation<unknown>, 'status' | 'data'>, now: number, ownerDecision = false, immediateRequest = false) {
   for (const name of ['Next action', 'Next Action']) restrictAction(item, word(card, name))
   item.cardIds.push(card.id)
   link(item, card.url ?? `https://www.notion.so/${card.id}`, 'card')
   link(item, word(card, 'Link')); link(item, word(card, 'Evidence'))
   item.checkpoint = date(card, 'Next check-in')
   const status = normalize(word(card, 'Status') ?? '')
-  if (future(date(card, 'Start Date'), now) || (!ownerDecision && ['backlog', 'todo', 'queued', 'planned', 'spare tokens'].includes(status))) {
+  if (future(date(card, 'Start Date'), now) || (!ownerDecision && !immediateRequest && ['backlog', 'todo', 'queued', 'planned', 'spare tokens'].includes(status))) {
     lower(item, 'future-or-conditional', 'Planned work or an agreed future start; no immediate owner decision')
   }
   const wait = word(card, 'Waiting For')
-  if (wait && !ownerDecision) lower(item, 'future-or-conditional', `Published dependency/wait: ${wait}`)
-  else if (status === 'waiting for' && !ownerDecision) lower(item, 'future-or-conditional', 'Waiting For status without a named next action; verify the prerequisite')
+  if (wait && !ownerDecision && !(immediateRequest && /\bWill\b/.test(wait))) lower(item, 'future-or-conditional', `Published dependency/wait: ${wait}`)
+  else if (!wait && status === 'waiting for' && !ownerDecision) lower(item, 'future-or-conditional', 'Waiting For status without a named next action; verify the prerequisite')
   if (word(card, 'Waiting For ID')) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
   if (!fresh(observation)) lower(item, 'needs-readiness-verification', 'Notion observation is stale or unavailable; last-known action only')
   if (card.properties['Will action']?.hasMore || !word(card, 'Owner') || !word(card, 'Status')) {
     lower(item, 'needs-readiness-verification', 'Owner, status or action context is incomplete')
   }
+}
+
+/** Claim admission is stricter than visibility. A planned work status alone
+ * does not postpone a concrete decision that Will can answer now. Other
+ * readiness restrictions (including source-local ones) still apply. */
+type ClaimItem = QueueItem & Partial<Pick<NeedsWillItem, 'requests' | 'proposalHistoryComplete' | 'pulls'>>
+export function claimRequestCandidate(item: ClaimItem) {
+  if (item.proposalHistoryComplete === false || item.decisionResolution && item.decisionResolution.state !== 'resolved') return false
+  if (item.kind === 'merge') return item.readiness === 'ready-now'
+  // Decisions can be immediate while the work itself is planned. Recompute
+  // their card-local readiness from fresh facts rather than display prose.
+  // An unverified associated PR cannot establish an actionable approval.
+  return item.kind === 'decision' && !item.pulls?.some(pull => !pull.readiness)
+}
+export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()) {
+  const current = word(card, 'Next action') ?? word(card, 'Next Action')
+  const actions = prop(card, 'Will action')
+  const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
+  const decisionRequest = tags.length > 0 && tags.every(tag => ['decision', 'approval', 'approve'].includes(tag))
+  const requests = item.proposalHistoryComplete === true ? item.requests?.filter(request => request.cardId === card.id && !request.answered &&
+    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action))) ?? [] : []
+  const request = requests[0]
+  const concrete = current ?? request?.question
+  const wait = word(card, 'Waiting For')
+  const ownerWait = !!wait && /\bWill\b/.test(wait)
+  const ownerRequest = !!concrete && (normalize(word(card, 'Owner') ?? '') === 'will' || decisionRequest || !!request || ownerWait)
+  if (!claimRequestCandidate(item) || item.readiness !== 'ready-now' && !ownerRequest) return null
+  // Approval tags can describe an immediate decision. Commands and releases
+  // must retain their existing prerequisite/authority verification.
+  if (item.readiness !== 'ready-now' && tags.some(tag => !['decision', 'approval', 'approve'].includes(tag))) return null
+  if (card.archived || card.in_trash || complete(word(card, 'Status'))) return null
+  if (item.sources.some(source => !['fresh', 'partial'].includes(source.status) || source.coverage === 'unknown' ||
+    !!source.expiresAt && !(Date.parse(source.expiresAt) > now) ||
+    source.kind === 'firstmate' && source.readiness !== 'ready-now' ||
+    source.request?.home === null && source.id !== card.id && source.readiness !== 'ready-now')) return null
+  // A tag/owner without an action must not survive a stale queue snapshot.
+  const keyedRequest = item.sources.some(source => source.kind === 'firstmate' && source.responseAnchor && source.readiness === 'ready-now' && source.action)
+  const routed = ownerRequest || keyedRequest || !!current &&
+    (Array.isArray(actions) ? actions : [actions]).some(action => typeof action === 'string' && /^(decision|approval|approve|merge)$/i.test(action.trim()))
+  if (!routed) return null
+  const action = concrete ?? (keyedRequest ? item.action : null)
+  if (!action || noRequest.test(action) || !!wait && noRequest.test(wait)) return null
+  const checked = { ...item, action, readiness: 'ready-now' as QueueReadiness, reasons: [] as string[], cardIds: [] as string[], evidence: [...item.evidence] }
+  for (const request of requests) {
+    if (!request.question || noRequest.test(request.question) || request.since && !(Date.parse(request.since) <= now)) return null
+    restrictAction(checked, request.question)
+  }
+  context(checked, card, { status: 'fresh', data: card }, now, keyedRequest, ownerRequest)
+  restrictAction(checked, action, keyedRequest ? 'owner-question' : 'action')
+  // Waiting for Will's answer is the request itself, but its wording must not
+  // hide a prerequisite such as approval after a later review.
+  if (ownerWait && !keyedRequest) restrictAction(checked, wait)
+  if (checked.readiness !== 'ready-now') return null
+  return { readiness: checked.readiness, reasons: [...new Set([...(item.readiness === 'ready-now' ? item.reasons : []), ...checked.reasons,
+    'Fresh exact-card evidence confirms a concrete owner-only action now'])] }
 }
 
 /** Read-only, deterministic projection; a checkpoint is ordering context, never readiness proof. */

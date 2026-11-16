@@ -2561,6 +2561,10 @@ it.each(['closed', 'rebound'].flatMap(change => ['work', 'ask'].map(producer => 
 
 it('shares durable leases across real MCP chats, workflow writers and owner UI release', async () => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'card-leases-integration-')); roots.push(root)
+  f.raw.properties.Owner.select.name = 'Will'
+  f.raw.properties.Status.status.name = 'In Progress'
+  f.raw.properties['Waiting For'].rich_text = []
+  f.raw.properties['Next action'] = { type: 'rich_text', rich_text: [{ plain_text: 'Choose the next step' }] }
   const secondId = 'c'.repeat(32), second = structuredClone(f.raw)
   second.id = secondId; second.url = `https://www.notion.so/${secondId}`; f.pages.set(secondId, second)
   const sources = f.sources(root)
