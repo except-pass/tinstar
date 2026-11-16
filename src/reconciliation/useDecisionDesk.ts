@@ -128,7 +128,9 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
       review_session_token: context.current.token, ...(context.current.lease && !revalidate ? { lease_token: context.current.lease } : {}), ...(cardId ? { card_id: cardId } : {}),
     })
     if (!value?.outcome) throw new Error('Prepared claim could not be verified. Backend unavailable.')
-    if (!pending && value.outcome !== 'already-holding' && value.packet && (exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)) {
+    const retainedClaim = value.outcome === 'held' || value.outcome === 'already-holding' || !!value.lease_token && value.lease_token === context.current.lease
+    const mismatchedRequest = !!value.packet && !!(exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)
+    if (!pending && !retainedClaim && value.packet && mismatchedRequest) {
       const refused: DeskClaim = { outcome: 'requested-unavailable', message: 'The requested decision is not ready or is held. No substitute decision is shown.', lease_token: value.lease_token }
       const operation = `return-release:${context.current.claimOperation}`
       accept(refused)
@@ -139,7 +141,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
       }
       return refused
     }
-    if (value.outcome === 'already-holding') setNotice('This session already holds a different decision. Finish or skip it before switching.')
+    if (value.outcome === 'already-holding' || retainedClaim && mismatchedRequest) setNotice('This session already holds a different decision. Finish or skip it before switching.')
     visibleMeasure.current = { name: `decision-desk.claim-visible.${value.outcome}`, started }
     if (pending && value.packet && claimRef.current?.packet && requestKey(value.packet) !== requestKey(claimRef.current.packet)) {
       accept({ ...claimRef.current, outcome: 'lease-lost', message: 'Retained answer must be resolved before reviewing another request.' })

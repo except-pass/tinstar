@@ -476,6 +476,12 @@ it.each(['first request returned', 'second request returned', 'release unavailab
       if (scenario === 'release unavailable') throw new Error('Release response unavailable')
       return new Response(JSON.stringify({ ok: true, data: { outcome: 'released' } }))
     }
+    if (String(url).endsWith('/claim')) {
+      const response = await fallback(url, init)
+      const body = await response.json()
+      body.data.outcome = 'claimed'
+      return new Response(JSON.stringify(body))
+    }
     return fallback(url, init)
   })
   render(<Decisions />)
@@ -493,20 +499,28 @@ it.each(['first request returned', 'second request returned', 'release unavailab
   expect(submits).toHaveLength(0)
 })
 
-it('checks a new Discuss request key even when its card is already displayed', async () => {
+it.each(['held', 'packet-invalidated'])('retains a same-card %s request and selection when Discuss requests another request', async claimOutcome => {
   packet.packet.binding.request_key = 'request-a'
   const view = render(<Decisions />)
   await screen.findByRole('radio', { name: /Authorize preview only/ })
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
   const fallback = vi.mocked(fetch).getMockImplementation()!
-  let released = false
   vi.mocked(fetch).mockImplementation(async (url, init) => {
-    if (String(url).endsWith('/release')) { released = true; return new Response(JSON.stringify({ ok: true, data: { outcome: 'released' } })) }
+    if (String(url).endsWith('/claim')) {
+      const response = await fallback(url, init)
+      const body = await response.json()
+      body.data.outcome = claimOutcome
+      return new Response(JSON.stringify(body))
+    }
     return fallback(url, init)
   })
   workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-b', cardIds: [packet.packet.binding.card_id] }] } }
   view.rerender(<Decisions />)
-  await waitFor(() => expect(released).toBe(true))
-  expect(screen.getByRole('heading', { name: 'Requested source request is not ready for review.' })).toBeVisible()
+  await screen.findByText('This session already holds a different decision. Finish or skip it before switching.')
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  expect(JSON.parse(sessionStorage.getItem('tinstar-decision-review-v1')!).lease).toBe('secret-lease')
+  expect(screen.queryByRole('heading', { name: 'Requested source request is not ready for review.' })).toBeNull()
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/release'))).toHaveLength(0)
   expect(submits).toHaveLength(0)
 })
 
