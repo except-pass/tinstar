@@ -58,10 +58,12 @@ describe('Notion authoritative observation table', () => {
     expect(scene.findings.filter(f => f.kind === 'untracked-worker')).toHaveLength(1)
     expect(scene.findings.some(f => f.kind === 'confirmed-link')).toBe(false)
   })
-  it('leaves independent workers legitimately unlinked', () => {
+  it('flags a worker missing a dispatch card without inventing a link', () => {
     const scene = reconcile(source())
     expect(scene.claims).toEqual([])
-    expect(scene.findings.filter(f => f.executionIds.length)).toEqual([])
+    expect(scene.findings.filter(f => f.executionIds.length)).toMatchObject([
+      { kind: 'unverified-conflicting', workerLinkDetectors: ['invalid-dispatch-card'] },
+    ])
   })
   it('surfaces wrong IDs without inventing workers or switching to a title candidate', () => {
     const input = source(); declare(input, fixtureId(1), [{ ...link, task_id: 'wrong' }])

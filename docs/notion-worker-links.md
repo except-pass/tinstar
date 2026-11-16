@@ -442,3 +442,26 @@ The Inspector and MCP now share the [start-work operation](features/workflow.md)
 It preserves this native schema unchanged and validates current execution before
 setting In Progress. Tracked external runs use their own consumer-reported
 provenance in Delegated To; they never invent a First Mate home/task identity.
+
+## Spawn card and backlog closure exceptions
+
+Every freshly observed spawned worker needs a coordinator-authored backlog
+`card:` line. The scene and worker-link report emit one `invalid-dispatch-card`
+exception per worker when that line is missing, `card: none`, malformed or
+conflicting, names an unknown card in a complete board read, or names an
+archived/Done card. Legacy metadata and free text do not satisfy this check.
+A stale or incomplete board read cannot prove that a card does not exist.
+
+A separate `terminal-in-flight` exception appears when the latest status event
+is `done` or `failed` for more than 15 minutes and the backlog row remains
+`in_flight`. The age comes from the status timestamp or its age at snapshot
+publication; unknown age does not prove that the grace elapsed. The next action
+is **close it in its home backlog**. Persistent second mates are excluded.
+
+Both findings include home, task ID and spawn generation. They also appear in
+`get_work_views`' existing `operationalExceptions` and Decisions' Worker evidence
+surface, including workers with no card to open. Correcting the line or closing
+the row clears the corresponding exception on the next source refresh. Closed
+historical rows and stale home observations do not produce new lifecycle
+exceptions. Tin Star never guesses a card, changes a home backlog or owns worker
+spawn/finish scripts; the home coordinator owns those corrections.

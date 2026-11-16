@@ -3,15 +3,24 @@ import { currentActivity } from '../../shared/workReadiness'
 import { externalWorkers } from '../../shared/workflow'
 import { freshObservation } from '../../shared/workHealth'
 import { declaredLinks } from './scene'
+import { lifecycleDetector } from './workerLifecycle'
 
 export interface ExecutionWarning {
-  cardId: string; title: string; state: 'no-running-worker' | 'unknown'; reasons: string[]
+  cardId: string | null; title: string; state: 'no-running-worker' | 'unknown'; reasons: string[]
+  executionId?: string
   sources: Array<{ home: string; observedAt: string | null; expiresAt: string | null; status: string }>
 }
 /** Warnings only. Inspect the declared sources separately: a slow/unrelated
  * home cannot prove absence, or hide a known running worker elsewhere. */
 export function executionWarnings(scene: FloorScene, now = Date.now()): ExecutionWarning[] {
-  return scene.cards.flatMap(card => {
+  const lifecycle: ExecutionWarning[] = scene.findings.filter(finding => finding.workerLinkDetectors?.some(lifecycleDetector)).flatMap(finding => {
+    const worker = scene.executions.find(worker => finding.executionIds.includes(worker.id))
+    if (!worker) return []
+    return [{ cardId: finding.cardIds.find(id => scene.cards.some(card => card.id === id)) ?? null, executionId: worker.id,
+      title: `${worker.identity.task_id}: ${finding.workerLinkDetectors!.includes('terminal-in-flight') ? 'Close home backlog' : 'Invalid spawn card'}`,
+      state: 'unknown' as const, reasons: [finding.reason], sources: [{ home: worker.home, ...worker.observation }] }]
+  })
+  return [...lifecycle, ...scene.cards.flatMap(card => {
     if (card.source.archived || card.source.in_trash || card.source.properties.Status?.value !== 'In Progress') return []
     const reasons: string[] = [], sources: ExecutionWarning['sources'] = []
     const conflicting = scene.findings.some(finding => finding.cardIds.includes(card.id) && finding.workerLinkDetectors?.some(detector => ['duplicate-primary', 'spawn-evidence', 'invalid-record'].includes(detector)))
@@ -45,5 +54,5 @@ export function executionWarnings(scene: FloorScene, now = Date.now()): Executio
     if (running && !conflicting && freshObservation(scene.coverage.intentions, now)) return []
     if (!reasons.length) reasons.push('Explicit worker declaration contains no running workers')
     return [{ cardId: card.id, title: String(card.source.properties.Name?.value ?? card.id), state: unknown ? 'unknown' as const : 'no-running-worker' as const, reasons, sources }]
-  })
+  })]
 }

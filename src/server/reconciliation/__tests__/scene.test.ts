@@ -24,6 +24,7 @@ function card(id = a, values: Record<string, unknown> = {}): Card {
 type TaskOverrides = Omit<Partial<Task>, 'current_state' | 'backlog'> & { current_state?: Partial<Task['current_state']>; backlog?: Partial<Task['backlog']> }
 function task(id = 'worker', pageId: string | null = a, overrides: TaskOverrides = {}): Task {
   return { id, kind: 'ship', spawn_gen: 'attempt-1', harness: null, model: null, branch: null, project: null, backend: null,
+    dispatchProvenance: { status: 'card', cardId: pageId ?? a, sources: ['task.backlog.body_lines'] },
     identity: { fm_home: '/farm/hulk', task_id: id, spawn_gen: 'attempt-1' },
     cardReferences: pageId ? [{ pageId, basis: 'explicit', source: 'task.notion_page_id' }] : [], remote: null,
     endpoint: { exists: true, agent_alive: null, status: null, observed_at: at, freshness: 'fresh' },

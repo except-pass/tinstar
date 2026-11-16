@@ -304,7 +304,7 @@ export function DecisionCardContext({ id, showLink = true, readOnly = false }: {
 }
 function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
   if (!warnings?.length) return null
-  return <details><summary>Worker evidence</summary>{warnings.map(warning => <article key={warning.cardId}><button type="button" disabled={!canFocus(warning.cardId)} onClick={() => onFocus(warning.cardId)}>{warning.title}</button><strong>{warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{decodeRequestText(reason)}</p>)}</article>)}</details>
+  return <details><summary>Worker evidence</summary>{warnings.map(warning => <article key={warning.executionId ? `${warning.executionId}:${warning.title}` : warning.cardId}><button type="button" disabled={!warning.cardId || !canFocus(warning.cardId)} onClick={() => { if (warning.cardId) onFocus(warning.cardId) }}>{warning.title}</button><strong>{warning.executionId ? 'Home backlog needs attention' : warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{decodeRequestText(reason)}</p>)}</article>)}</details>
 }
 
 /** Formal published choices use the same workflow operation as MCP. A saved

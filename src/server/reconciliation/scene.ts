@@ -10,12 +10,13 @@ import type { CardReference } from './references'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, parseWorkerLinks } from './workerLinks'
 import { checkInTime, type CheckInIndicator } from '../../shared/checkIn'
+import { workerLifecycleFindings } from './workerLifecycle'
 
 type SourceCard = NonNullable<SourceSnapshot['intentions']['data']>['cards'][number]
 type SourceTask = NonNullable<SourceSnapshot['fleet'][number]['observation']['data']>['tasks'][number]
 export type FindingKind = 'confirmed-link' | 'task-execution-gap' | 'untracked-worker' |
   'unverified-conflicting' | 'unknown-stale-source' | 'legitimate-wait-planned' | 'outside-coverage'
-export type WorkerLinkDetector = 'duplicate-primary' | 'spawn-evidence' | 'declared-absent' | 'historical-link' | 'invalid-record' | 'duplicate-execution'
+export type WorkerLinkDetector = 'duplicate-primary' | 'spawn-evidence' | 'declared-absent' | 'historical-link' | 'invalid-record' | 'duplicate-execution' | 'invalid-dispatch-card' | 'terminal-in-flight'
 export interface Finding {
   id: string
   kind: FindingKind
@@ -198,6 +199,9 @@ export function reconcileScene(input: SourceSnapshot, now = Date.now()) {
         liveness, activity: liveness === 'running' ? 'executing' : liveness === 'waiting' ? 'waiting' : liveness === 'finished' || liveness === 'absent' ? 'inactive' : 'unknown', source: task, observation: metadata(observation) }
       executions.push(execution)
       const taskBacklog = observation.data?.backlog?.find(row => row.id === (task.backlog.id ?? task.identity.task_id))
+      for (const finding of workerLifecycleFindings(execution, taskBacklog, intentions, now)) {
+        add('unverified-conflicting', finding.cardIds, [id], finding.reason, [home.source.home], [finding.detector])
+      }
       const refs: Array<CardReference | { pageId: string; basis: 'inferred'; source: string }> = [
         ...task.cardReferences, ...(taskBacklog?.cardReferences ?? []),
       ]
