@@ -28,8 +28,13 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   }))
   // The source requires these board schema fields even if a page leaves them empty.
   const schema = { ...properties, 'Last touched by': { type: 'select' }, 'Sub-item': { type: 'relation' }, Link: { type: 'url' } }
-  const raw = { object: 'page', id: card.id, url: card.url, archived: false, in_trash: false, last_edited_time: new Date().toISOString(), properties }
-  const pages = Array.from({ length: options.cards ?? 1 }, (_, index) => index === 0 ? raw : { ...raw, id: (index + 100).toString(16).padStart(32, '0'), properties: { ...properties, 'First Mate tasks': { id: 'First Mate tasks', type: 'rich_text', rich_text: [] } } })
+  const raw = { object: 'page', id: card.id, url: card.url, parent: { type: 'data_source_id', data_source_id: dataSourceId },
+    archived: false, in_trash: false, last_edited_time: new Date().toISOString(), properties }
+  const titles = ['Approve staged API rollout', 'Choose audit retention period', 'Authorize bounded migration rehearsal', 'Review incident recovery plan', 'Confirm release verification scope', 'Select queue backpressure policy', 'Approve dashboard access change', 'Choose dependency upgrade timing']
+  const pages = Array.from({ length: options.cards ?? 1 }, (_, index) => index === 0 ? raw : { ...raw, id: (index + 100).toString(16).padStart(32, '0'), properties: {
+    ...properties, Name: { id: 'Name', type: 'title', title: [{ plain_text: `${titles[index % titles.length]} · ${index + 1}` }] },
+    'First Mate tasks': { id: 'First Mate tasks', type: 'rich_text', rich_text: [] },
+  } })
   const reads: Array<{ path: string; method: string }> = []
   let commentsAvailable = true
   let requestText = historyText

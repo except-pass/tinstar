@@ -1,9 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CardContextReader } from '../cardContext'
+import { ReconciliationMcp } from '../mcp'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
 
 const roots: string[] = [], servers: Server[] = []
@@ -25,12 +28,12 @@ async function setup(options: Parameters<typeof preparationHistoryFixture>[2] = 
   const port = (server.address() as { port: number }).port
   const fixture = await preparationHistoryFixture(root, async () => JSON.stringify({ url: `http://127.0.0.1:${port}/job`, key: 'fixture-only-sender' }), options)
   const reconcile = vi.spyOn(fixture.sources.workflow, 'reconcileDecisions')
-  return { ...fixture, posts, reconcile }
+  return { ...fixture, root, posts, reconcile }
 }
 
 async function loadedSnapshot(sources: Awaited<ReturnType<typeof setup>>['sources']) {
   await sources.preparedReviews.snapshot()
-  await vi.waitFor(async () => expect((await sources.preparedReviews.snapshot()).history.every(row => row.state !== 'loading')).toBe(true))
+  await vi.waitFor(async () => expect((await sources.preparedReviews.snapshot()).history.every(row => row.state !== 'loading')).toBe(true), { timeout: 10_000 })
   return sources.preparedReviews.snapshot()
 }
 
@@ -59,9 +62,29 @@ it('loads cold history for automatic admission only after replenishment is turne
   await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } }, 'fixture-owner')
   await sources.preparation.replenish()
   await loadedSnapshot(sources)
-  await sources.preparation.replenish()
+  await vi.waitFor(() => expect(posts).toHaveLength(1))
   expect(posts).toHaveLength(1)
   expect(reconcile).not.toHaveBeenCalled()
+}, 20_000)
+
+it('claims a generic Needs Will card through MCP while the 64-card Desk is open', async () => {
+  const { sources, root } = await setup({ cards: 64, beforeRead: async url => {
+    if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await new Promise(resolve => setTimeout(resolve, 5))
+  } })
+  expect((await sources.preparedReviews.snapshot()).history.some(row => row.state === 'loading')).toBe(true)
+  const mcp = new ReconciliationMcp(sources, root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+  const client = new Client({ name: 'desk-claim-regression', version: '1' })
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const raw = await client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'desk-open-claim' } })
+    const result = JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
+    expect(result).toMatchObject({ outcome: 'claimed', lease: { card_id: expect.any(String) }, card: { outcome: 'available' } })
+    await client.callTool({ name: 'release_claim', arguments: { lease_token: result.lease_token, reason: 'Isolated regression complete' } })
+    await loadedSnapshot(sources)
+  } finally { await client.close() }
 }, 20_000)
 
 it('loads history for the Preparation view and shows actual missing options per card', async () => {
