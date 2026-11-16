@@ -108,6 +108,9 @@ it('refreshes cached request history after another process answers a decision', 
     const second = await sources.workViews()
     expect(second.needsWill![0]!.proposalHistoryComplete).toBe(true)
     expect(second.needsWill![0]!.requests).toEqual([])
-    expect(claimCardReadiness(second.needsWill![0]!, card)).toBeNull()
+    // Desk exposes open requests; claim admission also retains cached answers.
+    const claims = await sources.claimQueue()
+    expect(claims.needsWill![0]!.requests).toContainEqual(expect.objectContaining({ id: 'approval', answered: true }))
+    expect(claimCardReadiness(claims.needsWill![0]!, card)).toBeNull()
   } finally { await rm(root, { recursive: true, force: true }) }
 })

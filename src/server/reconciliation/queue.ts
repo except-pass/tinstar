@@ -170,7 +170,9 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   // an answer bound to another source does not close an independent request.
   if (item.requests?.some(request => request.cardId === card.id && request.answered &&
     request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action)) &&
-    (!request.sourceRequest || !item.sources.some(source => source.kind === 'firstmate' && source.request) ||
+    (!request.sourceRequest || !item.sources.some(source => source.request?.home != null) &&
+      !item.requests?.some(open => open.cardId === card.id && !open.answered &&
+        open.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(open.action))) ||
       item.sources.some(source => source.request && source.request.home !== null &&
         requestAnchor(source.request) === requestAnchor(request.sourceRequest!))))) return null
   const propertyAsk = normalize(word(card, 'Owner') ?? '') === 'will' &&
