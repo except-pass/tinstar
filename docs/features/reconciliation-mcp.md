@@ -484,7 +484,7 @@ card in the covered queue. Its `coverage` and `warnings` retain stale, unknown,
 partial and body-only evidence limitations; it does not certify all work clear.
 An unavailable source is not an empty queue.
 `claim_card(card_id, operation_id)` instead claims
-an exact active card on the configured board.
+an exact strictly formed Needs Will card on the configured board.
 
 Keep the returned `lease_token` in tool arguments across calls and later turns.
 Never print it in chat, card text, URLs or logs. Every later card read/change

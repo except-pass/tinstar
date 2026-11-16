@@ -278,14 +278,14 @@ it('rechecks eligibility inside allocation if coverage changes after preflight',
   expect(f.leases.status('a'.repeat(32))).toBeNull()
 })
 
-it('rejects a source write crossing the exact-card read before the atomic lease grant', async () => {
+it.each(['claim_next_card', 'claim_card'])('rejects a source write crossing the exact-card read before %s grants a lease', async tool => {
   const f = await fixture([card()])
   f.currentCard.mockImplementationOnce(async id => {
     const before = structuredClone(f.current.get(id)!)
-    await f.leases.mutate(id, async () => { f.current.get(id)!.properties['Next action']!.value = parked })
+    await f.leases.mutate(id, async () => { f.current.get(id)!.properties.Owner!.value = 'Firstmate' })
     return before
   })
-  expect(await f.call('claim_next_card', claim('write-race'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(await f.call(tool, { ...claim('write-race'), ...(tool === 'claim_card' ? { card_id: 'a'.repeat(32) } : {}) })).toMatchObject({ outcome: 'no-unclaimed-card' })
   expect(f.leases.status('a'.repeat(32))).toBeNull()
 })
 
@@ -358,4 +358,29 @@ it('filters Merge while retaining the existing verified PR readiness requirement
   row.sources.forEach(source => { source.readiness = 'ready-now' })
   expect(await f.call('claim_next_card', { operation_id: 'verified-merge', will_action: 'Merge' })).toMatchObject({ outcome: 'claimed', lease: { card_id: merge.id } })
   expect(f.currentCard.mock.calls.flat()).not.toContain(other.id)
+})
+
+
+it.each([
+  { Owner: 'Firstmate', Status: 'Backlog', 'Will action': [] },
+  { Owner: 'Firstmate' },
+  { Status: 'Backlog' },
+  { 'Will action': ['Approval'] },
+  { 'Waiting For': 'Will to approve the exception' },
+  { 'Waiting For Type': 'Event' },
+  { 'Waiting For ID': '' },
+])('rejects new exact leases for malformed Needs Will fields %j', async values => {
+  const current = card('a'.repeat(32), values)
+  const f = await fixture([current])
+  expect(await f.call('claim_card', { card_id: current.id, operation_id: 'malformed-exact' })).toMatchObject({ outcome: 'unavailable' })
+  expect(f.leases.status(current.id)).toBeNull()
+})
+
+it('claims an exact strict ask and resumes its lease after workflow changes', async () => {
+  const current = card()
+  const f = await fixture([current])
+  const first = await f.call('claim_card', { card_id: current.id, operation_id: 'strict-exact' })
+  expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: current.id } })
+  current.properties.Owner!.value = 'Firstmate'
+  expect(await f.call('claim_card', { card_id: current.id, operation_id: 'resume-exact', lease_token: first.lease_token })).toMatchObject({ outcome: 'held', lease: { card_id: current.id } })
 })

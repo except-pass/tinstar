@@ -26,7 +26,7 @@ import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
 import { SessionProbe } from './sessionProbe'
-import { claimFilters, matchesClaimFilters, type ClaimFilters } from './claimPolicy'
+import { claimFilters, matchesClaimFilters, strictlyNeedsWill, type ClaimFilters } from './claimPolicy'
 import { decisionRequests } from '../../shared/workflowRequests'
 import type { CardContextRead } from './cardContext'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
@@ -154,9 +154,9 @@ export class ReconciliationMcp {
           const card = await this.readers.getWork?.({ card_id: id, details: false, refresh: true }) as { outcome?: string; card?: { source?: { archived?: boolean; in_trash?: boolean; properties?: Record<string, { value?: unknown }> } } } | undefined
           return card?.outcome === 'available' ? card.card?.source as import('./workReader').WorkCard | undefined : null
         }
-        const activeCard = (card: Awaited<ReturnType<typeof exactCard>>) => !!card && !card.archived && !card.in_trash && !['Done', 'Archived'].includes(String(card.properties.Status?.value))
         if (input.card_id) {
-          if (!activeCard(await exactCard(input.card_id))) return { outcome: 'unavailable', message: 'Card is unavailable or no longer active in the configured board' }
+          const card = await exactCard(input.card_id)
+          if (!card || !strictlyNeedsWill(card)) return { outcome: 'unavailable', message: 'Card is unavailable or is not a strictly formed Needs Will card on the configured board' }
           cards = [input.card_id]
         } else {
           queue = await (this.readers.claimViews?.(input) ?? this.readers.workViews?.() ?? this.readers.queue())
@@ -169,7 +169,7 @@ export class ReconciliationMcp {
           cards = candidates.map(card => card.id)
         }
         const select = async () => {
-          if (input.card_id) return this.leases.claim(cards, caller, actor, input.operation_id, undefined, true)
+          if (input.card_id) return this.leases.claim(cards, caller, actor, input.operation_id, undefined, true, { eligible: () => true, sourceRevision: revision })
           // Validate only unheld candidates, preserving queue order. A competing
           // claim can win during the source read; try the next card in that case.
           const covered = () => {
@@ -214,7 +214,7 @@ export class ReconciliationMcp {
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     const claimInstructions = 'Use for next card in this conversation. Generate a fresh globally unique UUID operation_id for a new operation; reuse it only for an identical retry. Start without lease_token, then keep the returned lease_token in tool arguments across calls and later turns, never visible chat, card text or URLs. Present it on every later call for that card, including repeat claims. Independent conversations start without a token. A repeated claim with the token returns the held card; release it before selecting another. A lost token expires after 60 minutes. Claims never change card workflow or worker assignment. Retry an identical operation_id for an ambiguous result.'
     catalog.registerTool('claim_next_card', { description: 'Claim the first actionable, unclaimed strictly formed Needs Will card. Optional will_action, initiative (exact label or relation ID), area and max_age_days narrow the census before individual reads. Max age is the age of the oldest recorded open Will request; unknown ages are excluded. Owner Will, Waiting For status, a recognized Will action, Waiting For starting Will:, Actor/Will are required. Includes readiness and source coverage. ' + claimInstructions, inputSchema: { operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema, ...claimFilters }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
-    catalog.registerTool('claim_card', { description: 'Claim one exact active configured-board card. ' + claimInstructions, inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
+    catalog.registerTool('claim_card', { description: 'Claim one exact strictly formed Needs Will card on the configured board. ' + claimInstructions, inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
     catalog.registerTool('release_claim', { description: 'Release this conversation card lease with an explicit reason; no card workflow changes. Use lease_token from the previous tool result in arguments only, never visible chat, card text or URLs. Discard it after release; a later next card starts without a token.', inputSchema: { lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } }, async input => {
       try { return result(await this.leases.release(caller, input.lease_token, input.reason)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
