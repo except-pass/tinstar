@@ -47,7 +47,7 @@ Tin Star writes; it does not delete the issue. No generic comment is a decision.
 | Owner | Coordinator metadata, preserving Firstmate/other existing select values. A coordinator is not a Jira account; Assignee is not fabricated or used as worker proof. |
 | Last touched by, Area, Priority, Sub-area, Attention, Initiative, Epic, Link, Next action | Corresponding typed issue properties `tinstar.workflow.<encoded property name>`. Existing native create/edit metadata does not expose these logical custom fields. Priority/Epic do not silently become Jira's different priority/hierarchy semantics. |
 | Will action | Multi-value issue metadata. Structured existing request/answer markers remain in native comments. Answering one request preserves other requests/actions. |
-| Waiting For / Type / ID | Separate issue metadata, retaining existing multiline waits and explicit identifiers. Answer clears only the exact requested wait. The existing wait operation's behavior is preserved; it does not invent Type/ID values. No wait issues. |
+| Waiting For / Type / ID | Separate issue metadata, retaining multiline waits and explicit identifiers. Uses the [shared workflow wait contract](workflow.md#slice-2-remaining-operations-and-first-mate-integration). No separate Jira wait issues are created. |
 | First Mate tasks | Exact `tinstar.fm-links.v1` JSON in issue metadata, with home/task/spawn-generation readback. Existing worker validation and source freshness still apply. |
 | Delegated To | Separate exact external-worker/context metadata; consumer reports remain attributed and are not independent execution proof. |
 | Next check-in | Date metadata including timezone, through existing checkpoint semantics. |
