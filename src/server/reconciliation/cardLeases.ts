@@ -250,7 +250,7 @@ export class CardLeases {
       if (this.activeInStorage(old)) { if (exact) throw new CardLeaseError(publicLease(old)); continue }
       // Recheck admission under the same writer lock as allocation. Receipts
       // and held-token retries above deliberately preserve their original lease.
-      // A source write crossing the exact-card read invalidates that snapshot;
+      // A source write crossing queue/history or exact-card reads invalidates that snapshot;
       // in-flight writes are fenced by reservedInStorage above.
       if (admission && (db.prepare('SELECT 1 FROM source_write_reservations LIMIT 1').get() ||
         this.sourceRevisionInStorage(db) !== admission.sourceRevision || !admission.eligible(card))) continue

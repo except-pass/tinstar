@@ -433,8 +433,9 @@ when it is not certified ready. New leases skip parked/no-request, future or
 conditional, unverified, Done and Archived candidates. A concrete approval or
 decision on Backlog work can be actionable now without changing its work status.
 Eligibility is checked before claiming and again in the lease allocation
-transaction; a Tin Star source write crossing the fresh exact-card read
-invalidates that snapshot. An identical retry or held-token call retains its
+transaction; a Tin Star source write during queue/history collection or the fresh
+exact-card read invalidates that snapshot, and pending source writes prevent
+allocation. An identical retry or held-token call retains its
 existing lease, even if readiness has since changed.
 
 When none qualifies, `no-unclaimed-card` means no currently unclaimed actionable
