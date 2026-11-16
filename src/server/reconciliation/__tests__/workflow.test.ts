@@ -2989,7 +2989,9 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
   expect(await call('claim_next_card', { operation_id: 'too-old', will_action: 'Decision', max_age_days: 0 })).toMatchObject({ outcome: 'no-unclaimed-card' })
   const willWait = structuredClone(f.raw.properties['Waiting For'])
   f.raw.properties['Waiting For'].rich_text[0].plain_text += '\n' + waitLine({ type: 'Event', id: 'security', dependency: 'Security review', unblocks_when: 'Review complete', follow_up_by: 'Firstmate' })
-  expect(await call('claim_next_card', { operation_id: 'independent-wait', will_action: 'Decision' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const independent = await call('claim_next_card', { operation_id: 'independent-wait', will_action: 'Decision' })
+  expect(independent).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+  expect(await call('release_claim', { lease_token: independent.lease_token, reason: 'Independent wait property claim checked' })).toMatchObject({ outcome: 'released', card_id: id })
   f.raw.properties['Waiting For'] = willWait
   const selected = await call('claim_next_card', { operation_id: 'preview-bounce-claim', area: 'Engineering' })
   const reason = 'The mate can resolve this without the owner'

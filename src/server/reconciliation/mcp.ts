@@ -26,7 +26,7 @@ import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
 import { SessionProbe } from './sessionProbe'
-import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, type ClaimFilters } from './claimPolicy'
+import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
 import type { NeedsWillItem } from './needsWill'
 
@@ -99,6 +99,12 @@ function claimNextCards(queue: DeskQueue) {
   }
   return cards
 }
+function claimRequestSince(card: import('./workReader').WorkCard, item: QueueItem & Partial<NeedsWillItem>) {
+  const actions = card.properties['Will action']?.value
+  const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(action => action.trim().toLowerCase())
+  return oldestOpenRequestSince((item.requests ?? []).filter(request => request.cardId === card.id &&
+    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase())))
+}
 const renderedSchema = renderedObservationSchema
 const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), delivery: deliverySchema.optional(), state: stateSchema.optional() }).strict()
 
@@ -159,8 +165,7 @@ export class ReconciliationMcp {
           if (!hasQueue(queue)) return queue
           candidates = claimNextCards(queue).filter(candidate => {
             const card = hasQueue(queue) ? queue.claimCards?.find(card => card.id === candidate.id) : undefined
-            const since = candidate.item.requestSince ?? null
-            return !!card && matchesClaimFilters(card, input, since)
+            return !!card && matchesClaimFilters(card, input, claimRequestSince(card, candidate.item))
           })
           cards = candidates.map(card => card.id)
         }
@@ -189,7 +194,7 @@ export class ReconciliationMcp {
             if (!current) claimWarnings.push(`Fresh exact-card eligibility is unknown for ${id}; skipped without a lease. Queue coverage does not certify this request.`)
             const eligible = () => {
               if (!covered() || !current) return false
-              const since = item.requestSince ?? null
+              const since = claimRequestSince(current, item)
               if (!matchesClaimFilters(current, input, since)) return false
               const readiness = claimCardReadiness(item, current)
               if (!readiness) return false

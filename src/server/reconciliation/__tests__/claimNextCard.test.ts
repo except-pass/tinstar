@@ -328,6 +328,8 @@ it.each(['initiative', 'area', 'max_age_days'])('filters %s before fresh exact r
   const f = await fixture([card('a'.repeat(32), { Initiative: 'Other', Area: 'Other' }), card('b'.repeat(32), { Initiative: ['initiative-id'], Area: 'Engineering' })])
   f.queue.needsWill![0]!.requestSince = new Date(Date.now() - 10 * 86400_000).toISOString()
   f.queue.needsWill![1]!.requestSince = new Date(Date.now() - 3600_000).toISOString()
+  for (const row of f.queue.needsWill!) row.requests = [{ id: 'age', cardId: row.cardIds[0]!, action: 'Decision', preserveAction: false,
+    options: undefined, requestedFrom: 'Will', question: 'Approve?', since: row.requestSince, sourceId: 'age-note', answered: false }]
   const args = filter === 'initiative' ? { initiative: 'initiative-id' } : filter === 'area' ? { area: 'Engineering' } : { max_age_days: 1 }
   expect(await f.call('claim_next_card', { operation_id: filter, ...args })).toMatchObject({ outcome: 'claimed', lease: { card_id: 'b'.repeat(32) } })
   expect(f.currentCard.mock.calls).toEqual([['b'.repeat(32)]])
@@ -493,4 +495,24 @@ it.each(['cold', 'partial', 'unavailable', 'pending'])('returns property claims 
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     }
   }
+})
+
+
+it.each(['recent', 'unknown', 'changed-action'])('filters each grouped PR card by its own current-action request age (%s)', async mode => {
+  const link = 'https://github.com/acme/app/pull/42'
+  const a = card('a'.repeat(32), { Link: link }), b = card('b'.repeat(32), { Link: link })
+  const f = await fixture([a, b])
+  expect(f.queue.needsWill).toHaveLength(1)
+  const row = f.queue.needsWill![0]!
+  expect(row.cardIds.sort()).toEqual([a.id, b.id])
+  const old = new Date(Date.now() - 10 * 86400000).toISOString(), recent = new Date(Date.now() - 3600000).toISOString()
+  row.requestSince = old
+  row.requests = [{ id: 'old', cardId: a.id, action: 'Decision', preserveAction: false, options: undefined, requestedFrom: 'Will', question: 'Approve?', since: old, sourceId: 'old-note', answered: false }]
+  if (mode !== 'unknown') row.requests.push({ ...row.requests[0]!, id: 'recent', cardId: b.id, since: recent })
+  row.requests.push({ ...row.requests[0]!, id: 'old-do', cardId: b.id, action: 'Do', since: old })
+  if (mode === 'changed-action') f.current.get(b.id)!.properties['Will action']!.value = ['Do']
+  const result = await f.call('claim_next_card', { operation_id: 'group-age', max_age_days: 1 })
+  expect(result).toMatchObject(mode === 'recent' ? { outcome: 'claimed', lease: { card_id: b.id } } : { outcome: 'no-unclaimed-card' })
+  expect(f.currentCard.mock.calls).toEqual(mode === 'unknown' ? [] : [[b.id]])
+  expect(f.leases.status(a.id)).toBeNull()
 })
