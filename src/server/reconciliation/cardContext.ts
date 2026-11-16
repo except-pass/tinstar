@@ -52,7 +52,7 @@ export class CardContextReader {
   }
   commentDetails(id: string, force = false): Promise<CardContextRead> {
     const cached = this.commentCache.get(id)
-    if (!force && cached && cached.until > Date.now()) return cached.value
+    if (!force && cached && (!cached.resolved || cached.until > Date.now())) return cached.value
     if (this.commentCache.size >= 100) this.commentCache.delete(this.commentCache.keys().next().value!)
     const value = this.readComments(id)
     const entry = { until: Date.now() + 30_000, value, resolved: undefined as CardContextRead | undefined }
@@ -110,7 +110,7 @@ export class CardContextReader {
   }
   get(id: string, revision?: string) {
     const cached = this.cache.get(id)
-    if (cached && cached.until > Date.now() && (revision === undefined || revision === cached.revision)) return cached.value
+    if (cached && (!cached.resolved || cached.until > Date.now()) && (revision === undefined || revision === cached.revision)) return cached.value
     if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
     const value = this.read(id).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
     const entry = { until: Date.now() + 30_000, revision, value, resolved: undefined as CardContextRead | undefined }

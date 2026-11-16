@@ -63,6 +63,20 @@ it('says the webhook is not configured and still serves policy without posting',
   expect(await prep.status()).toMatchObject({ configured: false, preparer: 'Tinstar Decision Prep', explanation: webhookMissing })
 })
 
+it('serves a snapshot from known configuration while a slow secret lookup is pending', async () => {
+  const { packets, fixture } = await harness()
+  let complete!: (value: string | null) => void
+  const pending = new Promise<string | null>(resolve => { complete = resolve })
+  const prep = new DecisionPreparation(packets, 'board', { candidates: () => [], coverage: () => 'complete' }, () => fixture.evidence, () => pending)
+  const reviews = new PreparedReviews(packets, 'board', () => fixture.evidence, () => ({ card_ids: [], coverage: 'complete', requests: 0 }))
+  reviews.reportPreparation = () => prep.status(true)
+  try {
+    const snapshot = await reviews.snapshot()
+    expect(snapshot.runner).toMatchObject({ configured: false, explanation: 'Checking preparer configuration.' })
+  } finally { complete(null) }
+  expect((await prep.status()).explanation).toBe(webhookMissing)
+})
+
 it('posts one job per eligible decision, dedupes the revision, and skips leased, answered, and Todo work', async () => {
   const { prep, posts, key, rows, fixture, turnOn, leases } = await harness()
   await prep.replenish()
