@@ -78,7 +78,12 @@ leases are presented as Ready.
 board/fleet metadata and cached card-body and comment history. It does **not**
 refresh sources, call the mutating queue refresh, reconcile receipts, answer,
 repair source links, or take a lease. On a cold cache it honestly reports missing
-coverage. Existing source readers/view refreshes may separately populate caches;
+coverage. Preparation admission and the Desk snapshot separately populate caches
+through the existing read-only body/comment readers, without queue refresh or
+answer reconciliation. Prepare now reads only the selected queue card;
+replenishment (when enabled) and the snapshot read observed queue cards with at
+most four cards in flight. These reads retain the existing per-card bounds and
+30-second cache, including cached failures. Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches
 must be resolved, complete and unexpired for readiness; the earlier cache expiry
 bounds their combined freshness. Missing, partial or expired history blocks
