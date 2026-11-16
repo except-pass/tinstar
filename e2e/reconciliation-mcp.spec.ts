@@ -96,6 +96,9 @@ test('session code remains accessible after reveal with Discuss open', async ({ 
 })
 
 test.beforeEach(async ({ page }) => {
+  // Start each test with fresh static observations, then let time advance for
+  // MCP heartbeats and distinct, expiring presentation flashes.
+  await page.clock.install({ time: new Date(scene.generatedAt) })
   await installDecisionDesk(page)
   await page.addInitScript(() => { if (!localStorage.getItem('tinstar.overview.density')) localStorage.setItem('tinstar.overview.density', 'detailed') })
 })
