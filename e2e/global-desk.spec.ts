@@ -699,6 +699,8 @@ test('phone source conversation return preserves the exact leased request and on
   await expect(identity).toHaveAttribute('data-decision-id', item.id)
   await expect(page.locator('.dd-source-context .ask-composer')).toHaveCount(1)
   await page.reload()
+  await expect(page.getByRole('navigation', { name: 'Decisions mode' }).getByRole('button', { name: 'Workbench', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await openDecisionDesk(page)
   await expect(identity).toHaveAttribute('data-decision-id', item.id)
   await expect(page.getByRole('radio')).toHaveCount(2)
 })
