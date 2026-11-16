@@ -1,6 +1,5 @@
 import { isJiraCard } from '../shared/workIdentity'
 import type { SceneCard } from '../server/reconciliation/scene'
-import type { PresentationState } from './presentation'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
 
@@ -12,10 +11,7 @@ export interface WaitingForGroup {
 }
 const normalize = (id: string) => id.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
 const pageId = (id: string) => isJiraCard(id) ? id : /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(id) ? id.replaceAll('-', '').toLowerCase() : null
-export function waitingForActive(state: PresentationState) {
-  const statuses = state.donutFilter?.cards.length ? state.donutFilter.cards : state.statusFilter?.preset === 'custom' ? state.statusFilter.statuses : []
-  return statuses.length === 1 && statuses[0] === 'Waiting For'
-}
+export { waitingForActive } from '../shared/floorOrganization'
 function githubTarget(value: string) {
   try {
     const url = new URL(value)

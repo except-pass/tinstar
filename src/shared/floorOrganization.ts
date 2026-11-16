@@ -8,6 +8,15 @@ import type { FloorScene, PresentationState } from './reconciliationPresentation
 import { homeLabel } from './reconciliationLabels'
 import { directNeighbors, hasSearch, searchSeeds } from './smartSearch'
 
+export function waitingForActive(state: PresentationState) {
+  const statuses = state.donutFilter?.cards.length ? state.donutFilter.cards : state.statusFilter?.preset === 'custom' ? state.statusFilter.statuses : []
+  return statuses.length === 1 && statuses[0] === 'Waiting For'
+}
+export function waitingForWorkerScope(state: PresentationState): PresentationState {
+  return { ...state, donutFilter: { ...state.donutFilter, cards: [], workers: state.donutFilter?.workers ?? [] },
+    ...(state.statusFilter?.preset === 'custom' && state.statusFilter.statuses.length === 1 && state.statusFilter.statuses[0] === 'Waiting For' ? { statusFilter: { preset: 'operational' as const, statuses: [] } } : {}) }
+}
+
 export const floorFields = [
   { id: 'manager', label: 'Manager', source: 'worker', kind: 'category' },
   { id: 'machine', label: 'Machine', source: 'worker', kind: 'category' },

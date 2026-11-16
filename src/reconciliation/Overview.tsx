@@ -19,7 +19,7 @@ import { SmartSearch } from './SmartSearch'
 import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
-import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
+import { resolveFloorGroup, floorFields, waitingForWorkerScope } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
 import { saveOverviewDensity } from './overviewDensity'
@@ -367,8 +367,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   useEffect(() => { if (waiting && scene && waitingOpen === null) setWaitingOpen(new Set(waitingProjection.initial)) }, [waiting, scene, waitingOpen, waitingProjection])
   // Waiting For changes the Work presentation only. Keep the worker organizer,
   // status choices and relationship roots in the existing presentation state.
-  const waitingWorkerScope = useMemo(() => waiting ? { ...state, donutFilter: { ...state.donutFilter, cards: [], workers: state.donutFilter?.workers ?? [] },
-    ...(state.statusFilter?.preset === 'custom' && state.statusFilter.statuses.length === 1 && state.statusFilter.statuses[0] === 'Waiting For' ? { statusFilter: { preset: 'operational' as const, statuses: [] } } : {}) } : undefined, [waiting, state])
+  const waitingWorkerScope = useMemo(() => waiting ? waitingForWorkerScope(state) : undefined, [waiting, state])
   const waitingWorkers = useMemo(() => scene && waitingWorkerScope
     ? canonicalOverviewGroups(overviewGroups(scene, waitingWorkerScope, now, !!error, expanded)).filter(group => group.workers.length > 0) : [], [scene, waitingWorkerScope, now, error, expanded])
   useEffect(() => {

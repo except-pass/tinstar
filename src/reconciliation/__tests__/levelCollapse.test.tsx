@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
-import { organizedGroups } from '../../shared/floorOrganization'
-import { initialPresentation, semanticId } from '../presentation'
+import { organizedGroups, waitingForWorkerScope } from '../../shared/floorOrganization'
+import { applyPresentationAction, initialPresentation, semanticId } from '../presentation'
 import type { FloorScene } from '../presentation'
 import { preferencesKey } from '../presentationPreferences'
 import { nextLevelCollapsed, overviewLevelControls } from '../overviewLevelCollapse'
@@ -103,6 +103,44 @@ describe('initiative and epic bulk collapse', () => {
     expect(visibleOnly.epics.name).toMatch(/no visible groups/)
     const epicCollapse = nextLevelCollapsed(collapsed, visibleOnly.epics.ids, 'collapse')
     expect(epicCollapse.filter(id => controls.initiatives.ids.includes(id))).toEqual(controls.initiatives.ids)
+  })
+
+  it.each(['donut', 'custom-status'] as const)('accepts Waiting For worker groups through set-expanded with %s filtering', mode => {
+    const now = Date.now()
+    let state = { ...initialPresentation(), organizer,
+      statusFilter: { preset: mode === 'custom-status' ? 'custom' as const : 'all' as const, statuses: mode === 'custom-status' ? ['Waiting For'] : [] },
+      donutFilter: { cards: ['Waiting For'], workers: [] } }
+    const savedFilters = { statusFilter: state.statusFilter, donutFilter: state.donutFilter, organizer: state.organizer }
+    const originalScene = structuredClone(scene)
+    const workerGroups = organizedGroups(scene, waitingForWorkerScope(state), now).filter(group => group.workers.length)
+    const workerGroup = workerGroups.find(group => group.cardIds.includes(fixtureId(1)))!
+    expect(workerGroup).toBeDefined()
+    expect(organizedGroups(scene, state, now).some(group => group.outerId === workerGroup.outerId)).toBe(false)
+    const initiative = semanticId({ kind: 'group', id: workerGroup.outerId })
+    const epic = semanticId({ kind: 'group', id: workerGroup.id })
+    const activate = (level: 'initiatives' | 'epics') => {
+      const control = overviewLevelControls(workerGroups, state.collapsed, organizer)[level]
+      expect(control.disabled).toBe(false)
+      for (const id of control.ids) {
+        const result = applyPresentationAction(state, { type: 'set-expanded', target: { kind: 'group', id: id.slice('group:'.length) }, expanded: control.action === 'expand' }, scene, now)
+        expect(result.outcome).toBe('applied')
+        state = result.state as typeof state
+      }
+    }
+    activate('epics')
+    expect(state.collapsed).toContain(epic)
+    expect(state.collapsed).not.toContain(initiative)
+    const childState = [...state.collapsed]
+    activate('initiatives')
+    expect(state.collapsed).toContain(initiative)
+    expect(state.collapsed).toEqual(expect.arrayContaining(childState))
+    activate('initiatives')
+    expect(state.collapsed).toEqual(childState)
+    activate('epics')
+    expect(state.collapsed).not.toContain(epic)
+    expect(state.collapsed).not.toContain(initiative)
+    expect({ statusFilter: state.statusFilter, donutFilter: state.donutFilter, organizer: state.organizer }).toEqual(savedFilters)
+    expect(scene).toEqual(originalScene)
   })
 
   it('disables both controls when the current tree has neither level', () => {
