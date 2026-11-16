@@ -740,3 +740,21 @@ it('keeps a visible work choice read-only in Decisions and Desk when another own
   expect(screen.queryByText('PRIVATE_OWNER_RATIONALE')).toBeNull()
   expect(screen.queryByText('PRIVATE_OWNER_MESSAGE')).toBeNull()
 })
+
+it('shows both lifecycle exceptions for a cardless worker without offering an invented card link', () => {
+  const queue = fixtureQueue()
+  queue.operationalExceptions = [
+    { cardId: null, executionId: 'worker-attempt', title: 'worker: Invalid spawn card', state: 'unknown', reasons: ['home=/fixture/hulk task_id=worker spawn_gen=g: missing coordinator-authored backlog card: line'], sources: [] },
+    { cardId: null, executionId: 'worker-attempt', title: 'worker: Close home backlog', state: 'unknown', reasons: ['home=/fixture/hulk task_id=worker spawn_gen=g: close it in its home backlog'], sources: [] },
+  ]
+  workspace.value.queue = queue
+  render(<Decisions />)
+  fireEvent.click(screen.getByText('Some sources need verification'))
+  fireEvent.click(screen.getByText('Technical diagnostics'))
+  fireEvent.click(screen.getByText('Worker evidence'))
+  expect(screen.getByRole('button', { name: 'worker: Invalid spawn card' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'worker: Close home backlog' })).toBeDisabled()
+  expect(screen.getByText(/missing coordinator-authored backlog card: line/)).toBeVisible()
+  expect(screen.getByText(/close it in its home backlog/)).toBeVisible()
+  expect(screen.getAllByText('Home backlog needs attention')).toHaveLength(2)
+})
