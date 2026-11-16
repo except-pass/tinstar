@@ -17,16 +17,6 @@ export interface WaitingForException {
 }
 
 const NOTION_ID = /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i
-const DISPATCH = [
-  /\b(waiting for|wait for|pending)\b.{0,80}\b(worker|mate|first\s*mate|hilda|pickup|pick up)\b/i,
-  /\b(hilda|first\s*mate|firstmate)\b.{0,60}\b(start|attach|pick(?:ing)?\s*up|pickup|assign)\b/i,
-  /\b(worker|mate)\b.{0,40}\b(start(?:ing|ed)?|attach(?:ing|ed)?|pick(?:ing)?\s*up|pickup|assign(?:ed|ing)?)\b/i,
-  /\bqueued behind\b/i,
-  /\bbehind other (?:tasks|work|cards|items)\b/i,
-  /\bfirst\s*mate to pick up\b/i,
-  /\bwaiting for (?:a |the )?worker\b/i,
-]
-const PLACEHOLDER = /^(?:first\s*mate|firstmate|hilda(?:\s+mate)?|a worker|the worker|worker|mate|tbd|n\/a|na|unknown|none|pending|waiting|todo|queue|queued)$/i
 const SCHEDULE_WORD = /\b(next|check-?in|check|in|on|at|date|the|a|an|waiting|wait|for|until|by|scheduled|arbitrary|monday|tuesday|wednesday|thursday|friday|saturday|sunday|am|pm|et|eastern)\b/gi
 
 export const DISPATCH_WAIT_REASON = 'Waiting For must name an independent blocker: a person, team, vendor, an event that happens on its own, or another unfinished card. Waiting for a worker to be assigned, started, or attached, for First Mate to pick up, for a place in the queue, or for a check-in date alone does not qualify.'
@@ -49,11 +39,15 @@ export function waitLine(value: { dependency: string; unblocks_when: string; fol
   return `Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)} | Type: ${value.type} | ID: ${entryText(value.id)}`
 }
 
-export function parseWaitLine(line: string): { type: WaitingForType; id: string } | null {
-  const match = / \| Type: (Actor|Event|Work) \| ID: ([\s\S]*)$/.exec(line)
+export function parseWaitLine(line: string): { type: WaitingForType; id: string; dependency: string; unblocks_when: string; follow_up_by: string } | null {
+  const match = /^Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
   if (!match) return null
-  const id = match[2]!.startsWith('"') ? (() => { try { const parsed = JSON.parse(match[2]!) ; return typeof parsed === 'string' ? parsed : match[2]! } catch { return match[2]! } })() : match[2]!
-  return { type: match[1] as WaitingForType, id }
+  const decode = (text: string) => {
+    if (!text.startsWith('"')) return text
+    try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : '' } catch { return '' }
+  }
+  const value = { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4] as WaitingForType, id: decode(match[5]!) }
+  return Object.values(value).every(field => field.trim()) ? value : null
 }
 
 function scheduleOnly(text: string): boolean {
@@ -65,20 +59,17 @@ function scheduleOnly(text: string): boolean {
 }
 
 /** True when the text gives no independent prerequisite. Follow-up owner is not part of this check. */
-export function dispatchOnlyWait(dependency: string, unblocksWhen: string, id: string): boolean {
-  const text = `${dependency}\n${unblocksWhen}`
-  void id
-  return DISPATCH.some(pattern => pattern.test(text)) || scheduleOnly(dependency) || scheduleOnly(unblocksWhen)
+export function dispatchOnlyWait(dependency: string, unblocksWhen: string): boolean {
+  const outcome = unblocksWhen.trim()
+  const text = !outcome || /^(?:when )?(?:that|this|it) happens[.!]?$/i.test(outcome) ? dependency.trim() : outcome
+  return scheduleOnly(text) || /^(?:(?:waiting|wait) for |pending |when |once |after )?(?:(?:a |the |this |our )?(?:worker|card|task|work)(?: to be| is| gets| has been| to)? (?:assigned|started|attached|picked up|dispatched|starts|attaches)|.+? (?:to |is |will |can )?(?:pick(?:s|ing)? up|start(?:s|ing)?(?:\/attach)?|attach(?:es|ing)?|assign(?:s|ing)?) (?:a |the |this |our )?(?:worker|card|task|work)|.+? (?:to )?pick up|queued behind (?:other )?(?:tasks|work|cards)|behind other (?:tasks|work|cards|items))[.!]?$/i.test(text)
 }
 
 export function independentWaitIssue(wait: { type: string; id: string; dependency: string; unblocks_when: string }): WaitIssue | null {
-  const dependency = wait.dependency.trim(), id = wait.id.trim()
-  if (PLACEHOLDER.test(dependency) || PLACEHOLDER.test(id)) {
-    return { code: 'placeholder-blocker', field: PLACEHOLDER.test(dependency) ? 'dependency' : 'id', message: `${DISPATCH_WAIT_REASON} “${PLACEHOLDER.test(dependency) ? dependency : id}” is a placeholder, not that blocker.` }
+  if (!wait.dependency.trim() || !wait.unblocks_when.trim() || wait.dependency.trim().toLowerCase() === wait.id.trim().toLowerCase()) {
+    return { code: 'placeholder-blocker', field: 'dependency', message: `${DISPATCH_WAIT_REASON} Supply a distinct dependency and its unblock outcome.` }
   }
-  if (dispatchOnlyWait(wait.dependency, wait.unblocks_when, wait.id)) {
-    return { code: 'not-independent', field: 'dependency', message: DISPATCH_WAIT_REASON }
-  }
+  if (dispatchOnlyWait(wait.dependency, wait.unblocks_when)) return { code: 'not-independent', field: 'unblocks_when', message: DISPATCH_WAIT_REASON }
   return null
 }
 
@@ -115,28 +106,36 @@ export function waitingForException(input: {
   if (input.status === 'Waiting for Prod Release') return null
   const base = { card_id: input.cardId, observed_at: input.observedAt, coverage: input.coverage }
   if (input.status === 'Waiting For') {
-    const reason = waitingForFieldIssue({ ...input, knownWorkIds: (input.knownWork ?? []).map(card => card.id) })
-    if (reason) {
-      const field = reason.startsWith('Waiting For Type') ? 'Waiting For Type' : reason.startsWith('Waiting For ID') ? 'Waiting For ID' : 'Waiting For'
-      return { ...base, field, reason }
+    const referenceIssue = (type: string, id: string): WaitingForException | null => {
+      const reason = waitingForFieldIssue({ ...input, type, id, knownWorkIds: (input.knownWork ?? []).map(card => card.id) })
+      if (reason) return { ...base, field: reason.startsWith('Waiting For Type') ? 'Waiting For Type' : 'Waiting For ID', reason }
+      if (type === 'Work') {
+        const work = input.knownWork?.find(card => canonicalWorkId(card.id) === canonicalWorkId(id))
+        if (input.coverage !== 'complete') return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference needs verification from a fresh, complete source.' }
+        if (work && (work.archived || work.in_trash || ['Done', 'Archived'].includes(work.status))) return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference is completed, archived or deleted; it is not an unfinished blocker.' }
+      }
+      return null
     }
-    if (input.type === 'Work') {
-      const work = input.knownWork?.find(card => canonicalWorkId(card.id) === canonicalWorkId(input.id))
-      if (work && (work.archived || work.in_trash || ['Done', 'Archived'].includes(work.status))) return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference is completed, archived or deleted; it is not an unfinished blocker.' }
-    }
-    for (const line of input.waitingFor.split('\n').filter(line => line.trim())) {
-      const match = /^Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
-      if (!match || match.slice(1).some(value => !value.trim() || value === '""')) return { ...base, field: 'Waiting For', reason: 'Waiting For requires dependency, unblock condition, follow-up owner and typed identity on every active wait.' }
-      const issue = independentWaitIssue({ dependency: match[1]!, unblocks_when: match[2]!, type: match[4]!, id: match[5]! })
+    const primary = referenceIssue(input.type, input.id)
+    if (primary) return primary
+    const waits = input.waitingFor.split('\n').filter(line => line.trim()).map(parseWaitLine)
+    for (const wait of waits) {
+      if (!wait) return { ...base, field: 'Waiting For', reason: 'Waiting For requires dependency, unblock condition, follow-up owner and typed identity on every active wait.' }
+      const reference = referenceIssue(wait.type, wait.id)
+      if (reference) return reference
+      const issue = independentWaitIssue(wait)
       if (issue) return { ...base, field: 'Waiting For', reason: issue.message }
     }
+    if (waits.length && !waits.some(wait => wait?.type === input.type && wait.id === input.id)) return { ...base, field: 'Waiting For ID', reason: 'Active blocker metadata must match a remaining wait.' }
     if (!input.waitingFor.trim()) return { ...base, field: 'Waiting For', reason: 'Waiting For dependency, unblock condition and follow-up owner are missing.' }
     if (!Number.isFinite(checkInTime(input.nextCheckIn?.start ?? null, input.nextCheckIn?.time_zone))) return { ...base, field: 'Next check-in', reason: 'Next check-in is missing or invalid.' }
-    if (dispatchOnlyWait(input.waitingFor, '', input.id)) return { ...base, field: 'Waiting For', reason: DISPATCH_WAIT_REASON }
     return null
   }
-  if (['Queued', 'Todo', 'Backlog', 'In Progress'].includes(input.status) && input.waitingFor.trim() && dispatchOnlyWait(input.waitingFor, '', input.id)) {
-    return { ...base, field: 'Waiting For', reason: `${DISPATCH_WAIT_REASON} Status is ${input.status}; this text was not rewritten.` }
+  if (['Queued', 'Todo', 'Backlog', 'In Progress'].includes(input.status)) {
+    for (const line of input.waitingFor.split('\n').filter(line => line.trim())) {
+      const wait = parseWaitLine(line)
+      if (dispatchOnlyWait(wait?.dependency ?? line, wait?.unblocks_when ?? '')) return { ...base, field: 'Waiting For', reason: `${DISPATCH_WAIT_REASON} Status is ${input.status}; this text was not rewritten.` }
+    }
   }
   return null
 }

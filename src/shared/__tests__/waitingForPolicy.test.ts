@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape } from '../waitingForPolicy'
+import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape, waitLine } from '../waitingForPolicy'
 
 const id = 'a'.repeat(32)
 const other = 'e'.repeat(32)
@@ -18,7 +18,7 @@ describe('Waiting For independence', () => {
     'Check in on Friday',
     '2026-12-01',
   ])('rejects a dispatch-only reason: %s', dependency => {
-    expect(dispatchOnlyWait(dependency, 'When that happens', 'Build crew')).toBe(true)
+    expect(dispatchOnlyWait(dependency, 'When that happens')).toBe(true)
     expect(dispatch(dependency)?.code).toBe('not-independent')
   })
 
@@ -28,7 +28,8 @@ describe('Waiting For independence', () => {
     allow('Security approval of the firmware publication', 'The image is published', 'Release engineering')
     allow('Duke Energy interconnection approval', 'The utility confirms the tariff', 'Duke Energy')
     expect(independentWaitIssue({ type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified' })).toBeNull()
-    expect(independentWaitIssue({ type: 'Actor', id: 'First Mate', dependency: 'Main branch release PR #440 published', unblocks_when: 'The release is published' })?.code).toBe('placeholder-blocker')
+    expect(independentWaitIssue({ type: 'Actor', id: 'First Mate', dependency: 'Main branch release PR #440 published', unblocks_when: 'The release is published' })).toBeNull()
+    allow('Waiting for First Mate to publish the firmware source', 'The firmware source is published', 'Release engineering')
   })
 
   it('flags malformed Waiting For metadata and does not treat unknown coverage as absence', () => {
@@ -52,4 +53,23 @@ it('reports bypassed fields and Work references without rewriting', () => {
   expect(waitingForException({ ...base, type: 'Work', id: other })?.reason).toMatch(/needs verification/)
   expect(waitingForException({ ...base, type: 'Work', id: other, knownWork: [{ id: other, status: 'Done' }] })?.reason).toMatch(/completed/)
   expect(independentWaitIssue({ type: 'Actor', id: 'Release engineering', dependency: 'Waiting for a worker to be assigned', unblocks_when: 'The worker starts' })?.code).toBe('not-independent')
+})
+
+for (const workId of [id, 'invalid', other]) {
+  it(`checks secondary Work identity ${workId}`, () => {
+    const primary = { type: 'Actor', id: 'Will', dependency: 'Tariff approval', unblocks_when: 'The tariff is approved', follow_up_by: 'Consumer' }
+    const secondary = { ...primary, type: 'Work', id: workId, dependency: 'Other card outcome', unblocks_when: 'The other card finishes' }
+    const base = { cardId: id, status: 'Waiting For', type: 'Actor', id: 'Will', waitingFor: [waitLine(primary), waitLine(secondary)].join('\n'), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' as const }
+    expect(waitingForException(base)?.field).toBe('Waiting For ID')
+    if (workId === other) {
+      for (const state of [{ status: 'Done' }, { status: 'Queued', archived: true }, { status: 'Queued', in_trash: true }]) expect(waitingForException({ ...base, knownWork: [{ id: other, ...state }] })?.reason).toMatch(/completed|archived|deleted/)
+      expect(waitingForException({ ...base, knownWork: [{ id: other, status: 'Queued' }] })).toBeNull()
+      expect(waitingForException({ ...base, coverage: 'unknown', knownWork: [{ id: other, status: 'Queued' }] })?.reason).toMatch(/verification/)
+    }
+  })
+}
+
+it.each(['First Mate', 'Release engineering', 'Build crew'])('judges outcomes independently of actor %s', actor => {
+  expect(independentWaitIssue({ type: 'Actor', id: actor, dependency: `Waiting for ${actor} to publish the firmware source`, unblocks_when: 'The firmware source is published' })).toBeNull()
+  expect(independentWaitIssue({ type: 'Actor', id: actor, dependency: 'Security release', unblocks_when: 'The worker starts' })?.code).toBe('not-independent')
 })
