@@ -21,6 +21,7 @@ beforeEach(() => {
     const path = String(url).split('/').pop()!, body = init?.body ? JSON.parse(String(init.body)) : null
     let data: unknown
     if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', expires_at: new Date(Date.now() + 86400000).toISOString(), label: 'Browser review', device: 'desktop', held: null }] }
+    else if (path.startsWith('packet?id=')) data = packet
     else if (path === 'submission-state') data = { submissions: [] }
     else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
     else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [] }
@@ -251,6 +252,46 @@ it('refreshes reviewed metrics after consecutive successes with identical notice
   for (let count = 1; count <= 2; count++) {
     fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
-    await waitFor(() => expect(document.querySelector('.dd-status')?.textContent).toContain(`Reviewed ${count}`))
+    await waitFor(() => expect(screen.getByText('Reviewed today (UTC)', { exact: false })).toHaveTextContent(`Reviewed today (UTC) ${count}`))
   }
+})
+
+it('restores the current unresolved packet after successive expiries before attempting an exact claim', async () => {
+  await ready()
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  let expired = true
+  const recoveryTokens: string[] = []
+  const claimCards: string[] = []
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    if (String(url).endsWith('/sessions') && init?.method === 'GET' && expired) return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+    if (String(url).endsWith('/submission-state')) recoveryTokens.push(body.original_lease_token)
+    if (String(url).endsWith('/claim')) claimCards.push(body.card_id)
+    return fallback(url, init)
+  })
+  await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(claimCards.length).toBeGreaterThan(0))
+  expired = false
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByText('No prepared decisions ready.')
+  cleanup()
+  packet = { ...packet, id: '00000000-0000-4000-8000-000000000002', packet: { ...packet.packet, binding: { ...packet.packet.binding, card_id: 'b'.repeat(32), request_id: 'second-request' } } }
+  leaseToken = 'session-b-lease'
+  await ready()
+  outcome = 'save-unconfirmed'
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Confirm save status' })
+  const original = submits.at(-1)!
+  cleanup(); expired = true; claimCards.length = 0
+  await ready()
+  await waitFor(() => expect(recoveryTokens.at(-1)).toBe('session-b-lease'))
+  await waitFor(() => expect(claimCards).toEqual(['b'.repeat(32)]))
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+  await screen.findByText('No prepared decisions ready.')
+  expect(submits.at(-1)).toEqual(original)
 })
