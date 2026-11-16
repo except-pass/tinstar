@@ -129,7 +129,7 @@ function Inspector({ packet: stored, count, onSource }: { packet: DeskPacket; co
 function SourceDiscussion({ packet: { packet } }: { packet: DeskPacket }) {
   const controls = useAskControls(), workspace = useDeskWorkspace()
   const source = packet.binding.source_request
-  const matches = (workspace.workers ?? []).filter(worker => worker.home === source.home && worker.id === source.taskId)
+  const matches = (workspace.workers ?? []).filter(worker => source && worker.home === source.home && worker.id === source.taskId)
   const worker = matches.length === 1 ? matches[0] : null
   const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
   const linked = route ? findLinkedWorker(workspace.workers, route) : null

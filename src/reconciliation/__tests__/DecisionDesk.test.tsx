@@ -373,7 +373,8 @@ it('shows real source evidence read-only, cleans protocol metadata and keeps can
   expect(submits).toHaveLength(0)
 })
 
-it('sends text and voice-capable discussion with exact request context without answering', async () => {
+it.each(['firstmate', 'card-native'])('sends text and voice-capable %s discussion with exact request context without answering', async kind => {
+  if (kind === 'card-native') { packet.packet.binding.source_request = null; packet.packet.binding.source_spawn_gen = null }
   const fallback = vi.mocked(fetch).getMockImplementation()!
   const questions: unknown[] = []
   vi.mocked(fetch).mockImplementation(async (url, init) => {

@@ -34,7 +34,7 @@ it.each(['card', 'request', 'revision', 'option', 'question', 'answered', 'parti
   const { packet, evidence } = preparedDecisionFixture(now)
   expect(validateDecisionPacket(packet, evidence, now)).toMatchObject({ valid: true })
   if (kind === 'card') evidence.card_id = 'f'.repeat(32)
-  if (kind === 'request') evidence.requests[0]!.binding!.source_request.id = 'other'
+  if (kind === 'request') evidence.requests[0]!.binding!.source_request!.id = 'other'
   if (kind === 'revision') evidence.requests[0]!.binding!.source_revision = 'new revision'
   if (kind === 'option') evidence.requests[0]!.binding!.options[0]!.label = 'Production instead'
   if (kind === 'question') packet.question = 'Authorize something else?'
@@ -178,6 +178,61 @@ it('does not invalidate evidence for cosmetic worker-link JSON formatting', () =
   const changed = projectDecisionEvidence(fixture.snapshot, fixture.cardId, fixture.history, now)
   expect(changed.requests[0]!.dependencies.find(dependency => dependency.kind === 'card')!.revision).toBe(fixture.evidence.requests[0]!.dependencies.find(dependency => dependency.kind === 'card')!.revision)
   expect(validateDecisionPacket(fixture.packet, changed, now).valid).toBe(true)
+})
+
+function cardNativeFixture() {
+  const f = preparedDecisionFixture(now)
+  f.snapshot.fleet = []
+  f.history.context.blocks[0]!.text = `Operation: request_decision\nRequested from: Will\nQuestion: ${f.packet.question}\nTin Star request: ${JSON.stringify({
+    id: f.packet.binding.request_id, action: 'Decision', preserve_action: false, options: f.packet.binding.options,
+  })}`
+  f.evidence = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
+  f.packet.binding = f.evidence.requests[0]!.binding!
+  f.packet.dependencies = f.evidence.requests[0]!.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  return f
+}
+
+it('binds card-native requests without a fleet source and versions their packets normally', async () => {
+  const f = cardNativeFixture(), { packets } = await store()
+  expect(f.evidence.reasons).toEqual([])
+  expect(f.evidence.requests[0]!.reasons).toEqual([])
+  expect(f.packet.binding).toMatchObject({ source_request: null, source_spawn_gen: null, source_question: f.packet.question })
+  expect(f.evidence.requests[0]!.dependencies.map(dep => dep.kind)).toEqual(['request', 'card', 'answer'])
+  expect(validateDecisionPacket(f.packet, f.evidence, now).valid).toBe(true)
+  const first = await packets.publish(f.packet, f.evidence, 'bot', 'native-first')
+  expect(await packets.read(first.id, f.evidence)).toMatchObject({ ready: true, version: 1 })
+  const second = await packets.publish(f.packet, f.evidence, 'bot', 'native-second')
+  expect(await packets.read(second.id, f.evidence)).toMatchObject({ ready: true, version: 2 })
+  expect(await packets.read(first.id, f.evidence)).toMatchObject({ ready: false })
+})
+
+it.each(['question', 'option', 'record', 'answered', 'partial', 'expired', 'duplicate', 'malformed-binding'] as const)('invalidates a card-native packet for %s evidence', kind => {
+  const f = cardNativeFixture(), block = f.history.context.blocks[0]!
+  if (kind === 'question') block.text = block.text.replace(f.packet.question, 'Authorize a different scope?')
+  if (kind === 'option') block.text = block.text.replace('Authorize preview only', 'Authorize production')
+  if (kind === 'record') block.id = 'replacement-record'
+  if (kind === 'answered') f.history.context.blocks.push({ id: 'owner-answer', type: 'comment', text: `Tin Star answer: ${JSON.stringify(f.packet.binding.request_id)}` })
+  if (kind === 'partial') f.history.context.commentsOutcome = 'unavailable'
+  if (kind === 'expired') f.history.expires_at = new Date(now).toISOString()
+  if (kind === 'duplicate') f.history.context.blocks.push({ ...block, id: 'duplicate-record' })
+  if (kind === 'malformed-binding') block.text = block.text.replace('"action":"Decision"', '"action":"Decision","source_request":{}')
+  const changed = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
+  expect(validateDecisionPacket(f.packet, changed, now).valid).toBe(false)
+  if (kind === 'malformed-binding') expect(changed.requests[0]!.binding).toBeNull()
+})
+
+it('keeps native request keys scoped to the card and ignores cosmetic record changes', () => {
+  const f = cardNativeFixture()
+  const block = f.history.context.blocks[0]!
+  const marker = 'Tin Star request: ', start = block.text.indexOf(marker), record = JSON.parse(block.text.slice(start + marker.length))
+  record.options.reverse()
+  block.text = block.text.slice(0, start) + marker + JSON.stringify(record)
+  f.history.observed_at = new Date(now - 1000).toISOString()
+  expect(validateDecisionPacket(f.packet, projectDecisionEvidence(f.snapshot, f.cardId, f.history, now), now).valid).toBe(true)
+  const otherCard = 'e'.repeat(32), card = f.snapshot.intentions.data!.cards.find(card => card.id === f.cardId)!
+  f.snapshot.intentions.data!.cards.push({ ...card, id: otherCard })
+  const other = projectDecisionEvidence(f.snapshot, otherCard, f.history, now).requests[0]!.binding!
+  expect(other.request_key).not.toBe(f.packet.binding.request_key)
 })
 
 it('restores unchanged research only after fresh evidence is observed after withdrawal', async () => {
