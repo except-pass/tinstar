@@ -6,8 +6,8 @@ backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
 P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
 P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
-Existing Decisions screens, generic claims, source answers, receipts and
-`search_work` filters/coverage retain their behavior.
+Generic claims, source answers, receipts and `search_work` filters/coverage
+retain their behavior. P5 replaces the Decisions screen as described below.
 
 P1 starts no workers, dispatches no jobs and spends nothing on preparation.
 Automatic replenishment is stored ON by default, ready depth 10 (1–30), maximum
@@ -421,6 +421,24 @@ arguments. Duplicate browser contexts with cloned storage resume that same real
 session; a distinct context must explicitly create a new session. The rail lists
 actual server contexts and explains that other contexts must be resumed in their
 original browser. Discuss remains available as an explicitly opened overlay.
+
+Open **Source request & discussion** from the evidence inspector (or the inline
+**Evidence, confidence & execution boundaries** disclosure on smaller screens)
+to inspect card context, receipt history, an available exact source terminal link,
+and the request-bound text/voice composer. **Open source conversation in Discuss**
+resumes its existing thread. Returning from Discuss retains the exact request key;
+if the card-only claim returns a different request, the desk releases it without
+answering and reports that the requested decision is not ready or is held. It never
+presents that substitute as the requested destination. Unlinked requests cannot
+be reviewed without a verified canonical card and prepared packet.
+
+**Submit decision & next →** records the selected source option before advancing.
+**Skip** releases without answering. **Need more research** accepts an optional
+reason, withdraws the packet and serves the next eligible decision; it does not
+start a preparer. Retained worker notes are under **Preparation → Source delivery
+details**. MCP navigation still uses the operational queue, but visible delivery
+requires the requested card to be painted in Review; there is no searchable row
+list or previous/next list traversal in this screen.
 
 Review uses the approved three/two/one-column layout, source-bound radio choices,
 scoped high-risk confirmation and readback-confirmed submit/next. Expired leases,

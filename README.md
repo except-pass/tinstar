@@ -29,7 +29,7 @@ The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only
 
 The [Next check-in watchdog](docs/features/check-in-watchdog.md) requests overdue status updates through First Mate and shows a quiet line on the relevant card until Notion readback verifies the answer.
 
-Open a **Decisions** request to review First Mate’s published recommendation, choose an action or discuss the request with text or voice. See the [queue reference](docs/features/reconciliation-queue.md#decisions-tab) for the workbench, readiness and source identity rules.
+Open **Decisions** to review a prepared, source-bound packet in **Review**, or inspect queue policy and pending work in **Preparation**. See the [Decision Desk guide](docs/features/decision-desk-foundation.md#p5--review-and-preparation-ui) for submission, recovery and the preparation runner boundary.
 
 Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Discuss**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 
@@ -37,7 +37,7 @@ Expand a Discuss conversation and use **Reply to First Mate** to continue inline
 
 Use **Open in ChatGPT** on an Overview work card or PR row for an external discussion. See the [Open in ChatGPT reference](docs/features/open-in-chatgpt.md) for URL prefill limits, copy-prompt recovery and metadata privacy.
 
-The activity strip provides **Overview**, **Decisions**, **PRs**, **Releases** and **Review Ready**. Use **Review Ready** to open the existing context panel, inspect a deliverable's live feature and evidence, and approve it or request changes. See [deployed feature review](docs/features/workflow.md#deployed-feature-review) for acceptance scope and recovery rules. [Decisions](docs/features/reconciliation-queue.md#decisions-tab) provides a searchable queue with shared card selection and MCP flash. The [PR Operations reference](docs/features/pr-operations.md) covers the review table, repository scope and required owner access. The **Discuss** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
+The activity strip provides **Overview**, **Decisions**, **PRs**, **Releases** and **Review Ready**. Use **Review Ready** to open the existing context panel, inspect a deliverable's live feature and evidence, and approve it or request changes. See [deployed feature review](docs/features/workflow.md#deployed-feature-review) for acceptance scope and recovery rules. [Decisions](docs/features/decision-desk-foundation.md#p5--review-and-preparation-ui) reviews one leased prepared request at a time. The [PR Operations reference](docs/features/pr-operations.md) covers the review table, repository scope and required owner access. The **Discuss** header contains its title and collapse control. From worker detail, use **Switch worker**, or **Ctrl+[** and **Ctrl+]** to cycle, including while the terminal has focus.
 
 A worker opens a live terminal with its objective, project, worktree, branch and pull request in a detail rail (**Details** on windows 1200px wide or narrower). In the collapsible prompt composer, **Ctrl+Enter** (or **Cmd+Enter**) pastes the prompt into the worker's pane and presses Enter. It retains recent prompts, stash slots and quick menu keys. Paste a screenshot or drop a file to upload it under the config root's `screenshots/` folder and insert its `@path`. Mark a worker **Direct** in the detail rail to indicate you are working with it yourself; First Mate receives an inbox note when the mark changes. A snapshot kind of `secondmate` shows a **Second mate** badge in that rail. Each worker keeps the same face and color across reloads.
 
@@ -47,7 +47,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 | URL | Opens |
 | --- | --- |
-| `/?view=decisions` | Decisions queue. |
+| `/?view=decisions` | Decision Desk. |
 | `/?view=pulls` | PR Operations review table. |
 | `/?view=releases` | Releases page. |
 | `/?card=NOTION_PAGE_ID` | Reveal that authorized card in Overview. |
@@ -58,7 +58,7 @@ The open worker is part of the page URL, so a view can be opened directly or sha
 
 An id that is not in the fleet, or that is in more than one home when no `home` is given, shows **No such worker**. If a fleet update failed, the **Fleet update delayed** notice appears above it, since the worker may be in a home that has not loaded yet.
 
-For Decisions response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, its retained notes remain available under the Decisions diagnostics. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
+For Decisions response delivery inspection, see the [queue reference](docs/features/reconciliation-queue.md). Worker notes and replies appear under **Tell First Mate about this** in worker detail; when the worker leaves the fleet, its retained notes remain available under Preparation → Source delivery details. The [integration reference](docs/features/firstmate-observer.md) covers retention and retry.
 
 ## Quick start
 
