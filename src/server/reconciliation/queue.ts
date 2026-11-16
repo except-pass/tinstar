@@ -178,7 +178,7 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
     !card.properties['Will action']?.hasMore && tags.some(tag => ['decision', 'do', 'merge', 'elevated command'].includes(tag)) &&
     /^Will:\s*\S/.test(word(card, 'Waiting For') ?? '') &&
     word(card, 'Waiting For Type') === 'Actor' && word(card, 'Waiting For ID') === 'Will'
-  if (propertyAsk) return { readiness: 'ready-now' as const, reasons: [
+  if (propertyAsk && !current) return { readiness: 'ready-now' as const, reasons: [
     ...item.reasons, 'Current Will property ask is actionable for claims; Desk preparation history is not required',
   ] }
   const decisionRequest = tags.length > 0 && tags.every(tag => ['decision', 'approval', 'approve'].includes(tag))

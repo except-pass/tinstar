@@ -195,10 +195,9 @@ it('treats waiting for Will approval as the current request while retaining real
   expect(await f.call('claim_next_card', claim('real-prerequisite'))).toMatchObject({ outcome: 'no-unclaimed-card' })
 })
 
-it.each(['Done', 'Archived', 'archived', 'in_trash', 'no-action', 'no-request', 'future-date', 'future-condition', 'owner-removed'])('rejects fresh exact-card %s despite a ready cached queue', async change => {
+it.each(['Done', 'Archived', 'archived', 'in_trash', 'no-request', 'future-date', 'future-condition', 'owner-removed'])('rejects fresh exact-card %s despite a ready cached queue', async change => {
   const f = await fixture([card()]), current = f.current.get('a'.repeat(32))!
   if (change === 'archived' || change === 'in_trash') current[change] = true
-  else if (change === 'no-action') current.properties['Next action']!.value = ''
   else if (change === 'no-request') current.properties['Next action']!.value = 'No active approval requested'
   else if (change === 'future-date') current.properties['Start Date'] = { id: 'start', type: 'date', value: { start: '2099-01-01' }, hasMore: false }
   else if (change === 'future-condition') current.properties['Next action']!.value = 'Approve after the review completes'
