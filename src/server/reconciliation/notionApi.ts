@@ -18,6 +18,10 @@ export class NotionApi {
   private tail: Promise<unknown> = Promise.resolve()
   private schemas = new Map<string, { until: number; value: Promise<Response> }>()
   constructor(private fetcher: typeof fetch = fetch, private intervalMs = 350) {}
+  /** Prose readers already bound their concurrency. Share request-start pacing
+   * and 429 backoff, but do not hold property reads behind a slow history HTTP
+   * response for its entire 20-second deadline. */
+  readonly backgroundFetch: typeof fetch = (input, init) => this.request(input, init, true)
   readonly fetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input)), method = init?.method ?? 'GET'
     const schema = method === 'GET' && /^\/v1\/data_sources\/[^/]+$/.test(url.pathname)
@@ -32,7 +36,7 @@ export class NotionApi {
     }
     return pending
   }
-  private async request(input: Parameters<typeof fetch>[0], init?: RequestInit) {
+  private async request(input: Parameters<typeof fetch>[0], init?: RequestInit, background = false) {
     const prior = this.tail
     let release!: () => void
     const slot = new Promise<void>(resolve => { release = resolve })
@@ -42,20 +46,26 @@ export class NotionApi {
     const started = Date.now()
     try {
       await waitForTurn(prior, init?.signal)
-      const delay = this.nextAt - Date.now()
-      if (delay > 0) await new Promise<void>((resolve, reject) => {
-        const signal = init?.signal
-        const abort = () => { clearTimeout(timer); reject(signal?.reason) }
-        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, delay)
-        if (signal?.aborted) abort()
-        else signal?.addEventListener('abort', abort, { once: true })
-      })
+      while (this.nextAt > Date.now()) {
+        const delay = this.nextAt - Date.now()
+        await new Promise<void>((resolve, reject) => {
+          const signal = init?.signal
+          const abort = () => { clearTimeout(timer); reject(signal?.reason) }
+          const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, delay)
+          if (signal?.aborted) abort()
+          else signal?.addEventListener('abort', abort, { once: true })
+        })
+      }
       init?.signal?.throwIfAborted()
       const url = new URL(String(input)), method = init?.method ?? 'GET'
       const operation = `${method} ${url.pathname.split('/')[2] ?? 'other'}${url.pathname.endsWith('/query') ? '/query' : ''}`
       this.diagnostics.requests[operation] = (this.diagnostics.requests[operation] ?? 0) + 1
+      if (background) {
+        this.nextAt = Math.max(this.nextAt, Date.now() + this.intervalMs)
+        release()
+      }
       const response = await this.fetcher(input, init)
-      this.nextAt = Date.now() + this.intervalMs
+      if (!background) this.nextAt = Math.max(this.nextAt, Date.now() + this.intervalMs)
       if (response.status === 429) {
         this.diagnostics.rateLimits++
         const value = response.headers.get('retry-after'), seconds = Number(value)

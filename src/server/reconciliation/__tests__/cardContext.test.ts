@@ -61,3 +61,44 @@ it('retains the older body or comment expiry without refreshing cached history',
     }
   } finally { clock.mockRestore() }
 })
+
+it('coalesces a pending history read even after its freshness deadline has passed', async () => {
+  let finish!: (response: Response) => void
+  const fetcher = vi.fn<typeof fetch>(() => new Promise(resolve => { finish = resolve }))
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000)
+  try {
+    const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+    const first = reader.get('card')
+    clock.mockReturnValue(135_000)
+    expect(reader.get('card')).toBe(first)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    finish(Response.json({ results: [], has_more: false }))
+    await first
+    expect(reader.cachedDecisionHistory('card')).toBeUndefined()
+  } finally { clock.mockRestore() }
+})
+
+it('retains known history with its original expired timestamps while a refresh is pending', async () => {
+  const start = Date.parse('2026-11-16T20:00:00Z')
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(start)
+  let release!: () => void, slow = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const fetcher: typeof fetch = async () => {
+    if (slow) await gate
+    return Response.json({ results: [], has_more: false })
+  }
+  try {
+    const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+    await reader.details('card')
+    const original = reader.cachedDecisionHistory('card')
+    slow = true
+    clock.mockReturnValue(start + 31_000)
+    const refresh = reader.details('card')
+    expect(reader.cachedDecisionHistory('card')).toEqual(original)
+    expect(Date.parse(reader.cachedDecisionHistory('card')!.expires_at)).toBeLessThan(Date.now())
+    expect(reader.cachedComments('card')).toBeUndefined()
+    release()
+    await refresh
+    expect(Date.parse(reader.cachedDecisionHistory('card')!.expires_at)).toBe(start + 61_000)
+  } finally { release(); clock.mockRestore() }
+})

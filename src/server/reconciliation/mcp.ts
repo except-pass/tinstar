@@ -72,6 +72,7 @@ export interface PresentationReaders {
   getWork?(input: unknown): Promise<unknown>
   currentCard?(id: string): Promise<import('./workReader').WorkCard>
   workViews?(): Promise<QueueRead>
+  claimQueue?(): Promise<QueueRead>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
   updateWork?(input: UpdateWorkInput, actor: string): Promise<unknown>
   createWork?(input: CreateWorkInput, actor: string): Promise<unknown>
@@ -85,7 +86,7 @@ type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
 /** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
 function claimNextCards(queue: DeskQueue) {
-  const source = queue.needsWill ?? queue.items
+  const source = (queue.needsWill ?? queue.items).filter(claimRequestCandidate)
   const ordered = [...source.filter(item => item.readiness === 'ready-now'), ...source.filter(item => item.readiness !== 'ready-now')]
   const seen = new Set<string>()
   const cards: Array<{ id: string; readiness: (typeof source)[number]['readiness']; reasons: string[]; item: (typeof source)[number] }> = []
@@ -125,11 +126,11 @@ export class ReconciliationMcp {
         const claimWarnings: string[] = []
         const enrich = async (claimed: Awaited<ReturnType<CardLeases['claim']>>, queue?: QueueRead) => {
           const claimedId = 'lease' in claimed && claimed.lease ? claimed.lease.card_id : undefined
-          if (!input.card_id && claimedId && !queue) queue = await (this.readers.workViews?.() ?? this.readers.queue()).catch(() => undefined)
+          if (!input.card_id && claimedId && !queue) queue = await (this.readers.claimQueue?.() ?? this.readers.workViews?.() ?? this.readers.queue()).catch(() => undefined)
           const readiness = !input.card_id && claimedId
             ? admitted.get(claimedId) ?? (queue && hasQueue(queue) ? claimNextCards(queue).find(card => card.id === claimedId) : undefined)
             : undefined
-          return { ...claimed, ...(!input.card_id && claimedId ? { readiness: readiness?.readiness ?? 'unknown', readiness_reasons: readiness?.reasons ?? ['Current queue readiness evidence is unavailable for this card'] } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? [...queue.warnings, ...claimWarnings] : undefined } : {}), ...(claimedId ? { card: await this.readers.getWork?.({ card_id: claimedId, details: true }) } : {}) }
+          return { ...claimed, ...(!input.card_id && claimedId ? { readiness: readiness?.readiness ?? 'unknown', readiness_reasons: readiness?.reasons ?? ['Current queue readiness evidence is unavailable for this card'] } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? [...queue.warnings, ...claimWarnings] : undefined } : {}), ...(claimedId ? { card: await this.readers.getWork?.({ card_id: claimedId, details: false }) } : {}) }
         }
         if (input.lease_token) {
           const held = await this.leases.claim(input.card_id ? [input.card_id] : [], caller, actor, input.operation_id, input.lease_token, !!input.card_id)
@@ -152,7 +153,7 @@ export class ReconciliationMcp {
           if (!activeCard(await exactCard(input.card_id))) return { outcome: 'unavailable', message: 'Card is unavailable or no longer active in the configured board' }
           cards = [input.card_id]
         } else {
-          queue = await (this.readers.workViews?.() ?? this.readers.queue())
+          queue = await (this.readers.claimQueue?.() ?? this.readers.workViews?.() ?? this.readers.queue())
           if (!hasQueue(queue)) return queue
           candidates = claimNextCards(queue)
           cards = candidates.map(card => card.id)

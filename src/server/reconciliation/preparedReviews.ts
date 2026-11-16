@@ -15,7 +15,8 @@ export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card
 type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }
 export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
-export interface PreparedQueue { card_ids: string[]; coverage: 'complete' | 'unknown'; requests: number | null }
+export interface PreparedQueue { card_ids: string[]; coverage: 'complete' | 'unknown'; requests: number | null
+  history?: Array<{ card_id: string; title: string; state: 'loading' | 'available' | 'unavailable'; observed_at: string | null; expires_at: string | null; message?: string | null; retry_at?: string | null }> }
 export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: ReturnType<DecisionPackets['readInStorage']>; session_id?: string; packet_version?: number; message?: string; coverage?: string }
 const sessionLifetime = 24 * 60 * 60 * 1000
 
@@ -29,6 +30,7 @@ const unconfiguredPreparation = (): PreparationReport => ({
 export class PreparedReviews {
   private initialized?: Promise<void>
   reportPreparation: () => Promise<PreparationReport> | PreparationReport = unconfiguredPreparation
+  refreshEvidence: () => void = () => {}
   constructor(readonly packets: DecisionPackets, readonly scope: string, private evidence: (card: string) => DecisionEvidence,
     private queue: () => PreparedQueue, private now = Date.now) {}
   private get leases() { return this.packets.leases }
@@ -81,9 +83,10 @@ export class PreparedReviews {
     await this.initialize()
     return this.leases.readStorage(db => ({ sessions: (db.prepare('SELECT * FROM decision_review_sessions WHERE caller = ? AND scope = ? AND revoked IS NULL AND expires > ? ORDER BY created,id').all(caller, this.scope, this.now()) as unknown as Session[]).map(session => this.summary(db, session)) }))
   }
-  /** Complete cached-source UI projection; never dispatches research or writes source. */
+  /** Project known evidence, scheduling history outside the storage transaction. */
   async snapshot() {
     await this.initialize()
+    this.refreshEvidence()
     const prep = await this.reportPreparation()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
@@ -132,7 +135,7 @@ export class PreparedReviews {
         ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
         recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
           ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],
-        pending, source_failures: sourceFailures, omissions: verified ? [] : ['Source coverage is incomplete or unavailable; queue totals cannot be verified.'] }
+        pending, history: queue.history ?? [], source_failures: sourceFailures, omissions: verified ? [] : ['Source coverage is incomplete or unavailable; queue totals cannot be verified.'] }
     })
   }
   private session(db: DatabaseSync, caller: string, input: Pick<ClaimInput, 'review_session_token' | 'lease_token'>): Session | undefined {

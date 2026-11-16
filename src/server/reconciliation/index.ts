@@ -2,7 +2,7 @@ import { CardLeases, CardLeaseError } from './cardLeases'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
-import { DecisionPreparation, type PrepCandidate } from './decisionPrep'
+import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
@@ -24,6 +24,7 @@ import { type WorkScope } from './notion'
 import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
+import { PreparationHistory } from './preparationHistory'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
 import { QueuePullReader } from './queuePulls'
@@ -72,19 +73,21 @@ export class ReconciliationSources {
   readonly workflow
   readonly notionApi
   private context
+  private preparationHistory
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
   // Owner-authorized PR evidence must never enter an anonymous display response.
   private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
 
-  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
+  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot(), preparationSecret = readClavisValue) {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: () => this.prepCandidates(), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id))
-    this.preparedReviews.reportPreparation = () => this.preparation.status()
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparedReviews.reportPreparation = () => this.preparation.status(true)
+    this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -110,7 +113,8 @@ export class ReconciliationSources {
     })
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.context = new CardContextReader(config.notion, this.notionApi.fetch, this.workReader.jira)
+    this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
+    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded())
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
@@ -161,16 +165,34 @@ export class ReconciliationSources {
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
     const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
-    return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
+    const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
+      title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
+    coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
+  }
+
+  /** Enqueue only; snapshot delivery and automatic admission never wait for
+   * board-wide history. Original history freshness remains authoritative. */
+  private warmPreparationHistory() {
+    this.preparationHistory.warm(this.decisionQueue().card_ids)
+  }
+
+  private async preparationCandidates(cardId?: string) {
+    if (cardId) {
+      if (!this.decisionQueue().card_ids.includes(cardId)) return []
+      await this.preparationHistory.read(cardId)
+    } else this.warmPreparationHistory()
+    return this.prepCandidates(cardId)
   }
 
   /** Eligible-source facts for one preparation pass. Admission itself rechecks leases. */
-  private prepCandidates(): PrepCandidate[] {
+  private prepCandidates(onlyCard?: string): PrepCandidate[] {
     const snapshot = this.knownSnapshot(), queue = this.decisionQueue()
     const held = this.leases.readStorage(db => new Set(queue.card_ids.filter(id => this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reservedInStorage(db, id))))
     const candidates: PrepCandidate[] = []
     let rank = 0
     for (const cardId of queue.card_ids) {
+      if (onlyCard && cardId !== onlyCard) continue
       const card = snapshot.intentions.data?.cards.find(item => item.id === cardId)
       const evidence = this.preparationEvidence(cardId)
       for (const request of evidence.requests) candidates.push({
@@ -427,6 +449,38 @@ export class ReconciliationSources {
     this.invalidateQueueDisplays()
     void this.queueDisplay().catch(() => {})
     return queue
+  }
+
+  /** A claim allocates a card; it must not await the board's comment history
+   * or operational reconciliation. Exact active-card validation still happens
+   * before allocation, and get_work remains the explicit prose reader. */
+  async claimQueue() {
+    const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
+    const queue = buildQueue(snapshot)
+    const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    this.preparationHistory.warm(ids)
+    const contexts = new Map(ids.flatMap(id => {
+      const context = this.context.cachedComments(id)
+      return context ? [[id, context] as const] : []
+    }))
+    for (const id of ids) {
+      const card = snapshot.intentions.data?.cards.find(card => card.id === id), context = contexts.get(id)
+      if (!card || context?.outcome !== 'available') continue
+      const summary = await reconcileDecision(card, context.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
+        snapshot.fleet, undefined, undefined, undefined, snapshot.intentions, 'observe')
+      if (!summary) continue
+      for (const item of queue.items.filter(item => item.cardIds.includes(id))) {
+        const resolution = summary.requests?.find(result => item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary.requests ? summary : undefined)
+        if (resolution) {
+          item.decisionResolution = resolution
+          if (resolution.state !== 'resolved') { item.oneTouch = false; item.readiness = 'needs-readiness-verification' }
+        }
+      }
+    }
+    queue.needsWill = needsWill(queue, scene, contexts, null, new Map(), false)
+    if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
+    queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
+    return workReadback(queue)
   }
 
   async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {

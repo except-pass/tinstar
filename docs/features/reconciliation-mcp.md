@@ -438,6 +438,15 @@ exact-card read invalidates that snapshot, and pending source writes prevent
 allocation. An identical retry or held-token call retains its
 existing lease, even if readiness has since changed.
 
+Generic claims refresh the property census, enqueue missing history through the
+[shared bounded history loader](decision-desk-foundation.md#read-only-preparer-evidence),
+and select using cached evidence without waiting for history or operational
+reconciliation. Cold or incomplete history cannot admit a new lease; a later
+claim can select the card after history loads. Cached recorded answers and
+pending resolutions exclude their exact request/source anchor, preserving
+independent unanswered requests on the same card. Claim responses include card
+metadata only; use `get_work` with `details: true` for the selected card's prose.
+
 When none qualifies, `no-unclaimed-card` means no currently unclaimed actionable
 card in the covered queue. Its `coverage` and `warnings` retain stale, unknown,
 partial and body-only evidence limitations; it does not certify all work clear.
