@@ -457,11 +457,14 @@ export class ReconciliationSources {
   async claimQueue() {
     const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
-    const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
+    const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    this.preparationHistory.warm(ids)
+    const contexts = new Map(ids.flatMap(id => {
       const context = this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))
     queue.needsWill = needsWill(queue, scene, contexts, null, new Map(), false)
+    if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
     queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
     return workReadback(queue)
   }

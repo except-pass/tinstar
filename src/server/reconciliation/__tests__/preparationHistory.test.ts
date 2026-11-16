@@ -67,13 +67,14 @@ it('loads cold history for automatic admission only after replenishment is turne
   expect(reconcile).not.toHaveBeenCalled()
 }, 20_000)
 
-it('claims a generic Needs Will card through MCP while the 64-card Desk is open', async () => {
+it('warms cold claim history through MCP without blocking and claims only after history loads', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const { sources, root } = await setup({ cards: 64, beforeRead: async url => {
+  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const { sources, root, cardIds, reconcile } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
-  expect((await sources.preparedReviews.snapshot()).history.some(row => row.state === 'loading')).toBe(true)
+  expect(details).not.toHaveBeenCalled()
   const mcp = new ReconciliationMcp(sources, root)
   const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -87,10 +88,24 @@ it('claims a generic Needs Will card through MCP while the 64-card Desk is open'
     })])
     expect(performance.now() - started).toBeLessThan(2000)
     const result = JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
-    expect(result).toMatchObject({ outcome: 'claimed', lease: { card_id: expect.any(String) }, card: { outcome: 'available' } })
-    await client.callTool({ name: 'release_claim', arguments: { lease_token: result.lease_token, reason: 'Isolated regression complete' } })
+    expect(result).toMatchObject({ outcome: 'no-unclaimed-card', warnings: expect.arrayContaining([expect.stringContaining('publication history is unavailable')]) })
+    expect(cardIds.every(id => sources.leases.status(id) === null)).toBe(true)
+    expect(details).toHaveBeenCalledTimes(2)
+    const blocked = await sources.preparedReviews.snapshot()
+    expect(blocked.history.every(row => row.state === 'loading')).toBe(true)
+    expect(blocked.counts.ready).toBeNull()
+    expect(details).toHaveBeenCalledTimes(2)
     release()
-    await loadedSnapshot(sources)
+    await vi.waitFor(async () => {
+      const queue = await sources.claimQueue()
+      expect(queue.needsWill?.length).toBeGreaterThan(0)
+      expect(queue.needsWill?.every(item => item.proposalHistoryComplete)).toBe(true)
+    }, { timeout: 15_000, interval: 100 })
+    const recovered = await client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'history-loaded-claim' } })
+    const claimed = JSON.parse((recovered.content as Array<{ text: string }>)[0]!.text)
+    expect(claimed).toMatchObject({ outcome: 'claimed', lease: { card_id: expect.any(String) }, card: { outcome: 'available' } })
+    expect(reconcile).not.toHaveBeenCalled()
+    await client.callTool({ name: 'release_claim', arguments: { lease_token: claimed.lease_token, reason: 'Isolated regression complete' } })
   } finally { release(); await client.close() }
 }, 20_000)
 
