@@ -208,3 +208,30 @@ it('projects the latest current-revision attempt without overriding ready or lea
   await leases.claim([fixture.cardId], 'reviewer', 'Reviewer', 'claim-ready')
   expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Leased' })
 })
+
+it('allows explicit preparation after rejected packets and closes expired blocked attempts', async () => {
+  const { prep, packets, fixture, posts } = await harness()
+  const reviews = new PreparedReviews(packets, 'board', () => fixture.evidence,
+    () => ({ card_ids: [fixture.cardId], coverage: 'complete', requests: 1 }), () => now)
+  reviews.reportPreparation = () => prep.status()
+  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Retry rejected packet' }
+  const first = await prep.prepareNow('Will', request)
+  const invalid = structuredClone(fixture.packet)
+  invalid.question = 'Different source question?'
+  await prep.publish({ job_id: first.job_id, operation_id: 'rejected-first', packet: invalid })
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Failed' })
+  fixture.evidence.reasons.push('Source unavailable')
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Blocked' })
+  fixture.evidence.reasons.pop()
+  const retry = await prep.prepareNow('Will', request)
+  expect(retry).toMatchObject({ outcome: 'dispatched' })
+  expect(posts).toHaveLength(2)
+  await prep.publish({ job_id: retry.job_id, operation_id: 'rejected-retry', packet: invalid })
+  now += 11 * 60_000
+  await expect(prep.publish({ job_id: retry.job_id, operation_id: 'expired-correction', packet: fixture.packet })).rejects.toThrow('expired')
+  expect((await prep.status()).jobs.filter(job => job.state === 'blocked')).toHaveLength(0)
+  const fresh = await prep.prepareNow('Will', request)
+  expect(fresh).toMatchObject({ outcome: 'dispatched' })
+  expect(posts).toHaveLength(3)
+  expect(await packets.readPolicy('board')).toMatchObject({ values: { automatic_replenishment: false } })
+})

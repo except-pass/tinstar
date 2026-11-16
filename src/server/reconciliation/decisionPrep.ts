@@ -125,7 +125,7 @@ export class DecisionPreparation {
 
   private expire(db: DatabaseSync) {
     const cutoff = new Date(this.now() - attemptMs).toISOString()
-    db.prepare("UPDATE decision_prep_jobs SET state = 'failed', reason = ?, updated_at = ? WHERE scope = ? AND state IN ('admitted','dispatched') AND coalesce(dispatched_at, created_at) < ?")
+    db.prepare("UPDATE decision_prep_jobs SET state = 'failed', reason = ?, updated_at = ? WHERE scope = ? AND state IN ('admitted','dispatched','blocked') AND coalesce(dispatched_at, created_at) < ?")
       .run('Preparer did not publish before the attempt expired.', new Date(this.now()).toISOString(), this.scope, cutoff)
   }
 
@@ -262,7 +262,7 @@ export class DecisionPreparation {
     if (job.state === 'failed' || job.state === 'cancelled') throw new DecisionDeskConflict('This preparation attempt is not open for publication')
     const started = Date.parse(job.dispatched_at ?? job.created_at)
     if (Number.isFinite(started) && started + attemptMs < this.now()) {
-      await this.mark(job.id, 'failed', 'Preparer did not publish before the attempt expired.')
+      await this.packets.leases.writeStorage(db => this.expire(db))
       throw new DecisionDeskConflict('This preparation attempt expired before publication')
     }
     const evidence = this.evidence(job.card_id)

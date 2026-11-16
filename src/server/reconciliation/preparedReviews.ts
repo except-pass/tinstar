@@ -115,10 +115,10 @@ export class PreparedReviews {
         })
       })
       for (const row of pending) {
-        if (row.state === 'Ready' || held.has(row.card_id)) continue
+        if (row.state !== 'Queued' || held.has(row.card_id)) continue
         const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && job.source_revision === row.source_revision)
         if (!job || !['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state)) continue
-        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : job.state === 'failed' ? 'Failed' : 'Blocked'
+        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : 'Failed'
         if (job.reason) row.reasons = [...new Set([...row.reasons, job.reason])]
       }
       const verified = queue.coverage === 'complete' && !sourceFailures.length
