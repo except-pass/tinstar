@@ -213,10 +213,10 @@ export class CardLeases {
     })
   }
   capability(caller: string, operation: string) { return this.token(caller, operation) }
-  private sourceRevisionInStorage(db: SqliteDatabase, card: string) {
-    return (db.prepare("SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE card = ? AND type LIKE 'write-%'").get(card) as { revision: number }).revision
+  private sourceRevisionInStorage(db: SqliteDatabase) {
+    return (db.prepare("SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE type LIKE 'write-%'").get() as { revision: number }).revision
   }
-  sourceRevision(card: string) { return this.readStorage(db => this.sourceRevisionInStorage(db, card)) }
+  sourceRevision() { return this.readStorage(db => this.sourceRevisionInStorage(db)) }
   private token(caller: string, operation: string) {
     // Reconstruct an identical claim response after a lost response/restart,
     // without storing a plaintext token in a receipt or lease record.
@@ -252,7 +252,8 @@ export class CardLeases {
       // and held-token retries above deliberately preserve their original lease.
       // A source write crossing the exact-card read invalidates that snapshot;
       // in-flight writes are fenced by reservedInStorage above.
-      if (admission && (this.sourceRevisionInStorage(db, card) !== admission.sourceRevision || !admission.eligible(card))) continue
+      if (admission && (db.prepare('SELECT 1 FROM source_write_reservations LIMIT 1').get() ||
+        this.sourceRevisionInStorage(db) !== admission.sourceRevision || !admission.eligible(card))) continue
       const leaseToken = this.token(caller, operation)
       const row: LeaseRow = { card, generation: (old?.generation ?? 0) + 1, caller, holder: `${holder} · chat ${leaseHash(leaseToken).slice(0, 6)}`, token_hash: leaseHash(leaseToken), expires: this.now() + leaseDuration }
       db.prepare('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)').run(row.card, row.generation, row.caller, row.holder, row.token_hash, row.expires)

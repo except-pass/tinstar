@@ -135,6 +135,7 @@ export class ReconciliationMcp {
           const held = await this.leases.claim(input.card_id ? [input.card_id] : [], caller, actor, input.operation_id, input.lease_token, !!input.card_id)
           return await enrich(held)
         }
+        const revision = this.leases.sourceRevision()
         let cards: string[], queue: QueueRead | undefined
         let candidates: ReturnType<typeof claimNextCards> = []
         const exactCard = async (id: string) => {
@@ -168,7 +169,6 @@ export class ReconciliationMcp {
           for (const candidate of candidates) if (!this.leases.status(candidate.id)) {
             if (!covered() || !claimRequestCandidate(candidate.item)) continue
             const id = candidate.id
-            const revision = this.leases.sourceRevision(id)
             const current = await exactCard(id)
             if (!current) claimWarnings.push(`Fresh exact-card eligibility is unknown for ${id}; skipped without a lease. Queue coverage does not certify this request.`)
             const eligible = () => {

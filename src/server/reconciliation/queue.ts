@@ -152,9 +152,9 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const actions = prop(card, 'Will action')
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
   const decisionRequest = tags.length > 0 && tags.every(tag => ['decision', 'approval', 'approve'].includes(tag))
-  const request = item.proposalHistoryComplete === true ? item.requests?.find(request => request.cardId === card.id && !request.answered &&
-    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action)) && request.question &&
-    (!request.since || Date.parse(request.since) <= now)) : undefined
+  const requests = item.proposalHistoryComplete === true ? item.requests?.filter(request => request.cardId === card.id && !request.answered &&
+    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action))) ?? [] : []
+  const request = requests[0]
   const concrete = current ?? request?.question
   const wait = word(card, 'Waiting For')
   const ownerWait = !!wait && /\bWill\b/.test(wait)
@@ -176,6 +176,10 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const action = concrete ?? (keyedRequest ? item.action : null)
   if (!action || noRequest.test(action) || !!wait && noRequest.test(wait)) return null
   const checked = { ...item, action, readiness: 'ready-now' as QueueReadiness, reasons: [] as string[], cardIds: [] as string[], evidence: [...item.evidence] }
+  for (const request of requests) {
+    if (!request.question || noRequest.test(request.question) || request.since && !(Date.parse(request.since) <= now)) return null
+    restrictAction(checked, request.question)
+  }
   context(checked, card, { status: 'fresh', data: card }, now, keyedRequest, ownerRequest)
   restrictAction(checked, action, keyedRequest ? 'owner-question' : 'action')
   // Waiting for Will's answer is the request itself, but its wording must not

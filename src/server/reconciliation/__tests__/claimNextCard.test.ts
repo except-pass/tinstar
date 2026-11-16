@@ -43,7 +43,8 @@ async function fixture(cards: WorkCard[]) {
     if (!found) throw new Error('Unavailable')
     return structuredClone(found)
   })
-  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews: async () => queue, currentCard,
+  const workViews = vi.fn(async () => queue)
+  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews, currentCard,
     getWork: async input => ({ outcome: 'available', card: { id: (input as { card_id: string }).card_id } }),
     scene: async () => new SceneReconciler().reconcile(snapshot), card: async () => ({}), workerLinkReport: async () => ({}) as never,
   } satisfies PresentationReaders, root)
@@ -58,7 +59,7 @@ async function fixture(cards: WorkCard[]) {
     }
   }
   const call = await connect()
-  return { leases, queue, current, currentCard, call, connect, advance: () => { now += leaseDuration } }
+  return { leases, queue, current, currentCard, workViews, call, connect, advance: () => { now += leaseDuration } }
 }
 const claim = (operation_id: string) => ({ operation_id })
 
@@ -195,5 +196,31 @@ it('rejects a source write crossing the exact-card read before the atomic lease 
     return before
   })
   expect(await f.call('claim_next_card', claim('write-race'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.leases.status('a'.repeat(32))).toBeNull()
+})
+
+
+it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request masked by a concrete Next action', async mode => {
+  const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': 'Implement security policy' })])
+  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true,
+    requestedFrom: 'Will', question: mode === 'conditional' ? 'Approve the exception after the security review' :
+      mode === 'no-request' ? 'No active decision requested' : 'Approve the exception?',
+    since: mode === 'future' ? '2099-01-01' : new Date().toISOString(), sourceId: 'request-note', answered: false }]
+  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.leases.status('a'.repeat(32))).toBeNull()
+})
+
+it.each(['candidate', 'sibling'])('fences a %s source write during request-history collection', async mode => {
+  const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': '' })])
+  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true,
+    requestedFrom: 'Will', question: 'Approve the exception?', since: new Date().toISOString(), sourceId: 'request-note', answered: false }]
+  f.workViews.mockImplementationOnce(async () => {
+    const stale = structuredClone(f.queue)
+    await f.leases.mutate(mode === 'candidate' ? 'a'.repeat(32) : 'b'.repeat(32), async () => {
+      f.queue.needsWill![0]!.requests[0]!.answered = true
+    })
+    return stale
+  })
+  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
   expect(f.leases.status('a'.repeat(32))).toBeNull()
 })
