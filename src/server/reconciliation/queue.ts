@@ -130,6 +130,13 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
   const wait = word(card, 'Waiting For')
   if (wait && !ownerDecision && !(immediateRequest && /\bWill\b/.test(wait))) lower(item, 'future-or-conditional', `Published dependency/wait: ${wait}`)
   else if (!wait && status === 'waiting for' && !ownerDecision) lower(item, 'future-or-conditional', 'Waiting For status without a named next action; verify the prerequisite')
+  if (wait && (ownerDecision || immediateRequest || strictlyNeedsWill(card))) {
+    for (const line of wait.split('\n').filter(line => line.trim())) {
+      const typed = parseWaitLine(line)
+      if (typed ? typed.type !== 'Actor' || typed.id !== 'Will' : !line.startsWith('Will:')) lower(item, 'future-or-conditional', `Published dependency/wait: ${line}`)
+      else restrictAction(item, typed?.dependency ?? line)
+    }
+  }
   if (word(card, 'Waiting For ID') && !strictlyNeedsWill(card)) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
   if (!fresh(observation)) lower(item, 'needs-readiness-verification', 'Notion observation is stale or unavailable; last-known action only')
   if (card.properties['Will action']?.hasMore || !word(card, 'Owner') || !word(card, 'Status')) {
@@ -203,15 +210,6 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   }
   context(checked, card, { status: 'fresh', data: card }, now, keyedRequest, ownerRequest)
   restrictAction(checked, action, keyedRequest ? 'owner-question' : 'action')
-  // Waiting for Will's answer is the request itself, but its wording must not
-  // hide a prerequisite such as approval after a later review.
-  if (ownerWait && !keyedRequest) {
-    for (const line of wait!.split('\n').filter(line => line.trim())) {
-      const typed = parseWaitLine(line)
-      if (typed && (typed.type !== 'Actor' || typed.id !== 'Will') || !typed && !line.startsWith('Will:')) return null
-      restrictAction(checked, typed?.dependency ?? line)
-    }
-  }
   if (checked.readiness !== 'ready-now') return null
   return { readiness: checked.readiness, reasons: [...new Set([...(item.readiness === 'ready-now' ? item.reasons : []), ...checked.reasons,
     'Fresh exact-card evidence confirms a concrete owner-only action now'])] }

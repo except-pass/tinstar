@@ -1,6 +1,5 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
-import { decisionRequests } from '../../shared/workflowRequests'
-import { matchesClaimFilters, type ClaimFilters } from './claimPolicy'
+import { matchesClaimFilters, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
@@ -520,8 +519,8 @@ export class ReconciliationSources {
       // Narrow from the census and cached request timestamps before reading any
       // individual card. Unknown request age cannot satisfy an age limit.
       const matching = new Set(queue.claimCards.filter(card => {
-        const requests = decisionRequests(this.context.cachedComments(card.id)?.blocks ?? []).filter(request => !request.answered && request.requestedFrom === 'Will')
-        const since = requests.flatMap(request => request.since ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
+        const requests = currentWillRequests(this.context.cachedComments(card.id)?.blocks ?? [], card.properties['Will action']?.value)
+        const since = oldestOpenRequestSince(requests)
         return matchesClaimFilters(card, filters, since)
       }).map(card => card.id))
       queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))

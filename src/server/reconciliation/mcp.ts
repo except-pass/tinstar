@@ -26,8 +26,7 @@ import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
 import { SessionProbe } from './sessionProbe'
-import { claimFilters, matchesClaimFilters, strictlyNeedsWill, type ClaimFilters } from './claimPolicy'
-import { decisionRequests } from '../../shared/workflowRequests'
+import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import type { CardContextRead } from './cardContext'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
 import type { NeedsWillItem } from './needsWill'
@@ -154,9 +153,9 @@ export class ReconciliationMcp {
           const card = await this.readers.getWork?.({ card_id: id, details: false, refresh: true }) as { outcome?: string; card?: { source?: { archived?: boolean; in_trash?: boolean; properties?: Record<string, { value?: unknown }> } } } | undefined
           return card?.outcome === 'available' ? card.card?.source as import('./workReader').WorkCard | undefined : null
         }
+        let exact: Awaited<ReturnType<typeof exactCard>>
         if (input.card_id) {
-          const card = await exactCard(input.card_id)
-          if (!card || !strictlyNeedsWill(card)) return { outcome: 'unavailable', message: 'Card is unavailable or is not a strictly formed Needs Will card on the configured board' }
+          exact = await exactCard(input.card_id)
           cards = [input.card_id]
         } else {
           queue = await (this.readers.claimViews?.(input) ?? this.readers.workViews?.() ?? this.readers.queue())
@@ -169,7 +168,14 @@ export class ReconciliationMcp {
           cards = candidates.map(card => card.id)
         }
         const select = async () => {
-          if (input.card_id) return this.leases.claim(cards, caller, actor, input.operation_id, undefined, true, { eligible: () => true, sourceRevision: revision })
+          if (input.card_id) {
+            const claimed = await this.leases.claim(cards, caller, actor, input.operation_id, undefined, true, { eligible: () => !!exact && strictlyNeedsWill(exact), sourceRevision: revision })
+            if (claimed.outcome === 'no-unclaimed-card' && (!exact || !strictlyNeedsWill(exact))) {
+              const issues = exact ? needsWillIssues(exact) : ['Card is unavailable on the configured board']
+              return { outcome: 'unavailable', issues, message: `${issues.join('; ') || 'Card is archived or trashed'}. The owning mate must fix or retag the card.` }
+            }
+            return claimed
+          }
           // Validate only unheld candidates, preserving queue order. A competing
           // claim can win during the source read; try the next card in that case.
           const covered = () => {
@@ -185,9 +191,9 @@ export class ReconciliationMcp {
             let item = candidate.item
             if (history) {
               const actions = current?.properties['Will action']?.value
-              const requests = decisionRequests(history.blocks).filter(request => request.requestedFrom === 'Will' && Array.isArray(actions) && actions.includes(request.action))
+              const requests = currentWillRequests(history.blocks, actions)
               if (history.outcome !== 'available' || requests.length && requests.every(request => request.answered)) continue
-              item = { ...item, readiness: item.requestReadiness ?? item.readiness, requestSince: requests.filter(request => !request.answered).flatMap(request => request.since ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null, proposalHistoryComplete: true, requests: requests.filter(request => !request.answered).map(request => ({ ...request, cardId: id })) }
+              item = { ...item, readiness: item.requestReadiness ?? item.readiness, requestSince: oldestOpenRequestSince(requests), proposalHistoryComplete: true, requests: requests.filter(request => !request.answered).map(request => ({ ...request, cardId: id })) }
             }
             if (!current) claimWarnings.push(`Fresh exact-card eligibility is unknown for ${id}; skipped without a lease. Queue coverage does not certify this request.`)
             const eligible = () => {

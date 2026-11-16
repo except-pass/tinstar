@@ -7,7 +7,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { ReconciliationMcp, type PresentationReaders } from '../mcp'
 import { CardLeases, leaseDuration } from '../cardLeases'
-import { buildQueue } from '../queue'
+import { currentWillRequests, oldestOpenRequestSince } from '../claimPolicy'
+import { releasePull } from '../../../shared/releases'
+import { waitLine } from '../../../shared/waitingForPolicy'
+import { buildQueue, claimCardReadiness } from '../queue'
 import { needsWill } from '../needsWill'
 import { SceneReconciler } from '../scene'
 import type { WorkCard } from '../workReader'
@@ -31,7 +34,7 @@ function card(id = 'a'.repeat(32), values: Record<string, unknown> = {}): WorkCa
     'Will action': ['Decision'], 'Next action': 'Approve the security exception', ...values }).map(([name, value]) =>
     [name, { id: name, type: 'rich_text', value, hasMore: false }])) }
 }
-async function fixture(cards: WorkCard[]) {
+async function fixture(cards: WorkCard[], claimHistory?: PresentationReaders['claimHistory']) {
   const root = await mkdtemp(join(tmpdir(), 'claim-actionable-')); roots.push(root)
   let now = Date.now()
   const leases = new CardLeases(root, () => now)
@@ -48,7 +51,7 @@ async function fixture(cards: WorkCard[]) {
     return structuredClone(found)
   })
   const workViews = vi.fn(async () => queue)
-  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews, currentCard,
+  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews, currentCard, claimHistory,
     getWork: async input => ({ outcome: 'available', card: { id: (input as { card_id: string }).card_id } }),
     scene: async () => new SceneReconciler().reconcile(snapshot), card: async () => ({}), workerLinkReport: async () => ({}) as never,
   } satisfies PresentationReaders, root)
@@ -383,4 +386,75 @@ it('claims an exact strict ask and resumes its lease after workflow changes', as
   expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: current.id } })
   current.properties.Owner!.value = 'Firstmate'
   expect(await f.call('claim_card', { card_id: current.id, operation_id: 'resume-exact', lease_token: first.lease_token })).toMatchObject({ outcome: 'held', lease: { card_id: current.id } })
+})
+
+
+it('replays a lost exact claim response after strict fields change and permits release', async () => {
+  const current = card(), f = await fixture([current])
+  const args = { card_id: current.id, operation_id: 'lost-exact' }
+  const first = await f.call('claim_card', args)
+  current.properties.Owner!.value = 'Firstmate'
+  const replay = await f.call('claim_card', args)
+  expect(replay).toEqual(first)
+  expect(await f.call('claim_card', { card_id: current.id, operation_id: 'new-exact' })).toMatchObject({ outcome: 'unavailable', issues: ['Owner must be Will'], message: expect.stringContaining('owning mate must fix or retag') })
+  await f.call('release_claim', { lease_token: replay.lease_token, reason: 'Returned to mate' })
+  expect(f.leases.status(current.id)).toBeNull()
+})
+
+it('uses only current-action open requests for age across request selection', () => {
+  const notes = [
+    { id: 'old', text: 'Requested from: Will\nQuestion: Implement?\nTin Star request: {"id":"old","action":"Do"}', createdAt: '2026-11-01T00:00:00Z' },
+    { id: 'new', text: 'Requested from: Will\nQuestion: Approve?\nTin Star request: {"id":"new","action":"Decision"}', createdAt: '2026-11-16T00:00:00Z' },
+  ]
+  const requests = currentWillRequests(notes, ['Decision'])
+  expect(requests.map(request => request.id)).toEqual(['new'])
+  expect(oldestOpenRequestSince(requests)).toBe('2026-11-16T00:00:00Z')
+})
+
+it.each([false, true])('blocks independent waits with keyed request %s in projection and admission', async keyed => {
+  const current = card(), f = await fixture([current])
+  const row = f.queue.needsWill![0]!
+  if (keyed) row.sources.push({ ...row.sources[0]!, kind: 'firstmate', responseAnchor: 'keyed', readiness: 'ready-now', action: 'Approve?' })
+  current.properties['Waiting For']!.value = 'Will: Approve the exception\n' + waitLine({ type: 'Event', id: 'security', dependency: 'Security review', unblocks_when: 'Review complete', follow_up_by: 'Firstmate' })
+  expect(claimCardReadiness(row, current)).toBeNull()
+  const snapshot = fixtureSources()
+  snapshot.fleet = []
+  snapshot.intentions.data!.cards = [current]
+  expect(buildQueue(snapshot).items.find(item => item.cardIds.includes(current.id))?.readiness).not.toBe('ready-now')
+})
+
+
+it.each([false, true])('preserves PR head conflict %s when refreshing request history', async conflict => {
+  const current = card('a'.repeat(32), { 'Will action': ['Merge'], 'Next action': 'Merge the approved pull request', Link: 'https://github.com/acme/app/pull/7' })
+  const f = await fixture([current], async () => ({ outcome: 'available', blocks: [] }))
+  const snapshot = fixtureSources()
+  snapshot.fleet = []
+  snapshot.intentions.data!.cards = [current]
+  const url = 'https://github.com/acme/app/pull/7'
+  const identity = releasePull(url)!
+  const readiness = new Map([[url, { status: 'fresh' as const, state: 'open' as const, head: 'A', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60000).toISOString(), draft: false, checks: 'passed' as const, mergeability: 'ready' as const }]])
+  const inventory = { pulls: [{ ...identity, head: conflict ? 'B' : 'A', title: 'Approved change', author: 'owner', draft: false, base: 'main', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), observedAt: new Date().toISOString(), freshness: 'fresh' as const, links: [] }], repositories: [], warnings: [], associationsComplete: true }
+  const queue = buildQueue(snapshot, readiness, Date.now(), inventory)
+  f.queue.needsWill = needsWill(queue, new SceneReconciler().reconcile(snapshot), new Map(), inventory, readiness, true)
+  const row = f.queue.needsWill.find(item => item.cardIds.includes(current.id))!
+  expect(row.requestReadiness).toBe(conflict ? 'needs-readiness-verification' : 'ready-now')
+  expect(await f.call('claim_next_card', claim('head-check'))).toMatchObject({ outcome: conflict ? 'no-unclaimed-card' : 'claimed' })
+})
+
+
+it('projects and freshly admits the current Decision age despite an older Do request', async () => {
+  const current = card()
+  const recent = new Date(Date.now() - 3600000).toISOString()
+  const blocks = [
+    { id: 'old', type: 'comment', text: 'Requested from: Will\nQuestion: Implement?\nTin Star request: {"id":"old","action":"Do"}', createdAt: new Date(Date.now() - 10 * 86400000).toISOString() },
+    { id: 'new', type: 'comment', text: 'Requested from: Will\nQuestion: Approve?\nTin Star request: {"id":"new","action":"Decision"}', createdAt: recent },
+  ]
+  const history = { outcome: 'available' as const, blocks }
+  const f = await fixture([current], async () => history)
+  const snapshot = fixtureSources()
+  snapshot.fleet = []
+  snapshot.intentions.data!.cards = [current]
+  f.queue.needsWill = needsWill(f.queue, new SceneReconciler().reconcile(snapshot), new Map([[current.id, history]]), null, new Map())
+  expect(f.queue.needsWill[0]!.requestSince).toBe(recent)
+  expect(await f.call('claim_next_card', { ...claim('current-age'), max_age_days: 1 })).toMatchObject({ outcome: 'claimed' })
 })

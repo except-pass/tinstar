@@ -517,7 +517,6 @@ it.each([
   { actions: ['Decision'], wait: '' },
   { actions: ['Approval'], wait: 'Will to approve the exception' },
   { actions: ['Approval'], wait: '' },
-  { actions: [], wait: 'Will to approve the exception' },
 ])('delivers one daily malformed-asks report through the bridge for $actions and $wait', async ({ actions, wait }) => {
   const f = await fixture()
   f.card.properties['Will action'] = { id: 'action', type: 'multi_select', value: actions, hasMore: false }
@@ -538,4 +537,16 @@ it.each([
   f.advance(86400_000)
   await feed.sweep(true); f.advance(); await feed.sweep(true)
   expect((await feed.bridgeWork()).pending.some(notice => notice.body.includes('Malformed Needs Will ask'))).toBe(true)
+})
+
+
+it('does not infer a malformed Will ask from free-text mentions alone', async () => {
+  const f = await fixture()
+  f.card.properties['Will action'] = { id: 'action', type: 'multi_select', value: [], hasMore: false }
+  f.card.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: 'Will to approve the exception', hasMore: false }
+  f.card.properties['Waiting For ID'] = { id: 'wait-id', type: 'rich_text', value: '', hasMore: false }
+  const sources = { ...f.sources, willAskCensus: vi.fn(async () => structuredClone(f.observation)) }
+  const feed = new FirstmateUpdates(sources, f.root, f.settings, f.now)
+  await feed.sweep(true)
+  expect((await feed.bridgeWork()).pending.some(notice => notice.body.includes('Malformed Needs Will ask'))).toBe(false)
 })
