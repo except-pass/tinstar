@@ -84,7 +84,7 @@ it('blocks invalidated packet submission and renders Markdown without executable
   expect(document.querySelector('a[href^="javascript:"]')).toBeNull()
 })
 it('shows unavailable metrics honestly and persists effective policy through the backend', async () => {
-  await ready(); expect(screen.getByText('— / unavailable / 10')).toBeVisible()
+  await ready(); expect(screen.getByText('— / unavailable')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Preparation' }))
   fireEvent.change(screen.getByRole('slider', { name: 'Target ready depth' }), { target: { value: '16' } })
   await act(async () => { fireEvent.focus(window) })
@@ -141,4 +141,14 @@ it('waits for an exact source-return binding instead of claiming a substitute fr
   await screen.findByRole('radio', { name: /Authorize preview only/ })
   const claim = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/claim'))!
   expect(JSON.parse(String(claim[1]?.body)).card_id).toBe(packet.packet.binding.card_id)
+})
+
+it('offers one-click research refresh when source revision changes during submit, without an ambiguous-save control', async () => {
+  outcome = 'packet-invalidated'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Refresh packet & next' })
+  expect(screen.queryByRole('button', { name: 'Confirm retained save status' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeDisabled()
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
 })
