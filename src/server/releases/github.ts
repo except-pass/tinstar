@@ -138,7 +138,7 @@ export class GithubReleaseReader {
         if (summary.componentResults.some(row => /unknown|unavailable|missing|pending cutover/i.test(row.result))) gaps.push('The GitHub Release snapshot has missing component evidence; inspect its native links.')
         return {
           id: `${repository}:tag:${tag.name}`, repository, version: tag.name, sourceSha: tag.commit.sha,
-          kind: 'production', candidateId: null, planId: null, executionId: null,
+          kind: record?.draft ? 'draft' : 'production', candidateId: null, planId: null, executionId: null,
           scope: range?.files ?? previous?.scope ?? [], targets: [],
           state: 'Unknown',
           observedAt: runs.map(run => run.updatedAt).sort().at(-1) ?? record?.published_at ?? null,

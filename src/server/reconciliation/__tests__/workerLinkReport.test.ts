@@ -351,3 +351,12 @@ describe('operational six-tier dry run', () => {
     expect(report.homes[0]?.tiers.independent).toEqual([])
   })
 })
+
+it('lists unconfigured explicit home identities from declarations and snapshot paths', () => {
+  const input = source()
+  declare(input, [link(input, { fm_home: '/home/farm/fm-obsf' })])
+  input.fleet[0]!.observation.data!.tasks[0]!.paths.home = '/home/farm/fm-another'
+  expect(buildWorkerLinkReport(input).coverage.unconfiguredHomes).toEqual(['/home/farm/fm-another', '/home/farm/fm-obsf'])
+  input.fleet[0]!.observation.data!.tasks[0]!.remote = { host: 'stewie', root: '/some/worktree' }
+  expect(buildWorkerLinkReport(input).coverage.unconfiguredHomes).not.toContain('/some/worktree')
+})

@@ -739,3 +739,15 @@ it.each([false, true])('keeps a large-board refresh on the coalesced source path
     expect(comments).not.toHaveBeenCalled()
   } finally { release?.(); await manual; await poll }
 })
+
+it('collects fm-obsf as a configured remote snapshot and exposes it in worker coverage', async () => {
+  const dir = await temp(), file = join(dir, 'obsf.json'), home = '/home/farm/fm-obsf'
+  await writeFile(file, JSON.stringify({ ...snapshot(home), generated: new Date().toISOString() }))
+  await writeFile(join(dir, 'config.json'), JSON.stringify({ reconciliation: { fleet: [{ home, machine: 'stewie', label: 'Observability', snapshotFile: file }] } }))
+  const config = loadReconciliationConfig(dir)
+  expect(config.warnings).toEqual([])
+  const sources = new ReconciliationSources(config, undefined, undefined, dir)
+  const report = await sources.workerLinkReport()
+  expect(report.coverage.homes).toEqual([expect.objectContaining({ fm_home: home, status: 'fresh', coverage: 'complete' })])
+  expect(report.homes).toEqual([expect.objectContaining({ fm_home: home })])
+})

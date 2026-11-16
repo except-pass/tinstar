@@ -99,6 +99,7 @@ it('reuses prefetched historical Actions while enriching the selected release me
 
 it('shows an existing draft Release record rather than claiming it is missing', async () => {
   const result = await new GithubReleaseReader(nativeFixtureRead({ records: [{ ...nativeRecord, draft: true, published_at: null }] }), () => now).get(data())
+  expect(result.releases[0]!.kind).toBe('draft')
   expect(result.releases[0]!.github).toMatchObject({ record: 'available', body: nativeBody, publishedAt: null })
 })
 
