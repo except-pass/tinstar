@@ -166,7 +166,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const validate = ajv.compile(update)
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
-  expect(validate({ ...base, kind: 'wait', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate' })).toBe(true)
+  expect(validate({ ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' })).toBe(true)
   expect(validate({ ...base, kind: 'wait' })).toBe(false)
   expect(validate({ ...base, kind: 'unknown' })).toBe(false)
   expect(validate({ ...base, kind: 'edit', worker: {} })).toBe(false)

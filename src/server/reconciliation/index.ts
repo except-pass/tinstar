@@ -32,6 +32,7 @@ import { WorkReader, type WorkCard } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
 import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { coverageFromObservation, waitingForException } from '../../shared/waitingForPolicy'
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
 import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
@@ -279,7 +280,12 @@ export class ReconciliationSources {
     const links = [...scene.claims, ...scene.claimHistory].filter(claim => claim.cardId === id)
     // Source readers already allowlist fields; redact likely credential literals
     // from ordinary properties/evidence as well as body and comments.
-    return workReadback({ card, links, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
+    const text = (name: string) => String(card?.source.properties[name]?.value ?? '')
+    const waiting_for_exception = card ? waitingForException({
+      cardId: card.id, status: text('Status'), type: text('Waiting For Type'), id: text('Waiting For ID'), waitingFor: text('Waiting For'),
+      observedAt: card.source.last_edited_time ?? null, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage),
+    }) : null
+    return workReadback({ card, links, waiting_for_exception, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
       findings: scene.findings.filter(finding => finding.cardIds.includes(id)), health: workHealth(scene, id, Date.now()),
       omissions: 'Allowlisted source metadata only; no raw terminal transcripts or secrets. Query pages and on-demand body/comment reads have explicit bounds.',
       pull_requests: [...new Set([...(card ? Object.values(card.source.properties).map(property => String(property.value ?? '')) : []),

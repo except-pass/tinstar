@@ -141,13 +141,15 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | --- | --- |
 | `submit_for_review`, `accept_review`, `request_review_changes` | See [deployed feature review](#deployed-feature-review) for evidence, response and recovery contracts. |
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
-| `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`. Firstmate is always Queued. |
+| `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`, optional exact `resolve_wait`. Firstmate is always Queued. Leaving Waiting For requires that exact wait; another remaining wait keeps the card Waiting For. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
-| `wait` | `dependency`, `unblocks_when`, `follow_up_by`, optional `note`. Enters Waiting For and appends that wait while retaining other waits. |
+| `wait` | `type` (Actor, Event or Work), `id`, `dependency`, `unblocks_when`, `follow_up_by`, future `next_check_in`, optional `note`. Writes Status, Type, ID, the dependency line and Next check-in together. Appends another wait without erasing a different primary blocker. |
 | `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. For source binding and published choices, see [First Mate decision reconciliation](#first-mate-decision-reconciliation). |
-| `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires all wait inputs; Done/Archived requires disposition/evidence. |
+| `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires the full wait; Done/Archived requires disposition/evidence. Resolving one wait requeues only when no other wait remains. |
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
+
+A wait is an independent blocker. The server rejects a reason that only says a worker has not been assigned or attached, that First Mate has not picked the card up, that the card is queued behind other tasks, or that the only fact is a check-in date. Those cards stay Queued until `start_work` records current tracked execution. A Work id must be another unfinished card when source coverage is fresh and complete; a stale or failed source refuses the write and does not invent an id. `Waiting for Prod Release` stays on the release lifecycle. Direct Notion edits can still write an invalid status. `search_work` and `get_work` then report `waiting_for_exception` with the field, reason, card id, last observed time and source coverage, and do not rewrite the card. Unknown coverage is not evidence that a worker is gone.
 
 Ordinary properties are Name, Area, Priority, Sub-area, Attention, Initiative,
 Epic, Parent item, Link, Due Date, Start Date and Next action. The server uses the actual
@@ -358,7 +360,7 @@ start (native or external), checkpoint/wait, request/answer, complete and park
 continue to use the shared backend operations described above. State changes,
 errors, partial-save/readback and selective cleanup are shared with MCP.
 
-`get_workflow_rules` now returns `tinstar.workflow.s3`: enforced responsibilities,
+`get_workflow_rules` now returns `tinstar.workflow.s4`: enforced responsibilities,
 operation/decision signatures, exact worker provenance, Eastern checkpoint
 ceiling/date-only semantics, confirmation, partial repair, source-unknown behavior
 and retirement ownership. Clawson and any other authenticated consumer can read
