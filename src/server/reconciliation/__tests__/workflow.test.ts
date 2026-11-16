@@ -1,4 +1,5 @@
 import { CardLeases, withLeaseCaller } from '../cardLeases'
+import { reconcileDecision } from '../decisionResolution'
 import { buildQueue } from '../queue'
 import { queueSignals } from '../queueInputs'
 import { prepareClawsonMerge } from '../../pulls/clawsonMerge'
@@ -1469,12 +1470,15 @@ it('serves one current Needs Will projection through UI and authenticated MCP wi
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}` } } }))
   const read = await client.callTool({ name: 'get_work_views', arguments: {} })
   const agent = JSON.parse((read.content as Array<{ text: string }>)[0]!.text)
-  expect(agent.needsWill).toEqual(ui.data.needsWill)
+  const meaning = (items: typeof agent.needsWill) => items.map((item: any) => ({ ...item,
+    sources: item.sources.map(({ observedAt: _observedAt, expiresAt: _expiresAt, ...source }: any) => source) }))
+  expect(meaning(agent.needsWill)).toEqual(meaning(ui.data.needsWill))
   expect(agent.operationalExceptions).toEqual(ui.data.operationalExceptions)
   expect(mcp.sessions.list()).toEqual([])
   const answer = await sources.updateWork({ kind: 'answer_decision', card_id: id, operation_id: 'answer-view-request', request_id: 'choose-one', answer: 'Accept the evidence; queue the next assignment.', next: { owner: 'Firstmate', status: 'Queued' } }, 'Tin Star UI')
   expect(answer.outcome).toBe('saved')
   expect((await sources.queue()).needsWill).toEqual([])
+  expect((await completeQueueDisplay(`${base}/api/reconciliation/queue`)).data.needsWill).toEqual([])
 })
 
 it('requests readiness for active association-only PRs through the shared queue', async () => {
@@ -1855,6 +1859,29 @@ it('proves source decision UI/MCP receipt parity and before/after queue readback
   const meaning = (items: typeof after.items) => items.map((item: any) => ({ ...item,
     sources: item.sources.map(({ observedAt: _observedAt, expiresAt: _expiresAt, ...source }: any) => source) }))
   expect(meaning(uiQueue.data.items)).toEqual(meaning(after.items))
+})
+
+it('observes pending answers and acknowledged source closure without sending or confirming deliveries', async () => {
+  const f = decisionFixture()
+  await f.workflow.update(f.request, 'Publisher')
+  await f.workflow.update(f.answer, 'Tin Star UI')
+  const content = new WorkflowContent(f.reader), card = await f.reader.card(id, true)
+  const notes = [...await content.notes(id), ...await content.sections(id)]
+  const confirm = vi.fn(async () => {})
+  vi.mocked(f.bridge.submit).mockClear()
+  const observe = () => reconcileDecision(card, notes, f.fleet, f.bridge, confirm, undefined, undefined, 'observe')
+  expect(await observe()).toMatchObject({ state: 'pending' })
+  const source = f.home.observation.data!.backlog
+  f.messages[0]!.state = 'done'; f.home.observation.data!.backlog = []
+  expect(await observe()).toMatchObject({ state: 'resolved' })
+  f.home.observation.status = 'stale'
+  expect(await observe()).toMatchObject({ state: 'verification-needed' })
+  f.home.observation.status = 'fresh'; f.home.observation.data!.backlog = source
+  f.messages.length = 0
+  expect(await observe()).toMatchObject({ state: 'pending' })
+  expect(f.bridge.submit).not.toHaveBeenCalled()
+  expect(f.bridge.completeDecision).not.toHaveBeenCalled()
+  expect(confirm).not.toHaveBeenCalled()
 })
 
 it('delivers the exact multiline answer, including protocol-looking text, and ignores quoted decision examples', async () => {
@@ -2524,7 +2551,7 @@ it('shares durable leases across real MCP chats, workflow writers and owner UI r
   const queue = buildQueue(fixtureSources())
   queue.needsWill = undefined
   queue.items = [id, secondId].map(cardId => ({ id: cardId, title: 'Actionable fixture', action: 'Choose the next step', kind: 'decision', readiness: 'ready-now', reasons: [], cardIds: [cardId], executionIds: [], homeIds: [], decisionKeys: [], evidence: [], checkpoint: null, oneTouch: true, sources: [{ kind: 'notion', id: cardId, field: 'Will action', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString(), status: 'fresh', coverage: 'complete' }] }))
-  const mcp = new ReconciliationMcp({ leases: sources.leases, scene: async () => fixtureSources() as any, card: id => sources.card(id), queue: async () => queue, workerLinkReport: async () => ({} as any), getWork: input => sources.getWork(input), updateWork: (input, actor) => sources.updateWork(input, actor), authorizePulls: async req => req?.headers['tailscale-user-login'] === 'owner@example.test' }, root)
+  const mcp = new ReconciliationMcp({ leases: sources.leases, scene: async () => fixtureSources() as any, card: id => sources.card(id), queue: async () => { throw new Error('Claims must use the fresh tool view') }, workViews: async () => queue, currentCard: id => sources.currentCard(id), workerLinkReport: async () => ({} as any), getWork: input => sources.getWork(input), updateWork: (input, actor) => sources.updateWork(input, actor), authorizePulls: async req => req?.headers['tailscale-user-login'] === 'owner@example.test' }, root)
   const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`
@@ -2568,4 +2595,12 @@ it('shares durable leases across real MCP chats, workflow writers and owner UI r
   expect(await call(b, 'update_work', { ...edit, operation_id: 'stale-holder', lease_token: next.lease_token })).toMatchObject({ code: 'claim-lost' })
   expect((await call(a, 'release_claim', { lease_token: first.lease_token, reason: 'Explicit abandoned' })).outcome).toBe('released')
   expect(sources.leases.status(first.lease.card_id)).toBeNull()
+  // The queue and get_work cache still contain this card. Exact source checks
+  // must reject it before either kind of claim grants a new lease.
+  f.pages.get(first.lease.card_id).properties.Status.status.name = 'Done'
+  expect(await call(a, 'claim_card', { card_id: first.lease.card_id, operation_id: 'completed-exact' })).toMatchObject({ outcome: 'unavailable' })
+  expect(sources.leases.status(first.lease.card_id)).toBeNull()
+  const remaining = await call(a, 'claim_next_card', { operation_id: 'skip-completed' })
+  expect(remaining.lease.card_id).toBe(next.lease.card_id)
+  await call(a, 'release_claim', { lease_token: remaining.lease_token, reason: 'Test finished' })
 }, 30_000)

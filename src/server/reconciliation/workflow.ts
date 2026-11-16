@@ -40,6 +40,7 @@ export class WorkflowOperations {
   validateReview?: (input: Extract<ReviewOperation, { kind: 'submit_for_review' }>) => Promise<void>
   decisionDelivery?: DecisionDelivery
   onChange?: (change: WorkflowChange) => Promise<void>
+  onRecordedChange?: (cardId: string) => void
   deliveryStatus?: (cardId: string, operationId?: string) => Promise<unknown>
   private content: WorkflowContent
   private creations: CreationReceipts
@@ -163,6 +164,7 @@ export class WorkflowOperations {
     return result
   }
   private async changed(change: WorkflowChange) {
+    this.onRecordedChange?.(change.card.id)
     // Pilot issues are synthetic: recording a queue/start never offers live pickup.
     if (change.card.source?.synthetic) return
     await this.onChange?.(change).catch(() => {})
@@ -356,7 +358,7 @@ export class WorkflowOperations {
       notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
     }
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
-      (text, marker) => this.content.note(cardId, text, marker), await this.proposals?.read(cardId, notes), census)
+      async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
   }
   create(input: CreateWorkInput, actor: string): Promise<StartWorkResult> {
     const parsed = createWorkSchema.safeParse(input)
