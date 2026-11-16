@@ -138,6 +138,7 @@ it('reconciles an ambiguous original operation after reload even when its own pa
 })
 
 it('waits for an exact source-return binding instead of claiming a substitute from an older scene selection', async () => {
+  packet.packet.binding.request_key = 'exact-return'
   workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'exact-return' } }, state: { selection: { kind: 'card', id: 'another-card' } } }
   const view = render(<Decisions />)
   await screen.findByText('Requested source request is not ready for review.')
@@ -452,4 +453,58 @@ it.each(['lost response', 'expired during observation'])('reconciles a transfer 
   expect(bound).toBe('session-c-lease')
   expect(submits.at(-1)).toMatchObject({ operation_id: original.operation_id, option_id: original.option_id, original_lease_token: 'session-b-lease' })
   expect(claims.every(card => card === packet.packet.binding.card_id)).toBe(true)
+})
+
+it.each(['first request returned', 'second request returned', 'release unavailable'])('preserves a Discuss return to the second independent request on one card: %s', async scenario => {
+  const first = structuredClone(packet)
+  first.packet.binding.request_key = 'request-a'
+  first.packet.binding.request_id = 'source-a'
+  first.packet.title = 'First independent request'
+  const second = structuredClone(packet)
+  second.id = '00000000-0000-4000-8000-000000000002'
+  second.packet.binding.request_key = 'request-b'
+  second.packet.binding.request_id = 'source-b'
+  second.packet.title = 'Second independent request'
+  packet = scenario === 'second request returned' ? second : first
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-a', cardIds: [first.packet.binding.card_id] }, { id: 'request-b', cardIds: [second.packet.binding.card_id] }] } }
+  const releases: Record<string, unknown>[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/release')) {
+      releases.push(JSON.parse(String(init?.body)))
+      if (scenario === 'release unavailable') throw new Error('Release response unavailable')
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'released' } }))
+    }
+    return fallback(url, init)
+  })
+  render(<Decisions />)
+  if (scenario === 'second request returned') {
+    await screen.findByRole('heading', { name: second.packet.title })
+    expect(screen.getByText('Request source-b', { selector: '.dd-choices .dd-caption' })).toBeVisible()
+    expect(releases).toHaveLength(0)
+  } else {
+    await screen.findByRole('heading', { name: 'Requested source request is not ready for review.' })
+    await waitFor(() => expect(releases).toHaveLength(1))
+    expect(releases[0]).toMatchObject({ action: 'release', lease_token: 'secret-lease', review_session_token: 'secret-session' })
+    expect(screen.queryByRole('radio')).toBeNull()
+    expect(screen.queryByRole('heading', { name: first.packet.title })).toBeNull()
+  }
+  expect(submits).toHaveLength(0)
+})
+
+it('checks a new Discuss request key even when its card is already displayed', async () => {
+  packet.packet.binding.request_key = 'request-a'
+  const view = render(<Decisions />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  let released = false
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/release')) { released = true; return new Response(JSON.stringify({ ok: true, data: { outcome: 'released' } })) }
+    return fallback(url, init)
+  })
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-b', cardIds: [packet.packet.binding.card_id] }] } }
+  view.rerender(<Decisions />)
+  await waitFor(() => expect(released).toBe(true))
+  expect(screen.getByRole('heading', { name: 'Requested source request is not ready for review.' })).toBeVisible()
+  expect(submits).toHaveLength(0)
 })
