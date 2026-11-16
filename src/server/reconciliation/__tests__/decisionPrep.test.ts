@@ -235,3 +235,21 @@ it('allows explicit preparation after rejected packets and closes expired blocke
   expect(posts).toHaveLength(3)
   expect(await packets.readPolicy('board')).toMatchObject({ values: { automatic_replenishment: false } })
 })
+
+it('prevents a superseded blocked attempt from replacing its successful retry', async () => {
+  const { prep, packets, fixture } = await harness()
+  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare retry' }
+  const first = await prep.prepareNow('Will', request)
+  const invalid = structuredClone(fixture.packet)
+  invalid.question = 'Different source question?'
+  await prep.publish({ job_id: first.job_id, operation_id: 'blocked-predecessor', packet: invalid })
+  const retry = await prep.prepareNow('Will', request)
+  expect((await prep.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'cancelled' })
+  const published = await prep.publish({ job_id: retry.job_id, operation_id: 'successful-retry', packet: fixture.packet })
+  const before = await packets.ids()
+  await expect(prep.publish({ job_id: first.job_id, operation_id: 'late-invalid', packet: invalid })).rejects.toThrow('not open')
+  await expect(prep.publish({ job_id: first.job_id, operation_id: 'late-valid', packet: fixture.packet })).rejects.toThrow('not open')
+  expect(await packets.ids()).toEqual(before)
+  expect(await packets.read(published.packet_id, fixture.evidence)).toMatchObject({ ready: true })
+  expect(await prep.publish({ job_id: retry.job_id, operation_id: 'successful-retry', packet: fixture.packet })).toMatchObject({ ready: true, replayed: true })
+})

@@ -157,6 +157,8 @@ export class DecisionPreparation {
     if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
     const id = randomUUID(), at = new Date(this.now()).toISOString()
     const prior = Number((db.prepare('SELECT count(*) AS n FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?').get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as { n: number }).n)
+    db.prepare("UPDATE decision_prep_jobs SET state = 'cancelled', reason = ?, updated_at = ? WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state = 'blocked'")
+      .run('Superseded by a new preparation attempt.', at, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision)
     const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
       state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: prior + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
     db.prepare('INSERT INTO decision_prep_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, candidate.card_url, 'admitted', job.reason, actor, mode, `prep-${id}`, job.attempt, at, at, null, null)
@@ -164,10 +166,10 @@ export class DecisionPreparation {
     return { outcome: 'admitted', explanation: job.reason, job_id: id, state: 'admitted', job }
   }
 
-  private async mark(id: string, state: string, reason: string, packetId?: string) {
+  private async mark(id: string, state: string, reason: string) {
     await this.initialize()
-    await this.packets.leases.writeStorage(db => db.prepare(`UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = coalesce(?, packet_id),
-      dispatched_at = CASE WHEN ? = 'dispatched' THEN ? ELSE dispatched_at END WHERE id = ? AND (state = 'admitted' OR (state = 'dispatched' AND ? != 'dispatched') OR (state = 'blocked' AND ? IN ('published', 'blocked')))`).run(state, reason, new Date(this.now()).toISOString(), packetId ?? null, state, new Date(this.now()).toISOString(), id, state, state))
+    await this.packets.leases.writeStorage(db => db.prepare(`UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?,
+      dispatched_at = CASE WHEN ? = 'dispatched' THEN ? ELSE dispatched_at END WHERE id = ? AND (state = 'admitted' OR (state = 'dispatched' AND ? != 'dispatched'))`).run(state, reason, new Date(this.now()).toISOString(), state, new Date(this.now()).toISOString(), id, state))
   }
 
   private async dispatch(job: Row) {
@@ -252,25 +254,26 @@ export class DecisionPreparation {
   async publish(input: unknown) {
     const parsed = z.object({ job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: decisionPacketSchema }).strict().parse(input)
     await this.initialize()
-    const job = await this.packets.leases.readStorage(db => db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(parsed.job_id, this.scope) as unknown as Row | undefined)
-    if (!job) throw new DecisionDeskConflict('Preparation job is unavailable')
-    if (parsed.packet.binding.card_id !== job.card_id || parsed.packet.binding.request_id !== job.request_id || parsed.packet.binding.source_revision !== job.source_revision) throw new DecisionDeskConflict('Packet does not match this preparation job')
-    if (job.state === 'published' && job.packet_id) {
-      const current = await this.packets.read(job.packet_id, this.evidence(job.card_id))
-      return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
-    }
-    if (job.state === 'failed' || job.state === 'cancelled') throw new DecisionDeskConflict('This preparation attempt is not open for publication')
-    const started = Date.parse(job.dispatched_at ?? job.created_at)
-    if (Number.isFinite(started) && started + attemptMs < this.now()) {
-      await this.packets.leases.writeStorage(db => this.expire(db))
-      throw new DecisionDeskConflict('This preparation attempt expired before publication')
-    }
-    const evidence = this.evidence(job.card_id)
-    const stored = await this.packets.publish(parsed.packet, evidence, preparerName, parsed.operation_id)
-    const current = await this.packets.read(stored.id, evidence)
-    const ready = !!current?.ready
-    const reasons = current?.reasons ?? stored.validation?.reasons ?? []
-    await this.mark(job.id, ready ? 'published' : 'blocked', ready ? 'Packet is ready for review.' : reasons.join(' ') || 'Packet is not ready.', stored.id)
-    return { outcome: ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: stored.id, ready, reasons, replayed: stored.replayed }
+    await this.packets.leases.writeStorage(db => this.expire(db))
+    return this.packets.leases.writeStorage(db => {
+      const job = db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(parsed.job_id, this.scope) as Row | undefined
+      if (!job) throw new DecisionDeskConflict('Preparation job is unavailable')
+      if (parsed.packet.binding.card_id !== job.card_id || parsed.packet.binding.request_id !== job.request_id || parsed.packet.binding.source_revision !== job.source_revision) throw new DecisionDeskConflict('Packet does not match this preparation job')
+      const evidence = this.evidence(job.card_id)
+      if (job.state === 'published' && job.packet_id) {
+        const current = this.packets.readInStorage(db, job.packet_id, evidence)
+        return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
+      }
+      const started = Date.parse(job.dispatched_at ?? job.created_at)
+      if (Number.isFinite(started) && started + attemptMs < this.now()) throw new DecisionDeskConflict('This preparation attempt expired before publication')
+      if (!['admitted', 'dispatched', 'blocked'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
+      const stored = this.packets.publishInStorage(db, parsed.packet, evidence, preparerName, parsed.operation_id)
+      const current = this.packets.readInStorage(db, stored.id, evidence)
+      const ready = !!current?.ready
+      const reasons = current?.reasons ?? stored.validation?.reasons ?? []
+      db.prepare('UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = ? WHERE id = ?')
+        .run(ready ? 'published' : 'blocked', ready ? 'Packet is ready for review.' : reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), stored.id, job.id)
+      return { outcome: ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: stored.id, ready, reasons, replayed: stored.replayed }
+    })
   }
 }
