@@ -146,7 +146,7 @@ it('creates, edits, queues, starts with exact synthetic provenance, retains two 
   expect(wrong.outcome).toBe('not-saved')
   expect(await f.workflow.start({ card_id: cardId, operation_id: 'start', worker: f.worker }, 'Fixture')).toMatchObject({ outcome: 'saved', card: { properties: { Status: { value: 'In Progress' }, 'First Mate tasks': { value: workerLinkRecord([f.link]).json } } } })
   for (const request_id of ['request-a', 'request-b']) expect(await update({ kind: 'request_decision', operation_id: request_id, request_id, requested_from: 'Fixture owner', question: `Choose ${request_id}`, options: [{ id: 'yes', label: 'Proceed' }] })).toMatchObject({ outcome: 'saved' })
-  for (const dependency of ['dependency-a', 'dependency-b']) expect(await update({ kind: 'wait', operation_id: dependency, dependency, unblocks_when: `${dependency} ready`, follow_up_by: 'Fixture owner' })).toMatchObject({ outcome: 'saved' })
+  for (const dependency of ['dependency-a', 'dependency-b']) expect(await update({ kind: 'wait', operation_id: dependency, type: 'Actor', id: dependency, dependency, unblocks_when: `${dependency} ready`, follow_up_by: 'Fixture owner', next_check_in: new Date(Date.now() + 7 * 86400000).toISOString() })).toMatchObject({ outcome: 'saved' })
   const before = await f.reader.card(cardId, true), wait = String(before.properties['Waiting For']!.value).split('\n')[0]!
   expect(await update({ kind: 'answer_decision', operation_id: 'answer', request_id: 'request-a', answer: 'Proceed', option_id: 'yes', next: { owner: 'Firstmate', status: 'Queued' }, resolve_wait: wait })).toMatchObject({ outcome: 'saved' })
   const answered = await f.reader.card(cardId, true)
@@ -154,6 +154,9 @@ it('creates, edits, queues, starts with exact synthetic provenance, retains two 
   expect(answered.properties['Waiting For']!.value).toContain('dependency-b')
   expect(answered.properties['Waiting For']!.value).not.toContain('dependency-a')
   expect(answered.properties['First Mate tasks']!.value).toBe(workerLinkRecord([f.link]).json)
+  const remainingWait = String(answered.properties['Waiting For']!.value)
+  expect(await update({ kind: 'complete', operation_id: 'blocked-complete', disposition: 'Synthetic proof complete', evidence: 'Confirmed fixture reads' })).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+  expect(await update({ kind: 'assign', operation_id: 'resolve-final-wait', owner: 'Firstmate', status: 'Queued', resolve_wait: remainingWait })).toMatchObject({ outcome: 'saved' })
   expect(await update({ kind: 'complete', operation_id: 'complete', disposition: 'Synthetic proof complete', evidence: 'Confirmed fixture reads' })).toMatchObject({ outcome: 'saved', card: { properties: { Status: { value: 'Done' } } } })
   expect(notify).not.toHaveBeenCalled()
   expect((await f.reader.query({}, true)).data!.cards.some(card => card.id === cardId)).toBe(false)
@@ -286,7 +289,7 @@ it('does not replay a partial contract attachment or bypass provider-specific in
   await expect(contracts.write(id, contract, state, save)).rejects.toThrow('earlier append remains uncertain')
   expect(uploads).toBe(submitted)
   expect(await f.workflow.update({ card_id: id, operation_id: 'timestamp', kind: 'edit', properties: { 'Start Date': '2026-11-12T09:00:00Z' } }, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'jira-incompatible' })
-  expect(await f.workflow.update({ card_id: id, operation_id: 'property-limit', kind: 'wait', dependency: '漢'.repeat(11500), unblocks_when: 'Synthetic ready', follow_up_by: 'Fixture' }, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'jira-incompatible' })
+  expect(await f.workflow.update({ card_id: id, operation_id: 'property-limit', kind: 'wait', type: 'Actor', id: 'Fixture', dependency: '漢'.repeat(11500), unblocks_when: 'Synthetic ready', follow_up_by: 'Fixture', next_check_in: new Date(Date.now() + 7 * 86400000).toISOString() }, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'jira-incompatible' })
 })
 
 it('records an approved handoff on the existing Jira card without offering pickup or a live source answer', async () => {

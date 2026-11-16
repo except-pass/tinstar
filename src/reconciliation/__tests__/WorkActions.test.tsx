@@ -68,7 +68,7 @@ it.each(['Waiting For', 'In Progress', 'external', 'Done', 'Archived'])('answers
   const status = state === 'external' ? 'In Progress' : state
   fill('Next status', status)
   if (state === 'Waiting For') {
-    fill('Named dependency', 'Security approval'); fill('What unblocks it', 'Owner accepts evidence'); fill('Who follows up', 'Owner')
+    fill('Waiting For Type', 'Actor'); fill('Waiting For ID', 'Security'); fill('Named dependency', 'Security approval'); fill('What unblocks it', 'Owner accepts evidence'); fill('Who follows up', 'Owner'); fill('Next check-in (date or timestamp with timezone)', '2099-01-01T00:00:00Z')
   } else if (state === 'In Progress') {
     fill('First Mate home', '/fixture/home'); fill('Task ID', 'native-task'); fill('Spawn generation', 'exact-generation')
   } else if (state === 'external') {
@@ -83,7 +83,7 @@ it.each(['Waiting For', 'In Progress', 'external', 'Done', 'Archived'])('answers
   const input = updateWorkSchema.parse(JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).input)
   expect(input).toMatchObject({ kind: 'answer_decision', next: { status } })
   if (input.kind !== 'answer_decision') throw new Error('Expected decision answer')
-  if (state === 'Waiting For') expect(input.next.wait).toEqual({ dependency: 'Security approval', unblocks_when: 'Owner accepts evidence', follow_up_by: 'Owner' })
+  if (state === 'Waiting For') expect(input.next.wait).toEqual({ type: 'Actor', id: 'Security', dependency: 'Security approval', unblocks_when: 'Owner accepts evidence', follow_up_by: 'Owner', next_check_in: '2099-01-01T00:00:00Z' })
   else if (state === 'In Progress') expect(input.next.worker).toEqual({ kind: 'firstmate', fm_home: '/fixture/home', task_id: 'native-task', first_observed_spawn_gen: 'exact-generation' })
   else if (state === 'external') expect(input.next.worker).toMatchObject({ kind: 'external', card_id: card.id, run_id: 'run-one', state: 'running' })
   else expect(input.next).toMatchObject({ disposition: 'Owner accepted the supported outcome', evidence: 'Owner acceptance receipt' })

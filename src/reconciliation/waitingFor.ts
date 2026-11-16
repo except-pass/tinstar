@@ -1,11 +1,11 @@
 import { isJiraCard } from '../shared/workIdentity'
+import { waitingForException, waitingForFieldIssue, waitingForTypes, type SourceCoverage, type WaitingForType } from '../shared/waitingForPolicy'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { PresentationState } from './presentation'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
 
-export const waitingForTypes = ['Actor', 'Event', 'Work'] as const
-export type WaitingForType = typeof waitingForTypes[number]
+export { waitingForTypes, type WaitingForType }
 export interface WaitingForGroup {
   key: string; type: WaitingForType; id: string; label: string; cards: SceneCard[]
   target?: { kind: 'card'; id: string } | { kind: 'url'; url: string }
@@ -36,18 +36,18 @@ function eventTarget(id: string, cards: SceneCard[]) {
   return unique.length === 1 ? unique[0] : null
 }
 export function waitingForIssue(card: SceneCard, known: readonly SceneCard[]): string | null {
-  if (propertyText(card, 'Status') !== 'Waiting For') return null
-  const type = propertyText(card, 'Waiting For Type'), id = propertyText(card, 'Waiting For ID').trim()
-  if (!type) return 'Waiting For Type is missing.'
-  if (!waitingForTypes.includes(type as WaitingForType)) return `Waiting For Type “${type}” is not Work, Actor or Event.`
-  if (!id) return 'Waiting For ID is missing.'
-  if (type === 'Work') {
-    const canonical = pageId(id)
-    if (!canonical) return `Waiting For ID is not a valid ${isJiraCard(card.id) ? 'Jira' : 'Notion'} Work card identifier.`
-    if (canonical === pageId(card.id)) return 'Waiting For ID references this same Work card.'
-    if (!known.some(card => pageId(card.id) === canonical && !card.source.in_trash && !card.source.archived)) return 'Waiting For ID does not resolve to a Work card in the loaded source. The reference needs verification.'
-  }
-  return null
+  return waitingForFieldIssue({
+    cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
+    knownWorkIds: known.filter(item => !item.source.in_trash && !item.source.archived && !['Done', 'Archived'].includes(propertyText(item, 'Status'))).map(item => item.id),
+  })
+}
+export function waitingForSemanticsIssue(card: SceneCard, coverage: SourceCoverage, known: readonly SceneCard[] = []): string | null {
+  const exception = waitingForException({
+    cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
+    knownWork: known.map(item => ({ id: item.id, status: propertyText(item, 'Status'), archived: item.source.archived, in_trash: item.source.in_trash })), waitingFor: propertyText(card, 'Waiting For'), nextCheckIn: card.source.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null, observedAt: card.source.last_edited_time ?? null, coverage,
+  })
+  if (!exception || exception.reason === waitingForIssue(card, [])) return null
+  return exception.reason
 }
 const priority = (card: SceneCard) => {
   const value = propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '').toLowerCase()

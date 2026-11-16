@@ -135,9 +135,9 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const text = await response.text()
   const tools: Tool[] = JSON.parse(text).result.tools
   expect(tools).toHaveLength(31)
-  // 45 KiB today, including all eleven operations that the old 29 KiB catalog
-  // omitted. Catch accidental catalog expansion without an exact byte snapshot.
-  expect(Buffer.byteLength(text)).toBeLessThan(64 * 1024)
+  // About 65 KiB with structured waits and exact legacy-wait repair inputs.
+  // Catch accidental catalog expansion without an exact byte snapshot.
+  expect(Buffer.byteLength(text)).toBeLessThan(72 * 1024)
   const ajv = new Ajv2020({ strict: false })
   addFormats(ajv)
   const assertNoRefs = (value: unknown): void => {
@@ -166,7 +166,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const validate = ajv.compile(update)
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
-  expect(validate({ ...base, kind: 'wait', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate' })).toBe(true)
+  expect(validate({ ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' })).toBe(true)
   expect(validate({ ...base, kind: 'wait' })).toBe(false)
   expect(validate({ ...base, kind: 'unknown' })).toBe(false)
   expect(validate({ ...base, kind: 'edit', worker: {} })).toBe(false)

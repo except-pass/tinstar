@@ -83,7 +83,7 @@ async function main() {
     await update('assign', 'assign', { owner: 'Firstmate', status: 'Todo', note: 'Synthetic queue only; no inbox delivery.' })
     await call('start_work', { card_id: id, operation_id: `${prefix}-start`, worker: { kind: 'firstmate', fm_home: home, task_id: task, first_observed_spawn_gen: generation } })
     for (const request of ['a', 'b']) await update('request_decision', `request-${request}`, { request_id: `${prefix}-${request}`, question: `SYNTHETIC decision ${request}: proceed?`, requested_from: 'Will', options: [{ id: 'yes', label: 'Proceed with synthetic proof' }] })
-    for (const dependency of ['a', 'b']) await update('wait', `wait-${dependency}`, { dependency: `Synthetic dependency ${dependency}`, unblocks_when: `Synthetic ${dependency} proof recorded`, follow_up_by: 'Synthetic proof operator' })
+    for (const dependency of ['a', 'b']) await update('wait', `wait-${dependency}`, { type: 'Actor', id: `Synthetic owner ${dependency}`, dependency: `Synthetic dependency ${dependency}`, unblocks_when: `Synthetic ${dependency} proof recorded`, follow_up_by: 'Synthetic proof operator', next_check_in: new Date(Date.now() + 7 * 86400000).toISOString() })
     const waiting = await call('get_work', { card_id: id, refresh: true, details: true })
     const waits = String(waiting.card.source.properties['Waiting For'].value).split('\n')
     for (const [index, request] of ['a', 'b'].entries()) await update('answer_decision', `answer-${request}`, { request_id: `${prefix}-${request}`, answer: 'Proceed with synthetic proof', option_id: 'yes', resolve_wait: waits[index], next: { owner: 'Firstmate', status: 'Queued' } })

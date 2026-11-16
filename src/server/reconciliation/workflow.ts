@@ -9,6 +9,7 @@ import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decis
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { canonicalWorkId, independentWaitIssue, parseWaitLine, waitLine, hasActiveTypedWait, waitingForException, coverageFromObservation, workIdShape } from '../../shared/waitingForPolicy'
 import { ContractError, ImplementationContracts } from './implementationContract'
 import { HandoffOperations } from './workflowHandoff'
 import { codexTurn } from '../../shared/codexActivity'
@@ -22,6 +23,7 @@ import type { SourceSnapshot } from './index'
 import type { WorkReader, WorkCard } from './workReader'
 
 const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ owner: card.properties.Owner?.value ?? null, status: card.properties.Status?.value ?? null,
+  waiting_for: card.properties['Waiting For']?.value ?? null, waiting_for_type: card.properties['Waiting For Type']?.value ?? null, waiting_for_id: card.properties['Waiting For ID']?.value ?? null,
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -228,6 +230,7 @@ export class WorkflowOperations {
       if (input.expected && !same(input.expected, { owner: initial.owner, status: initial.status, worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null })) return result('not-saved', 'conflict', 'Owner, Status or worker links changed; read the card and retry', card)
       if (typeof initial.owner !== 'string' || !initial.owner.trim() || !initial.area || typeof initial.area === 'string' && !initial.area.trim() || Array.isArray(initial.area) && !initial.area.length) return result('not-saved', 'required-fields', 'Start work requires an existing Owner and Area; Tin Star does not infer them', card)
       const plan = await this.startPlan(card, input, actor)
+      await this.validateWaitState(card, plan.desired)
       const { properties } = plan
       desired = plan.desired
       fields = Object.keys(desired)
@@ -442,10 +445,46 @@ export class WorkflowOperations {
     if (card.properties.Status?.value === 'In Progress' && next > checkInCeiling(now)) throw new WorkflowError('checkpoint-ceiling', `Next check-in exceeds the board ceiling (${new Date(checkInCeiling(now)).toISOString()})`)
     return next
   }
+  private futureCheckIn(appointment: string) {
+    const next = checkInTime(appointment)
+    if (!Number.isFinite(next) || next <= Date.now()) throw new WorkflowError('invalid-check-in', 'Next check-in must be a future appointment; date-only means 9 AM America/New_York. Nothing was written.')
+    return next
+  }
+  private async assertWorkBlocker(card: WorkCard, workId: string) {
+    const shape = workIdShape(card.id, workId)
+    if (shape) throw new WorkflowError(shape.code, `${shape.message} Nothing was written.`)
+    let source: Awaited<ReturnType<WorkflowOperations['reader']['query']>>
+    try { source = await this.reader.query({ history: true }, true) } catch {
+      throw new WorkflowError('work-unverified', 'Waiting For Work ID cannot be verified because the source read failed. No identifier was invented. Refresh and retry. Nothing was written.')
+    }
+    if (source.status !== 'fresh' || source.coverage !== 'complete' || !source.data) throw new WorkflowError('work-unverified', 'Waiting For Work ID cannot be verified because source coverage is unavailable or stale. No identifier was invented. Refresh and retry. Nothing was written.')
+    const match = source.data.cards.find(item => canonicalWorkId(item.id) === canonicalWorkId(workId))
+    if (!match || match.in_trash) throw new WorkflowError('work-not-found', `Waiting For ID ${workId} is not an existing Work card in the current source. Nothing was written.`)
+    const status = String(match.properties.Status?.value ?? '')
+    if (match.archived || status === 'Done' || status === 'Archived') throw new WorkflowError('work-not-blocking', `Waiting For ID ${workId} is ${status || 'archived'}, so it is not an unfinished blocker. Nothing was written.`)
+  }
+  private async validateWaitState(card: WorkCard, desired: Record<string, unknown>, resolve?: string) {
+    if (!['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in'].some(name => name in desired)) return
+    const value = (name: string) => name in desired ? desired[name] : card.properties[name]?.value
+    const status = String(value('Status') ?? '')
+    if ((card.properties.Status?.value === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })) && status !== 'Waiting For') {
+      const entries = String(card.properties['Waiting For']?.value ?? '').split('\n').filter(line => line.trim())
+      if (!resolve || entries.filter(line => line === resolve).length !== 1 || entries.some(line => line !== resolve) || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
+    }
+    const waitingFor = String(value('Waiting For') ?? '')
+    const workIds = [String(value('Waiting For Type')) === 'Work' ? String(value('Waiting For ID')) : '', ...waitingFor.split('\n').flatMap(line => { const wait = parseWaitLine(line); return wait?.type === 'Work' ? [wait.id] : [] })].filter(Boolean)
+    const source = status === 'Waiting For' && workIds.length ? await this.reader.query({ history: true }, true) : undefined
+    const exception = waitingForException({ cardId: card.id, status, type: String(value('Waiting For Type') ?? ''), id: String(value('Waiting For ID') ?? ''), waitingFor,
+      nextCheckIn: value('Next check-in') as { start?: string; time_zone?: string } | null,
+      observedAt: card.last_edited_time ?? null, coverage: source ? coverageFromObservation(source.status, source.coverage) : 'complete',
+      knownWork: source?.data?.cards.map(work => ({ id: work.id, status: String(work.properties.Status?.value ?? ''), archived: work.archived, in_trash: work.in_trash })) })
+    if (exception) throw new WorkflowError('wait-invalid', `${exception.field}: ${exception.reason} Repair the active wait fields before this transition. Nothing was written.`)
+  }
   private async updatePlan(card: WorkCard, input: UpdateWorkInput, actor: string, notes: Awaited<ReturnType<WorkflowContent['notes']>>) {
     const desired: Record<string, unknown> = {}, properties: Record<string, unknown> = {}, sections: Record<string, string> = {}
     const reads = new Set<string>(), at = new Date().toISOString()
     let answerBinding: Record<string, unknown> | undefined
+    let heldWait = false
     let note = `Date: ${at}\nBy: ${actor}\nOperation: ${input.kind}`
     const set = (name: string, value: unknown) => { reads.add(name); properties[name] = this.property(card, name, value); desired[name] = this.normalized(card, name, value) }
     const transition = (owner: string, status: string) => {
@@ -454,23 +493,73 @@ export class WorkflowOperations {
       if (owner.toLowerCase() === 'firstmate' && input.kind === 'assign') status = 'Queued'
       set('Owner', owner); set('Status', status)
     }
-    const wait = (value: { dependency: string; unblocks_when: string; follow_up_by: string }) => {
-      const old = String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
-      const entryText = (text: string) => /[\r\n]/.test(text) ? JSON.stringify(text) : text
-      const line = `Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)}`
-      set('Waiting For', old.split('\n').includes(line) ? old : [old, line].filter(Boolean).join('\n'))
+    const waitText = () => String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
+    const wait = async (value: { type: 'Actor' | 'Event' | 'Work'; id: string; dependency: string; unblocks_when: string; follow_up_by: string; next_check_in: string }, replace?: string) => {
+      if (String(card.properties.Status?.value ?? '') === 'Waiting for Prod Release') throw new WorkflowError('release-lifecycle', 'Waiting for Prod Release stays on the release lifecycle. This operation does not convert it to generic Waiting For. Nothing was written.')
+      const issue = independentWaitIssue(value)
+      if (issue) throw new WorkflowError(issue.code, `${issue.message} Nothing was written.`)
+      if (value.type === 'Work') await this.assertWorkBlocker(card, value.id)
+      const line = waitLine(value)
+      const old = waitText()
+      const lines = old.split('\n').filter(entry => entry.length > 0)
+      if (replace !== undefined) {
+        if (lines.filter(entry => entry === replace).length !== 1 || parseWaitLine(replace) || value.dependency !== replace) throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one untyped current line and preserve that exact line as its dependency. Nothing was written.')
+        set('Waiting For', lines.map(entry => entry === replace ? line : entry).join('\n'))
+        set('Waiting For Type', value.type); set('Waiting For ID', value.id.trim())
+        note += `\nRepaired legacy wait: ${JSON.stringify(replace)}`
+      } else set('Waiting For', lines.includes(line) ? lines.join('\n') : [...lines, line].join('\n'))
+      const primaryType = String(desired['Waiting For Type'] ?? card.properties['Waiting For Type']?.value ?? ''), primaryId = String(desired['Waiting For ID'] ?? card.properties['Waiting For ID']?.value ?? '').trim()
+      const samePrimary = primaryType === value.type && primaryId.toLowerCase() === value.id.trim().toLowerCase()
+      const appointment = this.futureCheckIn(value.next_check_in)
+      const currentAppointment = checkInTime(((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { start?: string } | null)?.start ?? null, ((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { time_zone?: string } | null)?.time_zone)
+      if (!primaryType || !primaryId || samePrimary) { set('Waiting For Type', value.type); set('Waiting For ID', value.id.trim()) }
+      if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || currentAppointment <= Date.now() || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
       note += `\n${line}`
+    }
+    const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
+      const wasWaiting = String(card.properties.Status?.value ?? '') === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })
+      const entries = waitText().split('\n')
+      if (!wasWaiting) {
+        if (!resolve) return
+        if (entries.filter(entry => entry === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
+        set('Waiting For', entries.filter(entry => entry !== resolve).join('\n'))
+        if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
+        return
+      }
+      if (requestedStatus === 'Waiting For' && !resolve) return
+      const blockers = entries.filter(entry => entry.trim())
+      if (!resolve) throw new WorkflowError('wait-unresolved', `Leaving Waiting For requires the exact current wait text.${blockers.length ? ` Current wait: ${blockers[0]}` : ' Waiting For text is empty, so there is no exact wait to resolve. Repair it with a typed wait, or refresh the card.'} Nothing was written.`)
+      if (entries.filter(entry => entry === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
+      const remaining = entries.filter(entry => entry !== resolve)
+      set('Waiting For', remaining.join('\n'))
+      if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
+      const still = remaining.filter(entry => entry.trim())
+      const successor = still.map(parseWaitLine).find(parsed => parsed)
+      const clearBlocker = () => {
+        if (card.properties['Waiting For Type']) set('Waiting For Type', null)
+        if (card.properties['Waiting For ID']) set('Waiting For ID', '')
+      }
+      if (still.length > 0 && !successor) throw new WorkflowError('wait-repair-required', 'A remaining legacy wait has no typed identity. Repair it with a typed wait before resolving this blocker. Nothing was written.')
+      if (still.length === 0) clearBlocker()
+      else if (successor) { set('Waiting For Type', successor.type); set('Waiting For ID', successor.id) }
+      if (still.length > 0 && requestedStatus !== 'Waiting For') { set('Status', 'Waiting For'); heldWait = true; note += '\nStatus retained: Waiting For. Another independent wait remains.' }
     }
     if (input.kind === 'edit') {
       for (const [name, value] of Object.entries(input.properties ?? {})) set(name, value)
       Object.assign(sections, input.content)
       if (input.note) note += `\n${input.note}`
     } else if (input.kind === 'assign') {
+      const requested = input.owner.toLowerCase() === 'firstmate' ? 'Queued' : input.status
       transition(input.owner, input.status)
+      resolveWait(input.resolve_wait, requested)
       if (input.note) note += `\nHandoff: ${input.note}`
     } else if (input.kind === 'wait') {
+      if (input.repair_waits) {
+        if (card.properties.Status?.value !== 'Waiting For' || ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].some(name => !input.expected || !(name in input.expected) || !this.matches(card, name, input.expected[name]))) throw new WorkflowError('wait-repair-precondition', 'Legacy wait repair requires exact expected Status, Waiting For, Waiting For Type and Waiting For ID from the current card. Nothing was written.')
+        for (const repair of input.repair_waits) await wait(repair.replacement, repair.current)
+      }
       transition(String(card.properties.Owner?.value ?? ''), 'Waiting For')
-      wait(input)
+      await wait(input)
       if (input.note) note += `\n${input.note}`
     } else if (input.kind === 'checkpoint') {
       const cp = input.checkpoint, next = this.validateCheckpoint(card, cp.next_check_in)
@@ -523,29 +612,24 @@ export class WorkflowOperations {
           }
         }
         transition(input.next.owner, input.next.status)
-        if (input.next.status === 'In Progress') {
+        if (input.next.status === 'Waiting For') {
+          if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
+          await wait(input.next.wait)
+        }
+        resolveWait(input.resolve_wait, input.next.status)
+        if (input.next.status === 'In Progress' && !heldWait) {
           if (!input.next.worker) throw new WorkflowError('worker-required', 'Returning to In Progress requires current tracked worker evidence; Queued is available without a worker')
           const start = await this.startPlan(card, { card_id: card.id, operation_id: input.operation_id, worker: input.next.worker }, actor)
           Object.assign(desired, start.desired); Object.assign(properties, start.properties)
           reads.add(input.next.worker.kind === 'firstmate' ? FIRST_MATE_TASKS : 'Delegated To')
         }
-        if (['Done', 'Archived'].includes(input.next.status)) {
+        if (['Done', 'Archived'].includes(input.next.status) && !heldWait) {
           if (!input.next.disposition || !input.next.evidence) throw new WorkflowError('disposition-required', 'Closing through a decision answer requires explicit supported disposition and evidence')
           note += `\nDisposition: ${input.next.disposition}\nEvidence: ${input.next.evidence}`
-        }
-        if (input.next.status === 'Waiting For') {
-          if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires dependency, unblock condition and follow-up owner')
-          wait(input.next.wait)
         }
         const action = request.action
         const others = requests.some(row => row.id !== input.request_id && row.action === action && !answered.has(row.id))
         set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== request.action))
-        if (input.resolve_wait) {
-          const old = String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
-          const entries = old.split('\n'), resolved = input.resolve_wait
-          if (entries.filter(entry => entry === resolved).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry')
-          set('Waiting For', entries.filter(entry => entry !== resolved).join('\n'))
-        }
         note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
       }
     } else if (input.kind === 'complete' || input.kind === 'park') {
@@ -553,6 +637,8 @@ export class WorkflowOperations {
       set('Status', input.kind === 'complete' ? 'Done' : input.status)
       note += `\nDisposition: ${input.disposition}${input.kind === 'complete' ? `\nEvidence: ${input.evidence}` : ''}`
     }
+    await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
+    for (const name of ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in']) if (name in desired || 'Status' in desired) reads.add(name)
     set('Last touched by', actor)
     const sectionOriginal: Record<string, string> = {}
     if (Object.keys(sections).length) {
@@ -560,7 +646,7 @@ export class WorkflowOperations {
       for (const name of Object.keys(sections)) sectionOriginal[name] = blocks.find(block => block.text.split('\n')[0] === sectionMarker(name))?.text ?? ''
     }
     const original = { ...input.expected, ...Object.fromEntries([...reads].map(name => [name, card.properties[name]?.value ?? null])) }
-    return { desired, properties, original, sections, sectionOriginal, note }
+    return { desired, properties, original, sections, sectionOriginal, note, heldWait }
   }
   private matches(card: WorkCard, name: string, value: unknown) {
     const actual = card.properties[name]?.value ?? null
@@ -574,7 +660,7 @@ export class WorkflowOperations {
   }
   private async performUpdate(input: UpdateWorkInput, actor: string, prepared = false): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
-    let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined
+    let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined, heldWait = false
     let requested: Record<string, unknown> = {}
     const repair = this.noteRepairs.get(key)
     const saved: string[] = [...(repair?.result.saved_fields ?? [])]
@@ -657,6 +743,7 @@ export class WorkflowOperations {
         // Rebuild policy from validated input; a human-editable note never
         // supplies a raw PATCH plan or bypasses tracked-worker requirements.
         const plan = await this.updatePlan(planningCard, input, actor, notes)
+        heldWait = plan.heldWait
         if (card.source?.provider === 'jira') this.reader.jira?.validateProperties(plan.properties)
         this.reader.leases?.assertWritable(card.id)
         requested = plan.desired
@@ -703,7 +790,9 @@ export class WorkflowOperations {
       this.noteRepairs.delete(key)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
       await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
-      return result('saved', 'saved', 'Workflow changes and history saved and confirmed')
+      return result('saved', heldWait ? 'wait-remains' : 'saved', heldWait
+        ? 'The named wait was resolved, but another independent wait remains, so status stayed Waiting For. Other asks, tags and worker history were preserved.'
+        : 'Workflow changes and history saved and confirmed')
     } catch (error) {
       if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message)
       if (card?.source?.provider === 'jira' && attempted) {
