@@ -40,8 +40,10 @@ export class CardContextReader {
    * pending. This never establishes complete history for Desk preparation. */
   cachedClaimBlocks(id: string): CardContextRead['blocks'] {
     const now = Date.now()
-    return [this.cache.get(id), this.commentCache.get(id)].flatMap(cached =>
-      cached && cached.resolvedUntil > now ? cached.resolved?.blocks ?? [] : [])
+    const history = this.decisionCache.get(id)?.resolved
+    return [...(history && Date.parse(history.expires_at) > now ? history.context.blocks : []),
+      ...[this.cache.get(id), this.commentCache.get(id)].flatMap(cached =>
+        cached && cached.resolvedUntil > now ? cached.resolved?.blocks ?? [] : [])]
   }
   /** Read the cached observation with its original conservative freshness;
    * looking at evidence never refreshes it or fetches source history. */
@@ -68,13 +70,22 @@ export class CardContextReader {
     if (cached && (cached.pending || cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
-    const value = Promise.all([this.read(id, signal), this.readComments(id, signal)]).then(([body, comments]): CardContextRead => ({
+    const comments = this.readComments(id, signal)
+    const value = Promise.all([this.read(id, signal), comments]).then(([body, comments]): CardContextRead => ({
       ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
       outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
       omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
     }))
     const entry = { pending: true, value, resolved: cached?.resolved }
     this.decisionCache.set(id, entry)
+    // Positive comment evidence remains useful to claims even if the body
+    // fails. Preserve the hotfix's independent-cache behavior and freshness.
+    void comments.then(result => {
+      if (this.decisionCache.get(id) !== entry) return
+      const until = observed + 30_000, current = this.commentCache.get(id)
+      if (current?.pending || current && current.resolvedUntil > until) return
+      this.commentCache.set(id, { until, pending: false, resolvedUntil: until, value: Promise.resolve(result), resolved: result })
+    }).catch(() => {})
     void value.then(context => { entry.resolved = { context, observed_at: new Date(observed).toISOString(), expires_at: new Date(observed + 30_000).toISOString() } })
       .catch(() => {}).finally(() => { entry.pending = false })
     return value

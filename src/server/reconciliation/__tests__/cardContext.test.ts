@@ -165,3 +165,25 @@ it('retries a throttled history page through shared Notion Retry-After pacing', 
     expect(api.diagnostics.rateLimits).toBe(1)
   } finally { vi.useRealTimers() }
 })
+
+it.each(['body', 'comments'] as const)('retains known %s answers from complete publication reads for claims', async surface => {
+  const fetcher: typeof fetch = async input => {
+    const comments = new URL(String(input)).pathname === '/v1/comments'
+    if (comments !== (surface === 'comments')) return Response.json({ results: [], has_more: false })
+    const text = 'Tin Star answer: "decision"'
+    return Response.json({ results: [{ id: 'answer', type: 'paragraph', paragraph: { rich_text: [{ plain_text: text }] }, rich_text: [{ plain_text: text }] }], has_more: false })
+  }
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+  await reader.decisionDetails('card')
+  expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' }))
+})
+
+it('retains a known comment answer for claims when the publication body read fails', async () => {
+  const fetcher: typeof fetch = async input => new URL(String(input)).pathname === '/v1/comments'
+    ? Response.json({ results: [{ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "decision"' }] }], has_more: false })
+    : new Response('', { status: 503 })
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+  await expect(reader.decisionDetails('card')).rejects.toThrow('context unavailable')
+  expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' }))
+  expect(reader.cachedDecisionHistory('card')).toBeUndefined()
+})
