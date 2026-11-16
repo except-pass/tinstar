@@ -28,6 +28,13 @@ export class CardContextReader {
     const cached = this.commentCache.get(id)
     return cached && cached.resolvedUntil > Date.now() ? cached.resolved : undefined
   }
+  /** Claims can exclude a known answer even while the other history read is
+   * pending. This never establishes complete history for Desk preparation. */
+  cachedClaimBlocks(id: string): CardContextRead['blocks'] {
+    const now = Date.now()
+    return [this.cache.get(id), this.commentCache.get(id)].flatMap(cached =>
+      cached && cached.resolvedUntil > now ? cached.resolved?.blocks ?? [] : [])
+  }
   /** Read the cached observation with its original conservative freshness;
    * looking at evidence never refreshes it or fetches source history. */
   cachedDecisionHistory(id: string) {
