@@ -108,6 +108,12 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
       for (const attempt of recovered.submissions) {
         if (held?.lease_token && held.packet && attempt.selection.request_id === held.packet.packet.binding.request_id) {
           const key = requestKey(held.packet)
+          // A definite invalidation authorized no write. Fresh research must
+          // not inherit that abandoned operation or silently select its answer.
+          if (attempt.state === 'packet-invalidated' && attempt.selection.packet_id !== held.packet.id) {
+            if (context.current.attempts[key]?.operation_id === attempt.operation_id) { delete context.current.attempts[key]; delete context.current.selections[key] }
+            continue
+          }
           context.current.selections[key] = attempt.selection.option_id
           context.current.attempts[key] ??= { ...attempt.selection, operation_id: attempt.operation_id, lease_token: held.lease_token,
             review_session_token: context.current.token, next: attempt.next, ...(attempt.resolve_wait ? { resolve_wait: attempt.resolve_wait } : {}) }
@@ -156,7 +162,13 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
   const release = (action: 'skip' | 'research', reason = '') => run(async () => {
     context.current.release ??= { operation_id: crypto.randomUUID(), action, reason: reason.trim() || (action === 'skip' ? 'Reviewer skipped without an answer' : 'Reviewer requested more research') }; persist()
     const response = await deskCall<{ outcome: string; next?: DeskClaim; code?: string; message?: string }>('release', { ...context.current.release, review_session_token: context.current.token, lease_token: context.current.lease })
-    if (!response.next) { setError(response.message ?? 'Release not confirmed. Current card retained.'); return }
+    if (!response.next) {
+      setError(response.message ?? 'Release not confirmed. Current card retained.')
+      if (response.code && claimRef.current?.packet) accept({ ...claimRef.current, outcome: 'lease-lost', code: response.code })
+      return
+    }
+    const released = claimRef.current?.packet
+    if (released) { delete context.current.attempts[requestKey(released)]; delete context.current.selections[requestKey(released)]; persist() }
     context.current.release = undefined; setResult(null); setNotice(action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
     accept(response.next)
   })
@@ -173,6 +185,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
         if (held.outcome !== 'packet-invalidated') setResult(null)
       }
     }),
+    claimAvailable: () => run(async () => { await claimNext(undefined, true) }),
     claimCard: (card: string) => run(async () => { await claimNext(card) }),
     newSession: () => run(async () => {
       if (claimRef.current?.lease || Object.keys(context.current.attempts).length) throw new Error('Finish or skip this session’s held decision before creating another here. Other browser contexts can create independent sessions.')

@@ -79,6 +79,11 @@ export class PreparedReviews {
     await this.initialize()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
+      const evidenceByCard = new Map(queue.card_ids.map(card => [card, this.evidence(card)]))
+      const sourceFailures = [...evidenceByCard].flatMap(([card_id, evidence]) => {
+        const reasons = [...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)]
+        return reasons.length ? [{ card_id, reasons: [...new Set(reasons)] }] : []
+      })
       const answers = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
         ? db.prepare('SELECT 1 FROM decision_desk_confirmed_answers WHERE scope = ? AND card = ? AND request_id = ? AND source_revision = ?') : null
       const recorded = (binding: DecisionPacketBinding) => !!answers?.get(this.scope, binding.card_id, binding.request_id, binding.source_revision)
@@ -86,13 +91,13 @@ export class PreparedReviews {
         (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`).all() as Array<{ id: string }>
       const current = rows.map(row => {
         const stored = this.packets.readInStorage(db, row.id)!
-        return this.packets.readInStorage(db, row.id, this.evidence(stored.packet.binding.card_id))!
+        return this.packets.readInStorage(db, row.id, evidenceByCard.get(stored.packet.binding.card_id) ?? this.evidence(stored.packet.binding.card_id))!
       }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id) && !recorded(stored.packet.binding))
       const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now || Date.parse(packet.expires_at) <= now
       const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
       const ready = current.filter(stored => stored.ready)
       const pending = queue.card_ids.flatMap(card => {
-        const evidence = this.evidence(card)
+        const evidence = evidenceByCard.get(card)!
         return evidence.requests.filter(request => !request.answered && (!request.binding || !recorded(request.binding))).map(request => {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
           return { card_id: card, request_id: request.binding?.request_id ?? null,
@@ -101,18 +106,18 @@ export class PreparedReviews {
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })
-      const verified = queue.coverage === 'complete'
-      return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: queue.coverage,
+      const verified = queue.coverage === 'complete' && !sourceFailures.length
+      return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: verified ? 'complete' : 'unknown',
         counts: { ready: verified ? new Set(ready.map(packet => packet.packet.binding.card_id)).size : null,
           leased: verified ? held.size : null, preparing: 0,
           needs_repreparation: verified ? current.filter(packet => !this.packets.pendingAnswerInStorage(db, packet.id) && needsResearch(packet)).length : null,
           to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
-          requests: queue.requests },
+          requests: verified ? queue.requests : null },
         runner: { configured: false, explanation: 'No preparation runner is configured. Pending work is not being prepared.' },
         ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
         recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
           ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],
-        pending, omissions: verified ? [] : ['Source coverage is incomplete or unavailable; queue totals cannot be verified.'] }
+        pending, source_failures: sourceFailures, omissions: verified ? [] : ['Source coverage is incomplete or unavailable; queue totals cannot be verified.'] }
     })
   }
   private session(db: DatabaseSync, caller: string, input: Pick<ClaimInput, 'review_session_token' | 'lease_token'>): Session | undefined {

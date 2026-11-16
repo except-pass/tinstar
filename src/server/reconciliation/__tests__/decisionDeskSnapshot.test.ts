@@ -46,3 +46,12 @@ it('excludes readback-confirmed requests from re-preparation even before the sou
   expect(snapshot.pending.some(row => row.card_id === f.cardId)).toBe(false)
   expect(snapshot.recorded_requests).toEqual([expect.objectContaining({ card_id: f.cardId, request_id: 'preview-question' })])
 })
+
+it('reports cached source/history gaps as unavailable totals and precise failures instead of manufactured zero demand', async () => {
+  root = await mkdtemp(join(tmpdir(), 'desk-snapshot-'))
+  const fixture = decisionSubmitFixture(1), backend = await fixture.build(root)
+  fixture.fixtures[0]!.evidence.reasons = ['Complete cached decision history is unavailable']
+  fixture.fixtures[0]!.evidence.requests = []
+  expect(await backend.reviews.snapshot()).toMatchObject({ coverage: 'unknown', counts: { ready: null, leased: null, preparing: 0, to_prepare: null, requests: null }, source_failures: [{ card_id: fixture.fixtures[0]!.cardId, reasons: ['Complete cached decision history is unavailable'] }] })
+  expect(fixture.writes).toEqual([])
+})

@@ -6,11 +6,11 @@ import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.value }))
 vi.mock('../DecisionSourceContext', () => ({ DecisionSourceContext: () => <p>Canonical source context</p>, DecisionCardContext: () => <p>Canonical source evidence</p> }))
-let leaseToken: string
+let leaseToken: string, claimCode: string | undefined
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
   workspace.value = {}
-  sessionStorage.clear(); submits = []; outcome = 'not-saved'; leaseToken = 'secret-lease'
+  sessionStorage.clear(); submits = []; outcome = 'not-saved'; claimCode = undefined; leaseToken = 'secret-lease'
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
@@ -22,7 +22,7 @@ beforeEach(() => {
     let data: unknown
     if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', label: 'Browser review', device: 'desktop', held: null }] }
     else if (path === 'submission-state') data = { submissions: [] }
-    else if (path === 'claim') data = { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
+    else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
     else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [] }
     else if (path === 'policy') { if (body) policy = { version: policy.version + 1, values: body.values }; data = policy }
     else if (path === 'metrics') data = { reviewed_today_utc: 0, scope: 'test', recording_started_at: new Date().toISOString() }
@@ -151,4 +151,45 @@ it('offers one-click research refresh when source revision changes during submit
   expect(screen.queryByRole('button', { name: 'Confirm retained save status' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeDisabled()
   expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+})
+
+it('blocks a remotely lost claim and can explicitly claim next without releasing another session’s lease', async () => {
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  claimCode = 'card-held'
+  await act(async () => { fireEvent.focus(window) })
+  await screen.findByText('Lease expired or lost. Re-claim and revalidate before writing. Your selection is retained.')
+  expect(screen.queryByText('Leased to this session')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Submit decision & next →' })).toBeDisabled()
+  claimCode = undefined; packet = { ...packet, packet: { ...packet.packet, binding: { ...packet.packet.binding, card_id: 'b'.repeat(32) } } }
+  fireEvent.click(screen.getByRole('button', { name: 'Claim next prepared decision' }))
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${'b'.repeat(32)}`))
+  const calls = vi.mocked(fetch).mock.calls
+  const input = JSON.parse(String(calls.filter(([url]) => String(url).endsWith('/claim')).at(-1)![1]?.body))
+  expect(input).not.toHaveProperty('card_id')
+  expect(input).not.toHaveProperty('lease_token')
+  expect(calls.some(([url]) => String(url).endsWith('/release'))).toBe(false)
+})
+
+it('does not resurrect an abandoned invalidated answer into a newly prepared source revision after reload', async () => {
+  outcome = 'packet-invalidated'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Refresh packet & next' })
+  const first = submits[0]!, oldPacket = structuredClone(packet)
+  cleanup()
+  packet = { ...packet, id: '00000000-0000-4000-8000-000000000002', version: 2, packet: { ...packet.packet, binding: { ...packet.packet.binding, source_revision: 'new-semantic-source-revision' } } }
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => String(url).endsWith('/submission-state')
+    ? new Response(JSON.stringify({ ok: true, data: { submissions: [{ operation_id: first.operation_id, selection: { packet_id: first.packet_id, packet_version: first.packet_version, request_id: first.request_id, option_id: first.option_id }, state: 'packet-invalidated', next: first.next }] } }))
+    : String(url).includes('/packet?id=') ? new Response(JSON.stringify({ ok: true, data: oldPacket })) : fallback(url, init))
+  await ready()
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).not.toBeChecked()
+  expect(screen.getByRole('button', { name: 'Submit decision & next →' })).toBeDisabled()
+  outcome = 'not-saved'
+  fireEvent.click(screen.getByRole('radio', { name: 'Defer research' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await waitFor(() => expect(submits).toHaveLength(2))
+  expect(submits[1]!.operation_id).not.toBe(first.operation_id)
+  expect(submits[1]).toMatchObject({ packet_id: packet.id, packet_version: 2, option_id: 'defer' })
 })
