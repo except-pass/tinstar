@@ -202,7 +202,7 @@ it('rejects a source write crossing the exact-card read before the atomic lease 
 
 it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request masked by a concrete Next action', async mode => {
   const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': 'Implement security policy' })])
-  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true,
+  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: mode === 'conditional' ? 'Approve the exception after the security review' :
       mode === 'no-request' ? 'No active decision requested' : 'Approve the exception?',
     since: mode === 'future' ? '2099-01-01' : new Date().toISOString(), sourceId: 'request-note', answered: false }]
@@ -212,7 +212,7 @@ it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request 
 
 it.each(['candidate', 'sibling'])('fences a %s source write during request-history collection', async mode => {
   const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': '' })])
-  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true,
+  f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: 'Approve the exception?', since: new Date().toISOString(), sourceId: 'request-note', answered: false }]
   f.workViews.mockImplementationOnce(async () => {
     const stale = structuredClone(f.queue)
