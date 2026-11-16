@@ -69,7 +69,7 @@ export class DecisionPreparation {
   private replenishing?: Promise<void>
   private replenishAgain = false
   private automatic = false
-  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]> | AsyncIterable<PrepCandidate>; coverage(): 'complete' | 'unknown' },
+  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; coverage(): 'complete' | 'unknown' },
     private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
     private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
 
@@ -238,7 +238,7 @@ export class DecisionPreparation {
       if (!this.secret || !policy.values.automatic_replenishment || this.source.coverage() !== 'complete') return
       const admitted: Row[] = []
       const candidates = await this.source.candidates()
-      for await (const candidate of Array.isArray(candidates) ? [...candidates].sort((a, b) => a.rank - b.rank) : candidates) {
+      for (const candidate of [...candidates].sort((a, b) => a.rank - b.rank)) {
         const result = await this.packets.leases.writeStorage(db => this.admit(db, candidate, 'automatic', 'decision-desk', 'Automatic replenishment'))
         if (result.outcome === 'depth-met' || result.outcome === 'at-capacity') break
         if (result.job && result.outcome === 'admitted') admitted.push(result.job)
@@ -256,10 +256,7 @@ export class DecisionPreparation {
       await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'not-configured', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
       return { outcome: 'not-configured', explanation: webhookMissing }
     }
-    let candidate: PrepCandidate | undefined
-    for await (const row of await this.source.candidates(request.card_id)) {
-      if (row.card_id === request.card_id && row.request_id === request.request_id) { candidate = row; break }
-    }
+    const candidate = (await this.source.candidates(request.card_id)).find(row => row.card_id === request.card_id && row.request_id === request.request_id)
     if (!candidate) {
       await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'ineligible', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
       return { outcome: 'ineligible', explanation: 'That decision is not in the current source observation.' }
