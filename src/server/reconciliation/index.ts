@@ -463,6 +463,20 @@ export class ReconciliationSources {
       const context = this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))
+    for (const id of ids) {
+      const card = snapshot.intentions.data?.cards.find(card => card.id === id), context = contexts.get(id)
+      if (!card || context?.outcome !== 'available') continue
+      const summary = await reconcileDecision(card, context.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
+        snapshot.fleet, undefined, undefined, undefined, snapshot.intentions, 'observe')
+      if (!summary) continue
+      for (const item of queue.items.filter(item => item.cardIds.includes(id))) {
+        const resolution = summary.requests?.find(result => item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary.requests ? summary : undefined)
+        if (resolution) {
+          item.decisionResolution = resolution
+          if (resolution.state !== 'resolved') { item.oneTouch = false; item.readiness = 'needs-readiness-verification' }
+        }
+      }
+    }
     queue.needsWill = needsWill(queue, scene, contexts, null, new Map(), false)
     if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
     queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')

@@ -109,6 +109,45 @@ it('warms cold claim history through MCP without blocking and claims only after 
   } finally { release(); await client.close() }
 }, 20_000)
 
+it.each([false, true])('excludes an answered source while preserving an independent request on the same card: %s', async independentRequest => {
+  const { sources, root, cardId, posts, reads, reconcile } = await setup({ answered: true, independentRequest })
+  await loadedSnapshot(sources)
+  const queue = await sources.claimQueue()
+  const answered = queue.needsWill!.find(item => item.sources.some(source => source.request?.id === 'preview-go'))!
+  expect(answered.decisionResolution).toMatchObject({ state: 'pending', request_id: 'preview-question', source_anchor: expect.any(String) })
+  if (independentRequest) {
+    const open = queue.needsWill!.find(item => item.sources.some(source => source.request?.id === 'independent-go'))!
+    expect(open).toBeDefined()
+    expect(open.decisionResolution).toBeUndefined()
+    expect(open.readiness).toBe('ready-now')
+  }
+  const delivery = sources.workflow.decisionDelivery
+  const messages = delivery && vi.spyOn(delivery, 'messages').mockImplementation(() => new Promise(() => {}))
+  const mcp = new ReconciliationMcp(sources, root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+  const client = new Client({ name: 'answered-claim-regression', version: '1' })
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const started = performance.now()
+    const raw = await Promise.race([client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'answered-source-claim' } }), new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('Claim waited for answer delivery')), 1900); timer.unref()
+    })])
+    expect(performance.now() - started).toBeLessThan(2000)
+    const result = JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
+    expect(result.outcome).toBe(independentRequest ? 'claimed' : 'no-unclaimed-card')
+    if (independentRequest) {
+      expect(result.lease.card_id).toBe(cardId)
+      await client.callTool({ name: 'release_claim', arguments: { lease_token: result.lease_token, reason: 'Independent request verified' } })
+    } else expect(sources.leases.status(cardId)).toBeNull()
+    expect(reconcile).not.toHaveBeenCalled()
+    if (messages) expect(messages).not.toHaveBeenCalled()
+    expect(posts).toEqual([])
+    expect(reads.filter(read => !read.path.endsWith('/query')).every(read => read.method === 'GET')).toBe(true)
+  } finally { await client.close() }
+}, 20_000)
+
 it('loads history for the Preparation view and shows actual missing options per card', async () => {
   const { sources, cardId, removeOptions, reconcile } = await setup()
   removeOptions()

@@ -9,15 +9,27 @@ import type { ReconciliationConfig } from '../../src/server/reconciliation/confi
 
 export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: {
   cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number
+  answered?: boolean; independentRequest?: boolean
   wrapFetch?: (fixtureFetch: typeof fetch) => typeof fetch
 } = {}) {
   const fixture = preparedDecisionFixture()
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
-  card.properties.Status!.value = 'Waiting For'
+  card.properties.Status!.value = options.independentRequest ? 'In Progress' : 'Waiting For'
   const dataSourceId = 'f'.repeat(32)
   const homes = fixture.snapshot.fleet.map((home, index) => ({ ...home, source: { ...home.source, home: join(root, `home-${index}`) } }))
   let historyText = fixture.history.context.blocks[0]!.text
   for (const [index, home] of fixture.snapshot.fleet.entries()) historyText = historyText.replaceAll(home.source.home, homes[index]!.source.home)
+  const extraNotes: string[] = []
+  if (options.answered) extraNotes.push(`Operation: answer_decision\nAnswer: Defer the preview.\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify({ request_id: 'preview-question', answer: 'Defer the preview.', next: { owner: 'Firstmate', status: 'Queued' } })}\nTin Star answer: preview-question`)
+  if (options.independentRequest) {
+    const home = homes[1]!, task = home.observation.data!.tasks[0]!
+    const question = 'Approve an independent bounded audit?'
+    task.queue!.decisions.push({ key: 'independent-go', verb: 'needs-decision', summary: question })
+    const hold = home.observation.data!.backlog!.find(row => row.id === 'preview-go')!
+    home.observation.data!.backlog!.push({ ...hold, id: 'independent-go', title: question, hold_reason: question })
+    extraNotes.push(`Operation: request_decision\nRequested from: Will\nQuestion: ${question}\nTin Star request: ${JSON.stringify({ id: 'independent-question', action: 'Decision', preserve_action: false,
+      source_request: { home: home.source.home, taskId: task.id, id: 'independent-go', kind: 'decision' }, source_question: question, source_spawn_gen: task.identity.spawn_gen })}`)
+  }
   const properties = Object.fromEntries(Object.entries(card.properties).map(([name, prop]) => {
     const value = prop.value
     const type = name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
@@ -50,7 +62,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     if (page && method === 'GET') return Response.json(page)
     if (pages.some(page => url.pathname === `/v1/blocks/${page.id}/children`) && method === 'GET') return Response.json({ results: [{ id: 'background', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Decision background in the card body.' }] } }], has_more: false })
     if (url.pathname === '/v1/comments' && method === 'GET' && pages.some(page => url.searchParams.get('block_id') === page.id)) return commentsAvailable
-      ? Response.json({ results: [{ id: 'request-comment', rich_text: [{ plain_text: requestText }] }], has_more: false })
+      ? Response.json({ results: [requestText, ...extraNotes].map((text, index) => ({ id: `request-comment-${index}`, rich_text: [{ plain_text: text }] })), has_more: false })
       : new Response('', { status: 403 })
     throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`)
   }

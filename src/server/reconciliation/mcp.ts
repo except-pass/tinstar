@@ -86,7 +86,7 @@ type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
 /** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
 function claimNextCards(queue: DeskQueue) {
-  const source = queue.needsWill ?? queue.items
+  const source = (queue.needsWill ?? queue.items).filter(claimRequestCandidate)
   const ordered = [...source.filter(item => item.readiness === 'ready-now'), ...source.filter(item => item.readiness !== 'ready-now')]
   const seen = new Set<string>()
   const cards: Array<{ id: string; readiness: (typeof source)[number]['readiness']; reasons: string[]; item: (typeof source)[number] }> = []
