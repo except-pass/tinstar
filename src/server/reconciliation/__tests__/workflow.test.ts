@@ -2938,11 +2938,37 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
   await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve))
   const actualPort = (server.address() as { port: number }).port
   seedOriginAllowlist(actualPort)
+  const facadeToken = 'isolated-owner-proof-token-0000000000000000'
+  const facade = createTunnelFacade({ upstreamPort: actualPort, installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'owner-chatgpt', token: facadeToken, allowView: false }, configRoot: root })
+  await facade.listen(Number(process.env.TINSTAR_CLAIM_PROOF_FACADE_PORT ?? 0)); servers.push(facade.server)
+  const facadePort = (facade.server.address() as { port: number }).port
   const client = new Client({ name: 'owner-chatgpt-preview', version: '1' }); clients.push(client)
-  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
-  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${actualPort}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${facadePort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${facadeToken}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
   const timings: Array<{ filter: string; ms: number; exact_reads: number; comment_reads: number }> = []
-  const call = async (name: string, args: Record<string, unknown>) => JSON.parse((await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }> }).content[0]!.text)
+  const transcript: unknown[] = []
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = JSON.parse((await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }> }).content[0]!.text)
+    transcript.push({ name, args, response })
+    if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'owner-chatgpt-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
+    return response
+  }
+  const exactArgs = { card_id: id, operation_id: 'http-lost-response' }
+  const held = await call('claim_card', exactArgs)
+  expect(held.outcome).toBe('claimed')
+  f.raw.properties.Owner.select.name = 'Firstmate'
+  expect(await call('claim_card', exactArgs)).toMatchObject({ outcome: 'claimed', lease_token: held.lease_token, lease: held.lease })
+  expect(await call('claim_card', { card_id: id, operation_id: 'http-held', lease_token: held.lease_token })).toMatchObject({ outcome: 'held' })
+  await call('release_claim', { lease_token: held.lease_token, reason: 'Verify new grant admission' })
+  expect(await call('claim_card', { card_id: id, operation_id: 'http-refuse' })).toMatchObject({ outcome: 'unavailable', issues: ['Owner must be Will'], message: expect.stringContaining('owning mate must fix or retag') })
+  f.raw.properties.Owner.select.name = 'Will'
+
+  for (const [field, malformed] of Object.entries({ Owner: { select: { name: 'Firstmate' } }, Status: { status: { name: 'Backlog' } }, 'Will action': { multi_select: [] }, 'Waiting For': { rich_text: [{ plain_text: 'Unstructured owner ask' }] }, 'Waiting For Type': { select: { name: 'Event' } }, 'Waiting For ID': { rich_text: [] } })) {
+    const original = structuredClone(f.raw.properties[field])
+    Object.assign(f.raw.properties[field], malformed)
+    expect(await call('claim_card', { card_id: id, operation_id: `http-strict-${field}` })).toMatchObject({ outcome: 'unavailable', message: expect.stringContaining('owning mate must fix or retag') })
+    f.raw.properties[field] = original
+  }
+  f.comments.unshift({ id: 'old-do', created_time: new Date(Date.now() - 10 * 86400_000).toISOString(), rich_text: [{ plain_text: 'Requested from: Will\nQuestion: Implement?\nTin Star request: {"id":"old-do","action":"Do"}' }] })
   // The independent census and timestamps are ready before the proof begins.
   await sources.workViews()
   for (const filters of [{ will_action: 'Decision' }, { initiative: 'Tin Star' }, { area: 'Engineering' }, { max_age_days: 1 }, { will_action: 'Decision', initiative: 'Tin Star', area: 'Engineering', max_age_days: 1 }]) {
@@ -2957,6 +2983,14 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
     expect(timings.at(-1)!.ms).toBeLessThan(10_000)
     await call('release_claim', { lease_token: selected.lease_token, reason: 'Preview filter checked' })
   }
+  for (const [index, filters] of [{ will_action: 'Elevated command' }, { initiative: 'No matching initiative' }, { area: 'No matching area' }, { max_age_days: 0 }].entries()) {
+    expect(await call('claim_next_card', { operation_id: `no-match-${index}`, ...filters })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  }
+  expect(await call('claim_next_card', { operation_id: 'too-old', will_action: 'Decision', max_age_days: 0 })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const willWait = structuredClone(f.raw.properties['Waiting For'])
+  f.raw.properties['Waiting For'].rich_text[0].plain_text += '\n' + waitLine({ type: 'Event', id: 'security', dependency: 'Security review', unblocks_when: 'Review complete', follow_up_by: 'Firstmate' })
+  expect(await call('claim_next_card', { operation_id: 'independent-wait', will_action: 'Decision' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  f.raw.properties['Waiting For'] = willWait
   const selected = await call('claim_next_card', { operation_id: 'preview-bounce-claim', area: 'Engineering' })
   const reason = 'The mate can resolve this without the owner'
   expect(await call('not_for_me', { card_id: id, operation_id: 'preview-bounce', lease_token: 'wrong-token', reason })).toMatchObject({ code: 'claim-lost' })
@@ -2976,8 +3010,37 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
   expect(notice).toBeDefined()
   expect(notice!.body).toContain('/fixture/mate/claim-filter')
   expect(await call('claim_next_card', { operation_id: 'after-bounce', area: 'Engineering' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  // A UI touch must never replace the last responsible mate route.
+  wrong.properties['First Mate tasks'].rich_text = []
+  wrong.properties['Last touched by'].rich_text = [{ plain_text: 'Tin Star UI' }]
+  f.comments.push({ id: 'mate-ask', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Clawson","mate-ask"]' }] })
+  const fallback = await call('claim_card', { card_id: secondId, operation_id: 'http-fallback' })
+  expect(fallback.outcome).toBe('claimed')
+  expect(await call('not_for_me', { card_id: secondId, operation_id: 'http-fallback-bounce', lease_token: fallback.lease_token, reason: 'Clawson can decide' })).toMatchObject({ outcome: 'saved' })
+  expect((await sources.currentCard(secondId)).properties.Owner!.value).toBe('Clawson')
+  expect((await sources.currentCard(secondId)).properties['Waiting For ID']!.value).toBe('Clawson')
+  // Exercise the real daily census/report service with legacy structured tags.
+  wrong.properties.Owner.select.name = 'Firstmate'
+  wrong.properties['Will action'].multi_select = [{ name: 'Approval' }]
+  wrong.properties['Waiting For'].rich_text = [{ plain_text: 'Will to approve the exception' }]
+  wrong.properties['Waiting For ID'].rich_text = []
+  const proseOnlyId = 'd'.repeat(32), proseOnly = structuredClone(wrong)
+  proseOnly.id = proseOnlyId
+  proseOnly.properties['Will action'].multi_select = []
+  f.pages.set(proseOnlyId, proseOnly)
+  const reportRoot = await mkdtemp(join(tmpdir(), 'http-malformed-')); roots.push(reportRoot)
+  const reports = new FirstmateUpdates(f.sources(reportRoot), reportRoot, async () => ({ deliveryEnabled: true }), () => now)
+  await reports.sweep(true); now += 10_001; await reports.sweep(true)
+  const report = (await reports.bridgeWork()).pending.find(row => row.body.includes('Malformed Needs Will ask'))
+  expect(report).toBeDefined()
+  expect(report!.body).toContain(secondId)
+  expect(report!.body).not.toContain(proseOnlyId)
+  await reports.sweep(true)
+  expect((await reports.bridgeWork()).pending.filter(row => row.body.includes('Malformed Needs Will ask'))).toHaveLength(1)
+  transcript.push({ daily_malformed_report: report })
+  if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'owner-chatgpt-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
   if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'http-timings.json'), JSON.stringify({ port: actualPort, caller: 'owner-chatgpt', source: 'isolated Notion fixture; real HTTP MCP and durable lease/bridge stores', timings, bounce: 'confirmed reason, mate wait, cleared badges, bridge offer and lease release; absent on next claim' }, null, 2))
-}, 30_000)
+}, 60_000)
 
 it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-notice'])('returns a leased ask using the last mate touch (%s) and keeps failed returns recoverable', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'claim-bounce-')); roots.push(root)

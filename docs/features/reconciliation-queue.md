@@ -12,8 +12,8 @@ MCP `get_work_views` refreshes the source census and bounded request histories
 (up to 20 candidate cards), bypassing previously cached history. `claim_next_card`
 refreshes the census, filters candidates from structured fields and cached request
 ages, then reads only the selected candidate properties and history fresh.
-Malformed asks remain visible for verification and daily Firstmate reporting;
-they cannot receive a new next-card lease.
+Claim admission and malformed-ask reporting follow the
+[card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
 Foreground history waits have a ten-second budget; unfinished reads continue
 warming the shared cache. The response reports how many histories were inspected
 and leaves the remaining rows at verification-required readiness with unknown age.

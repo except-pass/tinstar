@@ -430,7 +430,7 @@ operation-id replays also include these fields, using current queue evidence;
 when evidence for the card is unavailable, `readiness` is `unknown` and
 `readiness_reasons` explains the missing evidence. Check the card before acting
 when it is not certified ready. New leases skip parked/no-request, future or
-conditional, unverified, Done and Archived candidates. New next-card leases
+conditional, unverified, Done and Archived candidates. New next-card and exact-card leases
 require exact structured fields: Owner `Will`, Status `Waiting For`, at least one
 `Will action` of `Decision`, `Do`, `Merge`, `Elevated command`, `Waiting For`
 starting `Will:`, `Waiting For Type` `Actor`, and `Waiting For ID` `Will`.
@@ -440,7 +440,9 @@ Eligibility is checked before claiming and again in the lease allocation
 transaction; a Tin Star source write during queue/history collection or the fresh
 exact-card read invalidates that snapshot, and pending source writes prevent
 allocation. An identical retry or held-token call retains its
-existing lease, even if readiness has since changed.
+existing lease, even if readiness or strict fields have since changed. A refused
+new exact-card claim identifies failing fields and directs the owning mate to
+fix or retag the card.
 
 Generic claims refresh the property census, enqueue missing history through the
 [shared bounded history loader](decision-desk-foundation.md#read-only-preparer-evidence),
@@ -453,8 +455,8 @@ metadata only; use `get_work` with `details: true` for the selected card's prose
 
 Optional `will_action`, `initiative`, `area`, and `max_age_days` filters intersect.
 Action and area use exact labels; initiative accepts its exact label or relation
-ID. Max age is elapsed days since the oldest recorded open Will request, not card
-edit time. Unknown ages do not satisfy this filter; `get_work_views` loads the
+ID. Max age is elapsed days since the oldest recorded open Will request matching
+the card’s current action tags, not card edit time. Unknown ages do not satisfy this filter; `get_work_views` loads the
 existing bounded request history when needed. The census and cached timestamps
 narrow candidates before individual reads. The selected candidate gets fresh
 properties and comment history; a stale or newly answered candidate is skipped.
@@ -465,7 +467,8 @@ a one-line reason. The workflow writer records that reason, clears all Will
 badges, preserves worker links and independent waits, and replaces the Will wait
 with a typed mate blocker and a future check-in. Declared First Mate tasks take
 precedence; otherwise the last mate touch or retained workflow receipt supplies
-the mate. The existing Firstmate workflow bridge receives the reason and exact
+the mate; owner and Tin Star UI/MCP identities are excluded from that fallback.
+The existing Firstmate workflow bridge receives the reason and exact
 route; Firstmate routes the notification to that mate. Confirmed storage of both
 the card note and bridge notice precedes lease release. Unknown mate, failed note
 or notice storage retains the lease and reports the failure; retry the identical
@@ -475,7 +478,9 @@ for the recorded return and current lease before retrying.
 
 The existing Firstmate workflow-notice surface also receives one daily UTC
 malformed-asks report, grouped by declared mate, from a fresh complete census.
-It lists each violating field and explicitly labels unknown mate ownership.
+It selects active asks using structured owner/identity fields or action tags
+(including legacy tags such as `Approval`), without inferring asks from free-text
+Will keywords. It lists each violating field and explicitly labels unknown mate ownership.
 It adds no dispatch, status or delivery channel. `search_work` owner/status
 filters and `coverage.intentions` retain their existing contracts.
 

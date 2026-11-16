@@ -140,6 +140,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | kind | Inputs / changes |
 | --- | --- |
 | `submit_for_review`, `accept_review`, `request_review_changes` | See [deployed feature review](#deployed-feature-review) for evidence, response and recovery contracts. |
+| `not_for_me` | Held lease and one-line `reason`; see the [card return contract](reconciliation-mcp.md#session-scoped-card-leases). |
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`, optional exact `resolve_wait`. Firstmate is always Queued. Leaving Waiting For requires that exact wait; another remaining wait keeps the card Waiting For. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |

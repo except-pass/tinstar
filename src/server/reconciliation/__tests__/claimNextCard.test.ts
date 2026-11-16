@@ -396,8 +396,8 @@ it('replays a lost exact claim response after strict fields change and permits r
   current.properties.Owner!.value = 'Firstmate'
   const replay = await f.call('claim_card', args)
   expect(replay).toEqual(first)
-  expect(await f.call('claim_card', { card_id: current.id, operation_id: 'new-exact' })).toMatchObject({ outcome: 'unavailable', issues: ['Owner must be Will'], message: expect.stringContaining('owning mate must fix or retag') })
   await f.call('release_claim', { lease_token: replay.lease_token, reason: 'Returned to mate' })
+  expect(await f.call('claim_card', { card_id: current.id, operation_id: 'new-exact' })).toMatchObject({ outcome: 'unavailable', issues: ['Owner must be Will'], message: expect.stringContaining('owning mate must fix or retag') })
   expect(f.leases.status(current.id)).toBeNull()
 })
 
