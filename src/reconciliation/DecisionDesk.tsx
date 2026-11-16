@@ -18,19 +18,18 @@ function Prose({ children }: { children: string }) {
 function Section({ label, children }: { label: string; children: ReactNode }) { return <section className="dd-section"><h3 className="dd-eyebrow">{label}</h3>{children}</section> }
 export function DecisionDesk() {
   const workspace = useDeskWorkspace()
-  const [consumedTarget, setConsumedTarget] = useState<string | null>(null)
   const entries = workspace.queue?.needsWill ?? workspace.queue?.items ?? []
   const originKey = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' ? workspace.origin.target.id : null
   const target = originKey ?? workspace.state?.queueItemId
   const navigation = workspace.state?.navigation
   const targetIdentity = JSON.stringify([originKey, workspace.state?.queueItemId, workspace.state?.queueCardId, workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : null, navigation?.revision])
-  const ignoreTarget = consumedTarget === targetIdentity
+  const ignoreTarget = workspace.consumedDecisionTarget === targetIdentity
   const newestNavigation = navigation?.revision === workspace.state?.revision ? navigation?.cardId : undefined
   const requested = ignoreTarget ? undefined : originKey ? entries.find(item => item.id === originKey)?.cardIds[0]
     : newestNavigation ?? workspace.state?.queueCardId ?? entries.find(item => item.id === target)?.cardIds[0] ?? (workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : undefined) ?? navigation?.cardId
   const requestedKey = ignoreTarget ? undefined : originKey ?? (!newestNavigation && !workspace.state?.queueCardId ? workspace.state?.queueItemId ?? undefined : undefined)
   const pendingTarget = !ignoreTarget && !!originKey && !requested
-  const desk = useDecisionDesk(requested, pendingTarget, requestedKey, () => setConsumedTarget(targetIdentity))
+  const desk = useDecisionDesk(requested, pendingTarget, requestedKey, () => workspace.consumeDecisionTarget(targetIdentity))
   const handledTarget = useRef<string | null>(null)
   const [tab, setTab] = useState<'review' | 'preparation'>('review'), [sourceOpen, setSourceOpen] = useState(false)
   const packet = desk.claim?.packet
@@ -45,7 +44,7 @@ export function DecisionDesk() {
     void desk.claimCard(requested, requestedKey)
   }, [desk.busy, desk.currentSession, requested, requestedKey, targetIdentity, packet?.packet.binding.card_id, packet?.packet.binding.request_key])
   const openSource = () => setSourceOpen(value => !value)
-  const nextWithoutTarget = () => { setConsumedTarget(targetIdentity); workspace.clearOrigin?.(); if (desk.currentSession) void desk.claimAvailable() }
+  const nextWithoutTarget = () => { workspace.consumeDecisionTarget(targetIdentity); workspace.clearOrigin?.(); if (desk.currentSession) void desk.claimAvailable() }
   const counts = desk.snapshot?.counts
   return <section className="decision-desk" aria-label="Decisions" data-presentation-scene data-scene-id={workspace.connection?.scene_id} data-revision={workspace.state?.revision}>
     <header className="dd-top"><div className="dd-brand"><span aria-hidden="true">✦</span> Tin Star <span className="dd-slash">/</span> <strong>Decision Desk</strong></div><nav aria-label="Decision Desk views">{(['review', 'preparation'] as const).map(view => <button key={view} type="button" aria-current={tab === view ? 'page' : undefined} onClick={() => setTab(view)}>{view === 'review' ? 'Review' : 'Preparation'}</button>)}</nav></header>

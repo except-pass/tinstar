@@ -21,6 +21,7 @@ function overviewTarget(target: AskReturn['target']) {
 
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
+  consumedDecisionTarget: string | null; consumeDecisionTarget: (target: string) => void
   views?: WorkspaceHistory; origin?: AskReturn; clearOrigin?: () => void
   queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void; workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>
 }
@@ -36,6 +37,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   decisionsActive?: boolean; decisionDeskActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
+  const [consumedDecisionTarget, consumeDecisionTarget] = useState<string | null>(null)
   const [history, setHistory] = useState(false)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
@@ -97,7 +99,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
+  const workspace = { consumedDecisionTarget, consumeDecisionTarget, views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
     <AskProvider decisionUnavailable={!!queueError || !!floor.error} decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
       if (destination.section === 'overview') search.remember()

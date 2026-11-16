@@ -91,7 +91,16 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     pending.review_session_token ??= context.current.token
     pending.lease_token ??= context.current.lease
     persist()
-    const response = await deskCall<{ outcome: string; next?: DeskClaim; message?: string }>('release', pending)
+    const response = await deskCall<{ outcome: string; next?: DeskClaim; code?: string; message?: string }>('release', pending)
+    if (!response.next && response.code && ['claim-lost', 'card-held', 'source-write-pending'].includes(response.code)) {
+      context.current.release = undefined
+      if (response.code !== 'source-write-pending') {
+        context.current.lease = undefined
+        accept({ ...claimRef.current, outcome: 'lease-lost', code: response.code, lease_token: undefined, lease: undefined, message: response.message } as DeskClaim)
+      }
+      persist()
+      throw new Error(response.message ?? 'Lease expired or lost. Re-claim and revalidate before writing. Your selection is retained.')
+    }
     if (!response.next) throw new Error(response.message ?? 'Release not confirmed. Current card retained.')
     context.current.release = undefined
     context.current.selections = {}; context.current.attempts = {}

@@ -7,12 +7,13 @@ import { initialPresentation } from '../presentation'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
-const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.value }))
+const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown>, consumed: null as string | null }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ ...workspace.value, consumedDecisionTarget: workspace.consumed, consumeDecisionTarget: (target: string) => { workspace.consumed = target } }) }))
 
 let leaseToken: string, claimCode: string | undefined
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
+  workspace.consumed = null
   workspace.value = {}
   sessionStorage.clear(); submits = []; outcome = 'not-saved'; claimCode = undefined; leaseToken = 'secret-lease'
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) })
@@ -658,4 +659,56 @@ it.each([
   expect(releases).toHaveLength(3)
   expect(releases[2].operation_id).not.toBe(releases[0].operation_id)
   expect(submits).toHaveLength(0)
+})
+
+it.each(['skip', 'research'])('recovers a definitely rejected %s after expiry, focus and reload without losing selection', async action => {
+  let rejected = false
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/release')) {
+      rejected = true
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'not-saved', code: 'claim-lost', message: 'Expired lease' } }))
+    }
+    return fallback(url, init)
+  })
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  if (action === 'skip') fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+  else {
+    fireEvent.click(screen.getByRole('button', { name: 'Need more research' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Request research & next' }))
+  }
+  await waitFor(() => expect(rejected).toBe(true))
+  await screen.findByRole('button', { name: 'Re-claim & revalidate' })
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  expect(JSON.parse(sessionStorage.getItem('tinstar-decision-review-v1')!).release).toBeUndefined()
+  leaseToken = 'renewed-lease'
+  await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Submit decision & next →' })).toBeEnabled())
+  cleanup(); await ready()
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByText('No prepared decisions ready.')
+  expect(submits).toHaveLength(1)
+  expect(submits[0].lease_token).toBe('renewed-lease')
+})
+
+it('keeps a completed Discuss target consumed across the Workbench and Desk mode boundary', async () => {
+  const first = structuredClone(packet)
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] } }
+  outcome = 'recorded-empty'
+  const view = render(<Decisions />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByText('No prepared decisions ready.')
+  view.rerender(<div aria-label="Workbench mode" />)
+  workspace.value = { ...workspace.value, queue: { items: [] } }
+  packet = { ...packet, packet: { ...packet.packet, binding: { ...packet.packet.binding, card_id: 'b'.repeat(32), request_key: 'request-b' } } }
+  view.rerender(<Decisions />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  const claims = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))
+  expect(JSON.parse(String(claims.at(-1)![1]?.body))).not.toHaveProperty('card_id')
+  expect(screen.queryByText('Requested source request is not ready for review.')).toBeNull()
 })
