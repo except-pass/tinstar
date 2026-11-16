@@ -526,3 +526,75 @@ it('retains an already-held decision when a different request is requested', asy
   expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/release'))).toHaveLength(0)
   expect(submits).toHaveLength(0)
 })
+
+it.each([
+  ['submit', 'manual'], ['submit', 'focus'],
+  ['skip', 'manual'], ['skip', 'focus'],
+  ['research', 'manual'], ['research', 'focus'],
+])('consumes explicit navigation after confirmed %s advancement before %s refresh', async (action, refresh) => {
+  const first = structuredClone(packet)
+  const second = structuredClone(packet)
+  second.id = '00000000-0000-4000-8000-000000000002'
+  second.packet.binding.card_id = 'b'.repeat(32)
+  second.packet.binding.request_key = 'request-b'
+  workspace.value = { state: { revision: 1, queueCardId: first.packet.binding.card_id } }
+  let advanced = false, available = false
+  const claims: Record<string, unknown>[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const path = String(url).split('/').pop()
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    let data: unknown
+    if (path === 'claim') {
+      claims.push(body)
+      data = !advanced ? { outcome: 'held', packet: first, lease_token: 'secret-lease' }
+        : available && !body.card_id ? { outcome: 'held', packet: second, lease_token: 'second-lease' }
+          : { outcome: 'no-prepared-decisions' }
+    } else if (path === 'submit') {
+      submits.push(body); advanced = true
+      data = { outcome: 'recorded-empty', selection: body, operation_id: body.operation_id, next: { outcome: 'no-prepared-decisions' } }
+    } else if (path === 'release') {
+      expect(body.action).toBe(action); advanced = true
+      data = { outcome: 'released', next: { outcome: 'no-prepared-decisions' } }
+    } else return fallback(url, init)
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  const view = render(<Decisions />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  expect(claims[0]).toMatchObject({ card_id: first.packet.binding.card_id })
+  if (action === 'submit') {
+    fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  } else if (action === 'skip') fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+  else {
+    fireEvent.click(screen.getByRole('button', { name: 'Need more research' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Request research & next' }))
+  }
+  await screen.findByText('No prepared decisions ready.')
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh prepared decisions' })).toBeEnabled())
+  available = true
+  if (refresh === 'manual') fireEvent.click(screen.getByRole('button', { name: 'Refresh prepared decisions' }))
+  else await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${second.packet.binding.card_id}`))
+  expect(claims.at(-1)).not.toHaveProperty('card_id')
+  expect(claims.at(-1)).not.toHaveProperty('lease_token')
+  workspace.value = { state: { revision: 2, queueCardId: first.packet.binding.card_id } }
+  view.rerender(<Decisions />)
+  await waitFor(() => expect(claims.at(-1)).toMatchObject({ card_id: first.packet.binding.card_id }))
+})
+
+it.each(['not-saved', 'save-unconfirmed'])('retains exact navigation and operation after %s', async failure => {
+  outcome = failure
+  packet.packet.binding.request_key = 'request-a'
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-a' } }, queue: { items: [{ id: 'request-a', cardIds: [packet.packet.binding.card_id] }] } }
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: failure === 'not-saved' ? 'Retry without advancing' : 'Confirm save status' })
+  await act(async () => { fireEvent.focus(window) })
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: failure === 'not-saved' ? 'Retry without advancing' : 'Confirm save status' }))
+  await waitFor(() => expect(submits).toHaveLength(2))
+  expect(submits[1]).toEqual(submits[0])
+  expect(screen.queryByText('No prepared decisions ready.')).toBeNull()
+})

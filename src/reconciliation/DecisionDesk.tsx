@@ -28,7 +28,7 @@ export function DecisionDesk() {
     : newestNavigation ?? workspace.state?.queueCardId ?? entries.find(item => item.id === target)?.cardIds[0] ?? (workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : undefined) ?? navigation?.cardId
   const requestedKey = ignoreTarget ? undefined : originKey ?? (!newestNavigation && !workspace.state?.queueCardId ? workspace.state?.queueItemId ?? undefined : undefined)
   const pendingTarget = !ignoreTarget && !!originKey && !requested
-  const desk = useDecisionDesk(requested, pendingTarget, requestedKey)
+  const desk = useDecisionDesk(requested, pendingTarget, requestedKey, workspace.state?.revision)
   const handledTarget = useRef<string | null>(null)
   const [tab, setTab] = useState<'review' | 'preparation'>('review'), [sourceOpen, setSourceOpen] = useState(false)
   const packet = desk.claim?.packet

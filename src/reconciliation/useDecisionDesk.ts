@@ -11,11 +11,15 @@ function load(): ReviewContext {
   try { return JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh() } catch { return fresh() }
 }
 const requestKey = (packet: DeskPacket) => `${packet.packet.binding.card_id}:${packet.packet.binding.request_id}`
-export function useDecisionDesk(initialCard?: string, targetPending = false, initialRequestKey?: string) {
+export function useDecisionDesk(initialCard?: string, targetPending = false, initialRequestKey?: string, navigationRevision?: number) {
   const initialTarget = useRef(initialCard)
-  initialTarget.current = initialCard
   const initialRequest = useRef(initialRequestKey)
-  initialRequest.current = initialRequestKey
+  const navigation = useRef({ initialCard, initialRequestKey, navigationRevision })
+  if (navigation.current.initialCard !== initialCard || navigation.current.initialRequestKey !== initialRequestKey || navigation.current.navigationRevision !== navigationRevision) {
+    navigation.current = { initialCard, initialRequestKey, navigationRevision }
+    initialTarget.current = initialCard
+    initialRequest.current = initialRequestKey
+  }
   const context = useRef<ReviewContext>(load())
   const lock = useRef(false), mounted = useRef(true)
   const visibleMeasure = useRef<{ name: string; started: number } | null>(null)
@@ -207,6 +211,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     const saved = await deskCall<DeskResult>('submit', input)
     setResult(saved)
     if (saved.outcome === 'recorded' || saved.outcome === 'recorded-empty') {
+      initialTarget.current = undefined; initialRequest.current = undefined
       setSubmissionRevision(value => value + 1)
       delete context.current.attempts[key]; delete context.current.selections[key]; context.current.recoveryLease = undefined; persist()
       visibleMeasure.current = { name: `decision-desk.submit-visible.${saved.next?.outcome ?? 'unavailable'}`, started }
@@ -225,6 +230,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
       if (response.code && claimRef.current?.packet) accept({ ...claimRef.current, outcome: 'lease-lost', code: response.code })
       return
     }
+    initialTarget.current = undefined; initialRequest.current = undefined
     const released = claimRef.current?.packet
     if (released) { delete context.current.attempts[requestKey(released)]; delete context.current.selections[requestKey(released)]; persist() }
     context.current.release = undefined; setResult(null); setNotice(action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
