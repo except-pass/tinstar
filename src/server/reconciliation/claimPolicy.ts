@@ -45,7 +45,7 @@ export function responsibleMate(card: WorkCard, notes: Array<{ text: string }> =
     const receipt = workflowReceipt(note)
     return receipt ? [JSON.parse(receipt.slice('Tin Star operation: '.length))[0] as unknown] : []
   })]
-  for (const actor of actors) if (typeof actor === 'string' && actor.trim() && !['Will', 'Owner', 'owner-chatgpt', 'Tin Star MCP'].includes(actor)) return { owner: actor, id: actor, tasks: [] }
+  for (const actor of actors) if (typeof actor === 'string' && actor.trim() && !['Will', 'Owner', 'owner-chatgpt', 'Tin Star MCP', 'Tin Star UI'].includes(actor)) return { owner: actor, id: actor, tasks: [] }
   return null
 }
 export function malformedWillAsk(card: WorkCard) {

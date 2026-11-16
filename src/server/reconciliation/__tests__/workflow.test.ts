@@ -2979,7 +2979,7 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
   if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'http-timings.json'), JSON.stringify({ port: actualPort, caller: 'owner-chatgpt', source: 'isolated Notion fixture; real HTTP MCP and durable lease/bridge stores', timings, bounce: 'confirmed reason, mate wait, cleared badges, bridge offer and lease release; absent on next claim' }, null, 2))
 }, 30_000)
 
-it.each(['Clawson', 'missing', 'failed-note', 'failed-notice'])('returns a leased ask using the last mate touch (%s) and keeps failed returns recoverable', async mode => {
+it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-notice'])('returns a leased ask using the last mate touch (%s) and keeps failed returns recoverable', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'claim-bounce-')); roots.push(root)
   const f = fixture()
   f.raw.properties.Owner.select.name = 'Will'
@@ -2987,7 +2987,9 @@ it.each(['Clawson', 'missing', 'failed-note', 'failed-notice'])('returns a lease
   f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Will: Approve the exception' }]
   f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
   f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
-  f.raw.properties['Last touched by'].rich_text = [{ plain_text: mode === 'missing' ? 'owner-chatgpt' : 'Clawson' }]
+  f.raw.properties['Last touched by'].rich_text = [{ plain_text: mode === 'missing' ? 'owner-chatgpt' : mode.startsWith('ui-') ? 'Tin Star UI' : 'Clawson' }]
+  if (mode === 'ui-touch') f.comments.push({ id: 'mate-ask', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Clawson","mate-ask"]' }] })
+  if (mode.startsWith('ui-')) f.comments.push({ id: 'owner-edit', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Tin Star UI","owner-edit"]' }] })
   const sources = f.sources(root), changed = vi.fn(async () => {})
   sources.workflow.onChange = changed
   const held = await sources.leases.claim([id], 'bounce-test', 'Will', 'bounce-test-claim', undefined, true)
@@ -2997,7 +2999,7 @@ it.each(['Clawson', 'missing', 'failed-note', 'failed-notice'])('returns a lease
   if (mode === 'failed-note') f.controls.failNote()
   if (mode === 'failed-notice') changed.mockRejectedValue(new Error('Notice storage unavailable'))
   const result = await update()
-  if (mode === 'missing') {
+  if (mode === 'missing' || mode === 'ui-only') {
     expect(result).toMatchObject({ outcome: 'not-saved', code: 'mate-unknown' })
     expect(sources.leases.status(id)).not.toBeNull()
     expect(f.requests.some(row => row.method === 'PATCH')).toBe(false)
@@ -3016,6 +3018,7 @@ it.each(['Clawson', 'missing', 'failed-note', 'failed-notice'])('returns a lease
   } else expect(result).toMatchObject({ outcome: 'saved', lease_release: { outcome: 'released' } })
   expect(sources.leases.status(id)).toBeNull()
   expect((await sources.currentCard(id)).properties.Owner!.value).toBe('Clawson')
+  expect((await sources.currentCard(id)).properties['Waiting For ID']!.value).toBe('Clawson')
   expect((await sources.currentCard(id)).properties['Will action']!.value).toEqual([])
   expect(f.comments.filter(comment => JSON.stringify(comment).includes(input.reason))).toHaveLength(1)
   expect(changed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'not_for_me', notes: expect.arrayContaining([expect.stringContaining(input.reason)]) }))
