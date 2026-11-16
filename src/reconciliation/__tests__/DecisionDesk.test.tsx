@@ -508,3 +508,21 @@ it('checks a new Discuss request key even when its card is already displayed', a
   expect(screen.getByRole('heading', { name: 'Requested source request is not ready for review.' })).toBeVisible()
   expect(submits).toHaveLength(0)
 })
+
+it('retains an already-held decision when a different request is requested', async () => {
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/claim')) return new Response(JSON.stringify({ ok: true, data: { outcome: 'already-holding', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } } }))
+    return fallback(url, init)
+  })
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'other-request' } }, queue: { items: [{ id: 'other-request', cardIds: ['other-card'] }] } }
+  // Keep the mounted reviewing context while delivering a new destination.
+  fireEvent.click(screen.getByRole('button', { name: 'Preparation' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+  await screen.findByText('This session already holds a different decision. Finish or skip it before switching.')
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/release'))).toHaveLength(0)
+  expect(submits).toHaveLength(0)
+})

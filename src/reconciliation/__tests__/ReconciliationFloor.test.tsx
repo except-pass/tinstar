@@ -244,7 +244,7 @@ it.each(['focus', 'open-queue'] as const)('renders MCP %s over diagnostics befor
       const health = screen.queryByText('Source health')
       if (health) expect(health).not.toBeVisible()
       if (type === 'focus') expect(screen.getByLabelText('Inspector')).toBeTruthy()
-      else expect(screen.getByLabelText('Selected decision')).toBeVisible()
+      else expect(screen.getByRole('region', { name: 'Decisions' })).toBeVisible()
       acknowledgments.push(ack)
     }
     const commands = command ? [command] : []

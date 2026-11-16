@@ -104,7 +104,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
       review_session_token: context.current.token, ...(context.current.lease && !revalidate ? { lease_token: context.current.lease } : {}), ...(cardId ? { card_id: cardId } : {}),
     })
     if (!value?.outcome) throw new Error('Prepared claim could not be verified. Backend unavailable.')
-    if (!pending && value.packet && (exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)) {
+    if (!pending && value.outcome !== 'already-holding' && value.packet && (exactRequestKey && value.packet.packet.binding.request_key !== exactRequestKey || exactPacketId && value.packet.id !== exactPacketId)) {
       const refused: DeskClaim = { outcome: 'requested-unavailable', message: 'The requested decision is not ready or is held. No substitute decision is shown.', lease_token: value.lease_token }
       const operation = `return-release:${context.current.claimOperation}`
       accept(refused)
