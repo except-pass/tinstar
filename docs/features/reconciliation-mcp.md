@@ -459,8 +459,8 @@ ID. Max age is elapsed days since the oldest recorded open Will request matching
 the card’s current action tags, not card edit time. Unknown ages do not satisfy this filter; `get_work_views` loads the
 existing bounded request history when needed. The census and cached timestamps
 narrow candidates before individual reads. The selected candidate gets fresh
-properties and comment history; a stale or newly answered candidate is skipped.
-No unrelated histories are refreshed on the claim path.
+properties and checks cached comment history; a stale or answered candidate is
+skipped. Missing histories warm through the shared bounded loader.
 
 `not_for_me(card_id, operation_id, lease_token, reason)` returns a leased ask with
 a one-line reason. The workflow writer records that reason, clears all Will

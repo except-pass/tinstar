@@ -4,14 +4,11 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-MCP `get_work_views` refreshes the source census for each
-request and refresh the same bounded request histories (up to 20 candidate cards),
-bypassing previously cached history.
-
 MCP `get_work_views` refreshes the source census and bounded request histories
 (up to 20 candidate cards), bypassing previously cached history. `claim_next_card`
 refreshes the census, filters candidates from structured fields and cached request
-ages, then reads only the selected candidate properties and history fresh.
+ages, then reads only the selected candidate properties fresh. Missing histories
+warm through the shared bounded loader without blocking the claim.
 Claim admission and malformed-ask reporting follow the
 [card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
 Foreground history waits have a ten-second budget; unfinished reads continue

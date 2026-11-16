@@ -291,9 +291,8 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
-  async claimHistory(id: string) { return this.context.commentDetails(id, true) }
+  async claimHistory(id: string) { return this.context.cachedComments(id) }
   async willAskCensus() { return this.workReader.query({}) }
-  async claimViews(filters: ClaimFilters) { return this.queue(undefined, undefined, false, 'claim', filters) }
   mainWaitNotionConfig() { return this.config.notion }
   releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
@@ -463,7 +462,7 @@ export class ReconciliationSources {
   /** A claim allocates a card; it must not await the board's comment history
    * or operational reconciliation. Exact active-card validation still happens
    * before allocation, and get_work remains the explicit prose reader. */
-  async claimQueue() {
+  async claimQueue(filters: ClaimFilters = {}) {
     const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
@@ -494,12 +493,18 @@ export class ReconciliationSources {
       item.requests.push(...decisionRequests(this.context.cachedClaimBlocks(id)).filter(request => request.answered)
         .map(request => ({ ...request, cardId: id })))
     }
+    const matching = new Set(queue.claimCards.filter(card => matchesClaimFilters(card, filters,
+      oldestOpenRequestSince(currentWillRequests(contexts.get(card.id)?.blocks ?? [], card.properties['Will action']?.value)))).map(card => card.id))
+    queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))
+    queue.needsWill = queue.needsWill.filter(item => item.cardIds.some(id => matching.has(id)))
+    queue.claimCards = queue.claimCards.filter(card => matching.has(card.id))
+    if (filters.max_age_days !== undefined) queue.warnings.push('Max age uses recorded request history; cards with unknown request age are excluded. Refresh get_work_views to load request ages.')
     if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
     queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
     return workReadback(queue)
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' | 'claim' = 'reconcile', filters: ClaimFilters = {}) {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {
     let reviewWarning: string | null = null
     const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
@@ -515,18 +520,6 @@ export class ReconciliationSources {
       states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
-    if (mode === 'claim') {
-      // Narrow from the census and cached request timestamps before reading any
-      // individual card. Unknown request age cannot satisfy an age limit.
-      const matching = new Set(queue.claimCards.filter(card => {
-        const requests = currentWillRequests(this.context.cachedComments(card.id)?.blocks ?? [], card.properties['Will action']?.value)
-        const since = oldestOpenRequestSince(requests)
-        return matchesClaimFilters(card, filters, since)
-      }).map(card => card.id))
-      queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))
-      queue.claimCards = queue.claimCards.filter(card => matching.has(card.id))
-      if (filters.max_age_days !== undefined) queue.warnings.push('Max age uses recorded request history; cards with unknown request age are excluded. Refresh get_work_views to load request ages.')
-    }
     if (this.releaseDesk && snapshot.intentions.status === 'fresh' && snapshot.intentions.coverage === 'complete' && snapshot.intentions.data) {
       try { queue.items.push(...await this.releaseDesk()) }
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
@@ -543,10 +536,6 @@ export class ReconciliationSources {
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
     const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     let contexts = collectedContexts
-    if (mode === 'claim') for (const id of ids) {
-      const cached = this.context.cachedComments(id)
-      if (cached) collectedContexts.set(id, cached)
-    }
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {

@@ -2978,7 +2978,7 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
     const reads = f.requests.slice(before).filter(row => row.method === 'GET' && new URL(row.url).pathname.startsWith('/v1/pages/'))
     expect(reads.map(row => new URL(row.url).pathname)).toEqual([`/v1/pages/${id}`])
     const commentReads = f.requests.slice(before).filter(row => row.method === 'GET' && new URL(row.url).pathname === '/v1/comments')
-    expect(commentReads).toHaveLength(1)
+    expect(commentReads).toHaveLength(0)
     timings.push({ filter: JSON.stringify(filters), ms: Math.round(performance.now() - start), exact_reads: reads.length, comment_reads: commentReads.length })
     expect(timings.at(-1)!.ms).toBeLessThan(10_000)
     await call('release_claim', { lease_token: selected.lease_token, reason: 'Preview filter checked' })

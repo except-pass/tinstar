@@ -75,9 +75,8 @@ export interface PresentationReaders {
   getWork?(input: unknown): Promise<unknown>
   currentCard?(id: string): Promise<import('./workReader').WorkCard>
   workViews?(): Promise<QueueRead>
-  claimQueue?(): Promise<QueueRead>
-  claimViews?(filters: ClaimFilters): Promise<QueueRead>
-  claimHistory?(id: string): Promise<CardContextRead>
+  claimQueue?(filters?: ClaimFilters): Promise<QueueRead>
+  claimHistory?(id: string): Promise<CardContextRead | undefined>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
   updateWork?(input: UpdateWorkInput, actor: string): Promise<unknown>
   createWork?(input: CreateWorkInput, actor: string): Promise<unknown>
@@ -91,7 +90,7 @@ type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
 /** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
 function claimNextCards(queue: DeskQueue) {
-  const source = (queue.needsWill ?? queue.items).filter(claimRequestCandidate)
+  const source = queue.needsWill ?? queue.items
   const ordered = [...source.filter(item => item.readiness === 'ready-now'), ...source.filter(item => item.readiness !== 'ready-now')]
   const seen = new Set<string>()
   const cards: Array<{ id: string; readiness: (typeof source)[number]['readiness']; reasons: string[]; item: QueueItem & Partial<NeedsWillItem> }> = []
@@ -158,7 +157,7 @@ export class ReconciliationMcp {
           exact = await exactCard(input.card_id)
           cards = [input.card_id]
         } else {
-          queue = await (this.readers.claimViews?.(input) ?? this.readers.workViews?.() ?? this.readers.queue())
+          queue = await (this.readers.claimQueue?.(input) ?? this.readers.workViews?.() ?? this.readers.queue())
           if (!hasQueue(queue)) return queue
           candidates = claimNextCards(queue).filter(candidate => {
             const card = hasQueue(queue) ? queue.claimCards?.find(card => card.id === candidate.id) : undefined

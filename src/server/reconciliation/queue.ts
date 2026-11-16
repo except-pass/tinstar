@@ -133,6 +133,7 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
   if (wait && (ownerDecision || immediateRequest || strictlyNeedsWill(card))) {
     for (const line of wait.split('\n').filter(line => line.trim())) {
       const typed = parseWaitLine(line)
+      if (!typed && !strictlyNeedsWill(card) && !line.startsWith('Will:')) continue
       if (typed ? typed.type !== 'Actor' || typed.id !== 'Will' : !line.startsWith('Will:')) lower(item, 'future-or-conditional', `Published dependency/wait: ${line}`)
       else restrictAction(item, typed?.dependency ?? line)
     }
@@ -384,7 +385,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const questionLinks = (call.headline.match(/https:\/\/[^\s<>"']+/g) ?? []).map(url => url.replace(/[),.;!?]+$/, '')).filter(url => parsePullUrl(url))
       for (const url of questionLinks) link(item, url)
       explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
-      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision)
+      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision, strictlyNeedsWill(card))
       if (canonicalRelationship && known.some(card => !accountable(card, request.home))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
