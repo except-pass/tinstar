@@ -81,8 +81,8 @@ repair source links, or take a lease. On a cold cache it honestly reports missin
 coverage. Preparation admission and the Desk snapshot separately populate caches
 through the existing read-only body/comment readers, without queue refresh or
 answer reconciliation. Prepare now reads only the selected queue card;
-replenishment (when enabled) and the snapshot read observed queue cards with at
-most four cards in flight. These reads retain the existing per-card bounds and
+replenishment (when enabled) and the snapshot read observed queue cards with
+one card consumed at a time before reading the next. These reads retain the existing per-card bounds and
 30-second cache, including cached failures. Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches
 must be resolved, complete and unexpired for readiness; the earlier cache expiry

@@ -29,7 +29,7 @@ const unconfiguredPreparation = (): PreparationReport => ({
 export class PreparedReviews {
   private initialized?: Promise<void>
   reportPreparation: () => Promise<PreparationReport> | PreparationReport = unconfiguredPreparation
-  refreshEvidence: () => Promise<void> = async () => {}
+  refreshEvidence: () => Promise<Map<string, DecisionEvidence> | void> = async () => {}
   constructor(readonly packets: DecisionPackets, readonly scope: string, private evidence: (card: string) => DecisionEvidence,
     private queue: () => PreparedQueue, private now = Date.now) {}
   private get leases() { return this.packets.leases }
@@ -85,11 +85,11 @@ export class PreparedReviews {
   /** Read history before the storage transaction; never dispatch research or write source. */
   async snapshot() {
     await this.initialize()
-    await this.refreshEvidence()
+    const collected = await this.refreshEvidence()
     const prep = await this.reportPreparation()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
-      const evidenceByCard = new Map(queue.card_ids.map(card => [card, this.evidence(card)]))
+      const evidenceByCard = new Map(queue.card_ids.map(card => [card, collected?.get(card) ?? this.evidence(card)]))
       const sourceFailures = [...evidenceByCard].flatMap(([card_id, evidence]) => {
         const reasons = [...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)]
         return reasons.length ? [{ card_id, reasons: [...new Set(reasons)] }] : []

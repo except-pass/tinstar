@@ -82,12 +82,13 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: async cardId => {
-      await this.readPreparationHistory(cardId)
-      return this.prepCandidates(cardId)
-    }, coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status()
-    this.preparedReviews.refreshEvidence = () => this.readPreparationHistory()
+    this.preparedReviews.refreshEvidence = async () => {
+      const evidence = new Map<string, ReturnType<typeof projectDecisionEvidence>>()
+      for await (const id of this.readPreparationHistory()) evidence.set(id, this.preparationEvidence(id))
+      return evidence
+    }
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -167,15 +168,20 @@ export class ReconciliationSources {
     return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
   }
 
-  /** Existing bounded, coalesced 30-second body/comment reads, with at most four
-   * cards in flight. No workflow reads, reconciliation or source writes. An
+  /** Existing bounded, coalesced 30-second body/comment reads, consumed one card
+   * at a time. No workflow reads, reconciliation or source writes. An
    * explicit request reads only its card; a desk/replenishment pass reads the
    * observed decision queue. Evidence remains a separate pure projection. */
-  private async readPreparationHistory(cardId?: string) {
+  private async *readPreparationHistory(cardId?: string) {
     const ids = this.decisionQueue().card_ids.filter(id => !cardId || id === cardId)
-    for (let offset = 0; offset < ids.length; offset += 4) {
-      await Promise.all(ids.slice(offset, offset + 4).map(id => this.context.details(id)))
+    for (const id of ids) {
+      await this.context.details(id)
+      yield id
     }
+  }
+
+  private async *preparationCandidates(cardId?: string) {
+    for await (const id of this.readPreparationHistory(cardId)) yield* this.prepCandidates(id)
   }
 
   /** Eligible-source facts for one preparation pass. Admission itself rechecks leases. */

@@ -7,7 +7,7 @@ import { ReconciliationSources } from '../../src/server/reconciliation'
 import { NotionApi } from '../../src/server/reconciliation/notionApi'
 import type { ReconciliationConfig } from '../../src/server/reconciliation/config'
 
-export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null) {
+export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: { cards?: number; onRead?: () => void } = {}) {
   const fixture = preparedDecisionFixture()
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
   card.properties.Status!.value = 'Waiting For'
@@ -26,17 +26,19 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   // The source requires these board schema fields even if a page leaves them empty.
   const schema = { ...properties, 'Last touched by': { type: 'select' }, 'Sub-item': { type: 'relation' }, Link: { type: 'url' } }
   const raw = { object: 'page', id: card.id, url: card.url, archived: false, in_trash: false, last_edited_time: new Date().toISOString(), properties }
+  const pages = Array.from({ length: options.cards ?? 1 }, (_, index) => index === 0 ? raw : { ...raw, id: (index + 100).toString(16).padStart(32, '0'), properties: { ...properties, 'First Mate tasks': { id: 'First Mate tasks', type: 'rich_text', rich_text: [] } } })
   const reads: Array<{ path: string; method: string }> = []
   let commentsAvailable = true
   let requestText = historyText
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input)), method = init?.method ?? 'GET'
+    options.onRead?.()
     reads.push({ path: url.pathname, method })
     if (url.origin !== 'https://api.notion.com') throw new Error('Fixture transport only supports synthetic Notion reads')
     if (url.pathname === `/v1/data_sources/${dataSourceId}` && method === 'GET') return Response.json({ object: 'data_source', properties: schema })
-    if (url.pathname === `/v1/data_sources/${dataSourceId}/query` && method === 'POST') return Response.json({ results: [raw], has_more: false })
-    if (url.pathname === `/v1/blocks/${card.id}/children` && method === 'GET') return Response.json({ results: [{ id: 'background', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Decision background in the card body.' }] } }], has_more: false })
-    if (url.pathname === '/v1/comments' && method === 'GET' && url.searchParams.get('block_id') === card.id) return commentsAvailable
+    if (url.pathname === `/v1/data_sources/${dataSourceId}/query` && method === 'POST') return Response.json({ results: pages, has_more: false })
+    if (pages.some(page => url.pathname === `/v1/blocks/${page.id}/children`) && method === 'GET') return Response.json({ results: [{ id: 'background', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Decision background in the card body.' }] } }], has_more: false })
+    if (url.pathname === '/v1/comments' && method === 'GET' && pages.some(page => url.searchParams.get('block_id') === page.id)) return commentsAvailable
       ? Response.json({ results: [{ id: 'request-comment', rich_text: [{ plain_text: requestText }] }], has_more: false })
       : new Response('', { status: 403 })
     throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`)
