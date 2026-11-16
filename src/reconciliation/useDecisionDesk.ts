@@ -3,7 +3,7 @@ import { deskCall, type DeskClaim, type DeskPacket, type DeskPolicy, type DeskRe
 
 const storageKey = 'tinstar-decision-review-v1'
 interface ReviewContext {
-  create: string; token?: string; id?: string; claimOperation?: string; lease?: string
+  create: string; token?: string; id?: string; claimOperation?: string; lease?: string; recoveryLease?: string
   selections: Record<string, string>; attempts: Record<string, DeskSubmit>; release?: { operation_id: string; action: 'skip' | 'research'; reason: string }
 }
 const fresh = (): ReviewContext => ({ create: crypto.randomUUID(), selections: {}, attempts: {} })
@@ -24,6 +24,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<DeskResult | null>(null)
   const [notice, setNotice] = useState(''), [revision, setRevision] = useState(0)
+  const [submissionRevision, setSubmissionRevision] = useState(0)
   const persist = useCallback(() => {
     try { sessionStorage.setItem(storageKey, JSON.stringify(context.current)) } catch { /* Memory still retains exact capabilities and retry IDs. */ }
     setRevision(value => value + 1)
@@ -56,7 +57,14 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     if (values[2].status === 'fulfilled' && Array.isArray(values[2].value?.sessions)) setSessions(values[2].value.sessions)
   }, [])
   const ensureSession = useCallback(async () => {
-    if (context.current.token) return
+    if (context.current.token) {
+      const { sessions: valid } = await deskCall<{ sessions: DeskSession[] }>('sessions')
+      if (valid.some(session => session.id === context.current.id && Date.parse(session.expires_at) > Date.now())) return
+      context.current.recoveryLease ??= context.current.lease
+      context.current.token = undefined; context.current.id = undefined; context.current.lease = undefined
+      context.current.claimOperation = undefined; context.current.release = undefined
+      context.current.create = crypto.randomUUID()
+    }
     persist()
     const response = await deskCall<{ session: DeskSession; review_session_token: string }>('sessions', {
       operation_id: context.current.create, label: 'Browser review', device: matchMedia('(max-width:660px)').matches ? 'phone' : 'desktop',
@@ -97,11 +105,11 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
       await ensureSession()
       // Server recovery is authoritative after reload. Never generate a new
       // operation for an unresolved answer whose first response was lost.
-      const recovered = await deskCall<{ submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; resolve_wait?: string }> }>('submission-state', { review_session_token: context.current.token })
+      const recovered = await deskCall<{ submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; resolve_wait?: string }> }>('submission-state', { review_session_token: context.current.token, ...(context.current.recoveryLease ? { original_lease_token: context.current.recoveryLease } : {}) })
       const retained = recovered.submissions[0]
-      if (retained && context.current.lease) {
+      if (retained && (context.current.lease || context.current.recoveryLease)) {
         const packet = await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(retained.selection.packet_id)}`)
-        accept({ outcome: 'lease-lost', packet, lease_token: context.current.lease })
+        accept({ outcome: 'lease-lost', packet, lease_token: context.current.lease ?? context.current.recoveryLease })
       }
       const response = await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true)
       const held = response.packet ? response : claimRef.current
@@ -115,7 +123,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
             continue
           }
           context.current.selections[key] = attempt.selection.option_id
-          context.current.attempts[key] ??= { ...attempt.selection, operation_id: attempt.operation_id, lease_token: held.lease_token,
+          context.current.attempts[key] ??= { ...attempt.selection, operation_id: attempt.operation_id, lease_token: context.current.recoveryLease ?? held.lease_token,
             review_session_token: context.current.token, next: attempt.next, ...(attempt.resolve_wait ? { resolve_wait: attempt.resolve_wait } : {}) }
           setResult({ outcome: attempt.state, operation_id: attempt.operation_id, selection: attempt.selection, message: 'Retained answer recovered. Retry the same operation without advancing.' })
         }
@@ -137,6 +145,10 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     context.current.selections[requestKey(packet)] = option; persist()
   }
   const submit = (confirmed = false) => run(async () => {
+    await ensureSession()
+    if (!context.current.lease && claimRef.current?.packet && !context.current.attempts[requestKey(claimRef.current.packet)]) {
+      await claimNext(claimRef.current.packet.packet.binding.card_id, true)
+    }
     const current = claimRef.current, packet = current?.packet
     if (!packet || !current?.lease_token) throw new Error('Re-claim and revalidate before submitting.')
     const key = requestKey(packet), option = context.current.selections[key]
@@ -152,6 +164,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     const saved = await deskCall<DeskResult>('submit', input)
     setResult(saved)
     if (saved.outcome === 'recorded' || saved.outcome === 'recorded-empty') {
+      setSubmissionRevision(value => value + 1)
       delete context.current.attempts[key]; delete context.current.selections[key]; persist()
       visibleMeasure.current = { name: `decision-desk.submit-visible.${saved.next?.outcome ?? 'unavailable'}`, started }
       accept(saved.next ?? { outcome: 'next-unavailable' })
@@ -160,6 +173,8 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     }
   }, true)
   const release = (action: 'skip' | 'research', reason = '') => run(async () => {
+    await ensureSession()
+    if (!context.current.lease) { await claimNext(claimRef.current?.packet?.packet.binding.card_id, true); return }
     context.current.release ??= { operation_id: crypto.randomUUID(), action, reason: reason.trim() || (action === 'skip' ? 'Reviewer skipped without an answer' : 'Reviewer requested more research') }; persist()
     const response = await deskCall<{ outcome: string; next?: DeskClaim; code?: string; message?: string }>('release', { ...context.current.release, review_session_token: context.current.token, lease_token: context.current.lease })
     if (!response.next) {
@@ -172,14 +187,14 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     context.current.release = undefined; setResult(null); setNotice(action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
     accept(response.next)
   })
-  return { claim, parts: claim?.packet ? [claim.packet] : [], snapshot, policy, sessions, busy, error, result, notice, revision,
+  return { claim, parts: claim?.packet ? [claim.packet] : [], snapshot, policy, sessions, busy, error, result, notice, revision, submissionRevision,
     currentSession: context.current.id, selections: context.current.selections, attempts: context.current.attempts,
     select, submit, release, refresh, retryClaim: () => run(async () => {
       const held = await claimNext(claimRef.current?.packet?.packet.binding.card_id, true)
       if (held.packet && held.lease_token) {
         const attempt = context.current.attempts[requestKey(held.packet)]
         if (attempt && (attempt.lease_token !== held.lease_token || attempt.packet_id !== held.packet.id)) {
-          attempt.original_lease_token ??= attempt.lease_token; attempt.lease_token = held.lease_token
+          attempt.original_lease_token ??= attempt.lease_token; attempt.review_session_token = context.current.token; attempt.lease_token = held.lease_token
           attempt.packet_id = held.packet.id; attempt.packet_version = held.packet.version; persist()
         }
         if (held.outcome !== 'packet-invalidated') setResult(null)

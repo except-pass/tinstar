@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     const path = String(url).split('/').pop()!, body = init?.body ? JSON.parse(String(init.body)) : null
     let data: unknown
-    if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', label: 'Browser review', device: 'desktop', held: null }] }
+    if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', expires_at: new Date(Date.now() + 86400000).toISOString(), label: 'Browser review', device: 'desktop', held: null }] }
     else if (path === 'submission-state') data = { submissions: [] }
     else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
     else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [] }
@@ -192,4 +192,65 @@ it('does not resurrect an abandoned invalidated answer into a newly prepared sou
   await waitFor(() => expect(submits).toHaveLength(2))
   expect(submits[1]!.operation_id).not.toBe(first.operation_id)
   expect(submits[1]).toMatchObject({ packet_id: packet.id, packet_version: 2, option_id: 'defer' })
+})
+
+it('renews an expired session on mobile while retaining a selected answer', async () => {
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  let renewed = false
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/sessions')) {
+      if (init?.method === 'GET') return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+      renewed = true
+    }
+    return fallback(url, init)
+  })
+  Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: true }) })
+  await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(renewed).toBe(true))
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  const calls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))
+  expect(JSON.parse(String(calls.at(-1)![1]?.body))).not.toHaveProperty('lease_token')
+})
+
+it('recovers an ambiguous operation through an expired session without changing its write capability or ID', async () => {
+  outcome = 'save-unconfirmed'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Confirm save status' })
+  const original = submits[0]!
+  cleanup()
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  let recovery: Record<string, unknown> | undefined
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/sessions') && init?.method === 'GET') return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+    if (String(url).endsWith('/submission-state')) recovery = JSON.parse(String(init?.body))
+    return fallback(url, init)
+  })
+  await ready()
+  await waitFor(() => expect(recovery).toMatchObject({ original_lease_token: 'secret-lease' }))
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+  await screen.findByText('No prepared decisions ready.')
+  expect(submits[1]).toEqual(original)
+})
+
+it('refreshes reviewed metrics after consecutive successes with identical notices', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/metrics')) return new Response(JSON.stringify({ ok: true, data: { reviewed_today_utc: submits.length, scope: 'test', recording_started_at: new Date().toISOString() } }))
+    if (String(url).endsWith('/submit')) {
+      const input = JSON.parse(String(init?.body)); submits.push(input)
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'recorded', operation_id: input.operation_id, selection: input, next: { outcome: 'held', packet, lease_token: leaseToken, lease: { expires_at: new Date(Date.now() + 60000).toISOString() } } } }))
+    }
+    return fallback(url, init)
+  })
+  await ready()
+  for (let count = 1; count <= 2; count++) {
+    fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+    await waitFor(() => expect(document.querySelector('.dd-status')?.textContent).toContain(`Reviewed ${count}`))
+  }
 })
