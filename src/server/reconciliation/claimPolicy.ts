@@ -44,7 +44,7 @@ export function responsibleMate(card: WorkCard, notes: Array<{ text: string }> =
 export function malformedWillAsk(card: WorkCard) {
   if (card.archived || card.in_trash || ['Done', 'Archived'].includes(String(value(card, 'Status')))) return null
   const actions = value(card, 'Will action')
-  const claimsWill = value(card, 'Owner') === 'Will' || value(card, 'Waiting For ID') === 'Will' || String(value(card, 'Waiting For') ?? '').startsWith('Will:') || Array.isArray(actions) && actions.some(action => willActions.includes(action as typeof willActions[number]))
+  const claimsWill = String(value(card, 'Owner') ?? '').trim().toLowerCase() === 'will' || value(card, 'Waiting For ID') === 'Will' || /\bWill\b/.test(String(value(card, 'Waiting For') ?? '')) || (Array.isArray(actions) ? actions : [actions]).some(action => typeof action === 'string' && !!action.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(action.trim()))
   const issues = needsWillIssues(card)
   return claimsWill && issues.length ? { card_id: card.id, mate: responsibleMate(card), issues } : null
 }

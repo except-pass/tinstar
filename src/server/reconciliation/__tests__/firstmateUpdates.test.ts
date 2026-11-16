@@ -513,9 +513,16 @@ it('revalidates legacy workflow reservations on a sweep without changing retry b
   expect((await restarted.bridgeWork()).pending).toEqual(offered)
 })
 
-it('delivers one daily malformed-asks report grouped by declared mate through the existing bridge', async () => {
+it.each([
+  { actions: ['Decision'], wait: '' },
+  { actions: ['Approval'], wait: 'Will to approve the exception' },
+  { actions: ['Approval'], wait: '' },
+  { actions: [], wait: 'Will to approve the exception' },
+])('delivers one daily malformed-asks report through the bridge for $actions and $wait', async ({ actions, wait }) => {
   const f = await fixture()
-  f.card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  f.card.properties['Will action'] = { id: 'action', type: 'multi_select', value: actions, hasMore: false }
+  f.card.properties['Waiting For'] = { id: 'wait', type: 'rich_text', value: wait, hasMore: false }
+  f.card.properties['Waiting For ID'] = { id: 'wait-id', type: 'rich_text', value: '', hasMore: false }
   f.card.properties['Last touched by']!.value = 'Clawson'
   f.card.properties.Status!.value = 'Waiting For'
   const sources = { ...f.sources, willAskCensus: vi.fn(async () => structuredClone(f.observation)) }
