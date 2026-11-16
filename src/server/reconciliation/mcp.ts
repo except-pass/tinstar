@@ -26,8 +26,7 @@ import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
 import { SessionProbe } from './sessionProbe'
-import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
-import type { CardContextRead } from './cardContext'
+import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, type ClaimFilters } from './claimPolicy'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
 import type { NeedsWillItem } from './needsWill'
 
@@ -76,7 +75,6 @@ export interface PresentationReaders {
   currentCard?(id: string): Promise<import('./workReader').WorkCard>
   workViews?(): Promise<QueueRead>
   claimQueue?(filters?: ClaimFilters): Promise<QueueRead>
-  claimHistory?(id: string): Promise<CardContextRead | undefined>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
   updateWork?(input: UpdateWorkInput, actor: string): Promise<unknown>
   createWork?(input: CreateWorkInput, actor: string): Promise<unknown>
@@ -184,16 +182,10 @@ export class ReconciliationMcp {
           }
           for (const candidate of candidates) if (!this.leases.status(candidate.id)) {
             if (!covered()) continue
-            if (!this.readers.claimHistory && !claimRequestCandidate(candidate.item)) continue
+            if (!claimRequestCandidate(candidate.item)) continue
             const id = candidate.id
-            const [current, history] = await Promise.all([exactCard(id), this.readers.claimHistory?.(id)])
-            let item = candidate.item
-            if (history) {
-              const actions = current?.properties['Will action']?.value
-              const requests = currentWillRequests(history.blocks, actions)
-              if (history.outcome !== 'available' || requests.length && requests.every(request => request.answered)) continue
-              item = { ...item, readiness: item.requestReadiness ?? item.readiness, requestSince: oldestOpenRequestSince(requests), proposalHistoryComplete: true, requests: requests.filter(request => !request.answered).map(request => ({ ...request, cardId: id })) }
-            }
+            const current = await exactCard(id)
+            const item = candidate.item
             if (!current) claimWarnings.push(`Fresh exact-card eligibility is unknown for ${id}; skipped without a lease. Queue coverage does not certify this request.`)
             const eligible = () => {
               if (!covered() || !current) return false

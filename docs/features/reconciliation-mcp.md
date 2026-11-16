@@ -447,10 +447,11 @@ fix or retag the card.
 Generic claims refresh the property census, enqueue missing history through the
 [shared bounded history loader](decision-desk-foundation.md#read-only-preparer-evidence),
 and select using cached evidence without waiting for history or operational
-reconciliation. Cold or incomplete history cannot admit a new lease; a later
-claim can select the card after history loads. Cached recorded answers and
-pending resolutions exclude their exact request/source anchor, preserving
-independent unanswered requests on the same card. Claim responses include card
+reconciliation. A current strict Will property ask is claimable with or without
+Next action text, even while history is cold, partial, unavailable or pending.
+Desk preparation still requires its structured request history. Cached recorded
+answers exclude their matching request/source anchor, and a future Start Date
+excludes automatic claims. Claim responses include card
 metadata only; use `get_work` with `details: true` for the selected card's prose.
 
 Optional `will_action`, `initiative`, `area`, and `max_age_days` filters intersect.

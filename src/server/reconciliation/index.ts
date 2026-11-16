@@ -291,7 +291,6 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
-  async claimHistory(id: string) { return this.context.cachedComments(id) }
   async willAskCensus() { return this.workReader.query({}) }
   mainWaitNotionConfig() { return this.config.notion }
   releaseTransport() { return notionReleaseTransport(this.workReader) }

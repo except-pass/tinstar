@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { createServer } from 'node:http'
+import { performance } from 'node:perf_hooks'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { ReconciliationMcp, type PresentationReaders } from '../mcp'
@@ -18,7 +21,6 @@ import { decisionItems } from '../../../shared/reconciliationQueue'
 import { ReconciliationSources } from '../index'
 import { CardContextReader, type CardContextRead } from '../cardContext'
 import { hasQueue } from '../../../shared/reconciliationQueue'
-import { claimCardReadiness } from '../queue'
 
 const roots: string[] = [], clients: Client[] = []
 afterEach(async () => {
@@ -34,7 +36,7 @@ function card(id = 'a'.repeat(32), values: Record<string, unknown> = {}): WorkCa
     'Will action': ['Decision'], 'Next action': 'Approve the security exception', ...values }).map(([name, value]) =>
     [name, { id: name, type: 'rich_text', value, hasMore: false }])) }
 }
-async function fixture(cards: WorkCard[], claimHistory?: PresentationReaders['claimHistory']) {
+async function fixture(cards: WorkCard[]) {
   const root = await mkdtemp(join(tmpdir(), 'claim-actionable-')); roots.push(root)
   let now = Date.now()
   const leases = new CardLeases(root, () => now)
@@ -51,8 +53,9 @@ async function fixture(cards: WorkCard[], claimHistory?: PresentationReaders['cl
     return structuredClone(found)
   })
   const workViews = vi.fn(async () => queue)
-  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews, currentCard, claimHistory,
-    getWork: async input => ({ outcome: 'available', card: { id: (input as { card_id: string }).card_id } }),
+  const getWork = vi.fn(async (input: unknown) => ({ outcome: 'available', card: { id: (input as { card_id: string }).card_id } }))
+  const mcp = new ReconciliationMcp({ leases, queue: async () => queue, workViews, currentCard,
+    getWork,
     scene: async () => new SceneReconciler().reconcile(snapshot), card: async () => ({}), workerLinkReport: async () => ({}) as never,
   } satisfies PresentationReaders, root)
   async function connect() {
@@ -66,7 +69,7 @@ async function fixture(cards: WorkCard[], claimHistory?: PresentationReaders['cl
     }
   }
   const call = await connect()
-  return { leases, queue, current, currentCard, workViews, call, connect, advance: () => { now += leaseDuration } }
+  return { root, mcp, getWork, leases, queue, current, currentCard, workViews, call, connect, advance: () => { now += leaseDuration } }
 }
 const claim = (operation_id: string) => ({ operation_id })
 const propertyAsks = [
@@ -186,32 +189,28 @@ it('accepts a current concrete owner request from complete request history on a 
   expect(await f.call('claim_next_card', claim('history-approval'))).toMatchObject({ outcome: 'claimed', readiness: 'ready-now' })
 })
 
-it('treats waiting for Will approval as the current request while retaining real prerequisites', async () => {
+it('claims the explicit Will ask independently of execution prerequisites', async () => {
   const f = await fixture([card('a'.repeat(32), { 'Waiting For': 'Will: approve the security exception' })])
   const first = await f.call('claim_next_card', claim('owner-wait'))
   expect(first).toMatchObject({ outcome: 'claimed', readiness: 'ready-now' })
   await f.call('release_claim', { lease_token: first.lease_token, reason: 'Request reviewed' })
   f.current.get('a'.repeat(32))!.properties['Waiting For']!.value = 'Will: approve after the security review'
-  expect(await f.call('claim_next_card', claim('real-prerequisite'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(await f.call('claim_next_card', claim('real-prerequisite'))).toMatchObject({ outcome: 'claimed' })
 })
 
-it.each(['Done', 'Archived', 'archived', 'in_trash', 'no-request', 'future-date', 'future-condition', 'owner-removed'])('rejects fresh exact-card %s despite a ready cached queue', async change => {
+it.each(['Done', 'Archived', 'archived', 'in_trash', 'future-date', 'owner-removed'])('rejects fresh exact-card %s despite a ready cached queue', async change => {
   const f = await fixture([card()]), current = f.current.get('a'.repeat(32))!
   if (change === 'archived' || change === 'in_trash') current[change] = true
-  else if (change === 'no-request') current.properties['Next action']!.value = 'No active approval requested'
   else if (change === 'future-date') current.properties['Start Date'] = { id: 'start', type: 'date', value: { start: '2099-01-01' }, hasMore: false }
-  else if (change === 'future-condition') current.properties['Next action']!.value = 'Approve after the review completes'
   else if (change === 'owner-removed') { current.properties.Owner!.value = 'Clawson'; current.properties['Will action']!.value = [] }
   else current.properties.Status!.value = change
   expect(await f.call('claim_next_card', claim(change))).toMatchObject({ outcome: 'no-unclaimed-card', queue: 'needs-will' })
   expect(f.leases.status(current.id)).toBeNull()
 })
 
-it.each(['stale', 'unknown', 'expired', 'history', 'future'])('reports no actionable card with %s evidence and preserves coverage limitations', async mode => {
+it.each(['stale', 'unknown', 'expired'])('reports no actionable card with %s evidence and preserves coverage limitations', async mode => {
   const f = await fixture([card()])
-  if (mode === 'history') { f.queue.needsWill![0]!.proposalHistoryComplete = false; f.queue.needsWill![0]!.readiness = 'needs-readiness-verification'; f.queue.needsWill![0]!.reasons = ['Publication history is incomplete; refresh before choosing'] }
-  else if (mode === 'future') { f.queue.needsWill![0]!.sources.push({ ...f.queue.needsWill![0]!.sources[0]!, kind: 'firstmate', readiness: 'future-or-conditional' }); f.queue.needsWill![0]!.readiness = 'future-or-conditional' }
-  else if (mode === 'expired') f.queue.coverage.intentions.expiresAt = new Date(Date.now() - 1).toISOString()
+  if (mode === 'expired') f.queue.coverage.intentions.expiresAt = new Date(Date.now() - 1).toISOString()
   else { f.queue.coverage.intentions.status = mode as 'stale' | 'unknown'; f.queue.coverage.intentions.coverage = 'unknown' }
   const result = await f.call('claim_next_card', claim(mode))
   expect(result).toMatchObject({ outcome: 'no-unclaimed-card', coverage: f.queue.coverage, warnings: f.queue.warnings })
@@ -221,7 +220,7 @@ it.each(['stale', 'unknown', 'expired', 'history', 'future'])('reports no action
 
 it('skips an ineligible row before an eligible row while keeping queue order', async () => {
   const f = await fixture([card('a'.repeat(32)), card('b'.repeat(32)), card('c'.repeat(32))])
-  f.current.get('a'.repeat(32))!.properties['Next action']!.value = parked
+  f.current.get('a'.repeat(32))!.properties.Status!.value = 'Done'
   const result = await f.call('claim_next_card', claim('ordered'))
   expect(result.lease.card_id).toBe('b'.repeat(32))
   expect(f.currentCard.mock.calls.map(([id]) => id)).toEqual(['a'.repeat(32), 'b'.repeat(32)])
@@ -236,12 +235,12 @@ it('reports unknown exact-card evidence rather than treating a failed read as no
   expect(f.leases.status('a'.repeat(32))).toBeNull()
 })
 
-it.each(['stale', 'unknown', 'expired'])('skips %s source-local readiness even with fresh overall coverage', async mode => {
+it.each(['stale', 'unknown', 'expired'])('claims exact property asks despite %s Desk source-local readiness', async mode => {
   const f = await fixture([card()]), source = f.queue.needsWill![0]!.sources[0]!
   if (mode === 'expired') source.expiresAt = new Date(Date.now() - 1).toISOString()
   else source.status = mode as 'stale' | 'unknown'
-  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
-  expect(f.leases.status('a'.repeat(32))).toBeNull()
+  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'claimed' })
+  expect(f.leases.status('a'.repeat(32))).not.toBeNull()
 })
 
 it('keeps concurrent conversations exclusive and preserves retries, release/reclaim and 60-minute expiry', async () => {
@@ -292,14 +291,14 @@ it.each(['claim_next_card', 'claim_card'])('rejects a source write crossing the 
 })
 
 
-it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request masked by a concrete Next action', async mode => {
+it.each(['conditional', 'future', 'no-request'])('claims a property ask independently of a %s recorded question', async mode => {
   const f = await fixture([card('a'.repeat(32), { 'Next action': 'Implement security policy' })])
   f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: mode === 'conditional' ? 'Approve the exception after the security review' :
       mode === 'no-request' ? 'No active decision requested' : 'Approve the exception?',
     since: mode === 'future' ? '2099-01-01' : new Date().toISOString(), sourceId: 'request-note', answered: false }]
-  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
-  expect(f.leases.status('a'.repeat(32))).toBeNull()
+  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'claimed' })
+  expect(f.leases.status('a'.repeat(32))).not.toBeNull()
 })
 
 it.each(['candidate', 'sibling'])('fences a %s source write during request-history collection', async mode => {
@@ -354,7 +353,9 @@ it.each([
 it('filters Merge while retaining the existing verified PR readiness requirement', async () => {
   const other = card('a'.repeat(32)), merge = card('b'.repeat(32), { 'Will action': ['Merge'], 'Next action': 'Merge the reviewed security change', Link: 'https://github.com/except-pass/tinstar/pull/100' })
   const f = await fixture([other, merge])
-  expect(await f.call('claim_next_card', { operation_id: 'unverified-merge', will_action: 'Merge' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const first = await f.call('claim_next_card', { operation_id: 'unverified-merge', will_action: 'Merge' })
+  expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: merge.id } })
+  await f.call('release_claim', { lease_token: first.lease_token, reason: 'Checked property claim' })
   const row = f.queue.needsWill!.find(item => item.cardIds.includes(merge.id))!
   row.readiness = 'ready-now'
   row.sources.forEach(source => { source.readiness = 'ready-now' })
@@ -410,12 +411,12 @@ it('uses only current-action open requests for age across request selection', ()
   expect(oldestOpenRequestSince(requests)).toBe('2026-11-16T00:00:00Z')
 })
 
-it.each([false, true])('blocks independent waits with keyed request %s in projection and admission', async keyed => {
+it.each([false, true])('keeps Desk dependency readiness separate from property claims with keyed request %s', async keyed => {
   const current = card(), f = await fixture([current])
   const row = f.queue.needsWill![0]!
   if (keyed) row.sources.push({ ...row.sources[0]!, kind: 'firstmate', responseAnchor: 'keyed', readiness: 'ready-now', action: 'Approve?' })
   current.properties['Waiting For']!.value = 'Will: Approve the exception\n' + waitLine({ type: 'Event', id: 'security', dependency: 'Security review', unblocks_when: 'Review complete', follow_up_by: 'Firstmate' })
-  expect(claimCardReadiness(row, current)).toBeNull()
+  expect(claimCardReadiness(row, current)).toMatchObject({ readiness: 'ready-now' })
   const snapshot = fixtureSources()
   snapshot.fleet = []
   snapshot.intentions.data!.cards = [current]
@@ -425,7 +426,7 @@ it.each([false, true])('blocks independent waits with keyed request %s in projec
 
 it.each([false, true])('preserves PR head conflict %s when refreshing request history', async conflict => {
   const current = card('a'.repeat(32), { 'Will action': ['Merge'], 'Next action': 'Merge the approved pull request', Link: 'https://github.com/acme/app/pull/7' })
-  const f = await fixture([current], async () => ({ outcome: 'available', blocks: [] }))
+  const f = await fixture([current])
   const snapshot = fixtureSources()
   snapshot.fleet = []
   snapshot.intentions.data!.cards = [current]
@@ -437,7 +438,7 @@ it.each([false, true])('preserves PR head conflict %s when refreshing request hi
   f.queue.needsWill = needsWill(queue, new SceneReconciler().reconcile(snapshot), new Map(), inventory, readiness, true)
   const row = f.queue.needsWill.find(item => item.cardIds.includes(current.id))!
   expect(row.requestReadiness).toBe(conflict ? 'needs-readiness-verification' : 'ready-now')
-  expect(await f.call('claim_next_card', claim('head-check'))).toMatchObject({ outcome: conflict ? 'no-unclaimed-card' : 'claimed' })
+  expect(await f.call('claim_next_card', claim('head-check'))).toMatchObject({ outcome: 'claimed' })
 })
 
 
@@ -449,11 +450,47 @@ it('projects and freshly admits the current Decision age despite an older Do req
     { id: 'new', type: 'comment', text: 'Requested from: Will\nQuestion: Approve?\nTin Star request: {"id":"new","action":"Decision"}', createdAt: recent },
   ]
   const history = { outcome: 'available' as const, blocks }
-  const f = await fixture([current], async () => history)
+  const f = await fixture([current])
   const snapshot = fixtureSources()
   snapshot.fleet = []
   snapshot.intentions.data!.cards = [current]
   f.queue.needsWill = needsWill(f.queue, new SceneReconciler().reconcile(snapshot), new Map([[current.id, history]]), null, new Map())
   expect(f.queue.needsWill[0]!.requestSince).toBe(recent)
   expect(await f.call('claim_next_card', { ...claim('current-age'), max_age_days: 1 })).toMatchObject({ outcome: 'claimed' })
+})
+
+
+it.each(['cold', 'partial', 'unavailable', 'pending'])('returns property claims over HTTP with %s history and either Next action representation', async history => {
+  for (const next of ['', 'Approve the exception']) {
+    const current = propertyAsk(undefined, 'Decision', { 'Next action': next, Area: 'Engineering', Initiative: 'Tin Star' })
+    const f = await fixture([current])
+    const row = f.queue.needsWill![0]!
+    row.proposalHistoryComplete = false
+    row.readiness = 'needs-readiness-verification'
+    row.requests = []
+    const details = vi.fn(() => history === 'pending' ? new Promise<never>(() => {}) : Promise.resolve({ outcome: history === 'unavailable' ? 'unavailable' : 'partial', blocks: [] }))
+    vi.spyOn(CardContextReader.prototype, 'details').mockImplementation(details as never)
+    f.getWork.mockImplementation(async input => {
+      if ((input as { details?: boolean }).details) await details()
+      return { outcome: 'available', card: { id: current.id } }
+    })
+    const server = createServer((req, res) => { void f.mcp.handle(req, res) })
+    await new Promise<void>(resolve => server.listen(5293, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    const client = new Client({ name: 'owner-chatgpt-timing', version: '1' })
+    try {
+      const token = (await readFile(join(f.root, 'mcp-token'), 'utf8')).trim()
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+      const started = performance.now()
+      const response = await client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'http-no-history', will_action: 'Decision', area: 'Engineering', initiative: 'Tin Star' } })
+      const elapsed = performance.now() - started
+      expect(JSON.parse((response.content as Array<{ text: string }>)[0]!.text)).toMatchObject({ outcome: 'claimed', readiness: 'ready-now' })
+      expect(elapsed).toBeLessThan(2000)
+      expect(details).not.toHaveBeenCalled()
+      expect(f.getWork).toHaveBeenCalledWith({ card_id: current.id, details: false })
+    } finally {
+      await client.close()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  }
 })
