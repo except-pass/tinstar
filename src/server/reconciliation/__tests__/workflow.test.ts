@@ -59,6 +59,8 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const blocks: any[] = [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: prose.body }] } }]
   const pages = new Map<string, any>([[id, raw]])
   let queryPageSize = 100
+  let historyMode: 'normal' | 'partial' | 'unavailable' | 'pending' = 'normal'
+  let resumeHistory: (() => void) | undefined
   let onRead: (() => void) | undefined
   const requests: Array<{ url: string; method: string; body?: any }> = []
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -109,7 +111,11 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
       if (lostNote) { lostNote = false; throw new Error('lost comment response') }
       return json(comment)
     }
-    if (path === '/v1/comments') return json({ has_more: false, results: comments })
+    if (path === '/v1/comments') {
+      if (historyMode === 'pending') await new Promise<void>(resolve => { resumeHistory = resolve })
+      if (historyMode === 'unavailable') return json({}, 503)
+      return json({ has_more: historyMode === 'partial', results: comments.filter(comment => !comment.pageId || comment.pageId === new URL(String(url)).searchParams.get('block_id')) })
+    }
     if (path.includes('/blocks/') && path.endsWith('/children')) {
       const blockPage = path.split('/')[3]!
       if (method === 'PATCH') {
@@ -145,7 +151,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
     sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
-    controls: { append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
+    controls: { history: (mode: typeof historyMode) => { historyMode = mode }, resumeHistory: () => { historyMode = 'normal'; resumeHistory?.() }, append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 const handoffInput = (overrides: Partial<SubmitHandoffInput> = {}): SubmitHandoffInput => ({
@@ -2966,8 +2972,11 @@ it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease 
     const original = structuredClone(f.raw.properties[field])
     Object.assign(f.raw.properties[field], malformed)
     expect(await call('claim_card', { card_id: id, operation_id: `http-strict-${field}` })).toMatchObject({ outcome: 'unavailable', message: expect.stringContaining('owning mate must fix or retag') })
+    await sources.snapshot(true)
+    expect(await call('claim_next_card', { operation_id: `http-auto-strict-${field}`, will_action: 'Decision' })).toMatchObject({ outcome: 'no-unclaimed-card' })
     f.raw.properties[field] = original
   }
+  await sources.snapshot(true)
   f.comments.unshift({ id: 'old-do', created_time: new Date(Date.now() - 10 * 86400_000).toISOString(), rich_text: [{ plain_text: 'Requested from: Will\nQuestion: Implement?\nTin Star request: {"id":"old-do","action":"Do"}' }] })
   // The independent census and timestamps are ready before the proof begins.
   await sources.workViews()
@@ -3088,3 +3097,99 @@ it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-not
   expect(f.comments.filter(comment => JSON.stringify(comment).includes(input.reason))).toHaveLength(1)
   expect(changed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'not_for_me', notes: expect.arrayContaining([expect.stringContaining(input.reason)]) }))
 })
+
+
+it('owner-chatgpt HTTP admits record-free asks across real history failures and filters grouped ages per card', async () => {
+  const transcript: unknown[] = []
+  async function setup() {
+    const root = await mkdtemp(join(tmpdir(), 'claim-boundary-http-')); roots.push(root)
+    const f = fixture()
+    Object.assign(f.raw.properties, {
+      Owner: { type: 'select', select: { name: 'Will' } },
+      Status: { type: 'status', status: { name: 'Waiting For' } },
+      'Will action': { type: 'multi_select', multi_select: [{ name: 'Decision' }] },
+      'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: 'Will: Approve the security exception' }] },
+      'Waiting For Type': { type: 'select', select: { name: 'Actor' } },
+      'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'Will' }] },
+      'Next action': { type: 'rich_text', rich_text: [] },
+    })
+    f.comments.splice(0)
+    const sources = f.sources(root), mcp = new ReconciliationMcp(sources, root)
+    const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+    await new Promise<void>(resolve => server.listen(5295, '127.0.0.1', resolve))
+    const client = new Client({ name: 'owner-chatgpt-boundary', version: '1' }); clients.push(client)
+    await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:5295/api/reconciliation/mcp'), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+    let operation = 0
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const start = performance.now()
+      const response = JSON.parse((await client.callTool({ name, arguments: name === 'search_work' ? args : { operation_id: `boundary-${operation++}`, ...args } }) as { content: Array<{ text: string }> }).content[0]!.text)
+      transcript.push({ name, args, response, ms: Math.round(performance.now() - start) })
+      return response
+    }
+    const close = async () => { await client.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
+    return { f, sources, call, close }
+  }
+  for (const mode of ['cold', 'partial', 'unavailable', 'pending'] as const) {
+    const { f, sources, call, close } = await setup()
+    if (mode !== 'cold') {
+      f.controls.history(mode)
+      const loading = sources.updateComments(id, true)
+      if (mode !== 'pending') await loading
+    }
+    for (const next of ['', 'Approve the security exception']) {
+      f.raw.properties['Next action'].rich_text = next ? [{ plain_text: next }] : []
+      const started = performance.now()
+      const claimed = await call('claim_next_card', { will_action: 'Decision', area: 'Engineering', initiative: 'Tin Star' })
+      expect(claimed).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+      expect(performance.now() - started).toBeLessThan(2000)
+      transcript.push({ history: mode, next_action: next, outcome: claimed.outcome })
+      await call('release_claim', { lease_token: claimed.lease_token, reason: 'Boundary checked' })
+    }
+    if (mode === 'cold') {
+      const unknown = await call('claim_next_card', { max_age_days: 1 })
+      expect(unknown).toMatchObject({ outcome: 'no-unclaimed-card' })
+      expect(JSON.stringify(unknown)).toContain('unknown request age')
+      for (const action of ['Do', 'Merge', 'Elevated command']) {
+        f.raw.properties['Will action'].multi_select = [{ name: action }]
+        await sources.snapshot(true)
+        const selected = await call('claim_next_card', { will_action: action })
+        expect(selected).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+        await call('release_claim', { lease_token: selected.lease_token, reason: 'Action filter checked' })
+      }
+    }
+    f.controls.resumeHistory()
+    await close()
+  }
+  const { f, sources, call, close } = await setup()
+  // Fresh exact-card properties fence future, closed and archived automatic claims.
+  for (const mode of ['future', 'Done', 'archived']) {
+    if (mode === 'future') f.raw.properties['Start Date'] = { type: 'date', date: { start: '2099-01-01' } }
+    else if (mode === 'Done') f.raw.properties.Status.status.name = 'Done'
+    else f.raw.archived = true
+    expect(await call('claim_next_card')).toMatchObject({ outcome: 'no-unclaimed-card' })
+    delete f.raw.properties['Start Date']; f.raw.properties.Status.status.name = 'Waiting For'; f.raw.archived = false
+  }
+  const secondId = 'c'.repeat(32), second = structuredClone(f.raw)
+  second.id = secondId; second.url = `https://www.notion.so/${secondId}`
+  for (const page of [f.raw, second]) page.properties.Link = { type: 'url', url: 'https://github.com/acme/app/pull/42' }
+  f.pages.set(secondId, second)
+  const request = (pageId: string, requestId: string, age: number, action = 'Decision') => ({ pageId, id: requestId, created_time: new Date(Date.now() - age).toISOString(), rich_text: [{ plain_text: `Requested from: Will\nQuestion: Approve the security exception?\nTin Star request: ${JSON.stringify({ id: requestId, action })}` }] })
+  f.comments.push(request(id, 'old-a', 10 * 86400000), request(secondId, 'recent-b', 3600000), request(secondId, 'old-do-b', 10 * 86400000, 'Do'))
+  await sources.snapshot(true)
+  await sources.updateContext(id); await sources.updateContext(secondId)
+  const grouped = await call('claim_next_card', { max_age_days: 1 })
+  expect(grouped).toMatchObject({ outcome: 'claimed', lease: { card_id: secondId } })
+  await call('release_claim', { lease_token: grouped.lease_token, reason: 'Grouped age checked' })
+  const simultaneous = await Promise.all([call('claim_next_card'), call('claim_next_card')])
+  expect(new Set(simultaneous.map(result => result.lease.card_id))).toEqual(new Set([id, secondId]))
+  for (const held of simultaneous) await call('release_claim', { lease_token: held.lease_token, reason: 'Concurrent allocation checked' })
+  f.comments.push({ pageId: secondId, id: 'answer-b', rich_text: [{ plain_text: 'Tin Star answer: "recent-b"' }] })
+  await sources.updateContext(secondId)
+  expect(await call('claim_next_card', { max_age_days: 1 })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const visible = await call('search_work', { owner: 'Will', statuses: ['Waiting For'] })
+  expect(visible.records.map((row: { card?: { id: string } }) => row.card?.id).sort()).toEqual([id, secondId].sort())
+  expect(visible.coverage.intentions).toBeTruthy()
+  expect(await call('search_work', { owner: 'Clawson', statuses: ['In Progress'] })).toMatchObject({ records: [], coverage: { intentions: expect.anything() } })
+  await close()
+  if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'claim-boundaries-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
+}, 60_000)

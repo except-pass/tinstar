@@ -429,8 +429,10 @@ request in existing queue order, ready-now cards first, and includes its `readin
 operation-id replays also include these fields, using current queue evidence;
 when evidence for the card is unavailable, `readiness` is `unknown` and
 `readiness_reasons` explains the missing evidence. Check the card before acting
-when it is not certified ready. New leases skip parked/no-request, future or
-conditional, unverified, Done and Archived candidates. New next-card and exact-card leases
+when it is not certified ready. Automatic claims skip Done, archived or trashed
+cards, future Start Dates and cached known answered requests. Desk readiness and
+independent waits do not block a current strict Will property ask.
+New next-card and exact-card leases
 require exact structured fields: Owner `Will`, Status `Waiting For`, at least one
 `Will action` of `Decision`, `Do`, `Merge`, `Elevated command`, `Waiting For`
 starting `Will:`, `Waiting For Type` `Actor`, and `Waiting For ID` `Will`.
@@ -456,8 +458,9 @@ metadata only; use `get_work` with `details: true` for the selected card's prose
 
 Optional `will_action`, `initiative`, `area`, and `max_age_days` filters intersect.
 Action and area use exact labels; initiative accepts its exact label or relation
-ID. Max age is elapsed days since the oldest recorded open Will request matching
-the card’s current action tags, not card edit time. Unknown ages do not satisfy this filter; `get_work_views` loads the
+ID. Max age is elapsed days since each candidate card’s oldest recorded open Will
+request matching its current action tags, even when several cards share a PR.
+Unknown ages do not satisfy this filter; `get_work_views` loads the
 existing bounded request history when needed. The census and cached timestamps
 narrow candidates before individual reads. The selected candidate gets fresh
 properties and checks cached comment history; a stale or answered candidate is
