@@ -33,7 +33,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
       source_request: { home: home.source.home, taskId: task.id, id: 'independent-go', kind: 'decision' }, source_question: question, source_spawn_gen: task.identity.spawn_gen })}`)
   }
   card.properties['Last touched by'] = { id: 'Last touched by', type: 'select', value: 'Fixture publisher', hasMore: false }
-  const properties = Object.fromEntries(Object.entries(card.properties).map(([name, prop]) => {
+  const properties: Record<string, Record<string, unknown>> = Object.fromEntries(Object.entries(card.properties).map(([name, prop]) => {
     const value = prop.value
     const type = name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
     const content = type === 'title' || type === 'rich_text' ? [{ plain_text: String(value), text: { content: String(value) } }]
@@ -46,7 +46,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const raw = { object: 'page', id: card.id, url: card.url, parent: { type: 'data_source_id', data_source_id: dataSourceId },
     archived: false, in_trash: false, last_edited_time: new Date().toISOString(), properties }
   const titles = ['Approve staged API rollout', 'Choose audit retention period', 'Authorize bounded migration rehearsal', 'Review incident recovery plan', 'Confirm release verification scope', 'Select queue backpressure policy', 'Approve dashboard access change', 'Choose dependency upgrade timing']
-  const pages = Array.from({ length: options.cards ?? 1 }, (_, index) => index === 0 ? raw : { ...raw, id: (index + 100).toString(16).padStart(32, '0'), properties: {
+  const pages: Array<typeof raw> = Array.from({ length: options.cards ?? 1 }, (_, index) => index === 0 ? raw : { ...raw, id: (index + 100).toString(16).padStart(32, '0'), properties: {
     ...properties, Name: { id: 'Name', type: 'title', title: [{ plain_text: `${titles[index % titles.length]} · ${index + 1}` }] },
     'First Mate tasks': { id: 'First Mate tasks', type: 'rich_text', rich_text: [] },
   } })
