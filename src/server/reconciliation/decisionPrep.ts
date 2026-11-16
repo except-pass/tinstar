@@ -97,7 +97,7 @@ export class DecisionPreparation {
   }
 
   private rows(db: DatabaseSync) {
-    return db.prepare('SELECT * FROM decision_prep_jobs WHERE scope = ? ORDER BY updated_at DESC, id DESC').all(this.scope) as unknown as Row[]
+    return db.prepare('SELECT * FROM decision_prep_jobs WHERE scope = ? ORDER BY created_at DESC, attempt DESC, id DESC').all(this.scope) as unknown as Row[]
   }
 
   private inflight(db: DatabaseSync) {
@@ -170,7 +170,7 @@ export class DecisionPreparation {
   private async mark(id: string, state: string, reason: string, packetId?: string) {
     await this.initialize()
     await this.packets.leases.writeStorage(db => db.prepare(`UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = coalesce(?, packet_id),
-      dispatched_at = CASE WHEN ? = 'dispatched' THEN ? ELSE dispatched_at END WHERE id = ?`).run(state, reason, new Date(this.now()).toISOString(), packetId ?? null, state, new Date(this.now()).toISOString(), id))
+      dispatched_at = CASE WHEN ? = 'dispatched' THEN ? ELSE dispatched_at END WHERE id = ? AND (state = 'admitted' OR (state = 'dispatched' AND ? != 'dispatched') OR (state = 'blocked' AND ? IN ('published', 'blocked')))`).run(state, reason, new Date(this.now()).toISOString(), packetId ?? null, state, new Date(this.now()).toISOString(), id, state, state))
   }
 
   private async dispatch(job: Row) {
@@ -202,7 +202,7 @@ export class DecisionPreparation {
       : `${preparerName} is the preparer. Automatic replenishment is off until you turn it on.`
     if (this.secret && problem) explanation += ` Latest problem: ${problem.reason}`
     return { configured: !!this.secret, preparer: preparerName, explanation, preparing, automatic_replenishment: policy.values.automatic_replenishment,
-      jobs: jobs.slice(0, 8).map(({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id }) => ({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id })) }
+      jobs: jobs.map(({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id }) => ({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id })) }
   }
 
   /** Automatic fill only. Explicit Prepare now is separate and works while this is off. */
@@ -248,7 +248,7 @@ export class DecisionPreparation {
     }
     await this.dispatch(admitted.job)
     const job = await this.packets.leases.readStorage(db => db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ?').get(admitted.job!.id) as unknown as Row)
-    return { outcome: job.state === 'dispatched' ? 'dispatched' : 'failed', explanation: job.reason, job_id: job.id, state: job.state }
+    return { outcome: job.state, explanation: job.reason, job_id: job.id, state: job.state }
   }
 
   /** Store a bot packet for one open job. Ready is the existing validation result, never a status or lease change. */

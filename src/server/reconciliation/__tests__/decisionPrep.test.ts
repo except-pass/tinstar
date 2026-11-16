@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { CardLeases } from '../cardLeases'
 import { DecisionPackets } from '../decisionPackets'
 import { DecisionPreparation, prepSecretName, webhookMissing, type PrepCandidate } from '../decisionPrep'
+import { PreparedReviews } from '../preparedReviews'
 import { ReconciliationMcp } from '../mcp'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import type { DecisionPacket } from '../../../shared/decisionPacket'
@@ -168,4 +169,42 @@ it('publishes a valid packet to Ready and keeps an invalid packet out of Ready w
     expect(replay).toMatchObject({ outcome: 'ready', ready: true, replayed: true })
     expect(leases.status(fixture.cardId)).toBeNull()
   } finally { await client.close() }
+})
+
+it.each(['accepted', 'rejected', 'lost'] as const)('preserves publication before webhook completion: %s', async completion => {
+  const { packets, fixture, rows } = await harness()
+  const prep = new DecisionPreparation(packets, 'board', { candidates: () => rows, coverage: () => 'complete' },
+    () => fixture.evidence, async () => JSON.stringify({ url: 'https://prep.example/job', key: 'test' }), () => now,
+    async (_url, init) => {
+      const body = JSON.parse(init!.body as string)
+      await prep.publish({ job_id: body.publish.job_id, operation_id: 'early-publish', packet: fixture.packet })
+      if (completion === 'lost') throw new Error('Response lost')
+      return new Response('', { status: completion === 'accepted' ? 202 : 500 })
+    })
+  const result = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare' })
+  expect(result).toMatchObject({ outcome: 'published', state: 'published' })
+  expect(await prep.status()).toMatchObject({ preparing: 0, jobs: [{ state: 'published' }] })
+  expect(await prep.publish({ job_id: result.job_id, operation_id: 'retry-publish', packet: fixture.packet })).toMatchObject({ ready: true, replayed: true })
+})
+
+it('projects the latest current-revision attempt without overriding ready or leased decisions', async () => {
+  const { prep, packets, leases, fixture, rows } = await harness({ status: 500 })
+  const reviews = new PreparedReviews(packets, 'board', () => fixture.evidence,
+    () => ({ card_ids: [fixture.cardId], coverage: 'complete', requests: 1 }), () => now)
+  reviews.reportPreparation = () => prep.status()
+  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare' }
+  await prep.prepareNow('Will', request)
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Failed' })
+  rows[0]!.source_revision = 'old-revision'
+  for (let i = 0; i < 9; i++) await prep.prepareNow('Will', request)
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Failed' })
+  fixture.evidence.requests[0]!.binding!.source_revision = 'unattempted-revision'
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Queued' })
+  expect((await reviews.snapshot()).counts.to_prepare).toBe(1)
+  fixture.evidence.requests[0]!.binding!.source_revision = fixture.packet.binding.source_revision
+  rows[0]!.source_revision = fixture.packet.binding.source_revision
+  await packets.publish(fixture.packet, fixture.evidence, 'fixture', 'ready-after-failure')
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Ready' })
+  await leases.claim([fixture.cardId], 'reviewer', 'Reviewer', 'claim-ready')
+  expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Leased' })
 })

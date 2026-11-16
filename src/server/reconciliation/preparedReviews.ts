@@ -108,15 +108,16 @@ export class PreparedReviews {
         const evidence = evidenceByCard.get(card)!
         return evidence.requests.filter(request => !request.answered && (!request.binding || !recorded(request.binding))).map(request => {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
-          return { card_id: card, request_id: request.binding?.request_id ?? null,
+          return { card_id: card, request_id: request.binding?.request_id ?? null, source_revision: request.binding?.source_revision ?? null,
             title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
             state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })
       for (const row of pending) {
-        const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && ['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state))
-        if (!job) continue
+        if (row.state === 'Ready' || held.has(row.card_id)) continue
+        const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && job.source_revision === row.source_revision)
+        if (!job || !['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state)) continue
         row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : job.state === 'failed' ? 'Failed' : 'Blocked'
         if (job.reason) row.reasons = [...new Set([...row.reasons, job.reason])]
       }
