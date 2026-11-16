@@ -555,8 +555,10 @@ conversation. Validation reasons and raw request evidence live in **Technical
 details**. Existing legacy text suggestions remain inert. Old user messages quoting
 the former validator wall retain the full original under Technical details.
 
-The [Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui)
-owns its recommendation layout, source discussion and return navigation. The
+The [Decisions workbench reference](reconciliation-queue.md#decisions-tab) owns its
+recommendation layout, contextual Discussion, challenges and navigation. The
+[Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui)
+owns prepared review and its source-return behavior. The
 [proposal contract](workflow.md#decisions-workbench-proposals) owns typed decision
 publications and cross-source currentness. Decision targets use the existing Ask
 store and selection route, with no separate conversation history or poller.

@@ -1,4 +1,4 @@
-# Decision Desk backend foundation (P1–P3)
+# Decision Desk foundation and review UI
 
 P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
@@ -461,7 +461,13 @@ be reviewed without a verified canonical card and prepared packet.
 **Submit decision & next →** records the selected source option before advancing.
 **Skip** releases without answering. **Need more research** accepts an optional
 reason, withdraws the packet and serves the next eligible decision; it does not
-start a preparer. Retained worker notes are under **Preparation → Source delivery
+start a preparer. An unconfirmed release retains its original operation and session/
+lease capabilities for reconciliation before another claim or submission. A
+definitive rejection clears the pending release; an expired or lost lease then
+requires re-claim and revalidation. Unresolved answers and local selections remain
+retained through this recovery.
+
+Retained worker notes are under **Preparation → Source delivery
 details**. MCP navigation still uses the operational queue, but visible delivery
 uses the visible selected mode: the workbench retains its searchable request list,
 while prepared Review requires its exact leased packet to be painted.
