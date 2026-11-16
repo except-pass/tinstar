@@ -7,6 +7,7 @@ import { CardContextReader } from '../cardContext'
 import { ReconciliationMcp } from '../mcp'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
 
 const roots: string[] = [], servers: Server[] = []
@@ -70,7 +71,7 @@ it('loads cold history for automatic admission only after replenishment is turne
 it('warms cold claim history through MCP without blocking and claims only after history loads', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, root, cardIds, reconcile } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -214,7 +215,7 @@ it('explains queue cards whose complete history has no recorded decision request
 it('returns a 64-card snapshot under two seconds while shared capped history reads remain blocked', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, cardIds, reads, posts, reconcile } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -252,7 +253,7 @@ it('returns a 64-card snapshot under two seconds while shared capped history rea
 it('reads only the Prepare now card and shares concurrent requests for it', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
-  const details = vi.spyOn(CardContextReader.prototype, 'details')
+  const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
   const { sources, cardId, requestId, reads } = await setup({ cards: 64, beforeRead: async url => {
     if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
@@ -265,4 +266,64 @@ it('reads only the Prepare now card and shares concurrent requests for it', asyn
   expect((await second).outcome).toMatch(/dispatched|already-preparing/)
   expect(details).toHaveBeenCalledTimes(1)
   expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(1)
+}, 20_000)
+
+it.each(['comments', 'body'] as const)('loads a late %s request on a 13-page contract without treating code or nested specs as missing history', async historySurface => {
+  const { sources, cardId, requestId, reads, posts } = await setup({ largeContract: true, historySurface, commentCount: 601 })
+  const snapshot = await loadedSnapshot(sources)
+  expect(snapshot.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'available' }))
+  expect(sources.preparationEvidence(cardId)).toMatchObject({ reasons: [], requests: [{ reasons: [], answered: false }] })
+  expect(reads.filter(read => read.path === `/v1/blocks/${cardId}/children`)).toHaveLength(13)
+  expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(7)
+  expect(reads.some(read => read.path.includes('nested-spec'))).toBe(false)
+  expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare large contract' })).toMatchObject({ outcome: 'dispatched' })
+  expect(posts).toHaveLength(1)
+  expect((await sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
+}, 20_000)
+
+it('refreshes just an explicitly requested expired card after a sweep outlives the 30-second cache', async () => {
+  const { sources, cardId, requestId, reads } = await setup({ cards: 46, largeContract: true })
+  await loadedSnapshot(sources)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000)
+  try {
+    const before = reads.length
+    expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Fresh exact card after long sweep' })).toMatchObject({ outcome: 'dispatched' })
+    const freshReads = reads.slice(before)
+    expect(freshReads).toHaveLength(14)
+    expect(freshReads.every(read => read.path === `/v1/blocks/${cardId}/children` || read.path === '/v1/comments')).toBe(true)
+  } finally { clock.mockRestore() }
+}, 20_000)
+
+it('publishes a structured request through MCP on a large card, dispatches with replenishment off, and publishes Ready', async () => {
+  const f = await setup({ largeContract: true, historySurface: 'none' })
+  const mcp = new ReconciliationMcp(f.sources, f.root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const token = (await readFile(join(f.root, 'mcp-token'), 'utf8')).trim()
+  const client = new Client({ name: 'large-card-publication-proof', version: '1' })
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const raw = await client.callTool({ name, arguments: args })
+      return JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
+    }
+    const template = preparedDecisionFixture().packet
+    expect(await call('update_work', { kind: 'request_decision', card_id: f.cardId, operation_id: 'large-card-request', request_id: f.requestId,
+      question: template.question, requested_from: 'Will', action: 'Decision', options: template.binding.options, source_request: f.sourceRequest })).toMatchObject({ outcome: 'saved' })
+    expect(f.publishedNotes).toHaveLength(1)
+    const prepared = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare published large-card request' })
+    expect(prepared).toMatchObject({ outcome: 'dispatched' })
+    expect(f.posts).toHaveLength(1)
+    const evidence = f.sources.preparationEvidence(f.cardId), request = evidence.requests[0]!
+    expect(evidence.reasons).toEqual([])
+    expect(request.reasons).toEqual([])
+    template.binding = request.binding!
+    template.dependencies = request.dependencies.map(dependency => ({ kind: dependency.kind, key: dependency.key, revision: dependency.revision! }))
+    expect(await call('publish_prepared_packet', { job_id: prepared.job_id, operation_id: 'large-card-packet', packet: template })).toMatchObject({ outcome: 'ready', ready: true })
+    const snapshot = await f.sources.preparedReviews.snapshot()
+    expect(snapshot.ready).toContainEqual(expect.objectContaining({ card_id: f.cardId, request_id: f.requestId }))
+    expect(snapshot.pending).toContainEqual(expect.objectContaining({ card_id: f.cardId, state: 'Ready' }))
+    expect((await f.sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
+    expect(f.sources.leases.status(f.cardId)).toBeNull()
+  } finally { await client.close() }
 }, 20_000)

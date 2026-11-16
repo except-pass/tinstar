@@ -1,4 +1,4 @@
-import type { CardContextReader } from './cardContext'
+import { decisionHistoryDeadlineMs, type CardContextReader } from './cardContext'
 
 /** One shared queue for display and admission. Two card reads at a time also
  * bound the body/comment requests waiting on the shared Notion rate limiter. */
@@ -12,7 +12,7 @@ export class PreparationHistory {
   warm(ids: string[]) {
     for (const id of ids) {
       const history = this.reader.cachedDecisionHistory(id)
-      if (history && Date.parse(history.expires_at) > Date.now()) continue
+      if (history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > Date.now()) continue
       this.enqueue(id)
     }
@@ -52,19 +52,22 @@ export class PreparationHistory {
   private async load(id: string) {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      // The readers abort their HTTP work after 20 seconds. This outer deadline
-      // also settles display state if a connector fails to settle on abort.
-      await Promise.race([this.reader.details(id), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), 20_000)
+      // The publication reader paginates independently of bounded card prose.
+      // Also settle display state if a connector fails to settle on abort.
+      await Promise.race([this.reader.decisionDetails(id), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), decisionHistoryDeadlineMs)
         timer.unref?.()
       })])
       const history = this.reader.cachedDecisionHistory(id)
-      if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available') throw new Error('Incomplete history')
+      if (history?.context.commentsOutcome !== 'available') throw new Error('Decision comment history is incomplete.')
+      if (history.context.outcome !== 'available') throw new Error('Decision body history is incomplete.')
+      if (Date.parse(history.expires_at) <= Date.now()) throw new Error('Decision history expired during the source read.')
       this.failures.delete(id)
-    } catch {
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'History source read failed.'
       const attempts = (this.failures.get(id)?.attempts ?? 0) + 1
       this.failures.set(id, { attempts, retryAt: Date.now() + Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
-        message: 'Complete card body and comment history could not be read within the source deadline. A background retry is scheduled; Prepare now can retry this card.' })
+        message: `${reason} A background retry is scheduled; Prepare now can retry this card.` })
     } finally { clearTimeout(timer) }
   }
 

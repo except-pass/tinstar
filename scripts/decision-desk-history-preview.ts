@@ -8,6 +8,7 @@ import { resolve, join, extname } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { preparedDecisionFixture } from '../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../test-fixtures/reconciliation/preparationHistory'
 import { DecisionDeskApi } from '../src/server/reconciliation/decisionDeskApi'
 import { ReconciliationMcp } from '../src/server/reconciliation/mcp'
@@ -44,7 +45,10 @@ const listen = (server: ReturnType<typeof createServer>, port: number) => new Pr
 await listen(webhook, 5294)
 await listen(notion, 5295)
 const secret = async () => JSON.stringify({ url: 'http://127.0.0.1:5294/job', key: 'preview-only-sender' })
-const fixture = await preparationHistoryFixture(root, secret, { cards: 64, intervalMs: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350),
+const cards = Number(process.env.PREVIEW_CARDS ?? 64)
+const largeContract = process.env.PREVIEW_LARGE_CONTRACT === '1'
+const manualPublication = process.env.PREVIEW_PUBLISH_REQUEST === '1'
+const fixture = await preparationHistoryFixture(root, secret, { cards, largeContract, historySurface: manualPublication ? 'none' : 'comments', intervalMs: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350),
   wrapFetch: fixtureFetch => {
     syntheticNotion = fixtureFetch
     return (input, init) => { const url = new URL(String(input)); return fetch(`http://127.0.0.1:5295${url.pathname}${url.search}`, init) }
@@ -75,10 +79,42 @@ async function claimProof() {
     return record
   } finally { await client.close() }
 }
+async function tool(name: string, args: Record<string, unknown>) {
+  const client = new Client({ name: 'large-card-publication-proof', version: '1' })
+  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:5296/api/reconciliation/mcp'), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+  try {
+    const raw = await client.callTool({ name, arguments: args })
+    return JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
+  } finally { await client.close() }
+}
+async function publishRequest() {
+  const request = { kind: 'request_decision', card_id: fixture.cardId, operation_id: 'large-contract-publish-request',
+    request_id: fixture.requestId, question: 'Authorize bounded preview research?', requested_from: 'Will', action: 'Decision',
+    options: [{ id: 'preview', label: 'Authorize preview only' }, { id: 'defer', label: 'Defer research' }], source_request: fixture.sourceRequest }
+  const result = await tool('update_work', request)
+  await writeFile(join(output, 'request-publication.json'), JSON.stringify({ request, result }, null, 2))
+  return result
+}
+async function publishPacket() {
+  const job = (await sources.preparation.status()).jobs.find(job => job.card_id === fixture.cardId && job.request_id === fixture.requestId)
+  if (!job) throw new Error('Prepare now must dispatch a job first')
+  const evidence = sources.preparationEvidence(fixture.cardId), request = evidence.requests.find(request => request.binding?.request_id === fixture.requestId)
+  if (!request?.binding || request.reasons.length || evidence.reasons.length) throw new Error(`Source evidence is not ready: ${JSON.stringify(evidence)}`)
+  const packet = preparedDecisionFixture().packet
+  packet.binding = request.binding
+  packet.dependencies = request.dependencies.map(dependency => ({ kind: dependency.kind, key: dependency.key, revision: dependency.revision! }))
+  const result = await tool('publish_prepared_packet', { job_id: job.id, operation_id: 'large-contract-publish-packet', packet })
+  const snapshot = await sources.preparedReviews.snapshot()
+  await writeFile(join(output, 'packet-publication.json'), JSON.stringify({ result, snapshot, posts, lease: sources.leases.status(fixture.cardId) }, null, 2))
+  return result
+}
 const ui = createServer(async (req, res) => {
   try {
     const path = new URL(req.url ?? '/', 'http://preview').pathname
     if (path === '/__preview/release' && req.method === 'POST') { released = true; release(); send(res, { released }); return }
+    if (path === '/__preview/request' && req.method === 'POST') { send(res, await publishRequest()); return }
+    if (path === '/__preview/publish' && req.method === 'POST') { send(res, await publishPacket()); return }
     if (path === '/__preview/claim' && req.method === 'POST') { send(res, await claimProof()); return }
     if (path === '/__preview/state') { send(res, { released, posts, reads: fixture.reads, measurements }); return }
     if (path.startsWith('/api/reconciliation/decision-desk/')) {
@@ -107,7 +143,7 @@ const ui = createServer(async (req, res) => {
 })
 seedOriginAllowlist(5293)
 await listen(ui, 5293)
-const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards: 64, notion_interval_ms: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350) }
+const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards, largeContract, manualPublication, card_id: fixture.cardId, request_id: fixture.requestId, notion_interval_ms: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350) }
 await writeFile(join(output, 'preview.json'), JSON.stringify(manifest, null, 2))
 process.stdout.write(`${JSON.stringify(manifest)}\n`)
 function stop() {

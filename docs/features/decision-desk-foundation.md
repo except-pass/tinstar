@@ -479,6 +479,79 @@ using the eligibility rules above. Open attempts, including validation-blocked
 attempts, expire after ten minutes from dispatch (or admission if not dispatched).
 Automatic replenishment checks at startup and every 30 seconds.
 
+### Publishing a source request and loading history
+
+A mate publishes a structured decision through the existing MCP `update_work`
+tool. Use the exact configured card and First Mate request identities returned
+by `get_work_views` / `get_work`, rather than inventing a home, task or hold ID:
+
+```json
+{
+  "kind": "request_decision",
+  "card_id": "<canonical card id>",
+  "operation_id": "<unique stable publication operation id>",
+  "request_id": "<unique decision id on this card>",
+  "question": "Approve the bounded preview?",
+  "requested_from": "Will",
+  "action": "Decision",
+  "options": [
+    { "id": "approve", "label": "Approve the bounded preview" },
+    { "id": "defer", "label": "Defer the preview" }
+  ],
+  "source_request": {
+    "home": "<exact configured First Mate home>",
+    "taskId": "<exact source task id>",
+    "id": "<exact source decision or hold id>",
+    "kind": "decision"
+  }
+}
+```
+
+If that conversation holds a card lease, also pass its `lease_token` in tool
+arguments. A successful call adds the Will action tag and a page comment with
+`Operation: request_decision`, the exact question, option identities, and the
+`Tin Star request` record. The server binds the current source question and
+worker generation. Check `outcome: saved`; retry an ambiguous result with the
+same operation ID and input. A free-text comment or Will action tag alone does
+not publish this record. Options and an exact live First Mate binding are
+required for a prepared packet to become Ready.
+
+Decision history reads all pages of page comments and top-level paragraphs
+(the legacy workflow record surface). Specification code, embeds, and nested
+contract content are not workflow publication surfaces. These omissions do not
+make the decision history partial. General `get_work` prose remains explicitly
+bounded and does not claim to contain the full implementation contract.
+
+The Desk queues at most two card-history reads and never makes snapshots or
+claims wait for that queue. Reads retain shared Notion request pacing and
+Retry-After backoff, retry transient 429s, and have a 120-second source deadline
+instead of the conversational reader's 20 seconds. Missing permissions, failed
+pages and invalid pagination still leave history unavailable with a visible
+retry. Evidence keeps its original 30-second freshness; reading the cache never
+extends it. A sweep can outlive that freshness. **Prepare now** prioritizes and
+refreshes the selected card plus expired source observations, so it does not
+require the whole sweep to be simultaneously fresh. It works with automatic
+replenishment off and does not change that switch.
+
+An isolated round-trip harness can publish through `update_work`, call the real
+Desk Prepare now API, receive the job at a local stub webhook, then publish
+through `publish_prepared_packet` and expose Ready on the snapshot:
+
+```sh
+PREVIEW_CARDS=46 PREVIEW_LARGE_CONTRACT=1 PREVIEW_PUBLISH_REQUEST=1 \
+  node --import tsx scripts/decision-desk-history-preview.ts /absolute/task-proof-directory
+```
+
+It uses only loopback ports 5293–5296 and a fresh config with test credentials.
+The test card has 1,205 root blocks across 13 pages, including code chunks and
+nested contract toggles. Its preview controls are POST `/__preview/release`
+(unblock source reads), `/__preview/request` (publish the source request), and
+`/__preview/publish` (publish a packet for the dispatched job). Prepare now is
+POST `/api/reconciliation/decision-desk/prepare` with `X-Tinstar-UI: 1` and JSON
+`{card_id,request_id,reason}`; the preview supplies its synthetic owner identity.
+The output directory records the exact request, publication, snapshot and
+webhook evidence. These controls exist only in the preview script.
+
 ## P5 — Review and Preparation UI
 
 The existing **Decisions** entry defaults to the source workbench, preserving its
