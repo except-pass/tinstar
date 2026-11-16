@@ -87,3 +87,12 @@ it('shows a missing exact source binding without treating complete history as un
   expect(snapshot.source_failures.flatMap(row => row.reasons)).not.toContain('Complete cached decision history is unavailable')
   expect(posts).toEqual([])
 }, 20_000)
+
+it('explains queue cards whose complete history has no recorded decision request', async () => {
+  const { sources, cardId, removeRequest, posts } = await setup()
+  removeRequest()
+  const snapshot = await sources.preparedReviews.snapshot()
+  expect(snapshot.source_failures).toEqual([{ card_id: cardId, reasons: ['No decision request is recorded in the complete card history'] }])
+  expect(snapshot.pending).toEqual([])
+  expect(posts).toEqual([])
+}, 20_000)

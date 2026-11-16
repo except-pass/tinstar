@@ -60,5 +60,6 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     allowComments: () => { commentsAvailable = true },
     removeOptions: () => { requestText = historyText.replace(/,"options":\[.*\]/, '') },
     removeBinding: () => { requestText = historyText.replace(/"source_request":\{[^}]+\},/, '') },
+    removeRequest: () => { requestText = 'A status update without a recorded decision request.' },
   }
 }

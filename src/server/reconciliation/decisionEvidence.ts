@@ -21,6 +21,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const rows = decisionRequests(history?.context.blocks ?? [])
+  if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []
   try { currentRequests = decisionProposals((history?.context.blocks ?? []).map(({ id, text }) => ({ id, text }))).map(row => row.id) }
   catch { reasons.push('Decision publication history is contradictory or incomplete') }
