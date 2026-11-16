@@ -311,6 +311,10 @@ it('advances transfer proof through repeated failed transfers of one source oper
   let bound = original.lease_token
   vi.mocked(fetch).mockImplementation(async (url, init) => {
     if (String(url).endsWith('/sessions') && init?.method === 'GET') return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+    if (String(url).endsWith('/submission-state')) {
+      const body = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ ok: true, data: { submissions: body.original_lease_token === bound ? [{ operation_id: original.operation_id, selection: original, state: 'lease-lost', next: original.next, binding_matches_original_lease: true }] : [] } }))
+    }
     if (String(url).endsWith('/submit')) {
       const input = JSON.parse(String(init?.body))
       if (input.lease_token !== bound) {
@@ -399,4 +403,53 @@ it('retains source-delivery receipts and worker replies in Preparation without t
   expect(screen.getByText('Please verify source evidence')).toBeVisible()
   expect(screen.getByText('Delivery details').closest('details')).not.toHaveAttribute('open')
   expect(submits).toHaveLength(0)
+})
+
+it.each(['lost response', 'expired during observation'])('reconciles a transfer after %s, reload and another session transfer', async failure => {
+  outcome = 'lease-lost'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Re-claim & revalidate' })
+  const original = submits[0]!
+  let bound = original.lease_token
+  let transferred = false
+  const claims: string[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    if (String(url).endsWith('/sessions') && init?.method === 'GET') return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+    if (String(url).endsWith('/submission-state')) return new Response(JSON.stringify({ ok: true, data: { submissions: body.original_lease_token === bound ? [{ operation_id: original.operation_id, selection: original, state: 'lease-lost', next: original.next, binding_matches_original_lease: true }] : [] } }))
+    if (String(url).endsWith('/claim')) claims.push(body.card_id)
+    if (String(url).endsWith('/submit')) {
+      expect(body.operation_id).toBe(original.operation_id)
+      expect(body.option_id).toBe(original.option_id)
+      if (body.lease_token !== bound) {
+        expect(body.original_lease_token).toBe(bound)
+        bound = body.lease_token
+      }
+      if (bound === 'session-b-lease' && !transferred) {
+        transferred = true
+        if (failure === 'lost response') throw new Error('Transfer response lost')
+      }
+    }
+    return fallback(url, init)
+  })
+  leaseToken = 'session-b-lease'
+  fireEvent.click(screen.getByRole('button', { name: 'Re-claim & revalidate' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+  await waitFor(() => expect(transferred).toBe(true))
+  await waitFor(() => expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked())
+  await waitFor(() => expect(screen.queryByText('Decision Desk operation in progress.')).toBeNull())
+  cleanup(); leaseToken = 'session-c-lease'
+  await ready()
+  fireEvent.click(await screen.findByRole('button', { name: 'Re-claim & revalidate' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeEnabled())
+  expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+  outcome = 'recorded-empty'
+  fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+  await screen.findByText('No prepared decisions ready.')
+  expect(bound).toBe('session-c-lease')
+  expect(submits.at(-1)).toMatchObject({ operation_id: original.operation_id, option_id: original.option_id, original_lease_token: 'session-b-lease' })
+  expect(claims.every(card => card === packet.packet.binding.card_id)).toBe(true)
 })

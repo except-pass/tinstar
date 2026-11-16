@@ -72,10 +72,24 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     if (!response.review_session_token || !response.session?.id) throw new Error('Review session could not be verified. Backend unavailable.')
     context.current.token = response.review_session_token; context.current.id = response.session.id; persist()
   }, [persist])
+  const recover = useCallback(async (pending?: DeskSubmit) => {
+    type Recovery = { submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; resolve_wait?: string; binding_matches_original_lease?: boolean }> }
+    const capabilities = [...new Set([pending?.lease_token ?? context.current.recoveryLease ?? context.current.lease, pending?.original_lease_token].filter((value): value is string => !!value))]
+    let recovered: Recovery = { submissions: [] }
+    for (const capability of capabilities.length ? capabilities : [undefined]) {
+      const value = await deskCall<Recovery>('submission-state', { review_session_token: context.current.token, ...(capability ? { original_lease_token: capability } : {}) })
+      recovered = { submissions: [...recovered.submissions.filter(old => !value.submissions.some(row => row.operation_id === old.operation_id)), ...value.submissions] }
+      if (pending && value.submissions.some(row => row.operation_id === pending.operation_id && row.binding_matches_original_lease)) {
+        pending.original_lease_token = capability; persist(); break
+      }
+    }
+    return recovered
+  }, [persist])
   const claimNext = useCallback(async (cardId?: string, revalidate = false) => {
     await ensureSession()
     const pending = Object.values(context.current.attempts)[0]
     if (pending) {
+      if (pending.original_lease_token) await recover(pending)
       const packet = claimRef.current?.packet ?? await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(pending.packet_id)}`)
       if (!claimRef.current?.packet) accept({ outcome: 'lease-lost', packet, lease_token: pending.lease_token })
       cardId = packet.packet.binding.card_id
@@ -95,7 +109,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     } else accept(value)
     performance.measure(`decision-desk.claim-api.${value.outcome}`, { start: started, end: performance.now() })
     return value
-  }, [accept, ensureSession, persist])
+  }, [accept, ensureSession, persist, recover])
   const run = useCallback(async (action: () => Promise<void>, ambiguous = false) => {
     if (lock.current) return
     lock.current = true; setBusy(true); setError(null)
@@ -119,7 +133,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
         const packet = await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(pending.packet_id)}`)
         accept({ outcome: 'lease-lost', packet, lease_token: pending.lease_token })
       }
-      const recovered = await deskCall<{ submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; resolve_wait?: string }> }>('submission-state', { review_session_token: context.current.token, ...(recoveryLease ? { original_lease_token: recoveryLease } : {}) })
+      const recovered = await recover(pending)
       const retained = pending ? recovered.submissions.find(attempt => attempt.operation_id === pending.operation_id) : recovered.submissions[0]
       if (!pending && retained && recoveryLease) {
         const packet = await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(retained.selection.packet_id)}`)
@@ -145,7 +159,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
       persist()
     })
     return () => { mounted.current = false }
-  }, [accept, claimNext, ensureSession, persist, run, targetPending])
+  }, [accept, claimNext, ensureSession, persist, recover, run, targetPending])
   // Cached-source revalidation, never research. Visibility/focus avoid an
   // unattended polling loop; the lease expiry is also enforced locally.
   useEffect(() => {
@@ -176,7 +190,6 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     if (confirmed && (packet.packet.risk.rating === 'High' || packet.packet.reversibility.rating === 'Difficult')) input.confirmation = { option_id: option, scope: packet.packet.authorization.scope }
     context.current.attempts[key] = input; context.current.recoveryLease = input.lease_token; persist()
     const saved = await deskCall<DeskResult>('submit', input)
-    if (input.original_lease_token && saved.outcome !== 'lease-lost') { input.original_lease_token = input.lease_token; persist() }
     setResult(saved)
     if (saved.outcome === 'recorded' || saved.outcome === 'recorded-empty') {
       setSubmissionRevision(value => value + 1)
