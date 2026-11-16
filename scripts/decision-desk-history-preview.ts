@@ -44,7 +44,7 @@ const listen = (server: ReturnType<typeof createServer>, port: number) => new Pr
 await listen(webhook, 5294)
 await listen(notion, 5295)
 const secret = async () => JSON.stringify({ url: 'http://127.0.0.1:5294/job', key: 'preview-only-sender' })
-const fixture = await preparationHistoryFixture(root, secret, { cards: 64, intervalMs: 350,
+const fixture = await preparationHistoryFixture(root, secret, { cards: 64, intervalMs: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350),
   wrapFetch: fixtureFetch => {
     syntheticNotion = fixtureFetch
     return (input, init) => { const url = new URL(String(input)); return fetch(`http://127.0.0.1:5295${url.pathname}${url.search}`, init) }
@@ -107,7 +107,7 @@ const ui = createServer(async (req, res) => {
 })
 seedOriginAllowlist(5293)
 await listen(ui, 5293)
-const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards: 64 }
+const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards: 64, notion_interval_ms: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350) }
 await writeFile(join(output, 'preview.json'), JSON.stringify(manifest, null, 2))
 process.stdout.write(`${JSON.stringify(manifest)}\n`)
 function stop() {

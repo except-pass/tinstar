@@ -16,8 +16,8 @@ export interface CardContextRead {
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private commentCache = new Map<string, { until: number; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
-  private cache = new Map<string, { until: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
+  private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
+  private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch, private jira?: JiraAdapter) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
@@ -26,14 +26,14 @@ export class CardContextReader {
   /** Display cached evidence without making a property-only view wait on prose. */
   cachedComments(id: string): CardContextRead | undefined {
     const cached = this.commentCache.get(id)
-    return cached && cached.until > Date.now() ? cached.resolved : undefined
+    return cached && cached.resolvedUntil > Date.now() ? cached.resolved : undefined
   }
   /** Read the cached observation with its original conservative freshness;
    * looking at evidence never refreshes it or fetches source history. */
   cachedDecisionHistory(id: string) {
     const body = this.cache.get(id), comments = this.commentCache.get(id)
     if (!body?.resolved || !comments?.resolved) return undefined
-    const until = Math.min(body.until, comments.until)
+    const until = Math.min(body.resolvedUntil, comments.resolvedUntil)
     const context: CardContextRead = {
       ...body.resolved, commentsOutcome: comments.resolved.outcome,
       blocks: [...body.resolved.blocks, ...comments.resolved.blocks],
@@ -52,12 +52,12 @@ export class CardContextReader {
   }
   commentDetails(id: string, force = false): Promise<CardContextRead> {
     const cached = this.commentCache.get(id)
-    if (!force && cached && (!cached.resolved || cached.until > Date.now())) return cached.value
+    if (!force && cached && (cached.pending || cached.until > Date.now())) return cached.value
     if (this.commentCache.size >= 100) this.commentCache.delete(this.commentCache.keys().next().value!)
     const value = this.readComments(id)
-    const entry = { until: Date.now() + 30_000, value, resolved: undefined as CardContextRead | undefined }
+    const entry = { until: Date.now() + 30_000, pending: true, value, resolved: cached?.resolved, resolvedUntil: cached?.resolvedUntil ?? 0 }
     this.commentCache.set(id, entry)
-    void value.then(result => { entry.resolved = result }).catch(() => {})
+    void value.then(result => { entry.resolved = result; entry.resolvedUntil = entry.until }).catch(() => {}).finally(() => { entry.pending = false })
     return value
   }
   private async readComments(id: string): Promise<CardContextRead> {
@@ -110,12 +110,12 @@ export class CardContextReader {
   }
   get(id: string, revision?: string) {
     const cached = this.cache.get(id)
-    if (cached && (!cached.resolved || cached.until > Date.now()) && (revision === undefined || revision === cached.revision)) return cached.value
+    if (cached && (cached.pending || cached.until > Date.now()) && (revision === undefined || revision === cached.revision)) return cached.value
     if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
     const value = this.read(id).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
-    const entry = { until: Date.now() + 30_000, revision, value, resolved: undefined as CardContextRead | undefined }
+    const entry = { until: Date.now() + 30_000, pending: true, revision, value, resolved: cached?.resolved, resolvedUntil: cached?.resolvedUntil ?? 0 }
     this.cache.set(id, entry)
-    void value.then(result => { entry.resolved = result }).catch(() => {})
+    void value.then(result => { entry.resolved = result; entry.resolvedUntil = entry.until }).catch(() => {}).finally(() => { entry.pending = false })
     return value
   }
   async read(id: string): Promise<CardContextRead> {
