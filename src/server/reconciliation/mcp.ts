@@ -2,7 +2,7 @@ import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } 
 import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
 import { DecisionDeskConflict } from './decisionPackets'
 import { CardLeases, CardLeaseError, leaseCaller, leaseFailure, withLeaseCaller } from './cardLeases'
-import { decisionItems, hasQueue } from '../../shared/reconciliationQueue'
+import { hasQueue, type DeskQueue } from '../../shared/reconciliationQueue'
 import { renderedObservationSchema, deliverySchema } from '../../shared/presentationObservation'
 import { organizedGroups } from '../../shared/floorOrganization'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -80,6 +80,19 @@ export interface PresentationReaders {
 }
 type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
+/** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
+function claimNextCards(queue: DeskQueue) {
+  const source = queue.needsWill ?? queue.items
+  const ordered = [...source.filter(item => item.readiness === 'ready-now'), ...source.filter(item => item.readiness !== 'ready-now')]
+  const seen = new Set<string>()
+  const cards: Array<{ id: string; readiness: (typeof source)[number]['readiness']; reasons: string[] }> = []
+  for (const item of ordered) for (const id of item.cardIds) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    cards.push({ id, readiness: item.readiness, reasons: [...item.reasons] })
+  }
+  return cards
+}
 const renderedSchema = renderedObservationSchema
 const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), delivery: deliverySchema.optional(), state: stateSchema.optional() }).strict()
 
@@ -105,9 +118,17 @@ export class ReconciliationMcp {
     }
     const claim = async (input: { operation_id: string; lease_token?: string; card_id?: string }) => {
       try {
+        const enrich = async (claimed: Awaited<ReturnType<CardLeases['claim']>>, queue?: QueueRead) => {
+          const claimedId = 'lease' in claimed && claimed.lease ? claimed.lease.card_id : undefined
+          if (!input.card_id && claimedId && !queue) queue = await (this.readers.workViews?.() ?? this.readers.queue()).catch(() => undefined)
+          const readiness = !input.card_id && claimedId
+            ? (queue && hasQueue(queue) ? claimNextCards(queue).find(card => card.id === claimedId) : undefined)
+            : undefined
+          return { ...claimed, ...(!input.card_id && claimedId ? { readiness: readiness?.readiness ?? 'unknown', readiness_reasons: readiness?.reasons ?? ['Current queue readiness evidence is unavailable for this card'] } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? queue.warnings : undefined } : {}), ...(claimedId ? { card: await this.readers.getWork?.({ card_id: claimedId, details: true }) } : {}) }
+        }
         if (input.lease_token) {
           const held = await this.leases.claim(input.card_id ? [input.card_id] : [], caller, actor, input.operation_id, input.lease_token, !!input.card_id)
-          return { ...held, ...('lease' in held && held.lease ? { card: await this.readers.getWork?.({ card_id: held.lease.card_id, details: true }) } : {}) }
+          return await enrich(held)
         }
         let cards: string[], queue: QueueRead | undefined
         const activeCard = async (id: string) => {
@@ -126,7 +147,10 @@ export class ReconciliationMcp {
         } else {
           queue = await (this.readers.workViews?.() ?? this.readers.queue())
           if (!hasQueue(queue)) return queue
-          cards = [...new Set(decisionItems(queue).flatMap(item => item.cardIds))]
+          cards = []
+          for (const card of claimNextCards(queue)) {
+            cards.push(card.id)
+          }
         }
         const select = async () => {
           if (input.card_id) return this.leases.claim(cards, caller, actor, input.operation_id, undefined, true)
@@ -140,14 +164,13 @@ export class ReconciliationMcp {
           // already held and therefore skipped by the loop above.
           return this.leases.claim([], caller, actor, input.operation_id)
         }
-        const claimed = await select()
-        return { ...claimed, ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? queue.warnings : undefined } : {}), ...('lease' in claimed && claimed.lease ? { card: await this.readers.getWork?.({ card_id: claimed.lease.card_id, details: true }) } : {}) }
+        return await enrich(await select(), queue)
       } catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, input.operation_id); throw error }
     }
 
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     const claimInstructions = 'Use for next card in this conversation. Generate a fresh globally unique UUID operation_id for a new operation; reuse it only for an identical retry. Start without lease_token, then keep the returned lease_token in tool arguments across calls and later turns, never visible chat, card text or URLs. Present it on every later call for that card, including repeat claims. Independent conversations start without a token. A repeated claim with the token returns the held card; release it before selecting another. A lost token expires after 60 minutes. Claims never change card workflow or worker assignment. Retry an identical operation_id for an ambiguous result.'
-    catalog.registerTool('claim_next_card', { description: 'Claim the first actionable unclaimed Needs Will card in existing queue order. ' + claimInstructions, inputSchema: { operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
+    catalog.registerTool('claim_next_card', { description: 'Claim the first unclaimed Needs Will card in existing queue order, ready-now cards first. The result includes that card\'s readiness and readiness_reasons; when it is not certified ready, check the card before acting. ' + claimInstructions, inputSchema: { operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
     catalog.registerTool('claim_card', { description: 'Claim one exact active configured-board card. ' + claimInstructions, inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
     catalog.registerTool('release_claim', { description: 'Release this conversation card lease with an explicit reason; no card workflow changes. Use lease_token from the previous tool result in arguments only, never visible chat, card text or URLs. Discard it after release; a later next card starts without a token.', inputSchema: { lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } }, async input => {
       try { return result(await this.leases.release(caller, input.lease_token, input.reason)) }

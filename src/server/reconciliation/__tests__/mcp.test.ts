@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { ReconciliationMcp, privatePeer } from '../mcp'
+import { ReconciliationMcp, privatePeer, type PresentationReaders } from '../mcp'
 import { fixtureScene, fixtureSources, fixtureQueue } from '../../../../test-fixtures/reconciliation/scenes'
 import { buildQueue } from '../queue'
 import { buildWorkerLinkReport } from '../workerLinkReport'
@@ -227,6 +227,56 @@ describe('authenticated real MCP transport', () => {
     expect(mcp.sessions.read(identity.scene_id).state?.flash?.ids).toEqual(ids)
     expect(mcp.sessions.read(identity.scene_id).state?.revision).toBe(1)
     expect(mcp.sessions.result(identity.scene_id, args.command_id).delivery).toMatchObject({ stage: 'foreground-visible', visible_targets: ids, pending: false })
+  })
+  it('claims a Needs Will card when none are ready-now, prefers ready-now, and skips a held card', async () => {
+    root = await mkdtemp(join(tmpdir(), 'tinstar-claim-next-'))
+    const a = 'a'.repeat(32), b = 'b'.repeat(32), c = 'c'.repeat(32)
+    const item = (cardId: string, readiness: 'ready-now' | 'needs-readiness-verification', reasons: string[]) => ({ id: cardId, readiness, reasons, cardIds: [cardId] })
+    let needsWill = [
+      item(a, 'needs-readiness-verification', ['A Will action tag/owner alone does not establish a concrete owner-only next action']),
+      item(b, 'needs-readiness-verification', ['Publication history is incomplete; refresh before choosing']),
+    ]
+    const mcp = new ReconciliationMcp({
+      scene: async () => fixtureScene(), card: async () => ({}), queue: async () => { throw new Error('Claims must use the fresh tool view') },
+      workViews: async () => ({ items: needsWill, needsWill }) as Awaited<ReturnType<NonNullable<PresentationReaders['workViews']>>>,
+      workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
+      currentCard: async () => ({ archived: false, in_trash: false, properties: { Status: { value: 'Waiting' } } }) as unknown as Awaited<ReturnType<NonNullable<PresentationReaders['currentCard']>>>,
+      getWork: async input => ({ outcome: 'available', card: { id: (input as { card_id?: string }).card_id } }),
+    }, root)
+    server = createServer((req, res) => { void mcp.handle(req, res) })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+    client = new Client({ name: 'claim-next-all', version: '1' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+    const described = (await client.listTools()).tools.find(tool => tool.name === 'claim_next_card')
+    expect(described?.description).toContain('ready-now')
+    expect(described?.description).toContain('readiness_reasons')
+    const call = async (name: string, args: Record<string, unknown>) => parse(await client!.callTool({ name, arguments: args }))
+    const first = await call('claim_next_card', { operation_id: 'zero-ready' })
+    expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: a }, readiness: 'needs-readiness-verification', readiness_reasons: ['A Will action tag/owner alone does not establish a concrete owner-only next action'] })
+    const repeated = await call('claim_next_card', { operation_id: 'repeat-first', lease_token: first.lease_token })
+    expect(repeated).toMatchObject({ outcome: 'held', lease: first.lease, lease_token: first.lease_token, readiness: first.readiness, readiness_reasons: first.readiness_reasons })
+    const queued = needsWill
+    needsWill = []
+    const replayed = await call('claim_next_card', { operation_id: 'zero-ready' })
+    expect(replayed).toMatchObject({ outcome: 'claimed', lease: first.lease, lease_token: first.lease_token, readiness: 'unknown', readiness_reasons: ['Current queue readiness evidence is unavailable for this card'] })
+    const missingRepeat = await call('claim_next_card', { operation_id: 'repeat-missing', lease_token: first.lease_token })
+    expect(missingRepeat).toMatchObject({ outcome: 'held', lease: first.lease, lease_token: first.lease_token, readiness: 'unknown', readiness_reasons: replayed.readiness_reasons })
+    needsWill = queued
+    const skipped = await call('claim_next_card', { operation_id: 'skip-held' })
+    expect(skipped).toMatchObject({ outcome: 'claimed', lease: { card_id: b }, readiness: 'needs-readiness-verification', readiness_reasons: ['Publication history is incomplete; refresh before choosing'] })
+    expect((await call('release_claim', { lease_token: first.lease_token, reason: 'Finished first' })).outcome).toBe('released')
+    expect((await call('release_claim', { lease_token: skipped.lease_token, reason: 'Finished second' })).outcome).toBe('released')
+    needsWill = [
+      item(a, 'needs-readiness-verification', ['A Will action tag/owner alone does not establish a concrete owner-only next action']),
+      item(c, 'ready-now', []),
+      item(b, 'needs-readiness-verification', ['Publication history is incomplete; refresh before choosing']),
+    ]
+    const preferred = await call('claim_next_card', { operation_id: 'prefer-ready' })
+    expect(preferred).toMatchObject({ outcome: 'claimed', lease: { card_id: c }, readiness: 'ready-now', readiness_reasons: [] })
+    const afterReadyHeld = await call('claim_next_card', { operation_id: 'after-ready-held' })
+    expect(afterReadyHeld.lease.card_id).toBe(a)
   })
   it('restricts peers to loopback and tailnet ranges', () => {
     for (const ip of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '100.64.1.2', '100.127.2.1', 'fd7a:115c:a1e0::1']) expect(privatePeer(ip)).toBe(true)
