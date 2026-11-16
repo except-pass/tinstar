@@ -79,6 +79,17 @@ const failureCopy: Record<string, string> = {
 }
 function Review({ desk, onSource, sourceOpen, onNextAvailable }: { desk: DecisionDeskState; onSource: () => void; sourceOpen: boolean; onNextAvailable: () => void }) {
   const held = desk.claim!, stored = held.packet!, packet = stored.packet
+  const actions = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const strip = actions.current, root = strip?.closest<HTMLElement>('.decision-desk')
+    if (!strip || !root) return
+    // Reserve the rendered height, including wrapped actions, so the last choice
+    // and evidence can scroll above the sticky strip at zoom and narrow widths.
+    const measure = () => root.style.setProperty('--dd-action-height', `${strip.getBoundingClientRect().height}px`)
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+    observer?.observe(strip); window.addEventListener('resize', measure); measure()
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure); root.style.removeProperty('--dd-action-height') }
+  }, [])
   const [confirm, setConfirm] = useState(false), [research, setResearch] = useState(false), [reason, setReason] = useState('')
   const [now, setNow] = useState(Date.now())
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
@@ -98,6 +109,7 @@ function Review({ desk, onSource, sourceOpen, onNextAvailable }: { desk: Decisio
   const message = pendingWrite ? failureCopy['save-unconfirmed'] : expired ? failureCopy['lease-lost'] : retainedUnconfirmed ? failureCopy[desk.result?.outcome === 'recorded-releasing' ? 'recorded-releasing' : 'save-unconfirmed'] : stale ? failureCopy['packet-invalidated'] : desk.result && !desk.result.outcome.startsWith('recorded') ? failureCopy[desk.result.outcome] ?? desk.result.message : desk.result?.outcome === 'recorded-releasing' ? failureCopy['recorded-releasing'] : null
   const submitLabel = retry ? (desk.result?.outcome === 'save-unconfirmed' ? 'Confirm save status' : 'Retry without advancing') : 'Submit decision & next →'
   return <>
+    <div className="dd-review-content">
     {message && <div className={`dd-banner ${expired || desk.result?.outcome === 'not-saved' ? 'dd-danger' : ''}`} role="alert"><strong>{message}</strong>{desk.result?.progress?.length ? <p>Independent source requests already recorded: {desk.result.progress.map(item => item.request_id).join(', ')}. This request remains unresolved.</p> : null}{desk.result?.reasons?.length ? <details><summary>View details</summary>{desk.result.reasons.map(text => <p key={text}>{text}</p>)}</details> : null}{blocked && held.code === 'card-held' && !retry && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={onNextAvailable}>Claim next prepared decision</button>}{blocked && reconcileRetained && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={() => void desk.submit()}>Confirm retained save status</button>}{blocked && !pendingWrite && !retainedUnconfirmed && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={() => void (stale && !expired ? desk.release('research', 'Packet stale; refresh required') : desk.retryClaim())}>{stale && !expired ? 'Refresh packet & next' : 'Re-claim & revalidate'}</button>}</div>}
     {desk.error && <p className="dd-banner dd-danger" role="alert">{desk.error}</p>}
     <div className="dd-identifiers" data-semantic-id={`card:${packet.binding.card_id}`} data-decision-id={packet.binding.request_key} tabIndex={-1}><span className="dd-eyebrow">DECISION · {packet.binding.card_id}</span><small>Request {packet.binding.request_id}</small>{!expired && <span className="dd-lease">Leased to this session</span>}</div>
@@ -109,7 +121,8 @@ function Review({ desk, onSource, sourceOpen, onNextAvailable }: { desk: Decisio
     <Section label="YOUR DECISION">{desk.snapshot?.recorded_requests.filter(item => item.card_id === packet.binding.card_id).map(item => <p className="dd-caption" key={`${item.request_id}:${item.confirmed_at}`}>Independent request {item.request_id} durably recorded at {new Date(item.confirmed_at).toLocaleString()}. Each request is reviewed separately.</p>)}{parts.map(part => <fieldset key={requestKey(part)} className="dd-choices" disabled={desk.busy || blocked || !!desk.attempts[requestKey(part)]}><legend>Choose one source option</legend><p className="dd-caption">Request {part.packet.binding.request_id}</p>{part.packet.binding.options.map(option => <label key={option.id} className={`dd-option ${desk.selections[requestKey(part)] === option.id ? 'dd-selected' : ''}`}><input type="radio" name={requestKey(part)} value={option.id} checked={desk.selections[requestKey(part)] === option.id} onChange={() => desk.select(part, option.id)} /><span>{option.label}{option.id === part.packet.recommended_option_id && <small>Recommended</small>}</span></label>)}</fieldset>)}</Section>
     <details className="dd-inline-evidence"><summary>Evidence, confidence & execution boundaries</summary><Inspector packet={stored} count={parts.length} onSource={onSource} /></details>
     {sourceOpen && <details className="dd-source-context" open><summary>Source request & discussion</summary><SourceDiscussion packet={stored} /></details>}
-    <footer className="dd-actions"><button type="button" className="dd-primary" disabled={desk.busy || blocked || !chosen} onClick={() => high && !retry ? setConfirm(true) : void desk.submit()}>{desk.busy ? 'Saving / verifying…' : submitLabel}</button><button type="button" className="dd-secondary" disabled={desk.busy || retry} onClick={() => void desk.release('skip')}>Skip</button><button type="button" className="dd-text" disabled={desk.busy || retry} onClick={() => setResearch(value => !value)}>Need more research</button></footer>
+    </div>
+    <footer ref={actions} className="dd-actions"><button type="button" className="dd-primary" disabled={desk.busy || blocked || !chosen} onClick={() => high && !retry ? setConfirm(true) : void desk.submit()}>{desk.busy ? 'Saving / verifying…' : submitLabel}</button><button type="button" className="dd-secondary" disabled={desk.busy || retry} onClick={() => void desk.release('skip')}>Skip</button><button type="button" className="dd-text" disabled={desk.busy || retry} onClick={() => setResearch(value => !value)}>Need more research</button></footer>
     {research && <div className="dd-research"><label>Research needed (optional)<textarea value={reason} maxLength={1000} onChange={event => setReason(event.target.value)} /></label><button type="button" className="dd-secondary" disabled={desk.busy} onClick={() => { setResearch(false); void desk.release('research', reason) }}>Request research & next</button><button className="dd-text" type="button" onClick={() => setResearch(false)}>Cancel</button></div>}
     {confirm && <Confirmation parts={parts} selections={desk.selections} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); void desk.submit(true) }} />}
   </>

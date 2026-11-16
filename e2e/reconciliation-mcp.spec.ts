@@ -313,6 +313,25 @@ test('Decision Desk header tabs stay separate at all review viewport sizes', asy
   }
 })
 
+test('Decision Desk action strip is opaque and final content scrolls clear at every review width', async ({ page }) => {
+  await page.goto(`${base}/?view=decisions`)
+  await expect(page.locator('.dd-choices')).toBeVisible()
+  for (const [width, height] of [[390, 844], [430, 932], [768, 1024], [1440, 900], [1920, 1080]] as const) {
+    await page.setViewportSize({ width, height })
+    await expect(page.locator('.dd-actions')).toHaveCSS('background-color', 'rgb(19, 30, 44)')
+    await page.locator('.decision-desk').evaluate(element => { element.scrollTop = element.scrollHeight })
+    const choice = await page.locator('.dd-choices').boundingBox()
+    const footer = await page.locator('.dd-actions').boundingBox()
+    expect(choice).not.toBeNull(); expect(footer).not.toBeNull()
+    expect(choice!.y + choice!.height).toBeLessThanOrEqual(footer!.y)
+    if (width < 1060) {
+      const evidence = await page.locator('.dd-inline-evidence').boundingBox()
+      expect(evidence).not.toBeNull()
+      expect(evidence!.y + evidence!.height).toBeLessThanOrEqual(footer!.y)
+    }
+  }
+})
+
 test('Decision Desk reports unavailable sources without claiming a visible decision', async ({ page }) => {
   await page.route('**/api/reconciliation/decision-desk/**', route => route.fulfill({ status: 503, json: { ok: false, error: { message: 'Fixture backend unavailable' } } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ status: 503, json: { ok: false } }))
