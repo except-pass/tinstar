@@ -4,12 +4,11 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-The operational queue retains canonical requests and their verification and conditional states. The [Decision Desk](#decisions-tab) reviews prepared packets bound to those requests. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
+The operational queue retains canonical requests and their verification and conditional states. The [Decisions surface](#decisions-tab) presents those requests and offers prepared review. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
 
 Source-bound answer transport, receipt reconciliation and delivery recovery follow the
 [shared workflow contract](workflow.md#first-mate-decision-reconciliation).
-The current review and source-discussion controls are described in the
-[Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui).
+The [Decisions controls](#decisions-tab) describe workbench review and source discussion.
 
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
@@ -77,10 +76,63 @@ The live discovery proof is saved outside the repository at `/home/farm/fm-home/
 
 ## Decisions tab
 
-`?view=decisions` opens the existing Decisions surface as the Decision Desk.
 The [Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui)
-owns Review, Preparation, source discussion and prepared-claim navigation.
-The operational queue described here remains the source for request identity,
-readiness and MCP queue traversal; queue navigation alone does not establish a
-prepared packet or a review lease. The [MCP delivery contract](reconciliation-mcp.md#delivery-and-acknowledgment)
-owns presentation handoff and visual acknowledgment.
+owns mode selection and prepared Review / Preparation. The workbench controls
+below apply to the source-request list. Queue navigation alone does not establish
+a prepared packet or a review lease.
+
+`?view=decisions` lists the shared `needsWill` projection across all three
+readiness categories, including future/conditional requests. Operational coordination
+bundles appear only under diagnostics rather than as one answerable decision. See the
+[workflow view contract](workflow.md#slice-3-shared-operational-views-and-normal-use)
+for ask inclusion, PR evidence, request age and advisory execution warnings.
+Legacy encoded text is decoded before readiness checks, so “After the next prod
+release” remains conditional. Source warnings and retained worker notes remain
+available under the header’s **Source status** / **Some sources need verification**
+disclosure and **Technical diagnostics**.
+Search by title, question, card ID or readiness. Selecting a compact row opens
+its action workbench beside the queue on desktop; mobile shows the queue or detail
+one pane at a time, with **All decisions** returning to the list. The persistent
+**Previous** and **Next decision** footer traverses the visible filtered list,
+including verification and conditional requests, and shows the current position.
+This differs from the ready-only MCP queue navigation.
+
+The detail shows one recommended action, its rationale and up to two alternatives;
+**More options** appears only for additional published actions. The
+[typed proposal contract](workflow.md#decisions-workbench-proposals) owns publication,
+currentness and selection checks. Stale or unknown evidence keeps the last-known
+recommendation visible with disabled choices. With no typed proposal, it shows
+**Recommendation not yet published** and **Ask for a recommendation**, which seeds
+an editable Ask turn. Legacy published workflow options retain their existing
+controls; freeform prose never becomes executable suggestions.
+
+**Something wrong?** opens **Already resolved**, **Not my decision** and **Need
+more information**. Each seeds a verification question for the exact request;
+it does not dismiss the request or mutate source status.
+
+**Discussion** previews the latest relevant First Mate answer and embeds the
+existing Ask text/voice composer. Context and return navigation retain the exact
+request key even without a linked card. **Full conversation** opens the same
+persistent Discuss thread. **Return to source** restores Decisions and its search,
+closing the mobile Discuss sheet. An expanded visible Discuss conversation replaces
+the inline composer so only one complete composer is shown. Switching selected
+requests collapses an unrelated expanded conversation; a conversation opened in
+Discuss afterwards stays open.
+
+Small source links and owner/status remain visible. **Evidence and delivery
+details** holds source-specific response controls, terminal links, card context,
+receipts and technical data. Selecting an action retains the request until actual
+source reconciliation; delivery and observed outcomes follow the
+[Ask selection contract](ask.md#discuss-and-decisions-presentation).
+Opening a row retains its canonical request identity and shares linked-card focus,
+visible through `get_scene`; persistence follows the [presentation preference rules](overview.md).
+Unlinked requests expose their details and evidence without offering card focus.
+
+The [MCP delivery contract](reconciliation-mcp.md#delivery-and-acknowledgment)
+governs tab selection, surface handoff and visual acknowledgment.
+Within Decisions, flash temporarily reveals all requested queue rows outside
+the local search without changing its text, then restores the list scroll
+unless the user interacts. Assistant reveal includes both its primary target
+and additional targets, including during foreground replay. Editing the local
+query dismisses the transient reveal. Steady selection and a brief flash use
+distinct styles; failed source reads report unavailable coverage.

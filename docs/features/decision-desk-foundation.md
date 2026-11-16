@@ -7,7 +7,7 @@ P2 adds [registered review sessions and prepared claims](#p2-registered-review-s
 P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
 P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
 Generic claims, source answers, receipts and `search_work` filters/coverage
-retain their behavior. P5 replaces the Decisions screen as described below.
+retain their behavior. P5 adds a Decisions mode as described below.
 
 P1 starts no workers, dispatches no jobs and spends nothing on preparation.
 Automatic replenishment is stored ON by default, ready depth 10 (1–30), maximum
@@ -366,8 +366,12 @@ An explicit replacement context may also supply `original_lease_token` to prove
 access to an older retained selection. After reclaim, submit accepts a fresh
 packet version only when its source binding/revision and authorization are
 identical, preserving the source operation ID. Transfer to a different review
-context also requires that original capability. A changed source revision cannot
-be rescued by an old selection or operation.
+context also requires the capability for the latest server-bound context. Recovery
+returns `binding_matches_original_lease` for each operation, identifying whether the
+supplied capability matches that binding. After a lost transfer response or a
+lease-lost result, reconcile the retained candidate capabilities through recovery
+before another transfer; retain the exact operation and selection. A changed source
+revision cannot be rescued by an old selection or operation.
 MCP exposes `submit_prepared_decision` and `get_prepared_submission_state` with
 these same semantics; no scene ID or invented conversation identity is used.
 
@@ -437,9 +441,13 @@ Open **Source request & discussion** from the evidence inspector (or the inline
 to inspect card context, receipt history, an available exact source terminal link,
 and the request-bound text/voice composer. **Open source conversation in Discuss**
 resumes its existing thread. Returning from Discuss retains the exact request key;
-if the card-only claim returns a different request, the desk releases it without
-answering and reports that the requested decision is not ready or is held. It never
-presents that substitute as the requested destination. Unlinked requests cannot
+if the card-only claim returns a different request, the desk releases a newly
+allocated substitute without answering and reports that the requested decision is
+not ready or is held. An existing held claim, including another request on the same
+card, retains its lease and local selection with an explanation that this session
+holds a different decision. It never presents that claim as the requested destination.
+Explicit Discuss returns re-arm navigation even to the same request; completed
+targets remain consumed across mode changes and ordinary refreshes. Unlinked requests cannot
 be reviewed without a verified canonical card and prepared packet.
 
 **Submit decision & next →** records the selected source option before advancing.

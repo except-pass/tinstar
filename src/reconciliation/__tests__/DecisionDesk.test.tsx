@@ -562,7 +562,7 @@ it.each([
     let data: unknown
     if (path === 'claim') {
       claims.push(body)
-      data = !advanced ? { outcome: 'held', packet: first, lease_token: 'secret-lease' }
+      data = !advanced ? { outcome: 'held', packet: first, lease_token: 'secret-lease', lease: { card_id: first.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
         : available && !body.card_id ? { outcome: 'held', packet: second, lease_token: 'second-lease' }
           : { outcome: 'no-prepared-decisions' }
     } else if (path === 'submit') {

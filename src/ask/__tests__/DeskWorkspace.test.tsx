@@ -612,7 +612,7 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   fireEvent.click(screen.getByRole('button', { name: 'Explicit source return' }))
   await waitFor(() => expect(claims.length).toBeGreaterThan(before))
   expect(claims.at(-1)).toMatchObject({ card_id: a.packet.binding.card_id, lease_token: 'lease-b' })
-  await screen.findByText('This session already holds a different decision. Finish or skip it before switching.')
+  await screen.findByText('This session already holds a different decision. Finish or skip it before switching.', { selector: '.dd-notice' })
   expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`)
   expect(releases).toHaveLength(1)
 })
