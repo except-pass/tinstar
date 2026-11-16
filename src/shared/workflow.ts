@@ -42,6 +42,7 @@ export const ordinaryPropertiesSchema = z.object({
 const contentSchema = z.object({ brief: prose.optional(), acceptance_criteria: prose.optional() }).strict()
 const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
   expected: z.record(z.unknown()).optional() }
+const resolvedWait = z.string().min(1)
 const waitId = z.string().trim().min(1).max(2048)
 export const waitSchema = z.object({
   type: z.enum(waitingForTypes), id: waitId, dependency: prose, unblocks_when: prose, follow_up_by: label,
@@ -57,13 +58,13 @@ export const decisionOptionsSchema = z.array(z.object({ id: identity.refine(valu
   .refine(options => new Set(options.map(option => option.id)).size === options.length, 'Option ids must be unique')
 const reviewRecovery = z.object({ reason: prose, confirmed_absent: z.literal(true) }).strict().optional()
 export const answerDecisionSchema = z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: prose, option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
-    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: prose.optional(), legacy_action: label.optional() }).strict()
+    next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: resolvedWait.optional(), legacy_action: label.optional() }).strict()
 export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('submit_for_review'), retry_missing_note: reviewRecovery, review: reviewEvidenceSchema }).strict(),
   z.object({ ...base, kind: z.literal('accept_review'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
   z.object({ ...base, kind: z.literal('request_review_changes'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
   z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: prose.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: resolvedWait.optional() }).strict(),
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
   z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, repair_waits: z.array(z.object({ current: z.string().min(1).max(12000), replacement: waitSchema }).strict()).min(1).max(100).optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(), proposal: decisionProposalSchema.optional(),

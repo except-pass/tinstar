@@ -1,3 +1,4 @@
+import { updateWorkSchema, waitSchema } from '../workflow'
 import { describe, expect, it } from 'vitest'
 import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape, waitLine, parseWaitLine } from '../waitingForPolicy'
 
@@ -117,4 +118,19 @@ describe('wait text round trips', () => {
   it('reads existing single-line quoted prose', () => {
     expect(parseWaitLine('Dependency: "Security approval" must be recorded | Unblocks when: "Approval" is recorded | Follow-up: "Consumer" team | Type: Actor | ID: "Security" team')).toEqual({ type: 'Actor', id: '"Security" team', dependency: '"Security approval" must be recorded', unblocks_when: '"Approval" is recorded', follow_up_by: '"Consumer" team' })
   })
+})
+
+it('accepts maximum serialized waits as exact assignment and decision resolution inputs', () => {
+  const escaped = (length: number) => '"' + '\u0001'.repeat(length - 1)
+  const wait = waitSchema.parse({ type: 'Actor', id: escaped(2048), dependency: escaped(12000), unblocks_when: escaped(12000), follow_up_by: escaped(200), next_check_in: '2027-01-01' })
+  const resolve_wait = waitLine(wait)
+  expect(resolve_wait.length).toBeGreaterThan(150000)
+  expect(parseWaitLine(resolve_wait)).toMatchObject({ type: wait.type, id: wait.id, dependency: wait.dependency, unblocks_when: wait.unblocks_when, follow_up_by: wait.follow_up_by })
+  for (const operation of [
+    { kind: 'assign', owner: 'Firstmate', status: 'Queued' },
+    { kind: 'answer_decision', request_id: 'length-ask', answer: 'Resolved', next: { owner: 'Firstmate', status: 'Queued' } },
+  ]) {
+    const parsed = updateWorkSchema.parse({ card_id: id, operation_id: `length-${operation.kind}`, ...operation, resolve_wait })
+    expect('resolve_wait' in parsed && parsed.resolve_wait).toBe(resolve_wait)
+  }
 })

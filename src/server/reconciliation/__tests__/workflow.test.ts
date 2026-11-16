@@ -2700,6 +2700,27 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'saved' })
   })
 
+  it('resolves long accepted waits and records their exact lines in history', async () => {
+    const f = readyFixture(), first = actor({ dependency: 'S'.repeat(12000) }), second = actor({ id: 'Legal', dependency: 'Legal acceptance', unblocks_when: 'Legal approves' })
+    expect(await f.workflow.update(op('wait', first), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(op('wait', { ...second, operation_id: 'history-second-wait' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    const firstLine = waitLine(first), secondLine = waitLine(second)
+    expect(firstLine.length).toBeGreaterThan(12000)
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: firstLine }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    expect(plainText(f.comments.at(-1)!.rich_text)).toContain(`Resolved wait: ${JSON.stringify(firstLine)}`)
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(secondLine)
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: secondLine, operation_id: 'history-last-wait' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(plainText(f.comments.at(-1)!.rich_text)).toContain(`Resolved wait: ${JSON.stringify(secondLine)}`)
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('')
+  })
+
+  it('records exact removal of a legacy wait outside Waiting For', async () => {
+    const f = fixture(), line = String((await f.reader.card(id, true)).properties['Waiting For']!.value)
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(plainText(f.comments.at(-1)!.rich_text)).toContain(`Resolved wait: ${JSON.stringify(line)}`)
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('')
+  })
+
   it('rejects a decision that removes its deduplicated replacement before writing', async () => {
     const f = readyFixture(), blocker = actor()
     expect(await f.workflow.update(op('wait', blocker), 'Consumer')).toMatchObject({ outcome: 'saved' })

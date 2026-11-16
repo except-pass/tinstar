@@ -523,6 +523,7 @@ export class WorkflowOperations {
         if (!resolve) return
         if (entries.filter(entry => entry === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
         set('Waiting For', entries.filter(entry => entry !== resolve).join('\n'))
+        if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
         return
       }
       if (requestedStatus === 'Waiting For' && !resolve) return
@@ -531,6 +532,7 @@ export class WorkflowOperations {
       if (entries.filter(entry => entry === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
       const remaining = entries.filter(entry => entry !== resolve)
       set('Waiting For', remaining.join('\n'))
+      if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
       const still = remaining.filter(entry => entry.trim())
       const successor = still.map(parseWaitLine).find(parsed => parsed)
       const clearBlocker = () => {
