@@ -51,6 +51,9 @@ in coverage; writes are never automatically retried. Counts by method/resource/q
 429 responses and cumulative request/queue latency appear in the existing sources
 and work-read diagnostics. There is no persistent mirror or offline write queue.
 
+Worker close-out and release wait recording are described in the
+[close-out and release-wait contract](worker-closeout-release-waits.md).
+
 ## Start contract and enforced rules
 
 `start_work({card_id, operation_id, worker, expected?})` requires an existing

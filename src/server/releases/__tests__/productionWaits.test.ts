@@ -23,7 +23,7 @@ function fixture() {
 }
 it('advances a release wait with an audited native production membership and never replays it', async () => {
   const f = fixture(), writer = new ProductionWaitWriter(f.transport, f.read)
-  expect(await writer.run()).toEqual({ completed: [f.card.id] })
+  expect(await writer.run()).toEqual({ completed: [f.card.id], unconfirmed: [] })
   expect(f.card.properties.Status!.value).toBe('Done')
   expect(f.transport.note).toHaveBeenCalledWith(f.card.id, expect.stringContaining(f.release.evidenceUrl!), expect.stringContaining('Tin Star production wait: membership:'))
   await writer.run(); expect(f.transport.transition).toHaveBeenCalledTimes(1)
@@ -56,7 +56,7 @@ it('revalidates newly added required PRs after recording its audit', async () =>
 it('recovers a failed transition using the same card audit marker', async () => {
   const f = fixture(), transition = f.transport.transition
   f.transport.transition = vi.fn().mockRejectedValueOnce(new Error('offline')).mockImplementation(transition)
-  await new ProductionWaitWriter(f.transport, f.read).run()
+  expect(await new ProductionWaitWriter(f.transport, f.read).run()).toEqual({ completed: [], unconfirmed: [f.card.id] })
   await new ProductionWaitWriter(f.transport, f.read).run()
   expect(f.transport.note).toHaveBeenCalledTimes(1)
   expect(f.card.properties.Status!.value).toBe('Done')

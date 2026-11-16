@@ -138,3 +138,9 @@ it.each([undefined, 'v1.22.0'])('reads a concurrent historical selection before 
   await reader.get(data(), 'v1.0.0')
   expect(read).toHaveBeenCalledTimes(count)
 })
+
+it('keeps a prerelease record out of production even with a stable-looking tag', async () => {
+  const prerelease = { ...nativeRecord, prerelease: true }
+  const result = await new GithubReleaseReader(nativeFixtureRead({ records: [prerelease] }), () => now).get(data())
+  expect(result.releases[0]!.kind).toBe('candidate')
+})

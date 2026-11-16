@@ -7,7 +7,7 @@ import { ReleaseMembershipReader } from './membership'
 const repository = 'fortresspower/cmsandbox'
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
 const tagSchema = z.object({ name: z.string(), commit: z.object({ sha }) })
-const recordSchema = z.object({ tag_name: z.string(), html_url: z.string(), body: z.string().nullable(), published_at: z.string().nullable(), draft: z.boolean() })
+const recordSchema = z.object({ tag_name: z.string(), html_url: z.string(), body: z.string().nullable(), published_at: z.string().nullable(), draft: z.boolean(), prerelease: z.boolean().default(false) })
 const runSchema = z.object({ id: z.number(), name: z.string(), path: z.string(), html_url: z.string(), head_sha: sha, head_branch: z.string().nullable(), event: z.string(), status: z.string(), conclusion: z.string().nullable(), run_attempt: z.number(), created_at: z.string(), updated_at: z.string(), run_started_at: z.string().nullable().optional() })
 const version = (name: string) => /^v\d+\.\d+\.\d+$/.test(name)
 const compareTags = (a: { name: string }, b: { name: string }) => {
@@ -138,7 +138,7 @@ export class GithubReleaseReader {
         if (summary.componentResults.some(row => /unknown|unavailable|missing|pending cutover/i.test(row.result))) gaps.push('The GitHub Release snapshot has missing component evidence; inspect its native links.')
         return {
           id: `${repository}:tag:${tag.name}`, repository, version: tag.name, sourceSha: tag.commit.sha,
-          kind: record?.draft ? 'draft' : 'production', candidateId: null, planId: null, executionId: null,
+          kind: record?.draft ? 'draft' : record?.prerelease ? 'candidate' : 'production', candidateId: null, planId: null, executionId: null,
           scope: range?.files ?? previous?.scope ?? [], targets: [],
           state: 'Unknown',
           observedAt: runs.map(run => run.updatedAt).sort().at(-1) ?? record?.published_at ?? null,

@@ -34,13 +34,13 @@ export function productionWaits(data: ReleasesRead, scene: FloorScene): ReleaseT
 /** Scheduled separately from reads. Reuse the existing Notion release transport
  * and durable card markers, including recovery after a lost status response. */
 export class ProductionWaitWriter {
-  private running: Promise<unknown> | null = null
+  private running: Promise<{ completed: string[]; unconfirmed: string[] }> | null = null
   constructor(private transport: ReleaseTransport, private read: () => Promise<{ data: ReleasesRead; scene: FloorScene }>) {}
-  run(): Promise<unknown> {
+  run() {
     return this.running ??= this.perform().finally(() => { this.running = null })
   }
   private async perform() {
-    const { data, scene } = await this.read(), completed: string[] = []
+    const { data, scene } = await this.read(), completed: string[] = [], unconfirmed: string[] = []
     for (const proposal of productionWaits(data, scene)) {
       const marker = `Tin Star production wait: ${proposal.id}`
       try {
@@ -57,8 +57,12 @@ export class ProductionWaitWriter {
         if (!matches() || !productionWaits(fresh.data, fresh.scene).some(row => row.id === proposal.id)) continue
         await this.transport.transition(card, proposal)
         completed.push(proposal.cardId)
-      } catch { /* Card/receipt readback on the next pass recovers uncertain writes. */ }
+      } catch {
+        // Surface an uncertain write to the scheduler; the next pass recovers
+        // from the card/receipt instead of silently claiming success.
+        unconfirmed.push(proposal.cardId)
+      }
     }
-    return { completed }
+    return { completed, unconfirmed }
   }
 }
