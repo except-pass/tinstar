@@ -68,6 +68,7 @@ export class DecisionPreparation {
   private loading?: Promise<void>
   private replenishing?: Promise<void>
   private replenishAgain = false
+  private automatic = false
   constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]> | AsyncIterable<PrepCandidate>; coverage(): 'complete' | 'unknown' },
     private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
     private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
@@ -195,6 +196,7 @@ export class DecisionPreparation {
     else await this.ensureConfig()
     await this.initialize()
     const policy = await this.packets.readPolicy(this.scope)
+    this.automatic = policy.values.automatic_replenishment
     const jobs = this.packets.leases.readStorage(db => this.rows(db))
     const preparing = jobs.filter(job => job.state === 'admitted' || job.state === 'dispatched').length
     const problem = jobs.find(job => job.state === 'failed' || job.state === 'blocked')
@@ -208,6 +210,12 @@ export class DecisionPreparation {
   }
 
   /** Automatic fill only. Explicit Prepare now is separate and works while this is off. */
+  historyLoaded() {
+    // A display-only read with replenishment off must not start a SQLite
+    // writer pass for every card in the board.
+    if (this.automatic) void this.replenish()
+  }
+
   replenish(): Promise<void> {
     if (this.replenishing) { this.replenishAgain = true; return this.replenishing }
     this.replenishing = (async () => {
@@ -224,6 +232,7 @@ export class DecisionPreparation {
       await this.ensureConfig()
       await this.initialize()
       const policy = await this.packets.readPolicy(this.scope)
+      this.automatic = policy.values.automatic_replenishment
       // Collect outside the lease transaction. Nested SQLite opens deadlock the writer.
       await this.packets.leases.writeStorage(db => this.expire(db))
       if (!this.secret || !policy.values.automatic_replenishment || this.source.coverage() !== 'complete') return

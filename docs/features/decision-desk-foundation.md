@@ -81,13 +81,20 @@ repair source links, or take a lease. On a cold cache it honestly reports missin
 coverage. The Desk snapshot and automatic admission enqueue missing/expired
 history and immediately project known evidence. A shared background queue reads
 at most two cards at once through the existing paced Notion client, including
-its shared Retry-After backoff. Each completed read schedules a coalesced
+its shared Retry-After backoff. History HTTP responses release the pacing slot
+once started, so a slow history response cannot monopolize property reads.
+Each completed read, when automatic replenishment is enabled, schedules a coalesced
 replenishment pass, so an eligible decision can be admitted before its history
 expires. Prepare now waits only for the selected card, prioritizing it ahead of
 queued background reads and reusing an in-flight read. Snapshots expose per-card
 history loading/available/unavailable states; the Preparation view refreshes those
-states while reads are pending. Secret lookup also refreshes in the background
-for snapshots. Expired history leaves coverage unknown. These reads retain
+states while reads are pending. Reads settle after a 20-second deadline;
+failures include a reason and retry time, with backoff from 30 seconds to five
+minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
+for snapshots. Generic MCP claims use the current property census and cached
+history, and return card metadata without waiting for prose or operational
+reconciliation. Use get_work with details for the selected card's history.
+Expired history leaves coverage unknown. These reads retain
 the existing per-card bounds and 30-second cache, including cached failures.
 Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches

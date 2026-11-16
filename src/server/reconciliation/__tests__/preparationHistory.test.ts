@@ -33,7 +33,7 @@ async function setup(options: Parameters<typeof preparationHistoryFixture>[2] = 
 
 async function loadedSnapshot(sources: Awaited<ReturnType<typeof setup>>['sources']) {
   await sources.preparedReviews.snapshot()
-  await vi.waitFor(async () => expect((await sources.preparedReviews.snapshot()).history.every(row => row.state !== 'loading')).toBe(true), { timeout: 10_000 })
+  await vi.waitFor(async () => expect((await sources.preparedReviews.snapshot()).history.every(row => row.state !== 'loading')).toBe(true), { timeout: 15_000, interval: 250 })
   return sources.preparedReviews.snapshot()
 }
 
@@ -68,8 +68,10 @@ it('loads cold history for automatic admission only after replenishment is turne
 }, 20_000)
 
 it('claims a generic Needs Will card through MCP while the 64-card Desk is open', async () => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
   const { sources, root } = await setup({ cards: 64, beforeRead: async url => {
-    if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await new Promise(resolve => setTimeout(resolve, 5))
+    if (url.pathname.includes('/blocks/') || url.pathname === '/v1/comments') await gate
   } })
   expect((await sources.preparedReviews.snapshot()).history.some(row => row.state === 'loading')).toBe(true)
   const mcp = new ReconciliationMcp(sources, root)
@@ -79,12 +81,17 @@ it('claims a generic Needs Will card through MCP while the 64-card Desk is open'
   const client = new Client({ name: 'desk-claim-regression', version: '1' })
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
-    const raw = await client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'desk-open-claim' } })
+    const started = performance.now()
+    const raw = await Promise.race([client.callTool({ name: 'claim_next_card', arguments: { operation_id: 'desk-open-claim' } }), new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('Claim waited for Desk history')), 1900); timer.unref()
+    })])
+    expect(performance.now() - started).toBeLessThan(2000)
     const result = JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
     expect(result).toMatchObject({ outcome: 'claimed', lease: { card_id: expect.any(String) }, card: { outcome: 'available' } })
     await client.callTool({ name: 'release_claim', arguments: { lease_token: result.lease_token, reason: 'Isolated regression complete' } })
+    release()
     await loadedSnapshot(sources)
-  } finally { await client.close() }
+  } finally { release(); await client.close() }
 }, 20_000)
 
 it('loads history for the Preparation view and shows actual missing options per card', async () => {

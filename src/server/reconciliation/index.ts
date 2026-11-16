@@ -113,8 +113,8 @@ export class ReconciliationSources {
     })
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.context = new CardContextReader(config.notion, this.notionApi.fetch, this.workReader.jira)
-    this.preparationHistory = new PreparationHistory(this.context, () => { void this.preparation.replenish() })
+    this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
+    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded())
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
@@ -449,6 +449,21 @@ export class ReconciliationSources {
     this.invalidateQueueDisplays()
     void this.queueDisplay().catch(() => {})
     return queue
+  }
+
+  /** A claim allocates a card; it must not await the board's comment history
+   * or operational reconciliation. Exact active-card validation still happens
+   * before allocation, and get_work remains the explicit prose reader. */
+  async claimQueue() {
+    const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
+    const queue = buildQueue(snapshot)
+    const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
+      const context = this.context.cachedComments(id)
+      return context ? [[id, context] as const] : []
+    }))
+    queue.needsWill = needsWill(queue, scene, contexts, null, new Map(), false)
+    queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
+    return workReadback(queue)
   }
 
   async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {

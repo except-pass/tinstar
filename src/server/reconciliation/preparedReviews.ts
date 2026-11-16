@@ -16,7 +16,7 @@ type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }
 export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
 export interface PreparedQueue { card_ids: string[]; coverage: 'complete' | 'unknown'; requests: number | null
-  history?: Array<{ card_id: string; title: string; state: 'loading' | 'available' | 'unavailable'; observed_at: string | null; expires_at: string | null }> }
+  history?: Array<{ card_id: string; title: string; state: 'loading' | 'available' | 'unavailable'; observed_at: string | null; expires_at: string | null; message?: string | null; retry_at?: string | null }> }
 export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: ReturnType<DecisionPackets['readInStorage']>; session_id?: string; packet_version?: number; message?: string; coverage?: string }
 const sessionLifetime = 24 * 60 * 60 * 1000
 
