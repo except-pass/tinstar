@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Decisions } from '../Decisions'
+import { DecisionDesk as Decisions } from '../DecisionDesk'
 import { AskProvider } from '../../ask/Ask'
 import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { initialPresentation } from '../presentation'

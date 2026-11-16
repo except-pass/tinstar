@@ -14,6 +14,8 @@ import './cockpit.css'
 import { Overview } from './reconciliation/Overview'
 import { Releases } from './releases/Releases'
 import { Decisions } from './reconciliation/Decisions'
+import { DecisionDesk } from './reconciliation/DecisionDesk'
+import './reconciliation/decisions-mode.css'
 import { AskWorkerComposer } from './ask/Ask'
 import { DeskWorkspace } from './ask/DeskWorkspace'
 import { useWorkspaceHistory } from './ask/workspaceHistory'
@@ -49,6 +51,10 @@ export default function App() {
   const [fleet, setFleet] = useState<FleetData>({ ready: false, workers: [], attention: [], errors: [] })
   const [detailOpen, setDetailOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(true)
+  // Prepared review is explicit until the owner enables its future default (fork F).
+  // Keep the selected mode across in-app Discuss returns, but never persist it as
+  // a new default or mount the prepared-review hook behind the workbench.
+  const [decisionMode, setDecisionMode] = useState<'workbench' | 'desk'>('workbench')
   const [overviewLocation, setOverviewLocation] = useState<OverviewLocation>(() => readOverviewSearch(window.location.search))
   const views = useWorkspaceHistory(overviewLocation.worker ? null : overviewLocation.page ?? 'overview')
   const [drawer, setDrawer] = useState(isDrawerLayout)
@@ -301,8 +307,8 @@ export default function App() {
 
   const activeIndex = current ? order.indexOf(current.key) : -1
 
-  return <div className={`cockpit-shell${overviewLocation.page === 'decisions' ? ' cockpit-shell--decision-desk' : ''}`}>
-    <ActivityBar reviewOpen={panelMode === 'needs'} onReview={() => selectPanel('needs')} reviewCount={reviewQueue.queue?.reviews?.complete && !reviewQueue.error ? reviewQueue.queue.reviews.items.length : null} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
+  return <div className={`cockpit-shell${overviewLocation.page === 'decisions' && decisionMode === 'desk' ? ' cockpit-shell--decision-desk' : ''}`}>
+    <ActivityBar reviewOpen={panelMode === 'needs'} onReview={() => selectPanel('needs')} reviewCount={reviewQueue.queue?.reviews?.complete && !reviewQueue.error ? reviewQueue.queue.reviews.items.length : null} overviewActive={!overviewLocation.worker && !overviewLocation.page} onOverview={openOverview} decisionsActive={overviewLocation.page === 'decisions'} onDecisions={() => { setDecisionMode('workbench'); setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} pullsActive={overviewLocation.page === 'pulls'} onPulls={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'pulls' }, 'push') }} releasesActive={overviewLocation.page === 'releases'} releaseCount={releaseQueueCount(releases.data, releases.error)} onReleases={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'releases' }, 'push') }} />
     {panelMode && drawer && <button type="button" className="cockpit-context-backdrop" aria-label="Dismiss panel" onClick={() => setPanelMode(null)} />}
     <ContextPanel mode={panelMode} count={panelMode === 'needs' ? reviews.complete && !reviewQueue.error ? reviews.items.length + attention.filter(card => card.type === 'review').length : null : workers.length} onCollapse={() => setPanelMode(null)}>
 
@@ -320,9 +326,9 @@ export default function App() {
       applyOverviewLocation(worker
         ? { worker: worker.id, home: homeName(worker.home), key: worker.key, q: overviewRef.current.q, origin: { ...origin } }
         : { worker: null, home: null, key: null, q: overviewRef.current.q, page: origin.section === 'overview' ? undefined : origin.section, origin: { ...origin } }, 'push')
-    }} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} onOverview={openOverview} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} workers={workers} messages={messages} submit={submit}>
+    }} overviewActive={!overviewLocation.worker && !overviewLocation.page} decisionsActive={overviewLocation.page === 'decisions'} decisionDeskActive={overviewLocation.page === 'decisions' && decisionMode === 'desk'} onOverview={openOverview} onDecisions={() => { setPanelMode(null); applyOverviewLocation({ worker: null, home: null, key: null, q: overviewRef.current.q, page: 'decisions' }, 'push') }} workers={workers} messages={messages} submit={submit}>
     <main className={`cockpit-main ${current ? 'cockpit-main-worker' : ''}`}>
-      {overviewLocation.page === 'decisions' ? <Decisions /> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
+      {overviewLocation.page === 'decisions' ? <section className="decisions-surface" aria-label="Decisions surface"><nav className="decisions-mode" aria-label="Decisions mode"><button type="button" aria-pressed={decisionMode === 'workbench'} onClick={() => setDecisionMode('workbench')}>Workbench</button><button type="button" aria-pressed={decisionMode === 'desk'} onClick={() => setDecisionMode('desk')}>Decision Desk</button></nav><div className="decisions-mode-content">{decisionMode === 'desk' ? <DecisionDesk /> : <Decisions />}</div></section> : overviewLocation.page === 'pulls' ? <Pulls /> : overviewLocation.page === 'releases' ? <Releases data={releases.data} error={releases.error} refresh={releases.refresh} /> : !current && !overviewLocation.worker ? <Overview initialCardId={overviewLocation.card} workers={workers} /> : current ? <>
         <div className="cockpit-session">
         <section className="cockpit-terminal" aria-label="Live terminal"><div className="cockpit-terminal-stage">
           {workers.flatMap(worker => {

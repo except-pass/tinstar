@@ -1,4 +1,4 @@
-import { installDecisionDesk } from './fixtures/decisionDesk'
+import { installDecisionDesk, openDecisionDesk } from './fixtures/decisionDesk'
 import { stopServer, serverBase } from './serverProcess'
 import { installDeskAttention } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect, type APIRequestContext } from '@playwright/test'
@@ -131,6 +131,7 @@ for (const kind of ['keyed', 'held-work'] as const) test(`Decisions keeps ${kind
     await installDecisionDesk(page)
     await page.goto(base)
     await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await openDecisionDesk(page)
     await expect(page.locator('.dd-identifiers')).toBeVisible()
     await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
     const desk = page.locator('.dd-source-context')

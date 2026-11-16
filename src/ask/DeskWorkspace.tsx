@@ -31,9 +31,9 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, onDecisions, workers, messages, submit, children }: {
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, decisionDeskActive = false, onOverview, onDecisions, workers, messages, submit, children }: {
   views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
-  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
+  decisionsActive?: boolean; decisionDeskActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
   const [history, setHistory] = useState(false)
@@ -108,7 +108,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
         if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
-      <div className="desk-workspace">{children}<WorkspaceRail overlay={decisionsActive} closeRequest={closeRequest} openRequest={openRequest} /></div>
+      <div className="desk-workspace">{children}<WorkspaceRail overlay={decisionDeskActive} closeRequest={closeRequest} openRequest={openRequest} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>
 }

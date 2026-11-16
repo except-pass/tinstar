@@ -41,7 +41,7 @@ beforeEach(() => {
         : url.endsWith('/submission-state') ? { submissions: [] } : {}
       return new Response(JSON.stringify({ ok: true, data }))
     }
-    const data = url === '/api/fleet'  ? { ready: true, workers: [], attention: [], errors: [] }
+    const data = url === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
       : url === '/api/fleet/messages' ? []
       : url === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
       : url === '/api/quota' ? { providers: [], checkedAt: null, fetchedAt: null, commandError: null }
@@ -101,12 +101,10 @@ it('opens a delivered decision conversation in Waiting with one composer', async
   delivered.context.view = { scene: 'decisions', request_key: request.id }
   items = [delivered]
   render(<App />)
-  await screen.findByRole('radio', { name: /Authorize preview only/ })
-  fireEvent.click(screen.getAllByRole('button', { name: 'Source request & discussion' })[0]!)
-  const full = await screen.findByRole('button', { name: 'Open source conversation in Discuss' })
+  const full = await screen.findByRole('button', { name: 'Full conversation ↗' })
   fireEvent.click(full)
   await act(async () => {})
-  fireEvent.click(within(screen.getByRole('dialog', { name: 'Discuss' })).getByRole('button', { name: 'Close Discuss' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse Discuss' }))
   fireEvent.click(full)
   await act(async () => {})
   expect(screen.getByRole('button', { name: 'Waiting 1' })).toHaveAttribute('aria-pressed', 'true')
@@ -385,7 +383,7 @@ it('retains the expanded three-turn thread and inline draft through Overview, PR
 }, 30_000)
 
 
-it.each([390, 1440])('keeps manual decision focus while Discuss uses the responsive review overlay at %spx', async width => {
+it.each([390, 1440])('routes manual decisions without closing Discuss at %spx', async width => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   source.queue = fixtureQueue()
   function QueueProbe() {
@@ -400,11 +398,10 @@ it.each([390, 1440])('keeps manual decision focus while Discuss uses the respons
   await act(async () => {})
   fireEvent.click(screen.getByRole('button', { name: /Open Discuss/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Open decision' }))
-  if (width === 390) expect(screen.getByLabelText('Discuss')).toBeVisible()
-  else expect(screen.getByLabelText('Discuss')).not.toBeVisible()
+  expect(screen.getByLabelText('Discuss')).toBeVisible()
   expect(screen.getByTestId('page')).toHaveTextContent('decisions')
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
-  if (width === 390) fireEvent.click(within(screen.getByLabelText('Discuss')).getByRole('button', { name: 'Close Discuss' }))
+  fireEvent.click(within(screen.getByLabelText('Discuss')).getByRole('button', { name: width === 390 ? 'Close Discuss' : 'Collapse Discuss' }))
   expect(screen.getByLabelText('Decision pane open')).toHaveTextContent('true')
   fireEvent.click(screen.getByRole('button', { name: 'Visit Overview' }))
   expect(screen.getByTestId('page')).toHaveTextContent('overview')
@@ -424,7 +421,7 @@ it.each(['navigate-card', 'next_queue_item', 'next', 'previous', 'card', 'item',
   vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ left: 10, right: 310, top: 10, bottom: 50, width: 300, height: 40 } as DOMRect))
-  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.desk-backdrop') ?? document.querySelector(`[data-semantic-id="card:${cardId}"]`) })
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.desk-backdrop') ?? document.querySelector(`.decisions-row[data-card-id="${cardId}"]`) })
   const action = mode === 'navigate-card' ? { type: 'navigate-card', cardId }
     : ['next_queue_item', 'next', 'previous'].includes(mode) ? { type: 'navigate-queue', direction: mode === 'previous' ? 'previous' : 'next' }
     : mode === 'card' ? { type: 'open-queue', cardId }
@@ -445,7 +442,7 @@ it.each(['navigate-card', 'next_queue_item', 'next', 'previous', 'card', 'item',
   const tick = async (ms = 1100) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
   await tick()
   expect(location.search).toContain('view=decisions')
-  expect(document.querySelector(`[data-semantic-id="card:${cardId}"]`)).toBeInTheDocument()
+  expect(document.querySelector(`.decisions-row[data-card-id="${cardId}"]`)).toHaveClass('selected')
   expect(screen.getByLabelText('Discuss')).not.toBeVisible()
   expect(document.querySelector('.desk-backdrop')).toBeNull()
   expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-scene-id', 'test')
@@ -533,4 +530,26 @@ it.each(['navigate-card', 'focus', 'flash', 'reveal-search'] as const)('delivers
   expect(observeTargets(expected, 'overview')).toMatchObject({ stage: 'foreground-visible', rendered_targets: expected, visible_targets: expected, pending: false })
   const acknowledgments = read.mock.calls.flatMap(([url, init]) => url === '/api/reconciliation/ui' ? JSON.parse(String(init?.body)).acknowledgments ?? [] : [])
   expect(acknowledgments).toEqual(expect.arrayContaining([expect.objectContaining({ command_id: '2', delivery: expect.objectContaining({ stage: 'foreground-visible', visible_targets: expected, pending: false }) })]))
+})
+
+
+it('keeps the source workbench as default and claims a prepared packet only after explicit mode selection', async () => {
+  source.queue = fixtureQueue()
+  window.history.replaceState(null, '', '/?view=decisions')
+  render(<App />)
+  await screen.findByText('Choose a decision to resolve')
+  expect(document.querySelectorAll('.decisions-row').length).toBeGreaterThan(0)
+  expect(document.querySelector('.decision-desk')).toBeNull()
+  expect(read.mock.calls.some(([url]) => String(url).includes('/decision-desk/'))).toBe(false)
+  const modes = screen.getByRole('navigation', { name: 'Decisions mode' })
+  fireEvent.click(within(modes).getByRole('button', { name: 'Decision Desk' }))
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  expect(read.mock.calls.some(([url]) => String(url).endsWith('/decision-desk/claim'))).toBe(true)
+  fireEvent.click(within(modes).getByRole('button', { name: 'Workbench' }))
+  expect(document.querySelectorAll('.decisions-row').length).toBeGreaterThan(0)
+  expect(document.querySelector('.decision-desk')).toBeNull()
+  cleanup()
+  render(<App />)
+  await screen.findByText('Choose a decision to resolve')
+  expect(document.querySelector('.decision-desk')).toBeNull()
 })

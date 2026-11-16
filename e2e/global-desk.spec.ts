@@ -1,4 +1,4 @@
-import { installDecisionDesk } from './fixtures/decisionDesk'
+import { installDecisionDesk, openDecisionDesk } from './fixtures/decisionDesk'
 import { expect, test } from '@playwright/test'
 import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
@@ -64,8 +64,13 @@ test('one persistent Desk across sections with pointer/keyboard sizing and reloa
     await nav.getByRole('button', { name: section === 'Releases' ? /^Releases/ : section, exact: section !== 'Releases' }).click()
     await expect(desk).toHaveAttribute('data-mount-witness', 'same-desk')
     await expect(separator).toHaveAttribute('aria-valuenow', '440')
-    if (section === 'Decisions') await expect(desk).toBeHidden()
-    else await expect(desk.getByText('Independent question 1')).toBeVisible()
+    await expect(desk.getByText('Independent question 1')).toBeVisible()
+    if (section === 'Decisions') {
+      await openDecisionDesk(page)
+      await expect(desk).toBeHidden()
+      await page.getByRole('navigation', { name: 'Decisions mode' }).getByRole('button', { name: 'Workbench', exact: true }).click()
+      await expect(desk.getByText('Independent question 1')).toBeVisible()
+    }
   }
   await separator.focus(); await page.keyboard.press('ArrowLeft')
   await expect(separator).toHaveAttribute('aria-valuenow', '456')
@@ -474,6 +479,7 @@ test('retained worker note exposes targeted retry and reply after its worker lea
   })
   await page.goto(base)
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await openDecisionDesk(page)
   await page.getByRole('button', { name: 'Preparation', exact: true }).click()
   await page.getByText('Source delivery details', { exact: true }).click()
   const retained = page.locator('.cockpit-messages')
@@ -498,11 +504,13 @@ test('formal decisions remain in Decisions and never enter conversation tab coun
   await expect(page.locator('.global-desk .ov-queue')).toHaveCount(0)
   await expect(page.locator('.ask-desk article')).toHaveCount(2)
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await openDecisionDesk(page)
   await expect(page.locator('.dd-identifiers')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('separate-decisions.png') })
   queue = { ...queue, items: queue.items.map(item => ({ ...item, sources: item.sources.map(source => ({ ...source, expiresAt: '2020-01-01T00:00:00Z' })) })) }
   prepared.invalidate()
   await page.reload()
+  await openDecisionDesk(page)
   await expect(page.getByText('Packet invalidated — source revision changed. Refresh research before deciding.')).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
 })
@@ -677,6 +685,7 @@ test('phone source conversation return preserves the exact leased request and on
   await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   const identity = page.locator('.dd-identifiers')
   await expect(identity).toHaveAttribute('data-decision-id', item.id)
   await page.locator('.dd-inline-evidence>summary').click()

@@ -414,13 +414,23 @@ first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
 
 ## P5 — Review and Preparation UI
 
-The existing Decisions entry uses the prepared-review APIs for one real,
+The existing **Decisions** entry defaults to the source workbench, preserving its
+request list, answering controls, receipts, evidence, and Discuss behavior. The
+**Workbench / Decision Desk** mode control makes prepared review explicit. No
+prepared session is created or packet claimed while only the workbench is open.
+The mode is retained across in-app navigation so returning from Discuss keeps the
+selected surface; it is not persisted as a new default. A page reload starts with
+the workbench. The owner must explicitly enable the future Desk default (fork F);
+packet availability never switches it automatically.
+
+The selected Decision Desk mode uses the prepared-review APIs for one real,
 server-registered review context. Session capabilities, exact selections and
 submission operation IDs are retained in session storage and sent only as API
 arguments. Duplicate browser contexts with cloned storage resume that same real
 session; a distinct context must explicitly create a new session. The rail lists
 actual server contexts and explains that other contexts must be resumed in their
-original browser. Discuss remains available as an explicitly opened overlay.
+original browser. Discuss remains available as an explicitly opened overlay in the Desk mode; the
+workbench retains its existing responsive Discuss behavior.
 
 Open **Source request & discussion** from the evidence inspector (or the inline
 **Evidence, confidence & execution boundaries** disclosure on smaller screens)
@@ -437,8 +447,8 @@ be reviewed without a verified canonical card and prepared packet.
 reason, withdraws the packet and serves the next eligible decision; it does not
 start a preparer. Retained worker notes are under **Preparation → Source delivery
 details**. MCP navigation still uses the operational queue, but visible delivery
-requires the requested card to be painted in Review; there is no searchable row
-list or previous/next list traversal in this screen.
+uses the visible selected mode: the workbench retains its searchable request list,
+while prepared Review requires its exact leased packet to be painted.
 
 Review uses the approved three/two/one-column layout, source-bound radio choices,
 scoped high-risk confirmation and readback-confirmed submit/next. Expired leases,

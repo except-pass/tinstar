@@ -1,0 +1,7 @@
+.decisions-surface{display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;overflow:hidden}
+.decisions-mode{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:4px 16px;border-bottom:1px solid #304154;background:#101a26}
+.decisions-mode button{min-height:44px;padding:8px 14px;border:1px solid transparent;border-radius:8px;background:transparent;color:#a8b9c9;font:600 13px/1.4 system-ui;cursor:pointer}
+.decisions-mode button[aria-pressed="true"]{background:#233448;border-color:#304154;color:#ebf3fa}
+.decisions-mode button:hover{color:#78e3bd}.decisions-mode button:focus-visible{outline:2px solid #78e3bd;outline-offset:2px}
+.decisions-mode-content{flex:1;min-width:0;min-height:0}
+@media(max-width:660px){.decisions-mode{padding:4px 12px}}

@@ -1,182 +1,337 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
-import { useDecisionDesk, requestKey, type DecisionDeskState } from './useDecisionDesk'
-import { deskCall, type DeskPacket, type DeskPolicy } from './decisionDeskClient'
+import { CardLeaseStatus } from './CardLeaseStatus'
+import { cardSourceUrl, isJiraCard } from '../shared/workIdentity'
+import { SessionConnection } from './SessionConnection'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useDeskWorkspace } from '../ask/DeskWorkspace'
+import { useViewSnapshot } from '../ask/workspaceHistory'
 import { AskContextComposer, useAskControls } from '../ask/Ask'
+import { AskActions, actionDeliveryLabel } from '../ask/AskActions'
+import { decisionProposalReady, currentDecisionProposal } from '../shared/decisionProposal'
+import { mostRecentAnswer } from '../ask/deskInbox'
 import { AskSurface } from '../ask/AskSurface'
-import { DecisionCardContext } from './DecisionSourceContext'
-import { WorkerNotes } from '../cockpit/shell/present'
+import { apiFetch } from '../apiClient'
+import type { QueueItem } from '../server/reconciliation/queue'
+import type { NeedsWillItem } from '../server/reconciliation/needsWill'
+import { cardTitle } from './overviewModel'
+import { decodeRequestText, displayRequestText } from './requestText'
+import { isCoordinationRequest } from '../shared/requestText'
+import { SourceActions } from './QueuePanel'
+import { useWorkSave, WorkActions } from './WorkActions'
+import { WorkerNotes, ResponseRetry } from '../cockpit/shell/present'
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
-import './decision-desk.css'
+import { requestAnchor } from '../shared/deskSource'
+import './decisions.css'
+import '../ask/ask-actions.css'
 
-const metric = (value: number | null | undefined) => value == null ? '— / unavailable' : String(value)
-const safeLink = (url: string) => { try { const value = new URL(url); return value.protocol === 'https:' && !value.username && !value.password ? url : undefined } catch { return undefined } }
-function Prose({ children }: { children: string }) {
-  return <ReactMarkdown skipHtml components={{ a: ({ href, children }) => safeLink(href ?? '') ? <a href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>, img: ({ alt }) => <span>{alt}</span> }}>{children}</ReactMarkdown>
+export const readinessLabels = {
+  'ready-now': 'Open question',
+  'needs-readiness-verification': 'Needs verification',
+  'future-or-conditional': 'Waiting on a prerequisite',
 }
-function Section({ label, children }: { label: string; children: ReactNode }) { return <section className="dd-section"><h3 className="dd-eyebrow">{label}</h3>{children}</section> }
+const sourceStale = (item: QueueItem, now: number) => item.sources.some(source => !['fresh', 'partial'].includes(source.status) || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
+interface DecisionEntry { key: string; item: QueueItem; id: string | null; title: string; question: string | null }
+function decisionCopy(item: QueueItem, title: string) {
+  const request = item as Partial<NeedsWillItem>
+  const action = request.requests?.find(request => request.question)?.question ?? item.action
+  const prose = displayRequestText(action ?? title, 'Read the source to verify this request.')
+  const question = prose.replace(/^owner\s*:\s*/i, '').trim()
+  const cleanTitle = displayRequestText(title).replace(/^(?:owner|decision)\s*:\s*/i, '').trim()
+  return { title: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? cleanTitle : question,
+    question: action && cleanTitle !== displayRequestText(action).replace(/^owner\s*:\s*/i, '').trim() ? question : null }
+}
+
+/** One row per existing canonical request. Opening it shares card focus, never
+ * creates a second decision, approval or read/archive state. */
 export function Decisions() {
   const workspace = useDeskWorkspace()
-  const [ignoreTarget, setIgnoreTarget] = useState(false)
-  const entries = workspace.queue?.needsWill ?? workspace.queue?.items ?? []
-  const originKey = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' ? workspace.origin.target.id : null
-  const target = originKey ?? workspace.state?.queueItemId
-  const navigation = workspace.state?.navigation
-  const newestNavigation = navigation?.revision === workspace.state?.revision ? navigation?.cardId : undefined
-  const requested = ignoreTarget ? undefined : originKey ? entries.find(item => item.id === originKey)?.cardIds[0]
-    : newestNavigation ?? workspace.state?.queueCardId ?? entries.find(item => item.id === target)?.cardIds[0] ?? (workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : undefined) ?? navigation?.cardId
-  const requestedKey = ignoreTarget ? undefined : originKey ?? (!newestNavigation && !workspace.state?.queueCardId ? workspace.state?.queueItemId ?? undefined : undefined)
-  const pendingTarget = !ignoreTarget && !!originKey && !requested
-  const desk = useDecisionDesk(requested, pendingTarget, requestedKey)
-  const handledTarget = useRef<string | null>(null)
-  const [tab, setTab] = useState<'review' | 'preparation'>('review'), [sourceOpen, setSourceOpen] = useState(false)
-  const packet = desk.claim?.packet
+  const controls = useAskControls()
+  const { scene, error, queue, queueError, state, send, connection, bridgeError, now, views } = workspace
+  const [query, setQuery] = useState(''), [openedId, setOpenedId] = useState<string | null>(() => { try { return sessionStorage.getItem('tinstar-decision-request') } catch { return null } })
+  const [detailOpen, setDetailOpen] = useState(!!openedId)
+  useEffect(() => { try { if (openedId) sessionStorage.setItem('tinstar-decision-request', openedId); else sessionStorage.removeItem('tinstar-decision-request') } catch {} }, [openedId])
+  const list = useRef<HTMLDivElement>(null), interaction = useRef(0)
+  const [expiredFlash, setExpiredFlash] = useState<number | null>(null)
+  const selectedId = state.selection?.kind === 'card' ? state.selection.id : null
+  const previousSelectedId = useRef(selectedId)
+  const flash = state.flash && state.flash.until > Date.now() && state.flash.until !== expiredFlash ? state.flash : null
+  useViewSnapshot(views, 'decisions', () => ({ query, filter: { request: openedId, detailOpen } }), saved => { setQuery(saved.query); setOpenedId(saved.filter.request); setDetailOpen(saved.filter.detailOpen) })
+
+  const coordination = (queue?.needsWill ?? queue?.items ?? []).filter(item => isCoordinationRequest(item.title))
+  const entries: DecisionEntry[] = (queue?.needsWill ?? queue?.items ?? []).filter(item => !isCoordinationRequest(item.title)).map(item => {
+    const id = item.cardIds[0] ?? null, card = scene?.cards.find(card => card.id === id)
+    return { key: item.id, item, id, ...decisionCopy(item, card ? cardTitle(card) : item.title) }
+  })
   useEffect(() => {
-    if (desk.busy || !desk.currentSession || !requested) return
-    const key = `${workspace.state?.revision}:${requested}:${requestedKey ?? ''}`
-    if (handledTarget.current === key) return
-    const initialRefusal = handledTarget.current === null && desk.claim?.outcome === 'requested-unavailable'
-    handledTarget.current = key
-    if (initialRefusal) return
-    if (requested === packet?.packet.binding.card_id && (!requestedKey || requestedKey === packet.packet.binding.request_key)) return
-    void desk.claimCard(requested, requestedKey)
-  }, [desk.busy, desk.currentSession, requested, requestedKey, workspace.state?.revision, packet?.packet.binding.card_id, packet?.packet.binding.request_key])
-  const openSource = () => setSourceOpen(value => !value)
-  const nextWithoutTarget = () => { setIgnoreTarget(true); workspace.clearOrigin?.(); if (desk.currentSession) void desk.claimAvailable() }
-  const counts = desk.snapshot?.counts
-  return <section className="decision-desk" aria-label="Decisions" data-presentation-scene data-scene-id={workspace.connection?.scene_id} data-revision={workspace.state?.revision}>
-    <header className="dd-top"><div className="dd-brand"><span aria-hidden="true">✦</span> Tin Star <span className="dd-slash">/</span> <strong>Decision Desk</strong></div><nav aria-label="Decision Desk views">{(['review', 'preparation'] as const).map(view => <button key={view} type="button" aria-current={tab === view ? 'page' : undefined} onClick={() => setTab(view)}>{view === 'review' ? 'Review' : 'Preparation'}</button>)}</nav></header>
-    <div className="dd-status" aria-label="Queue status" title={desk.snapshot ? `Scope ${desk.snapshot.scope}; cached-source projection at ${new Date(desk.snapshot.observed_at).toLocaleString()}` : 'Queue scope and observation time unavailable'}><span>Ready <b>{counts?.ready == null ? '— / unavailable' : `${counts.ready} / ${desk.policy?.values.target_ready ?? '—'}`}</b></span>{counts?.ready != null && <meter aria-label="Ready buffer" min={0} max={desk.policy?.values.target_ready ?? 30} value={counts?.ready ?? 0} title={counts?.ready == null ? 'Ready count unavailable' : `${counts.ready} validated unleased cards`} />}<span>Preparing <b>{metric(counts?.preparing)}</b></span><span>Leased <b>{metric(counts?.leased)}</b></span><ReviewedCount refreshKey={desk.submissionRevision} /></div>
-    {(!desk.snapshot || desk.snapshot.omissions.length > 0) && <p className="dd-coverage">{desk.snapshot?.omissions.join(' ') ?? 'Queue metrics unavailable: the backend or source coverage could not be verified.'}</p>}
-    <div className="dd-sr" role="status" aria-live="polite">{desk.busy ? 'Decision Desk operation in progress.' : desk.notice || desk.result?.message || (packet ? 'Prepared decision loaded.' : desk.claim?.outcome)}</div>
-    {tab === 'preparation' ? <Preparation desk={desk} /> : <div className="dd-layout">
-      <aside className="dd-rail"><Section label="REVIEW SESSIONS">{desk.sessions.length ? desk.sessions.map(session => <div className={`dd-session ${desk.currentSession === session.id ? 'dd-current' : ''}`} key={session.id}><strong><span aria-hidden="true">{session.device === 'phone' ? '▯' : '▣'}</span> {session.label}{desk.currentSession === session.id ? ' · this session' : ''}</strong><p>{session.held?.title ?? 'No held decision'}</p></div>) : <p>Session list unavailable.</p>}<p className="dd-caption">Sessions are independent reviewing contexts. Open the original browser context to resume another session.</p><button type="button" className="dd-secondary" disabled={desk.busy || !!desk.claim?.lease} onClick={() => void desk.newSession()}>+ New review session</button></Section><Section label="PREPARED · UNLEASED">{desk.snapshot?.ready.length ? desk.snapshot.ready.slice(0, 5).map(item => <button className="dd-ready-row" key={item.id} type="button" disabled={desk.busy || !!desk.claim?.lease} onClick={() => void desk.claimCard(item.card_id, undefined, item.id)}><strong>{item.title}</strong><small>{item.risk} risk · {item.card_id}</small></button>) : <p>{desk.snapshot ? 'No validated, unleased packets in the covered source scope.' : 'Prepared inventory unavailable.'}</p>}</Section></aside>
-      <main className="dd-main">{desk.notice && <p className="dd-notice" role="status">{desk.notice}</p>}{packet ? <Review key={packet.packet.binding.card_id} desk={desk} onSource={openSource} sourceOpen={sourceOpen} onNextAvailable={nextWithoutTarget} /> : <Empty desk={desk} requestedUnavailable={pendingTarget} nextWithoutTarget={nextWithoutTarget} />}</main>
-      <aside className="dd-inspector" aria-label="Decision evidence inspector">{packet ? <Inspector packet={packet} count={desk.parts.length} onSource={openSource} /> : <Section label="PREPARATION SUMMARY"><p>{desk.snapshot?.runner.explanation ?? 'Preparation status unavailable.'}</p></Section>}</aside>
-    </div>}
+    if (!queue) return
+    const selectionChanged = previousSelectedId.current !== selectedId
+    previousSelectedId.current = selectedId
+    setOpenedId(current => queue.refreshing && !selectionChanged && !entries.some(entry => entry.key === current) ? current
+      : !selectedId || entries.find(entry => entry.key === current)?.item.cardIds.includes(selectedId) ? current : null)
+  }, [selectedId, queue])
+  const pendingSelection = !!queue?.refreshing && !!openedId && !state.queueOpen && !entries.some(entry => entry.key === openedId)
+  const queueCardId = state.queueOpen ? state.queueCardId : null
+  const selected = state.queueOpen
+    ? queueCardId ? entries.find(entry => entry.item.cardIds.includes(queueCardId)) : entries.find(entry => entry.key === state.queueItemId)
+    : pendingSelection ? undefined : entries.find(entry => entry.key === openedId) ?? (selectedId ? entries.find(entry => entry.item.cardIds.includes(selectedId)) : undefined)
+  const contextCardId = queueCardId && !selected ? queueCardId : null
+  const closeDetail = () => { workspace.clearOrigin?.(); setDetailOpen(false); send({ type: 'close-queue' }) }
+  const matches = (entry: DecisionEntry) => `${entry.title} ${entry.question ?? ''} ${entry.item.cardIds.join(' ')} ${readinessLabels[entry.item.readiness]}`.toLowerCase().includes(query.trim().toLowerCase())
+  const visible = entries.filter(entry => matches(entry) || state.queueOpen && entry.key === selected?.key || !!entry.id && entry.item.cardIds.includes(selectedId ?? '') || !!entry.id && entry.item.cardIds.some(id => flash?.ids.includes(`card:${id}`)))
+  const unavailable = !!queueError || !!error
+  const incomplete = !!queue?.pullCoverage && (!queue.pullCoverage.associationsComplete || queue.pullCoverage.repositories.some(repo => repo.status !== 'fresh' || !repo.complete)) || queue && [queue.coverage.intentions, ...queue.coverage.fleet].some(source => !['fresh', 'partial'].includes(source.status) || source.coverage !== 'complete' || !!source.expiresAt && Date.parse(source.expiresAt) <= now)
+  const canFocus = (id: string) => !unavailable && !!scene?.cards.some(card => card.id === id)
+  const returnedOrigin = useRef<typeof workspace.origin>()
+  useEffect(() => {
+    const origin = workspace.origin
+    if (!origin) { returnedOrigin.current = undefined; return }
+    if (origin.section !== 'decisions' || origin.target.kind !== 'decision' || returnedOrigin.current === origin) return
+    setOpenedId(origin.target.id); setDetailOpen(true)
+    if (origin.view?.query !== undefined) setQuery(origin.view.query)
+    if (state.queueOpen) send({ type: 'close-queue' })
+    if (!queue && !queueError) return
+    returnedOrigin.current = origin
+    const entry = entries.find(entry => entry.key === origin.target.id)
+    if (entry?.id && canFocus(entry.id)) send({ type: 'focus', target: { kind: 'card', id: entry.id }, origin: 'manual' })
+  }, [workspace.origin, queue, queueError, scene])
+  useLayoutEffect(() => {
+    if (state.queueOpen && selected) {
+      Array.from(list.current?.querySelectorAll<HTMLElement>('[data-decision-id]') ?? []).find(row => row.dataset.decisionId === selected.key)?.scrollIntoView({ block: 'nearest' })
+    } else if (selectedId) list.current?.querySelector<HTMLElement>(`[data-card-id="${selectedId}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [state.selection, state.queueOpen, selected?.key])
+  useLayoutEffect(() => {
+    const current = state.flash, viewport = list.current
+    if (current && current.until > Date.now()) setDetailOpen(false)
+    if (!current || current.until <= Date.now() || !viewport) return
+    const row = Array.from(viewport.querySelectorAll<HTMLElement>('[data-card-id]')).find(row => current.ids.includes(`card:${row.dataset.cardId}`))
+    const scrolls: { element: HTMLElement; top: number; left: number }[] = []
+    for (let element: HTMLElement | null = viewport; element; element = element.parentElement) {
+      scrolls.push({ element, top: element.scrollTop, left: element.scrollLeft })
+    }
+    const before = interaction.current
+    let restored = false
+    const restore = () => {
+      if (restored || interaction.current !== before) return
+      restored = true
+      for (const { element, top, left } of scrolls) {
+        element.scrollTop = top
+        element.scrollLeft = left
+      }
+    }
+    const takeOwnership = () => { interaction.current++ }
+    const events = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const
+    for (const event of events) document.addEventListener(event, takeOwnership, true)
+    row?.scrollIntoView({ block: 'nearest' })
+    const frame = requestAnimationFrame(() => row?.scrollIntoView({ block: 'nearest' }))
+    const timer = setTimeout(() => {
+      setExpiredFlash(current.until)
+      restore()
+    }, Math.max(0, current.until - Date.now()))
+    return () => {
+      clearTimeout(timer)
+      cancelAnimationFrame(frame)
+      restore()
+      for (const event of events) document.removeEventListener(event, takeOwnership, true)
+    }
+  }, [state.flash])
+  const retainedNotes = (workspace.messages ?? []).filter(message => message.kind === 'message' && !(workspace.workers ?? []).some(worker => worker.home === message.home && worker.id === message.taskId))
+  const needsVerification = unavailable || incomplete || bridgeError || !!queue?.warnings?.length || !!queue?.operationalExceptions?.length || !!coordination.length
+  const missingOrigin = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' && openedId === workspace.origin.target.id && !!queue && !entries.some(entry => entry.key === openedId)
+  const preview = missingOrigin || pendingSelection ? undefined : selected ?? (!contextCardId && !state.queueOpen ? visible[0] : undefined)
+  const previewId = preview?.item.id
+  const previousRequest = useRef(previewId)
+  useLayoutEffect(() => {
+    if (previousRequest.current === previewId) return
+    previousRequest.current = previewId
+    if (previewId && controls?.deskVisible && controls.expanded && !controls.items.some(turn => turn.conversation_id === controls.expanded && turn.context.target?.kind === 'decision' && turn.context.target.id === previewId)) controls.collapse()
+  }, [previewId, controls])
+  const position = preview ? visible.findIndex(entry => entry.key === preview.key) : -1
+  const openEntry = (entry: DecisionEntry) => {
+    interaction.current++
+    workspace.clearOrigin?.()
+    if (state.queueOpen) send({ type: 'close-queue' })
+    if (entry.id && canFocus(entry.id)) send({ type: 'focus', target: { kind: 'card', id: entry.id }, origin: 'manual' })
+    setOpenedId(entry.key); setDetailOpen(true)
+  }
+  return <section className={`decisions${(detailOpen || state.queueOpen) && (preview || contextCardId || missingOrigin || pendingSelection) ? ' detail-open' : ''}`} aria-label="Decisions" data-presentation-scene data-scene-id={connection?.scene_id} data-revision={state.revision}>
+    <header className="decisions-top"><SessionConnection /><div className="decisions-brand"><h1>Decisions</h1><span>Choose a decision to resolve</span></div>
+      <details className="decisions-source"><summary>{needsVerification ? 'Some sources need verification' : 'Source status'}</summary><div className="decisions-warnings">
+        <h3>Source health</h3>
+        {bridgeError && <p>MCP connection delayed. Local browsing remains available.</p>}
+        {unavailable && <p role="status">Requests could not refresh. Shared card focus is unavailable until sources recover.</p>}
+        {incomplete && <p>Some evidence is stale or unavailable. Retained requests do not establish that all work is clear.</p>}
+        {!needsVerification && <p>No source warnings were reported in this observation.</p>}
+        <details><summary>Technical diagnostics</summary>
+          {queue?.warnings?.map(warning => <p key={warning}>{warning}</p>)}
+          {!!coordination.length && <details><summary>Operational coordination</summary>{coordination.map(item => <p key={item.id}>{displayRequestText(item.title)}</p>)}</details>}
+          <ExecutionWarnings warnings={queue?.operationalExceptions} onFocus={id => send({ type: 'focus', target: { kind: 'card', id }, origin: 'manual' })} canFocus={canFocus} />
+          {!!retainedNotes.length && <details><summary>Retained worker notes</summary><WorkerNotes messages={retainedNotes} submit={workspace.submit} /></details>}
+        </details>
+      </div></details>
+    </header>
+    <div className="decisions-layout" data-selected={!!preview || !!contextCardId || missingOrigin || pendingSelection}>
+      <section className="decisions-queue" aria-label="Decision queue"><div className="decisions-queue-top">
+        <div className="decisions-queue-title"><strong>Decision queue</strong><span>{visible.length} shown</span></div>
+        <label className="decisions-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Search decisions" value={query} onChange={event => { interaction.current++; setExpiredFlash(state.flash?.until ?? null); setQuery(event.target.value) }} placeholder="Find a decision…" /></label>
+      </div><div className="decisions-list" ref={list} aria-label="Decision requests">
+        {!queue && !queueError && <p role="status">Reading decision sources…</p>}
+        {!queue && queueError && <p role="status">Decision sources are unavailable.</p>}
+        {queue && !visible.length && <p role="status">{unavailable || incomplete ? 'No matching requests in available records. Some evidence needs verification.' : query ? 'No matching requests.' : 'No decisions in the current queue.'}</p>}
+        {visible.map(entry => {
+          const { item, id } = entry, stale = sourceStale(item, now)
+          const flashed = item.cardIds.some(id => flash?.ids.includes(`card:${id}`))
+          const row = <button type="button" title={[item.title, item.action].filter(Boolean).join(' · ')} className={`decisions-row${selected?.key === entry.key ? ' selected' : ''}${flashed ? ' flashed' : ''}`} data-card-id={id ?? undefined} data-decision-id={item.id} aria-pressed={selected?.key === entry.key} onClick={() => openEntry(entry)}>
+            <div className="one-line"><span className="title">{entry.title}</span><span className="chev">›</span></div>
+            <div className="one-line"><span className={`subtitle${stale ? ' stale' : ''}`}>{stale ? 'Needs verification' : item.proposal ? `Recommendation: ${item.proposal.value.actions.find(action => action.id === item.proposal!.value.recommended_action_id)?.label}` : item.readiness !== 'ready-now' ? readinessLabels[item.readiness] : entry.question ?? 'Question and evidence inside'}</span><span className="type">{item.kind === 'blocked' ? 'Intervention' : item.kind === 'merge' ? 'Review' : 'Decision'}</span></div>
+          </button>
+          return id ? <AskSurface as="div" subject={{ target: { kind: 'decision', id: entry.key }, view: { scene: 'decisions', request_key: entry.key, query } }} key={entry.key}>{row}</AskSurface> : <div key={entry.key}>{row}</div>
+        })}
+      </div></section>
+      {preview && <DecisionDetail key={preview.key} entry={preview} items={queue?.needsWill ?? queue?.items ?? []} unavailable={unavailable} onClose={closeDetail} query={query} position={position} total={visible.length}
+        previous={() => openEntry(visible[(position - 1 + visible.length) % visible.length]!)} next={() => openEntry(visible[(position + 1) % visible.length]!)} />}
+      {(missingOrigin || pendingSelection) && <MissingDecision requestKey={openedId!} pending={!!queue?.refreshing} onClose={closeDetail} />}
+      {contextCardId && !missingOrigin && <aside className="decisions-summary" aria-label="Card context"><button type="button" onClick={closeDetail}>← All decisions</button><h2>Card context</h2><DecisionCardContext key={contextCardId} id={contextCardId} /></aside>}
+    </div>
   </section>
 }
-function ReviewedCount({ refreshKey }: { refreshKey: number }) {
-  const [data, setData] = useState<{ reviewed_today_utc: number; recording_started_at: string | null; scope: string } | null>(null)
-  useEffect(() => { let active = true; void deskCall<NonNullable<typeof data>>('metrics').then(value => { if (active) setData(value) }).catch(() => {}); return () => { active = false } }, [refreshKey])
-  return <span title={data ? `Confirmed source requests today, UTC, in ${data.scope}; recording since ${data.recording_started_at ?? 'unavailable'}. Worker acknowledgment is separate.` : 'Reviewed metrics could not be verified'}>Reviewed today (UTC) <b>{metric(data?.reviewed_today_utc)}</b></span>
+
+function MissingDecision({ requestKey, pending = false, onClose }: { requestKey: string; pending?: boolean; onClose: () => void }) {
+  const controls = useAskControls(), { openDesk } = useDeskWorkspace()
+  const latest = controls?.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === requestKey).at(-1)
+  return <aside className="decisions-summary" aria-label={pending ? 'Refreshing request' : 'Request unavailable'}>
+    <button type="button" className="mobile-back" onClick={onClose}>← All decisions</button>
+    <h2 className="detail-heading">{pending ? 'Refreshing request' : 'Request unavailable'}</h2><p className="lede">{pending ? 'This request’s sources are still refreshing.' : 'This request is absent from the current queue.'} Its conversation remains in Discuss.</p>
+    {latest && <><p>{displayRequestText(latest.context.anchor.label)}</p><button type="button" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); openDesk() }}>Full conversation ↗</button>
+      {latest.context.anchor.url && <a href={latest.context.anchor.url} target="_blank" rel="noreferrer">Source record ↗</a>}</>}
+  </aside>
 }
-function Empty({ desk, requestedUnavailable = false, nextWithoutTarget }: { desk: DecisionDeskState; requestedUnavailable?: boolean; nextWithoutTarget: () => void }) {
-  const outcome = desk.claim?.outcome
-  requestedUnavailable ||= outcome === 'requested-unavailable'
-  const conflict = desk.claim?.code === 'card-held'
-  const title = requestedUnavailable ? 'Requested source request is not ready for review.' : conflict ? 'This decision is held by another review session.' : desk.error || outcome === 'source-unavailable' || outcome === 'next-unavailable' ? 'Decision Desk unavailable.' : outcome === 'no-decision-requests' ? 'No decision requests in the verified source scope.' : !desk.claim ? 'Opening your review session…' : 'No prepared decisions ready.'
-  return <div className="dd-empty"><span className="dd-eyebrow">REVIEW</span><h1>{title}</h1><p>{requestedUnavailable ? desk.error ?? desk.claim?.message ?? 'The exact source request and canonical card binding are not available in the current source observation. No substitute decision was claimed.' : conflict ? `Held by ${desk.claim?.lease?.holder ?? 'another reviewer'} until ${desk.claim?.lease?.expires_at ?? 'unavailable'}. Claim the next prepared decision to continue.` : desk.error ?? (outcome === 'no-decision-requests' ? 'There are no unanswered source requests in the verified scope.' : desk.snapshot?.runner.explanation ?? 'Source coverage and preparation status could not be verified. Outstanding decisions may still exist.')}</p>{desk.snapshot && outcome !== 'no-decision-requests' && <p>{metric(desk.snapshot.counts.preparing)} preparing · {desk.snapshot.coverage === 'complete' ? 'Source coverage complete at the last observation.' : 'Source coverage incomplete or unavailable.'}</p>}<button type="button" className="dd-secondary" disabled={desk.busy} onClick={() => requestedUnavailable ? nextWithoutTarget() : void desk.retryClaim()}>{requestedUnavailable ? 'Claim next prepared decision' : 'Refresh prepared decisions'}</button></div>
-}
-const failureCopy: Record<string, string> = {
-  'not-saved': 'Answer was not saved. Your selection is retained. Retry without advancing.',
-  'save-unconfirmed': 'Save status unconfirmed — confirming result. Your selection is retained. Retry the same operation ID.',
-  'saving': 'Save status unconfirmed — confirming result. Your selection is retained.',
-  'selected': 'Retained selection recovered. Retry without advancing.',
-  'packet-invalidated': 'Packet invalidated — source revision changed. Refresh research before deciding.',
-  'lease-lost': 'Lease expired or lost. Re-claim and revalidate before writing. Your selection is retained.',
-  'source-unavailable': 'Source verification unavailable. Refresh evidence before deciding. Your selection is retained.',
-  'recorded-releasing': 'Decision recorded. Releasing the previous lease is pending. Retry the same operation ID.',
-}
-function Review({ desk, onSource, sourceOpen, onNextAvailable }: { desk: DecisionDeskState; onSource: () => void; sourceOpen: boolean; onNextAvailable: () => void }) {
-  const held = desk.claim!, stored = held.packet!, packet = stored.packet
-  const actions = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const strip = actions.current, root = strip?.closest<HTMLElement>('.decision-desk')
-    if (!strip || !root) return
-    // Reserve the rendered height, including wrapped actions, so the last choice
-    // and evidence can scroll above the sticky strip at zoom and narrow widths.
-    const measure = () => root.style.setProperty('--dd-action-height', `${strip.getBoundingClientRect().height}px`)
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
-    observer?.observe(strip); window.addEventListener('resize', measure); measure()
-    return () => { observer?.disconnect(); window.removeEventListener('resize', measure); root.style.removeProperty('--dd-action-height') }
-  }, [])
-  const [confirm, setConfirm] = useState(false), [research, setResearch] = useState(false), [reason, setReason] = useState('')
-  const [now, setNow] = useState(Date.now())
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
-  const pendingWrite = held.code === 'source-write-pending'
-  const expired = !held.lease || Date.parse(held.lease.expires_at) <= now || held.code === 'claim-lost' || held.code === 'card-held' || held.outcome === 'lease-lost' || desk.result?.outcome === 'lease-lost'
-  const stale = held.outcome === 'packet-invalidated' || desk.result?.outcome === 'packet-invalidated' || !stored.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= now || Date.parse(stored.expires_at) <= now
-  const parts = desk.parts.length ? desk.parts : [stored]
-  const blockedResult = ['packet-invalidated', 'source-unavailable', 'lease-lost', 'answer-conflict', 'blocked-recovery'].includes(desk.result?.outcome ?? '')
-  const retry = parts.some(part => !!desk.attempts[requestKey(part)])
-  const reconcileRetained = retry && (!desk.result || ['save-unconfirmed', 'saving', 'blocked-recovery', 'lease-lost', 'recorded-releasing', 'selected'].includes(desk.result.outcome))
-  const chosen = parts.every(part => !!desk.selections[requestKey(part)])
-  const high = parts.some(part => part.packet.risk.rating === 'High' || part.packet.reversibility.rating === 'Difficult')
-  const retainedUnconfirmed = retry && ((!desk.busy && !desk.result) || ['save-unconfirmed', 'saving', 'blocked-recovery', 'recorded-releasing'].includes(desk.result?.outcome ?? ''))
-  const blocked = expired || stale || blockedResult || pendingWrite
-  useEffect(() => { if (blocked) setConfirm(false) }, [blocked])
-  useEffect(() => { if (desk.result?.outcome === 'confirmation-required') setConfirm(true) }, [desk.result])
-  const message = pendingWrite ? failureCopy['save-unconfirmed'] : expired ? failureCopy['lease-lost'] : retainedUnconfirmed ? failureCopy[desk.result?.outcome === 'recorded-releasing' ? 'recorded-releasing' : 'save-unconfirmed'] : stale ? failureCopy['packet-invalidated'] : desk.result && !desk.result.outcome.startsWith('recorded') ? failureCopy[desk.result.outcome] ?? desk.result.message : desk.result?.outcome === 'recorded-releasing' ? failureCopy['recorded-releasing'] : null
-  const submitLabel = retry ? (desk.result?.outcome === 'save-unconfirmed' ? 'Confirm save status' : 'Retry without advancing') : 'Submit decision & next →'
-  return <>
-    <div className="dd-review-content">
-    {message && <div className={`dd-banner ${expired || desk.result?.outcome === 'not-saved' ? 'dd-danger' : ''}`} role="alert"><strong>{message}</strong>{desk.result?.progress?.length ? <p>Independent source requests already recorded: {desk.result.progress.map(item => item.request_id).join(', ')}. This request remains unresolved.</p> : null}{desk.result?.reasons?.length ? <details><summary>View details</summary>{desk.result.reasons.map(text => <p key={text}>{text}</p>)}</details> : null}{blocked && held.code === 'card-held' && !retry && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={onNextAvailable}>Claim next prepared decision</button>}{blocked && reconcileRetained && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={() => void desk.submit()}>Confirm retained save status</button>}{blocked && !pendingWrite && !retainedUnconfirmed && <button className="dd-secondary" type="button" disabled={desk.busy} onClick={() => void (stale && !expired ? desk.release('research', 'Packet stale; refresh required') : desk.retryClaim())}>{stale && !expired ? 'Refresh packet & next' : 'Re-claim & revalidate'}</button>}</div>}
-    {desk.error && <p className="dd-banner dd-danger" role="alert">{desk.error}</p>}
-    <div className="dd-identifiers" data-semantic-id={`card:${packet.binding.card_id}`} data-decision-id={packet.binding.request_key} tabIndex={-1}><span className="dd-eyebrow">DECISION · {packet.binding.card_id}</span><small>Request {packet.binding.request_id}</small>{!expired && <span className="dd-lease">Leased to this session</span>}</div>
-    <h1>{packet.title}</h1><div className="dd-question"><Prose>{packet.question}</Prose></div>
-    <Section label="BACKGROUND"><div className="dd-background"><Prose>{packet.background}</Prose></div>{packet.background.length > 400 && <details><summary>Read full background</summary><Prose>{packet.background}</Prose></details>}</Section>
-    <div className="dd-recommendation"><h3 className="dd-eyebrow">PREPARATION AGENT RECOMMENDS</h3><strong>{packet.binding.options.find(option => option.id === packet.recommended_option_id)?.label}</strong><Prose>{packet.rationale}</Prose><p className="dd-caption">{packet.confidence} confidence · Advisory recommendation; choose your answer below.</p>{packet.uncertainty.length === 1 ? <p className="dd-caption">Uncertainty: {packet.uncertainty[0]}</p> : packet.uncertainty.length > 1 && <details open={packet.confidence === 'Low'}><summary>Uncertainty{packet.confidence === 'Low' ? ' · low confidence' : ''}</summary><ul>{packet.uncertainty.map(text => <li key={text}>{text}</li>)}</ul></details>}</div>
-    {packet.confidence === 'Low' && <div className="dd-banner"><strong>Low confidence</strong><p>Review these unknowns before deciding. Request more research if they affect your authorization.</p>{packet.material_unknowns.map(text => <p key={text}>{text}</p>)}</div>}
-    <Assessments packet={stored} />
-    <Section label="YOUR DECISION">{desk.snapshot?.recorded_requests.filter(item => item.card_id === packet.binding.card_id).map(item => <p className="dd-caption" key={`${item.request_id}:${item.confirmed_at}`}>Independent request {item.request_id} durably recorded at {new Date(item.confirmed_at).toLocaleString()}. Each request is reviewed separately.</p>)}{parts.map(part => <fieldset key={requestKey(part)} className="dd-choices" disabled={desk.busy || blocked || !!desk.attempts[requestKey(part)]}><legend>Choose one source option</legend><p className="dd-caption">Request {part.packet.binding.request_id}</p>{part.packet.binding.options.map(option => <label key={option.id} className={`dd-option ${desk.selections[requestKey(part)] === option.id ? 'dd-selected' : ''}`}><input type="radio" name={requestKey(part)} value={option.id} checked={desk.selections[requestKey(part)] === option.id} onChange={() => desk.select(part, option.id)} /><span>{option.label}{option.id === part.packet.recommended_option_id && <small>Recommended</small>}</span></label>)}</fieldset>)}</Section>
-    <details className="dd-inline-evidence"><summary>Evidence, confidence & execution boundaries</summary><Inspector packet={stored} count={parts.length} onSource={onSource} /></details>
-    {sourceOpen && <details className="dd-source-context" open><summary>Source request & discussion</summary><SourceDiscussion packet={stored} /></details>}
+
+function DecisionDetail({ entry, items, unavailable, onClose, query, position, total, previous, next }: { entry: DecisionEntry; items: QueueItem[]; unavailable: boolean; onClose: () => void; query: string; position: number; total: number; previous: () => void; next: () => void }) {
+  const { now, submit, messages = [], workers = [], openDesk, scene } = useDeskWorkspace()
+  const controls = useAskControls()
+  const { item } = entry
+  const ready = !unavailable && item.readiness === 'ready-now' && !sourceStale(item, now)
+  const request = item as Partial<NeedsWillItem>
+  const turns = (controls?.items ?? []).filter(turn => turn.context.target?.kind === 'decision' && turn.context.target.id === item.id)
+  const latest = turns.at(-1), answer = mostRecentAnswer(turns)
+  const replyProposals = turns.flatMap(turn => {
+    const value = turn.reply?.decision_proposal
+    return value && value.request_key === item.id && value.source.kind === 'ask-reply' && value.source.id === turn.request_id && (!value.card_id || item.cardIds.includes(value.card_id)) ? [{ answer_id: turn.request_id, value }] : []
+  })
+  const proposal = currentDecisionProposal([...replyProposals, ...(item.proposals ?? (item.proposal ? [item.proposal] : []))])
+  const proposalReply = turns.find(turn => turn.request_id === proposal?.answer_id && !turn.published_proposal)
+  const proposalReady = !unavailable && !controls?.error && decisionProposalReady(item, proposal, proposalReply, now)
+  const recommended = proposal?.value.actions.find(action => action.id === proposal.value.recommended_action_id)
+  const [draft, setDraft] = useState<{ question: string; key: number } | null>(null), [challenge, setChallenge] = useState(false)
+  const subject = { target: { kind: 'decision' as const, id: item.id }, view: { scene: 'decisions' as const, request_key: item.id, query }, label: entry.title, ...(latest ? { followUpTo: latest.request_id } : {}) }
+  const seed = (question: string) => { controls?.collapse(); setDraft({ question, key: Date.now() }); setChallenge(false) }
+  const selection = proposal && turns.filter(turn => turn.action_selection?.answer_id === proposal.answer_id).at(-1)
+  const card = scene?.cards.find(card => card.id === entry.id)
+  const question = proposal?.value.question ?? entry.question ?? displayRequestText(item.action ?? '', '').replace(/^owner\s*:\s*/i, '').trim()
+  const sourceStatus = card ? [card.source.properties.Owner?.value, card.source.properties.Status?.value].filter(Boolean).join(' · ') : `Owner/status not published · ${readinessLabels[item.readiness]}`
+  return <aside className="decisions-summary" aria-label="Selected decision" data-decision-id={item.id}>
+    <button type="button" className="mobile-back" onClick={onClose}>← All decisions</button>
+    <div className="decisions-detail-main"><div className="detail-eyebrow"><span className="section-label">{item.kind === 'blocked' ? 'Intervention' : 'Decision'} · {Math.max(1, position + 1)} of {total}</span><span className="state-label">{selection ? actionDeliveryLabel(selection) : !ready || !!proposal && !proposalReady ? 'Needs verification' : proposal ? 'Awaiting your choice' : 'Recommendation needed'}</span></div>
+      <h2 className="detail-heading" title={item.title}>{entry.title}</h2>{question && question !== entry.title && <p className="lede" title={question}>{question}</p>}<div className="divider" />
+      <section className="rec-panel" aria-label="Recommendation and choices"><h3 className="small-cap">First Mate recommends</h3>
+        <div className="rec-title">{recommended?.label ?? 'Recommendation not yet published'}</div>
+        {proposal ? <><p className="rec-basis">{proposal.value.rationale}</p>
+          {controls && <AskActions decision answerId={proposal.answer_id} suggestions={proposal.value.actions} recommendedActionId={proposal.value.recommended_action_id} superseded={false} disabled={!proposalReady}
+            selection={selection ? { request_id: selection.request_id, action_id: selection.action_selection!.action_id, status: selection.status, outcome: selection.outcome, merge_selection: selection.merge_selection, error: selection.error } : null} onSelect={controls.selectAction} />}
+        </> : <button type="button" className="primary" onClick={() => seed('Please publish a current recommendation and alternatives for this exact request using tinstar.decision-proposal.v1, with request_key matching this context. Include rationale and source references.')}>Ask for a recommendation →</button>}
+        <div className="secondary-bar"><button type="button" className="wrong-btn" aria-expanded={challenge} onClick={() => setChallenge(!challenge)}>Something wrong? ▾</button><span className="source-basis">{proposal ? `${proposalReady ? 'Current request' : 'Last-known recommendation'} · First Mate` : 'No current proposal'}</span></div>
+        {challenge && <div className="wrong-menu">{[
+          ['Already resolved', 'Please verify whether this exact request has already been resolved and reconcile its source if confirmed.'],
+          ['Not my decision', 'Please verify who owns this exact decision and its outstanding ask.'],
+          ['Need more information', 'Please provide the missing context and a current recommendation for this exact request.'],
+        ].map(([label, question]) => <button type="button" key={label} onClick={() => seed(`${label}: ${question}`)}>{label}</button>)}</div>}
+        {!proposal && <DecisionChoices key={entry.key} entry={entry} items={items} disabled={!ready} />}
+        {!ready && <p className="rec-basis" role="status">{item.readiness === 'future-or-conditional' ? 'Waiting on a prerequisite. Verify it has cleared before answering.' : 'This request needs verification before you act.'}</p>}
+      </section>
+      <section className="discussion" aria-label="Decision discussion"><div className="discuss-head"><h3 className="small-cap">Discussion</h3>{latest && <button type="button" className="full-link" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); openDesk() }}>Full conversation ↗</button>}</div>
+        <div className="thread-preview">{answer?.reply ? <><b>First Mate · recent answer</b><span>{displayRequestText(answer.reply.summary)}</span></> : <span>No First Mate exchange published for this request yet.</span>}</div>
+        {controls?.deskVisible && controls.expanded ? <p className="rec-basis">Continue in the open Discuss conversation.</p> : <AskContextComposer key={draft?.key ?? item.id} compact subject={{ ...subject, ...(draft ? { question: draft.question } : {}) }} />}
+      </section>
+      <section className="evidence"><h3 className="small-cap">Sources and evidence</h3><div className="evidence-links">
+        {item.cardIds.map(id => <a key={id} href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗</a>)}
+        {item.evidence.filter(e => e.kind !== 'card').map(e => <a key={e.url} href={e.url} target="_blank" rel="noreferrer">{e.kind === 'pull-request' ? 'Related PR' : 'Evidence'} ↗</a>)}
+        {proposal?.value.references.filter(ref => !item.evidence.some(e => e.url === ref.url)).map(ref => <a key={ref.url} href={ref.url} target="_blank" rel="noreferrer">{ref.label} ↗</a>)}
+      </div><p className="source-basis">{sourceStatus}</p>
+      <details className="decisions-evidence"><summary>Evidence and delivery details</summary>
+        {!item.sources.some(source => source.request && source.request.home !== null) && <p>{displayRequestText(item.action ?? item.title)}</p>}
+        {item.sources.filter(source => source.request && source.request.home !== null).map((source, index) => {
+          const pending = messages.find(message => message.kind === 'answer' && message.sourceAnchor === source.responseAnchor)
+          const request = source.request!
+          const matches = workers.filter(worker => worker.home === request.home && worker.id === request.taskId)
+          const worker = matches.length === 1 ? matches[0] : null
+          const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
+          const linked = route ? findLinkedWorker(workers, route) : null
+          const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
+          return <section key={`${source.id}:${index}`} className="decisions-response" aria-label="Decision response"><p>{displayRequestText(source.action ?? '', 'Read the source to verify this question.')}</p>
+            {href && <a href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}
+            {pending ? <><p role="status">{['saved', 'acknowledged', 'done'].includes(pending.state) ? 'Answer saved.' : 'Response pending.'}</p><pre>{JSON.stringify(pending, null, 2)}</pre>{submit && (pending.state === 'sending' || pending.state === 'saved' && pending.announced === false) && <ResponseRetry message={pending} submit={submit} />}</> : ready && request.home !== null && source.readiness === 'ready-now' && source.responseAnchor === requestAnchor(request) && submit && <SourceActions source={source} submit={submit} />}
+          </section>
+        })}
+        {item.cardIds.map(id => <DecisionCardContext key={id} id={id} showLink={false} />)}
+        {request.pulls?.map(pull => <p key={pull.id}>{pull.repository} #{pull.number} · PR opened {pull.createdAt} (not request age) · {pull.readiness?.checks ?? 'Checks unverified'}</p>)}
+        <p>{request.requestSince ? `Oldest recorded open ask: ${request.requestSince}` : 'Request age unknown'}</p><pre>{JSON.stringify({ request: item, proposal }, null, 2)}</pre>
+      </details></section>
     </div>
-    <footer ref={actions} className="dd-actions"><button type="button" className="dd-primary" disabled={desk.busy || blocked || !chosen} onClick={() => high && !retry ? setConfirm(true) : void desk.submit()}>{desk.busy ? 'Saving / verifying…' : submitLabel}</button><button type="button" className="dd-secondary" disabled={desk.busy || retry} onClick={() => void desk.release('skip')}>Skip</button><button type="button" className="dd-text" disabled={desk.busy || retry} onClick={() => setResearch(value => !value)}>Need more research</button></footer>
-    {research && <div className="dd-research"><label>Research needed (optional)<textarea value={reason} maxLength={1000} onChange={event => setReason(event.target.value)} /></label><button type="button" className="dd-secondary" disabled={desk.busy} onClick={() => { setResearch(false); void desk.release('research', reason) }}>Request research & next</button><button className="dd-text" type="button" onClick={() => setResearch(false)}>Cancel</button></div>}
-    {confirm && <Confirmation parts={parts} selections={desk.selections} onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); void desk.submit(true) }} />}
-  </>
+    <footer className="nav-foot"><button type="button" onClick={previous} disabled={total < 2}>← Previous</button><span className="progress">{Math.max(1, position + 1)} of {total}</span><button type="button" onClick={next} disabled={total < 2}>Next decision →</button></footer>
+  </aside>
 }
-function Assessments({ packet: { packet } }: { packet: DeskPacket }) {
-  return <div className="dd-assessments"><section><h3>Decision risk</h3><strong className={`dd-rating dd-${packet.risk.rating.toLowerCase()}`}>{packet.risk.rating}</strong><Prose>{packet.risk.explanation}</Prose><p className="dd-caption">Blast radius: {packet.risk.blast_radius}</p></section><section><h3>Reversibility</h3><strong className="dd-rating">{packet.reversibility.rating}</strong><Prose>{packet.reversibility.explanation}</Prose><p className="dd-caption">Rollback: {packet.reversibility.rollback}</p></section></div>
-}
-function Inspector({ packet: stored, count, onSource }: { packet: DeskPacket; count: number; onSource: () => void }) {
-  const packet = stored.packet
-  return <><Section label="PREPARATION SUMMARY"><p>{stored.validation.valid ? 'Source binding validated' : 'Source verification required'}</p><dl><dt>Confidence</dt><dd>{packet.confidence}</dd><dt>Packet</dt><dd>Version {stored.version}</dd><dt>Published</dt><dd>{new Date(stored.published_at).toLocaleString()}</dd><dt>Fresh through</dt><dd>{stored.validation.valid_until ? new Date(stored.validation.valid_until).toLocaleString() : 'Unavailable'}</dd><dt>Answer parts</dt><dd>{count || 1} independent source request{count === 1 ? '' : 's'}</dd></dl><details><summary>Source revision & preparation</summary><p>Source record: {packet.binding.source_id}</p><p>{stored.validation.valid ? 'Exact semantic source revision matched this immutable packet at validation.' : 'Source revision is not verified; refresh is required.'}</p><p>Packet version {stored.version} · content digest {stored.content_hash}</p><p>Prepared by {stored.prepared_by}</p><p>Source generation: {packet.binding.source_spawn_gen ?? 'Unavailable'}</p></details></Section><Section label="AFTER YOU APPROVE"><details><summary>Impact, likelihood & rollback</summary><p>{packet.risk.likelihood}</p><p>{packet.risk.blast_radius}</p><p>{packet.reversibility.rollback}</p><p>{packet.reversibility.residual_exposure}</p></details><Prose>{packet.authorization.scope}</Prose><p>{packet.authorization.next_owner} · {packet.authorization.next_status}</p><Prose>{packet.authorization.permitted_follow_up}</Prose><ul>{packet.authorization.remaining_gates.map(text => <li key={text}>{text}</li>)}</ul></Section><Section label="EVIDENCE & PROVENANCE">{packet.references.map(reference => safeLink(reference.url) ? <a className="dd-reference" key={reference.url} href={reference.url} target="_blank" rel="noreferrer">{reference.label} ↗</a> : <p key={reference.url}>{reference.label} · Link unavailable</p>)}<details><summary>Full background, consequences & unknowns</summary><Prose>{packet.background}</Prose>{[...packet.consequences, ...packet.impacted, ...packet.prerequisites, ...packet.uncertainty, ...packet.material_unknowns].map((text, i) => <p key={i}>{text}</p>)}</details><details><summary>Freshness & invalidation</summary>{packet.invalidation_conditions.map(text => <p key={text}>{text}</p>)}{stored.validation.reasons.map(text => <p key={text}>{text}</p>)}</details><button className="dd-text" type="button" onClick={onSource}>Source request & discussion</button></Section></>
-}
-function SourceDiscussion({ packet: { packet } }: { packet: DeskPacket }) {
-  const controls = useAskControls(), workspace = useDeskWorkspace()
-  const source = packet.binding.source_request
-  const matches = (workspace.workers ?? []).filter(worker => worker.home === source.home && worker.id === source.taskId)
-  const worker = matches.length === 1 ? matches[0] : null
-  const route = worker ? { worker: worker.id, home: homeName(worker.home), key: null, q: '' } : null
-  const linked = route ? findLinkedWorker(workspace.workers, route) : null
-  const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
-  const latest = controls?.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === packet.binding.request_key).at(-1)
-  const subject = { target: { kind: 'decision' as const, id: packet.binding.request_key }, view: { scene: 'decisions' as const, request_key: packet.binding.request_key, query: '' }, label: packet.title }
-  return <AskSurface as="section" subject={subject}><DecisionCardContext id={packet.binding.card_id} /><p>Discussion is bound to source request {packet.binding.request_id}. Sending a question does not answer this decision.</p>{href && <a className="dd-reference" href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}{workspace.scene?.cards.some(card => card.id === packet.binding.card_id) && <button type="button" className="dd-text" onClick={() => workspace.send({ type: 'navigate-card', cardId: packet.binding.card_id })}>Open related work</button>}{latest ? <button type="button" className="dd-secondary" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); workspace.openDesk() }}>Open source conversation in Discuss</button> : <p className="dd-caption">No First Mate exchange is published for this request yet.</p>}{controls?.deskVisible && controls.expanded ? <p className="dd-caption">Continue in the open Discuss conversation.</p> : <AskContextComposer compact subject={subject} />}</AskSurface>
-}
-function Confirmation({ parts, selections, onCancel, onConfirm }: { parts: DeskPacket[]; selections: Record<string, string>; onCancel: () => void; onConfirm: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null), [checked, setChecked] = useState(false)
+
+/** Prepared review renders evidence only; its packet controller owns answer and
+ * lease actions. The workbench keeps its original interactive context by default. */
+export function DecisionCardContext({ id, showLink = true, readOnly = false }: { id: string; showLink?: boolean; readOnly?: boolean }) {
+  const { scene, refreshAfterMutation, send } = useDeskWorkspace()
+  const card = scene?.cards.find(card => card.id === id)
+  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null
-    dialog.current?.showModal()
-    return () => { dialog.current?.close(); previous?.focus() }
-  }, [])
-  return <dialog className="dd-modal" ref={dialog} aria-labelledby="dd-confirm-title" onCancel={event => { event.preventDefault(); onCancel() }} onKeyDown={event => {
-    if (event.key !== 'Tab') return
-    // Native dialog can hand Tab focus to browser chrome. Keep the review
-    // confirmation within its currently enabled confirmation controls.
-    const controls = [...dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),a[href]') ?? []].filter(control => control.getClientRects().length)
-    const first = controls[0], last = controls.at(-1)
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-  }}><h2 id="dd-confirm-title">Confirm this bounded decision</h2><p>Review the exact choices, adverse impact and what this answer permits.</p>{parts.map(part => <section key={requestKey(part)}><h3>{part.packet.binding.options.find(option => option.id === selections[requestKey(part)])?.label}</h3><p><b>Authorized scope:</b> {part.packet.authorization.scope}</p><p><b>Adverse impact:</b> {part.packet.risk.explanation} {part.packet.risk.blast_radius}</p><p><b>Reversibility · {part.packet.reversibility.rating}:</b> {part.packet.reversibility.rollback} {part.packet.reversibility.residual_exposure}</p><p><b>Next:</b> {part.packet.authorization.next_owner} · {part.packet.authorization.next_status}. {part.packet.authorization.permitted_follow_up}</p><ul>{part.packet.authorization.remaining_gates.map(text => <li key={text}>{text}</li>)}</ul></section>)}<label className="dd-check"><input type="checkbox" checked={checked} onChange={event => setChecked(event.target.checked)} />I confirm these selected options within the stated scope.</label><div className="dd-modal-actions"><button type="button" className="dd-secondary" autoFocus onClick={onCancel}>Cancel</button><button type="button" className="dd-primary" disabled={!checked} onClick={onConfirm}>Confirm & submit decision</button></div></dialog>
+    const controller = new AbortController()
+    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
+      if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' })
+    }).catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
+    return () => controller.abort()
+  }, [id])
+  return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
+    {!readOnly && <CardLeaseStatus key={id} cardId={id} />}
+    {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
+    {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
+    {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
+    {card && !readOnly && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button>{!readOnly && <details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details>}</>}
+    {!readOnly && <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>}
+  </section>
 }
-function Preparation({ desk }: { desk: DecisionDeskState }) {
-  const workspace = useDeskWorkspace()
-  const retained = (workspace.messages ?? []).filter(message => message.kind === 'message' && !(workspace.workers ?? []).some(worker => worker.home === message.home && worker.id === message.taskId))
-  const [values, setValues] = useState<DeskPolicy['values'] | null>(desk.policy?.values ?? null)
-  const [saving, setSaving] = useState(false), [message, setMessage] = useState('')
-  const observedPolicy = useRef(desk.policy)
-  useEffect(() => {
-    // A cached-source refresh must not erase settings the reviewer is editing.
-    if (observedPolicy.current?.scope !== desk.policy?.scope || observedPolicy.current?.version !== desk.policy?.version) {
-      observedPolicy.current = desk.policy; setValues(desk.policy?.values ?? null)
-    }
-  }, [desk.policy])
-  const counts = desk.snapshot?.counts
-  return <main className="dd-preparation"><span className="dd-eyebrow">DECISION PREPARATION / CONFIGURATION</span><h1>Keep decisions ready before I ask.</h1><p>Set the buffer of validated, unleased decision packets for rapid review.</p><div className="dd-stats">{[['Ready · unleased', counts?.ready], ['Preparing now', counts?.preparing], ['Leased to sessions', counts?.leased], ['Needs re-preparation', counts?.needs_repreparation]].map(([label, value]) => <div key={label as string}><span>{label}</span><strong>{metric(value as number | null | undefined)}</strong></div>)}</div><p className="dd-banner">{desk.snapshot?.runner.explanation ?? 'Preparation runner status unavailable.'}</p><div className="dd-prep-panels"><section className="dd-panel"><h2 className="dd-eyebrow">QUEUE POLICY</h2>{values ? <><label className="dd-range"><span>Target ready depth <output>{values.target_ready}</output></span><input aria-label="Target ready depth" type="range" min="1" max="30" value={values.target_ready} onChange={event => setValues({ ...values, target_ready: Number(event.target.value) })} /><small>Keep this many validated, unleased decisions available</small></label><label className="dd-range"><span>Maximum parallel preparers <output>{values.max_preparers}</output></span><input aria-label="Maximum parallel preparers" type="range" min="1" max="8" value={values.max_preparers} onChange={event => setValues({ ...values, max_preparers: Number(event.target.value) })} /><small>Worker cap, 1–8. No runner is currently configured.</small></label><label className="dd-check dd-policy-toggle"><span><strong>Automatic replenishment</strong><small>When a runner is configured, start eligible work after claims, answers and invalidation.</small></span><input type="checkbox" role="switch" checked={values.automatic_replenishment} onChange={event => setValues({ ...values, automatic_replenishment: event.target.checked })} /></label><div className="dd-order"><strong>Review ordering</strong><p>Existing Tin Star readiness, next checkpoint, then canonical ID. Source requests are not silently reordered.</p></div><button className="dd-primary" type="button" disabled={saving} onClick={async () => { setSaving(true); setMessage(''); try { await desk.savePolicy(values); setMessage('Queue policy saved. No preparation runner is configured.') } catch (error) { setMessage(`Settings were not confirmed saved. ${error instanceof Error ? error.message : 'Backend unavailable'}`) } finally { setSaving(false) } }}>{saving ? 'Saving policy…' : 'Save queue policy'}</button><p className="dd-caption">Effective saved policy: {desk.policy?.values.target_ready} ready · {desk.policy?.values.max_preparers} preparers · automatic {desk.policy?.values.automatic_replenishment ? 'on' : 'off'}. Version {desk.policy?.version}.</p></> : <p>Effective settings unavailable. Retry after backend access is restored.</p>}{message && <p role="status">{message}</p>}</section><section className="dd-panel"><h2 className="dd-eyebrow">PREPARATION PIPELINE</h2><div className="dd-pipeline">{[['To prepare', counts?.to_prepare], ['Working', counts?.preparing], ['Ready', counts?.ready], ['Leased', counts?.leased]].map(([label, value]) => <div key={label as string}><strong>{metric(value as number | null | undefined)}</strong><span>{label}</span></div>)}</div><h3 className="dd-eyebrow">UP NEXT FOR PREPARATION</h3>{desk.snapshot?.pending.some(row => row.state !== 'Ready' && row.state !== 'Leased') ? desk.snapshot.pending.filter(row => row.state !== 'Ready' && row.state !== 'Leased').slice(0, 5).map((row, index) => <article className="dd-pending" key={`${row.card_id}:${row.request_id}:${index}`}><strong>{row.title}</strong><small>{row.card_id} · {row.request_id ?? 'Unverified request identity'}</small><span>{row.state} · no runner configured</span>{row.reasons.length > 0 && <details><summary>Evidence & next action</summary>{row.reasons.map(text => <p key={text}>{text}</p>)}<p>Refresh authoritative source evidence before preparation. No automatic retry is scheduled.</p></details>}</article>) : <p>{desk.snapshot?.counts.requests === 0 ? 'No decision requests in the verified scope.' : desk.snapshot?.coverage === 'complete' ? 'No pending preparation rows in the verified scope.' : 'Pending source work unavailable or not yet verified.'}</p>}</section></div>{!!desk.snapshot?.source_failures?.length && <details className="dd-rules"><summary>Source verification unavailable</summary>{desk.snapshot.source_failures.map(failure => <section key={failure.card_id}><strong>Card {failure.card_id}</strong>{failure.reasons.map(reason => <p key={reason}>{reason}</p>)}</section>)}</details>}{retained.length > 0 && <details className="dd-rules"><summary>Source delivery details</summary><WorkerNotes messages={retained} submit={workspace.submit} /></details>}<details className="dd-rules"><summary>Processing rules</summary><p>Notion cards and exact source requests remain authoritative. Preparation publishes advisory packets; it cannot answer or authorize work. Review leases last 60 minutes and are separate from preparation locks. Changed requests, expired evidence and lost leases block submission. Answer retries retain the original operation ID; durable source readback precedes the next card. No preparation runner, scheduler or retry process is started by these settings.</p></details></main>
+function ExecutionWarnings({ warnings, onFocus, canFocus }: { warnings: import('../server/reconciliation/workflowViews').ExecutionWarning[] | undefined; onFocus: (id: string) => void; canFocus: (id: string) => boolean }) {
+  if (!warnings?.length) return null
+  return <details><summary>Worker evidence</summary>{warnings.map(warning => <article key={warning.cardId}><button type="button" disabled={!canFocus(warning.cardId)} onClick={() => onFocus(warning.cardId)}>{warning.title}</button><strong>{warning.state === 'unknown' ? 'Execution unknown' : 'No running linked worker observed'}</strong>{warning.reasons.map(reason => <p key={reason}>{decodeRequestText(reason)}</p>)}</article>)}</details>
+}
+
+/** Formal published choices use the same workflow operation as MCP. A saved
+ * answer does not dismiss this source request; only reconciliation can do so. */
+function DecisionChoices({ entry, items, disabled }: { entry: DecisionEntry; items: QueueItem[]; disabled: boolean }) {
+  const [saved, setSaved] = useState<{ items: QueueItem[]; requestId: string; result: import('../shared/workflow').StartWorkResult } | null>(null)
+  const requests = (entry.item as Partial<NeedsWillItem>).requests ?? []
+  const proposals = requests.filter(request => request.cardId === entry.id && !request.answered && request.options?.length && (!entry.item.sources.some(source => source.kind === 'firstmate') || !!request.sourceRequest && entry.item.sources.some(source => source.request && source.request.home !== null && requestAnchor(source.request) === requestAnchor(request.sourceRequest!) && (source.question ?? source.action) === request.sourceQuestion && (source.generation ?? null) === (request.sourceSpawnGen ?? null))))
+  const localStatus = saved?.result.decision_resolution?.message ?? saved?.result.message
+  const resolution = saved ? items.filter(item => item.cardIds.includes(entry.id!))
+    .flatMap(item => item.decisionResolution?.requests ?? (item.decisionResolution ? [item.decisionResolution] : []))
+    .find(status => status.request_id === saved.requestId) : entry.item.decisionResolution
+  const status = saved?.items === items ? localStatus : resolution?.message ?? localStatus
+  return <>{proposals.map(proposal => <ProposalChoices key={proposal.id} cardId={entry.id!} proposal={proposal} disabled={disabled} onResult={result => setSaved({ items, requestId: proposal.id, result })} />)}{status && <small role="status">{status}</small>}</>
+}
+
+function ProposalChoices({ cardId, proposal, onResult, disabled }: { disabled: boolean; cardId: string; proposal: NeedsWillItem['requests'][number]; onResult: (result: import('../shared/workflow').StartWorkResult) => void }) {
+  const { busy, result, save } = useWorkSave(async () => {})
+  const shownResult = useRef(result)
+  useLayoutEffect(() => {
+    if (result && shownResult.current !== result) onResult(result)
+    shownResult.current = result
+  }, [result, onResult])
+  return <div className="ask-recommendations ask-action-choices" role="group" aria-label={proposal.question ?? 'Decision choices'}>
+    {proposal.options!.map(option => <button className="ask-action-choice" key={option.id} disabled={disabled || busy || !!result?.decision_resolution} onClick={() => void save({
+      kind: 'answer_decision', card_id: cardId, request_id: proposal.id, option_id: option.id, answer: option.label,
+      next: { owner: 'Firstmate', status: 'Queued' },
+    })}>{option.label}</button>)}
+  </div>
 }

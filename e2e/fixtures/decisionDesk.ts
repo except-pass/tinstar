@@ -26,3 +26,9 @@ export async function installDecisionDesk(page: Page, initialCard = fixtureId(1)
   })
   return { invalidate: () => { invalidated = true } }
 }
+
+/** Explicit user mode selection; the default must remain the source workbench. */
+export async function openDecisionDesk(page: Page) {
+  const modes = page.getByRole('navigation', { name: 'Decisions mode' })
+  await modes.getByRole('button', { name: 'Decision Desk', exact: true }).click()
+}

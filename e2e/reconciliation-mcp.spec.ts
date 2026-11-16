@@ -1,4 +1,4 @@
-import { installDecisionDesk } from './fixtures/decisionDesk'
+import { installDecisionDesk, openDecisionDesk } from './fixtures/decisionDesk'
 import { buildWorkerLinkReport } from '../src/server/reconciliation/workerLinkReport'
 import { test, expect, type Page } from '@playwright/test'
 import { createServer, type Server } from 'node:http'
@@ -223,6 +223,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
   expect(await flashedLine.evaluate(node => { const style = getComputedStyle(node); return style.stroke !== 'none' && Number(style.strokeWidth.replace('px', '')) > 0 && style.visibility === 'visible' })).toBe(true)
   await expect(page.getByRole('status').filter({ hasText: 'Assistant changed this view' })).toBeVisible()
   await present(page, { type: 'open-queue' }, 'open-desk')
+  await openDecisionDesk(page)
   const beforeNext = await call('get_scene', { scene_id: first })
   expect(beforeNext.state.queueItemId).toBe(queue.items[0]!.id)
   let nextAck = await call('next_queue_item', { scene_id: first, command_id: 'next', expected_revision: beforeNext.state.revision })
@@ -285,6 +286,7 @@ test('real MCP client gets browser-applied acks, isolates windows, and respects 
 
 test('Decisions preserves one leased request through presentation navigation on desktop and phone', async ({ page }) => {
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   const sceneId = await windowId(page)
   const held = page.locator('.dd-identifiers')
   await expect(held).toHaveAttribute('data-semantic-id', `card:${fixtureId(1)}`)
@@ -301,6 +303,7 @@ test('Decisions preserves one leased request through presentation navigation on 
 
 test('Decision Desk header tabs stay separate at all review viewport sizes', async ({ page }) => {
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   await windowId(page)
   for (const [width, height] of [[390, 844], [430, 932], [768, 1024], [1440, 900], [1920, 1080]] as const) {
     await page.setViewportSize({ width, height })
@@ -315,6 +318,7 @@ test('Decision Desk header tabs stay separate at all review viewport sizes', asy
 
 test('Decision Desk action strip is opaque and final content scrolls clear at every review width', async ({ page }) => {
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   await expect(page.locator('.dd-choices')).toBeVisible()
   for (const [width, height] of [[390, 844], [430, 932], [768, 1024], [1440, 900], [1920, 1080]] as const) {
     await page.setViewportSize({ width, height })
@@ -336,6 +340,7 @@ test('Decision Desk reports unavailable sources without claiming a visible decis
   await page.route('**/api/reconciliation/decision-desk/**', route => route.fulfill({ status: 503, json: { ok: false, error: { message: 'Fixture backend unavailable' } } }))
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ status: 503, json: { ok: false } }))
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   const scene_id = await windowId(page)
   await expect(page.getByRole('heading', { name: 'Decision Desk unavailable.' })).toBeVisible()
   await expect(page.locator('.dd-identifiers')).toHaveCount(0)
@@ -351,6 +356,7 @@ test('Decision Desk presentation flashes cannot submit or discard a selected sou
   const writes: string[] = []
   page.on('request', req => { if (req.url().includes('/decision-desk/submit')) writes.push(req.url()) })
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   await windowId(page)
   const option = page.getByRole('radio', { name: /Authorize preview only/ })
   await option.check()
@@ -366,6 +372,7 @@ test('Preparation explains blocked source requests without inventing answer choi
     runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [{ card_id: fixtureId(4), request_id: null, title: 'Unlinked recovery request', state: 'Blocked', reasons: ['Exact source request and supported options are unavailable.'] }],
   } } }))
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   await page.getByRole('button', { name: 'Preparation', exact: true }).click()
   await expect(page.getByText('Unlinked recovery request')).toBeVisible()
   await page.getByText('Evidence & next action').click()

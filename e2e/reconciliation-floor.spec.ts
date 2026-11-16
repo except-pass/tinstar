@@ -1,4 +1,4 @@
-import { installDecisionDesk } from './fixtures/decisionDesk'
+import { installDecisionDesk, openDecisionDesk } from './fixtures/decisionDesk'
 import { expect, test, type Page, type Locator, type Request } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -356,6 +356,7 @@ for (const mobile of [false, true]) test(`Desk navigates hidden task through col
   const saved = await page.evaluate(() => localStorage.getItem('tinstar.floor.preferences'))
   await page.locator('.ov-workspace').evaluate(el => { el.scrollTop = el.scrollHeight })
   await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
+  await openDecisionDesk(page)
   await expect(page.locator('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${fixtureId(1)}`)
   if (mobile) await page.locator('.dd-inline-evidence>summary').click()
   await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
@@ -395,6 +396,7 @@ test('a decision whose card leaves the scene retains its source link without wri
   await page.route('**/api/reconciliation/scene*', route => { sceneReads++; return route.fulfill({ json: { ok: true, data: scene } }) })
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.goto(`${base}/?view=decisions`)
+  await openDecisionDesk(page)
   const row = page.locator('.dd-identifiers')
   const id = (await row.getAttribute('data-semantic-id'))?.replace('card:', '')
   expect(id).toBeTruthy()
