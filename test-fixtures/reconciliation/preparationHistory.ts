@@ -21,7 +21,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   let historyText = fixture.history.context.blocks[0]!.text
   for (const [index, home] of fixture.snapshot.fleet.entries()) historyText = historyText.replaceAll(home.source.home, homes[index]!.source.home)
   const extraNotes: string[] = []
-  const publishedNotes: Array<{ id: string; rich_text: unknown[] }> = []
+  const publishedNotes: Array<{ id: string; cardId: string; rich_text: unknown[] }> = []
   if (options.answered) extraNotes.push(`Operation: answer_decision\nAnswer: Defer the preview.\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify({ request_id: 'preview-question', answer: 'Defer the preview.', next: { owner: 'Firstmate', status: 'Queued' } })}\nTin Star answer: preview-question`)
   if (options.independentRequest) {
     const home = homes[1]!, task = home.observation.data!.tasks[0]!
@@ -32,6 +32,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     extraNotes.push(`Operation: request_decision\nRequested from: Will\nQuestion: ${question}\nTin Star request: ${JSON.stringify({ id: 'independent-question', action: 'Decision', preserve_action: false,
       source_request: { home: home.source.home, taskId: task.id, id: 'independent-go', kind: 'decision' }, source_question: question, source_spawn_gen: task.identity.spawn_gen })}`)
   }
+  card.properties['Last touched by'] = { id: 'Last touched by', type: 'select', value: 'Fixture publisher', hasMore: false }
   const properties = Object.fromEntries(Object.entries(card.properties).map(([name, prop]) => {
     const value = prop.value
     const type = name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
@@ -64,13 +65,13 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     if (page && method === 'GET') return Response.json(page)
     if (page && method === 'PATCH') {
       const input = JSON.parse(String(init?.body))
-      Object.assign(page.properties, input.properties)
+      for (const [name, value] of Object.entries(input.properties)) page.properties[name] = { ...page.properties[name], ...(value as object) }
       page.last_edited_time = new Date().toISOString()
       return Response.json(page)
     }
     if (url.pathname === '/v1/comments' && method === 'POST') {
       const input = JSON.parse(String(init?.body))
-      const note = { id: `published-comment-${publishedNotes.length}`, rich_text: input.rich_text }
+      const note = { id: `published-comment-${publishedNotes.length}`, cardId: input.parent.page_id, rich_text: input.rich_text }
       publishedNotes.push(note)
       return Response.json(note)
     }
@@ -93,7 +94,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
       const offset = Number(url.searchParams.get('start_cursor') ?? 0)
       const texts = [...Array.from({ length: options.commentCount ?? 0 }, () => 'A historical status note.'),
         ...(options.historySurface === 'none' || options.historySurface === 'body' ? [] : [requestText]), ...extraNotes]
-      const comments = [...texts.map((text, index) => ({ id: `request-comment-${index}`, rich_text: [{ plain_text: text }] })), ...publishedNotes]
+      const comments = [...texts.map((text, index) => ({ id: `request-comment-${index}`, rich_text: [{ plain_text: text }] })), ...publishedNotes.filter(note => note.cardId === url.searchParams.get('block_id'))]
       return Response.json({ results: comments.slice(offset, offset + 100), has_more: offset + 100 < comments.length, next_cursor: String(offset + 100) })
     }
     throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`)
