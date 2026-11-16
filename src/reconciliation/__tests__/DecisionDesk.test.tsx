@@ -87,6 +87,8 @@ it('shows unavailable metrics honestly and persists effective policy through the
   await ready(); expect(screen.getByText('— / unavailable / 10')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Preparation' }))
   fireEvent.change(screen.getByRole('slider', { name: 'Target ready depth' }), { target: { value: '16' } })
+  await act(async () => { fireEvent.focus(window) })
+  expect(screen.getByRole('slider', { name: 'Target ready depth' })).toHaveValue('16')
   fireEvent.click(screen.getByRole('switch'))
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save queue policy' })))
   expect(policy.values).toEqual({ target_ready: 16, max_preparers: 3, automatic_replenishment: false })
