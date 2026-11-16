@@ -537,7 +537,7 @@ it.each([
   second.id = '00000000-0000-4000-8000-000000000002'
   second.packet.binding.card_id = 'b'.repeat(32)
   second.packet.binding.request_key = 'request-b'
-  workspace.value = { state: { revision: 1, queueCardId: first.packet.binding.card_id } }
+  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] }, state: { revision: 1 } }
   let advanced = false, available = false
   const claims: Record<string, unknown>[] = []
   const fallback = vi.mocked(fetch).getMockImplementation()!
@@ -572,13 +572,16 @@ it.each([
   }
   await screen.findByText('No prepared decisions ready.')
   await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh prepared decisions' })).toBeEnabled())
+  workspace.value = { ...workspace.value, queue: { items: [] }, state: { revision: 2 } }
+  view.rerender(<Decisions />)
+  expect(screen.queryByText('Requested source request is not ready for review.')).toBeNull()
   available = true
   if (refresh === 'manual') fireEvent.click(screen.getByRole('button', { name: 'Refresh prepared decisions' }))
   else await act(async () => { fireEvent.focus(window) })
   await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${second.packet.binding.card_id}`))
   expect(claims.at(-1)).not.toHaveProperty('card_id')
   expect(claims.at(-1)).not.toHaveProperty('lease_token')
-  workspace.value = { state: { revision: 2, queueCardId: first.packet.binding.card_id } }
+  workspace.value = { state: { revision: 3, queueCardId: first.packet.binding.card_id, navigation: { cardId: first.packet.binding.card_id, revision: 3 } } }
   view.rerender(<Decisions />)
   await waitFor(() => expect(claims.at(-1)).toMatchObject({ card_id: first.packet.binding.card_id }))
 })
@@ -597,4 +600,62 @@ it.each(['not-saved', 'save-unconfirmed'])('retains exact navigation and operati
   await waitFor(() => expect(submits).toHaveLength(2))
   expect(submits[1]).toEqual(submits[0])
   expect(screen.queryByText('No prepared decisions ready.')).toBeNull()
+})
+
+it.each([
+  ['skip', 'focus'], ['research', 'focus'],
+  ['skip', 'reload'], ['research', 'reload'],
+])('reconciles a lost %s response through %s before releasing the next card', async (action, recovery) => {
+  const first = structuredClone(packet), second = structuredClone(packet)
+  second.id = '00000000-0000-4000-8000-000000000002'
+  second.packet.binding.card_id = 'b'.repeat(32)
+  second.packet.binding.request_key = 'request-b'
+  let committed = false, lost = false, finished = false
+  const releases: Record<string, unknown>[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const path = String(url).split('/').pop()
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    if (path === 'submit') throw new Error('Release must not answer')
+    if (path === 'claim') {
+      expect(committed).toBe(false)
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'held', packet: first, lease_token: 'secret-lease' } }))
+    }
+    if (path === 'release') {
+      releases.push(body)
+      if (!committed) {
+        committed = true; lost = true
+        throw new Error('Dropped release response')
+      }
+      if (body.operation_id === releases[0].operation_id) {
+        expect(body).toEqual(releases[0])
+        return new Response(JSON.stringify({ ok: true, data: { outcome: 'released', next: { outcome: 'held', packet: second, lease_token: 'second-lease' } } }))
+      }
+      expect(body.lease_token).toBe('second-lease')
+      finished = true
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'released', next: { outcome: 'no-prepared-decisions' } } }))
+    }
+    return fallback(url, init)
+  })
+  await ready()
+  const release = () => {
+    if (action === 'skip') fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    else {
+      fireEvent.click(screen.getByRole('button', { name: 'Need more research' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Request research & next' }))
+    }
+  }
+  release()
+  await waitFor(() => expect(lost).toBe(true))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled())
+  if (recovery === 'reload') { cleanup(); render(<Decisions />) }
+  else await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${second.packet.binding.card_id}`))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled())
+  release()
+  await screen.findByText('No prepared decisions ready.')
+  expect(finished).toBe(true)
+  expect(releases).toHaveLength(3)
+  expect(releases[2].operation_id).not.toBe(releases[0].operation_id)
+  expect(submits).toHaveLength(0)
 })
