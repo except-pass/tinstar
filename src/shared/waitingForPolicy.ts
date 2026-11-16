@@ -1,3 +1,4 @@
+import { checkInTime } from './checkIn'
 import { isJiraCard } from './workIdentity'
 
 /** One Waiting For policy for writes and read-side diagnostics.
@@ -16,7 +17,6 @@ export interface WaitingForException {
 }
 
 const NOTION_ID = /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i
-const INDEPENDENT = /\b(approv|accept|review|security|firmware|tariff|vendor|legal|publication|publish|source|credential|access|permit|certif|signature|invoice|budget|design|spec|contract|owner|customer|utility|hardware|equipment|merge|pull request|pr #|github|deploy|receipt|release|decision|compliance|audit|outage)\b/i
 const DISPATCH = [
   /\b(waiting for|wait for|pending)\b.{0,80}\b(worker|mate|first\s*mate|hilda|pickup|pick up)\b/i,
   /\b(hilda|first\s*mate|firstmate)\b.{0,60}\b(start|attach|pick(?:ing)?\s*up|pickup|assign)\b/i,
@@ -66,14 +66,14 @@ function scheduleOnly(text: string): boolean {
 
 /** True when the text gives no independent prerequisite. Follow-up owner is not part of this check. */
 export function dispatchOnlyWait(dependency: string, unblocksWhen: string, id: string): boolean {
-  const text = `${dependency}\n${unblocksWhen}\n${id}`
-  if (INDEPENDENT.test(text)) return false
+  const text = `${dependency}\n${unblocksWhen}`
+  void id
   return DISPATCH.some(pattern => pattern.test(text)) || scheduleOnly(dependency) || scheduleOnly(unblocksWhen)
 }
 
 export function independentWaitIssue(wait: { type: string; id: string; dependency: string; unblocks_when: string }): WaitIssue | null {
   const dependency = wait.dependency.trim(), id = wait.id.trim()
-  if (PLACEHOLDER.test(dependency) || PLACEHOLDER.test(id) && !INDEPENDENT.test(`${wait.dependency}\n${wait.unblocks_when}`)) {
+  if (PLACEHOLDER.test(dependency) || PLACEHOLDER.test(id)) {
     return { code: 'placeholder-blocker', field: PLACEHOLDER.test(dependency) ? 'dependency' : 'id', message: `${DISPATCH_WAIT_REASON} “${PLACEHOLDER.test(dependency) ? dependency : id}” is a placeholder, not that blocker.` }
   }
   if (dispatchOnlyWait(wait.dependency, wait.unblocks_when, wait.id)) {
@@ -110,16 +110,28 @@ export function waitingForFieldIssue(input: { cardId: string; status: string; ty
 /** Structural and dispatch-only problems on a card Tin Star did not rewrite.
  * Work-id membership in a filtered result is intentionally not treated as absence. */
 export function waitingForException(input: {
-  cardId: string; status: string; type: string; id: string; waitingFor: string; observedAt: string | null; coverage: SourceCoverage
+  cardId: string; status: string; type: string; id: string; waitingFor: string; nextCheckIn?: { start?: string; time_zone?: string } | null; knownWork?: readonly { id: string; status: string; archived?: boolean; in_trash?: boolean }[]; observedAt: string | null; coverage: SourceCoverage
 }): WaitingForException | null {
   if (input.status === 'Waiting for Prod Release') return null
   const base = { card_id: input.cardId, observed_at: input.observedAt, coverage: input.coverage }
   if (input.status === 'Waiting For') {
-    const reason = waitingForFieldIssue({ ...input, knownWorkIds: [] })
-    if (reason && !reason.includes('needs verification')) {
+    const reason = waitingForFieldIssue({ ...input, knownWorkIds: (input.knownWork ?? []).map(card => card.id) })
+    if (reason) {
       const field = reason.startsWith('Waiting For Type') ? 'Waiting For Type' : reason.startsWith('Waiting For ID') ? 'Waiting For ID' : 'Waiting For'
       return { ...base, field, reason }
     }
+    if (input.type === 'Work') {
+      const work = input.knownWork?.find(card => canonicalWorkId(card.id) === canonicalWorkId(input.id))
+      if (work && (work.archived || work.in_trash || ['Done', 'Archived'].includes(work.status))) return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference is completed, archived or deleted; it is not an unfinished blocker.' }
+    }
+    for (const line of input.waitingFor.split('\n').filter(line => line.trim())) {
+      const match = /^Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
+      if (!match || match.slice(1).some(value => !value.trim() || value === '""')) return { ...base, field: 'Waiting For', reason: 'Waiting For requires dependency, unblock condition, follow-up owner and typed identity on every active wait.' }
+      const issue = independentWaitIssue({ dependency: match[1]!, unblocks_when: match[2]!, type: match[4]!, id: match[5]! })
+      if (issue) return { ...base, field: 'Waiting For', reason: issue.message }
+    }
+    if (!input.waitingFor.trim()) return { ...base, field: 'Waiting For', reason: 'Waiting For dependency, unblock condition and follow-up owner are missing.' }
+    if (!Number.isFinite(checkInTime(input.nextCheckIn?.start ?? null, input.nextCheckIn?.time_zone))) return { ...base, field: 'Next check-in', reason: 'Next check-in is missing or invalid.' }
     if (dispatchOnlyWait(input.waitingFor, '', input.id)) return { ...base, field: 'Waiting For', reason: DISPATCH_WAIT_REASON }
     return null
   }

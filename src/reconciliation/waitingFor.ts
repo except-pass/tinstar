@@ -38,13 +38,13 @@ function eventTarget(id: string, cards: SceneCard[]) {
 export function waitingForIssue(card: SceneCard, known: readonly SceneCard[]): string | null {
   return waitingForFieldIssue({
     cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
-    knownWorkIds: known.filter(item => !item.source.in_trash && !item.source.archived).map(item => item.id),
+    knownWorkIds: known.filter(item => !item.source.in_trash && !item.source.archived && !['Done', 'Archived'].includes(propertyText(item, 'Status'))).map(item => item.id),
   })
 }
-export function waitingForSemanticsIssue(card: SceneCard, coverage: SourceCoverage): string | null {
+export function waitingForSemanticsIssue(card: SceneCard, coverage: SourceCoverage, known: readonly SceneCard[] = []): string | null {
   const exception = waitingForException({
     cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
-    waitingFor: propertyText(card, 'Waiting For'), observedAt: card.source.last_edited_time ?? null, coverage,
+    knownWork: known.map(item => ({ id: item.id, status: propertyText(item, 'Status'), archived: item.source.archived, in_trash: item.source.in_trash })), waitingFor: propertyText(card, 'Waiting For'), nextCheckIn: card.source.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null, observedAt: card.source.last_edited_time ?? null, coverage,
   })
   if (!exception || exception.reason === waitingForIssue(card, [])) return null
   return exception.reason

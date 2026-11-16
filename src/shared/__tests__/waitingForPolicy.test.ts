@@ -28,7 +28,7 @@ describe('Waiting For independence', () => {
     allow('Security approval of the firmware publication', 'The image is published', 'Release engineering')
     allow('Duke Energy interconnection approval', 'The utility confirms the tariff', 'Duke Energy')
     expect(independentWaitIssue({ type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified' })).toBeNull()
-    expect(independentWaitIssue({ type: 'Actor', id: 'First Mate', dependency: 'Main branch release PR #440 published', unblocks_when: 'The release is published' })).toBeNull()
+    expect(independentWaitIssue({ type: 'Actor', id: 'First Mate', dependency: 'Main branch release PR #440 published', unblocks_when: 'The release is published' })?.code).toBe('placeholder-blocker')
   })
 
   it('flags malformed Waiting For metadata and does not treat unknown coverage as absence', () => {
@@ -42,4 +42,14 @@ describe('Waiting For independence', () => {
     expect(waitingForException({ cardId: id, status: 'Waiting for Prod Release', type: '', id: '', waitingFor: '', observedAt: null, coverage: 'complete' })).toBeNull()
     expect(waitingForException({ cardId: id, status: 'Queued', type: '', id: '', waitingFor: 'HILDA mate is starting the worker', observedAt: '2026-11-16T00:00:00Z', coverage: 'partial' })?.field).toBe('Waiting For')
   })
+})
+
+it('reports bypassed fields and Work references without rewriting', () => {
+  const base = { cardId: id, status: 'Waiting For', type: 'Actor', id: 'Will', waitingFor: '', observedAt: null, coverage: 'complete' as const }
+  expect(waitingForException(base)?.field).toBe('Waiting For')
+  const waitingFor = 'Dependency: Approval | Unblocks when: Approved | Follow-up: Consumer | Type: Actor | ID: Will'
+  expect(waitingForException({ ...base, waitingFor })?.field).toBe('Next check-in')
+  expect(waitingForException({ ...base, type: 'Work', id: other })?.reason).toMatch(/needs verification/)
+  expect(waitingForException({ ...base, type: 'Work', id: other, knownWork: [{ id: other, status: 'Done' }] })?.reason).toMatch(/completed/)
+  expect(independentWaitIssue({ type: 'Actor', id: 'Release engineering', dependency: 'Waiting for a worker to be assigned', unblocks_when: 'The worker starts' })?.code).toBe('not-independent')
 })

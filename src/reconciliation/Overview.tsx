@@ -313,7 +313,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
   const notionUrl = card ? safeUrl(card.source.url) : null
   const waitIssue = card ? waitingForIssue(card, scene.cards) : null
   const waitCoverage = coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage)
-  const waitSemantics = card ? waitingForSemanticsIssue(card, waitCoverage) : null
+  const waitSemantics = card ? waitingForSemanticsIssue(card, waitCoverage, scene.cards) : null
   const cardProvider = card && isJiraCard(card.id) ? 'Jira' : 'Notion'
   const selectedPattern = currentCard ? view.patternResults?.get(currentCard.id) : undefined
   const content = <>

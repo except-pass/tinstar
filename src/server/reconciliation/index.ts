@@ -283,6 +283,8 @@ export class ReconciliationSources {
     const text = (name: string) => String(card?.source.properties[name]?.value ?? '')
     const waiting_for_exception = card ? waitingForException({
       cardId: card.id, status: text('Status'), type: text('Waiting For Type'), id: text('Waiting For ID'), waitingFor: text('Waiting For'),
+      nextCheckIn: card.source.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null,
+      knownWork: scene.cards.map(item => ({ id: item.id, status: String(item.source.properties.Status?.value ?? ''), archived: item.source.archived, in_trash: item.source.in_trash })),
       observedAt: card.source.last_edited_time ?? null, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage),
     }) : null
     return workReadback({ card, links, waiting_for_exception, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),

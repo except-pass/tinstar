@@ -2616,6 +2616,20 @@ describe('Waiting For status semantics', () => {
   const op = (kind: string, extra: Record<string, unknown> = {}) => ({ card_id: id, operation_id: `sem-${kind}-${JSON.stringify(extra).length}`, kind, ...extra }) as UpdateWorkInput
   const actor = (extra: Record<string, unknown> = {}) => ({ type: 'Actor' as const, id: 'Will', dependency: 'Owner acceptance of the tariff', unblocks_when: 'Will sends the acceptance', follow_up_by: 'Consumer', next_check_in: checkIn(), ...extra })
 
+  it('repairs expired appointments and refuses legacy blocker loss or unresolved exits', async () => {
+    const f = fixture(), first = actor()
+    expect(await f.workflow.update(op('wait', first), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    f.raw.properties['Next check-in'].date.start = '2020-01-01'
+    const next = checkIn()
+    expect(await f.workflow.update(op('wait', { ...actor(), id: 'Security team', next_check_in: next, operation_id: 'append-overdue' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Next check-in']!.value).toMatchObject({ start: next })
+    const line = waitLine(first)
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: `Legacy security approval\n${line}` }]
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-repair-required' })
+    expect(await f.workflow.update(op('park', { status: 'Backlog', disposition: 'Deferred' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+    expect(await f.workflow.update(op('complete', { disposition: 'Completed', evidence: 'Receipt' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+  })
+
   it('rejects a HILDA worker-pickup wait through the shared writer and leaves the card Queued', async () => {
     const f = fixture(), before = patches(f)
     const result = await f.workflow.update(op('wait', { type: 'Actor', id: 'Build crew', dependency: 'waiting for HILDA mate to start/attach a worker', unblocks_when: 'The worker attaches', follow_up_by: 'Consumer', next_check_in: checkIn() }), 'Consumer')

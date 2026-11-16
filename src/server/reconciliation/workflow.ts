@@ -228,6 +228,7 @@ export class WorkflowOperations {
       const initial = relevant(card, input.worker.kind)
       if (input.expected && !same(input.expected, { owner: initial.owner, status: initial.status, worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null })) return result('not-saved', 'conflict', 'Owner, Status or worker links changed; read the card and retry', card)
       if (typeof initial.owner !== 'string' || !initial.owner.trim() || !initial.area || typeof initial.area === 'string' && !initial.area.trim() || Array.isArray(initial.area) && !initial.area.length) return result('not-saved', 'required-fields', 'Start work requires an existing Owner and Area; Tin Star does not infer them', card)
+      if (card.properties.Status?.value === 'Waiting For') throw new WorkflowError('wait-unresolved', 'Resolve the exact active wait through assign or answer_decision before starting work. Nothing was written.')
       const plan = await this.startPlan(card, input, actor)
       const { properties } = plan
       desired = plan.desired
@@ -489,7 +490,7 @@ export class WorkflowOperations {
       const appointment = this.futureCheckIn(value.next_check_in)
       const currentAppointment = checkInTime((card.properties['Next check-in']?.value as { start?: string } | null)?.start ?? null, (card.properties['Next check-in']?.value as { time_zone?: string } | null)?.time_zone)
       if (!primaryType || !primaryId || samePrimary) { set('Waiting For Type', value.type); set('Waiting For ID', value.id.trim()) }
-      if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
+      if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || currentAppointment <= Date.now() || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
       note += `\n${line}`
     }
     const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
@@ -508,15 +509,13 @@ export class WorkflowOperations {
       const remaining = entries.filter(entry => entry !== resolve)
       set('Waiting For', remaining.join('\n'))
       const still = remaining.filter(entry => entry.trim())
-      const removed = parseWaitLine(resolve)
-      const activeType = String(desired['Waiting For Type'] ?? card.properties['Waiting For Type']?.value ?? '')
-      const activeId = String(desired['Waiting For ID'] ?? card.properties['Waiting For ID']?.value ?? '').trim()
       const successor = still.map(parseWaitLine).find(parsed => parsed)
       const clearBlocker = () => {
         if (card.properties['Waiting For Type']) set('Waiting For Type', null)
         if (card.properties['Waiting For ID']) set('Waiting For ID', '')
       }
-      if (still.length === 0 || removed && !successor && activeType === removed.type && activeId === removed.id) clearBlocker()
+      if (still.length > 0 && !successor) throw new WorkflowError('wait-repair-required', 'A remaining legacy wait has no typed identity. Repair it with a typed wait before resolving this blocker. Nothing was written.')
+      if (still.length === 0) clearBlocker()
       else if (successor) { set('Waiting For Type', successor.type); set('Waiting For ID', successor.id) }
       if (still.length > 0 && requestedStatus !== 'Waiting For') { set('Status', 'Waiting For'); heldWait = true; note += '\nStatus retained: Waiting For. Another independent wait remains.' }
     }
@@ -609,6 +608,7 @@ export class WorkflowOperations {
       set('Status', input.kind === 'complete' ? 'Done' : input.status)
       note += `\nDisposition: ${input.disposition}${input.kind === 'complete' ? `\nEvidence: ${input.evidence}` : ''}`
     }
+    if (card.properties.Status?.value === 'Waiting For' && desired.Status !== undefined && desired.Status !== 'Waiting For' && !('resolve_wait' in input && input.resolve_wait)) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires explicit resolution through assign or answer_decision. Nothing was written.')
     set('Last touched by', actor)
     const sectionOriginal: Record<string, string> = {}
     if (Object.keys(sections).length) {
