@@ -2,7 +2,7 @@ import { CardLeases, CardLeaseError } from './cardLeases'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
-import { DecisionPreparation, type PrepCandidate } from './decisionPrep'
+import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
@@ -78,13 +78,16 @@ export class ReconciliationSources {
   // Owner-authorized PR evidence must never enter an anonymous display response.
   private queueDisplays = new Map<boolean, { value?: ReturnType<typeof buildQueue>; pending?: Promise<void>; until: number; again: boolean; failed?: boolean }>()
 
-  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
+  constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot(), preparationSecret = readClavisValue) {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: () => this.prepCandidates(), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id))
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status()
+    this.preparedReviews.refreshEvidence = async () => {
+      for await (const id of this.readPreparationHistory()) void id
+    }
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -164,13 +167,30 @@ export class ReconciliationSources {
     return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
   }
 
+  /** Existing bounded, coalesced 30-second body/comment reads, consumed one card
+   * at a time. No workflow reads, reconciliation or source writes. An
+   * explicit request reads only its card; a desk/replenishment pass reads the
+   * observed decision queue. Evidence remains a separate pure projection. */
+  private async *readPreparationHistory(cardId?: string) {
+    const ids = this.decisionQueue().card_ids.filter(id => !cardId || id === cardId)
+    for (const id of ids) {
+      await this.context.details(id)
+      yield id
+    }
+  }
+
+  private async *preparationCandidates(cardId?: string) {
+    for await (const id of this.readPreparationHistory(cardId)) yield* this.prepCandidates(id)
+  }
+
   /** Eligible-source facts for one preparation pass. Admission itself rechecks leases. */
-  private prepCandidates(): PrepCandidate[] {
+  private prepCandidates(onlyCard?: string): PrepCandidate[] {
     const snapshot = this.knownSnapshot(), queue = this.decisionQueue()
     const held = this.leases.readStorage(db => new Set(queue.card_ids.filter(id => this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reservedInStorage(db, id))))
     const candidates: PrepCandidate[] = []
     let rank = 0
     for (const cardId of queue.card_ids) {
+      if (onlyCard && cardId !== onlyCard) continue
       const card = snapshot.intentions.data?.cards.find(item => item.id === cardId)
       const evidence = this.preparationEvidence(cardId)
       for (const request of evidence.requests) candidates.push({

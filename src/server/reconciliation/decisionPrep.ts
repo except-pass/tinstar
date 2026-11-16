@@ -66,7 +66,7 @@ export class DecisionPreparation {
   private secret: Secret | null = null
   private loadedAt = 0
   private loading?: Promise<void>
-  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(): PrepCandidate[]; coverage(): 'complete' | 'unknown' },
+  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]> | AsyncIterable<PrepCandidate>; coverage(): 'complete' | 'unknown' },
     private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
     private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
 
@@ -211,17 +211,15 @@ export class DecisionPreparation {
       await this.initialize()
       const policy = await this.packets.readPolicy(this.scope)
       // Collect outside the lease transaction. Nested SQLite opens deadlock the writer.
-      const candidates = this.secret && policy.values.automatic_replenishment && this.source.coverage() === 'complete' ? [...this.source.candidates()].sort((a, b) => a.rank - b.rank) : []
-      const admitted = await this.packets.leases.writeStorage(db => {
-        this.expire(db)
-        const jobs: Row[] = []
-        for (const candidate of candidates) {
-          const result = this.admit(db, candidate, 'automatic', 'decision-desk', 'Automatic replenishment')
-          if (result.outcome === 'depth-met' || result.outcome === 'at-capacity') break
-          if (result.job && result.outcome === 'admitted') jobs.push(result.job)
-        }
-        return jobs
-      })
+      await this.packets.leases.writeStorage(db => this.expire(db))
+      if (!this.secret || !policy.values.automatic_replenishment || this.source.coverage() !== 'complete') return
+      const admitted: Row[] = []
+      const candidates = await this.source.candidates()
+      for await (const candidate of Array.isArray(candidates) ? [...candidates].sort((a, b) => a.rank - b.rank) : candidates) {
+        const result = await this.packets.leases.writeStorage(db => this.admit(db, candidate, 'automatic', 'decision-desk', 'Automatic replenishment'))
+        if (result.outcome === 'depth-met' || result.outcome === 'at-capacity') break
+        if (result.job && result.outcome === 'admitted') admitted.push(result.job)
+      }
       for (const job of admitted) await this.dispatch(job)
     } catch { /* A preparation pass must not take down the server. The next pass retries. */ }
   }
@@ -235,7 +233,10 @@ export class DecisionPreparation {
       await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'not-configured', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
       return { outcome: 'not-configured', explanation: webhookMissing }
     }
-    const candidate = this.source.candidates().find(row => row.card_id === request.card_id && row.request_id === request.request_id)
+    let candidate: PrepCandidate | undefined
+    for await (const row of await this.source.candidates(request.card_id)) {
+      if (row.card_id === request.card_id && row.request_id === request.request_id) { candidate = row; break }
+    }
     if (!candidate) {
       await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'ineligible', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
       return { outcome: 'ineligible', explanation: 'That decision is not in the current source observation.' }

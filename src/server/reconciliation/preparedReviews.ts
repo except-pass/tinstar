@@ -29,6 +29,7 @@ const unconfiguredPreparation = (): PreparationReport => ({
 export class PreparedReviews {
   private initialized?: Promise<void>
   reportPreparation: () => Promise<PreparationReport> | PreparationReport = unconfiguredPreparation
+  refreshEvidence: () => Promise<void> = async () => {}
   constructor(readonly packets: DecisionPackets, readonly scope: string, private evidence: (card: string) => DecisionEvidence,
     private queue: () => PreparedQueue, private now = Date.now) {}
   private get leases() { return this.packets.leases }
@@ -81,9 +82,10 @@ export class PreparedReviews {
     await this.initialize()
     return this.leases.readStorage(db => ({ sessions: (db.prepare('SELECT * FROM decision_review_sessions WHERE caller = ? AND scope = ? AND revoked IS NULL AND expires > ? ORDER BY created,id').all(caller, this.scope, this.now()) as unknown as Session[]).map(session => this.summary(db, session)) }))
   }
-  /** Complete cached-source UI projection; never dispatches research or writes source. */
+  /** Read history before the storage transaction; never dispatch research or write source. */
   async snapshot() {
     await this.initialize()
+    await this.refreshEvidence()
     const prep = await this.reportPreparation()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()

@@ -78,12 +78,20 @@ leases are presented as Ready.
 board/fleet metadata and cached card-body and comment history. It does **not**
 refresh sources, call the mutating queue refresh, reconcile receipts, answer,
 repair source links, or take a lease. On a cold cache it honestly reports missing
-coverage. Existing source readers/view refreshes may separately populate caches;
+coverage. Preparation admission and the Desk snapshot separately populate caches
+through the existing read-only body/comment readers, without queue refresh or
+answer reconciliation. Prepare now reads only the selected queue card;
+replenishment (when enabled) consumes each observed queue card before reading
+the next. The snapshot collects history first and checks freshness when projecting
+its states and totals; expired history leaves coverage unknown. These reads retain
+the existing per-card bounds and 30-second cache, including cached failures.
+Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches
 must be resolved, complete and unexpired for readiness; the earlier cache expiry
 bounds their combined freshness. Missing, partial or expired history blocks
 readiness rather than establishing that a request is unanswered. Legacy paragraph
-answers and conflicting body publications remain part of that history.
+answers and conflicting body publications remain part of that history. Complete,
+fresh history with no decision request reports that absence as a source failure.
 
 The dependency map checks request meaning, card closure/authorization context,
 answer history, and worker attempt/state. Linked PRs appear as unverified PR-head
@@ -522,9 +530,9 @@ unconfirmed saves retain the selection and operation; retries use the same ID.
 Preparation saves the effective versioned queue policy and shows whether the
 Tinstar Decision Prep webhook is configured, along with job failures and pending
 rows. See [P4](#p4--preparation-jobs) for configuration and admission rules. Unknown source totals
-are unavailable, not zero. The cached-source `/snapshot` projection supplies full
-latest-packet inventory/counts and pending rows without researching or mutating
-source cards; it is separate from the bounded publication inventory.
+are unavailable, not zero. The `/snapshot` projection supplies full latest-packet
+inventory/counts and pending rows under the [read-only evidence contract](#read-only-preparer-evidence);
+it is separate from the bounded publication inventory.
 
 **Multipart boundary:** P5 reviews each independently identified source request
 separately through P3. Same-card requests are not inferred to form a bundle.
