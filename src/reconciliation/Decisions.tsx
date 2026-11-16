@@ -38,9 +38,6 @@ export function Decisions() {
     handledTarget.current = key
     void desk.claimCard(requested)
   }, [desk.busy, desk.currentSession, requested, workspace.state?.revision, packet?.packet.binding.card_id])
-  useEffect(() => {
-    if (packet) workspace.send?.({ type: 'focus', target: { kind: 'card', id: packet.packet.binding.card_id }, origin: 'manual' })
-  }, [packet?.packet.binding.card_id, workspace.send])
   const openSource = () => setSourceOpen(value => !value)
   const nextWithoutTarget = () => { setIgnoreTarget(true); workspace.clearOrigin?.(); if (desk.claim?.packet) void desk.claimAvailable() }
   const counts = desk.snapshot?.counts
@@ -144,7 +141,7 @@ function SourceDiscussion({ packet: { packet } }: { packet: DeskPacket }) {
   const href = worker && linked?.home === worker.home && linked.id === worker.id && route ? `?${new URLSearchParams({ worker: route.worker, home: route.home })}` : null
   const latest = controls?.items.filter(item => item.context.target?.kind === 'decision' && item.context.target.id === packet.binding.request_key).at(-1)
   const subject = { target: { kind: 'decision' as const, id: packet.binding.request_key }, view: { scene: 'decisions' as const, request_key: packet.binding.request_key, query: '' }, label: packet.title }
-  return <AskSurface as="section" subject={subject}><DecisionCardContext id={packet.binding.card_id} readOnly /><p>Discussion is bound to source request {packet.binding.request_id}. Sending a question does not answer this decision.</p>{href && <a className="dd-reference" href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}{workspace.scene?.cards.some(card => card.id === packet.binding.card_id) && <button type="button" className="dd-text" onClick={() => workspace.send({ type: 'navigate-card', cardId: packet.binding.card_id })}>Open related work</button>}{latest ? <button type="button" className="dd-secondary" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); workspace.openDesk() }}>Open source conversation in Discuss</button> : <p className="dd-caption">No First Mate exchange is published for this request yet.</p>}{controls?.deskVisible && controls.expanded ? <p className="dd-caption">Continue in the open Discuss conversation.</p> : <AskContextComposer compact subject={subject} />}</AskSurface>
+  return <AskSurface as="section" subject={subject}><DecisionCardContext id={packet.binding.card_id} /><p>Discussion is bound to source request {packet.binding.request_id}. Sending a question does not answer this decision.</p>{href && <a className="dd-reference" href={href} target="_blank" rel="noreferrer">Open source terminal ↗</a>}{workspace.scene?.cards.some(card => card.id === packet.binding.card_id) && <button type="button" className="dd-text" onClick={() => workspace.send({ type: 'navigate-card', cardId: packet.binding.card_id })}>Open related work</button>}{latest ? <button type="button" className="dd-secondary" onClick={() => { controls!.setDeskVisible(true); controls!.showThread(latest); workspace.openDesk() }}>Open source conversation in Discuss</button> : <p className="dd-caption">No First Mate exchange is published for this request yet.</p>}{controls?.deskVisible && controls.expanded ? <p className="dd-caption">Continue in the open Discuss conversation.</p> : <AskContextComposer compact subject={subject} />}</AskSurface>
 }
 function Confirmation({ parts, selections, onCancel, onConfirm }: { parts: DeskPacket[]; selections: Record<string, string>; onCancel: () => void; onConfirm: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null), [checked, setChecked] = useState(false)

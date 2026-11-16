@@ -2,10 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
-// These tests isolate workspace/legacy source routing. Prepared Review has its
-// own API/client tests and running-UI proof; it must never manufacture a packet
-// from the generic queue fixtures used by this suite.
-vi.mock('../../reconciliation/Decisions', async () => { const { DecisionSourceContext } = await import('../../reconciliation/DecisionSourceContext'); return { Decisions: DecisionSourceContext } })
+import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import { observeTargets } from '../../reconciliation/presentationVisibility'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
@@ -23,7 +20,7 @@ let items: ReturnType<typeof record>[]
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null; source.queueError = null
+  localStorage.clear(); sessionStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null; source.queueError = null
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
   vi.stubGlobal('matchMedia', () => ({ matches: window.innerWidth <= 850, addEventListener() {}, removeEventListener() {} }))
@@ -31,7 +28,20 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false }
   read.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : null
-    const data = url === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
+    if (url.includes('/decision-desk/')) {
+      const value = preparedDecisionFixture().packet
+      const cardId = body?.card_id ?? sessionStorage.getItem('test-held-card') ?? value.binding.card_id
+      sessionStorage.setItem('test-held-card', cardId)
+      const request = (source.queue?.needsWill ?? source.queue?.items ?? []).find(item => item.cardIds.includes(cardId))
+      value.binding.card_id = cardId
+      value.binding.request_key = request?.id ?? value.binding.request_key
+      const packet = { id: 'fixture-packet', version: 1, packet: value, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() }
+      const data = url.endsWith('/sessions') ? body ? { session: { id: 'browser' }, review_session_token: 'session' } : { sessions: [{ id: 'browser', label: 'Browser', expires_at: new Date(Date.now() + 86400000).toISOString() }] }
+        : url.endsWith('/claim') ? { outcome: 'held', packet, lease_token: 'lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } }
+        : url.endsWith('/submission-state') ? { submissions: [] } : {}
+      return new Response(JSON.stringify({ ok: true, data }))
+    }
+    const data = url === '/api/fleet'  ? { ready: true, workers: [], attention: [], errors: [] }
       : url === '/api/fleet/messages' ? []
       : url === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
       : url === '/api/quota' ? { providers: [], checkedAt: null, fetchedAt: null, commandError: null }
@@ -91,7 +101,9 @@ it('opens a delivered decision conversation in Waiting with one composer', async
   delivered.context.view = { scene: 'decisions', request_key: request.id }
   items = [delivered]
   render(<App />)
-  const full = await screen.findByRole('button', { name: 'Full conversation ↗' })
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  fireEvent.click(screen.getAllByRole('button', { name: 'Source request & discussion' })[0]!)
+  const full = await screen.findByRole('button', { name: 'Open source conversation in Discuss' })
   fireEvent.click(full)
   await act(async () => {})
   fireEvent.click(within(screen.getByRole('dialog', { name: 'Discuss' })).getByRole('button', { name: 'Close Discuss' }))
@@ -412,7 +424,7 @@ it.each(['navigate-card', 'next_queue_item', 'next', 'previous', 'card', 'item',
   vi.spyOn(document, 'hasFocus').mockImplementation(() => !hidden)
   vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(() => [{ width: 300, height: 40 }] as unknown as DOMRectList)
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ left: 10, right: 310, top: 10, bottom: 50, width: 300, height: 40 } as DOMRect))
-  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.desk-backdrop') ?? document.querySelector(`.decisions-row[data-card-id="${cardId}"]`) })
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => document.querySelector('.desk-backdrop') ?? document.querySelector(`[data-semantic-id="card:${cardId}"]`) })
   const action = mode === 'navigate-card' ? { type: 'navigate-card', cardId }
     : ['next_queue_item', 'next', 'previous'].includes(mode) ? { type: 'navigate-queue', direction: mode === 'previous' ? 'previous' : 'next' }
     : mode === 'card' ? { type: 'open-queue', cardId }
@@ -433,7 +445,7 @@ it.each(['navigate-card', 'next_queue_item', 'next', 'previous', 'card', 'item',
   const tick = async (ms = 1100) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
   await tick()
   expect(location.search).toContain('view=decisions')
-  expect(document.querySelector(`.decisions-row[data-card-id="${cardId}"]`)).toHaveClass('selected')
+  expect(document.querySelector(`[data-semantic-id="card:${cardId}"]`)).toBeInTheDocument()
   expect(screen.getByLabelText('Discuss')).not.toBeVisible()
   expect(document.querySelector('.desk-backdrop')).toBeNull()
   expect(document.querySelector('[data-scene-id]')).toHaveAttribute('data-scene-id', 'test')

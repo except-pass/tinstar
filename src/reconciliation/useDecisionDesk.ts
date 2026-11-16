@@ -176,6 +176,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false) {
     if (confirmed && (packet.packet.risk.rating === 'High' || packet.packet.reversibility.rating === 'Difficult')) input.confirmation = { option_id: option, scope: packet.packet.authorization.scope }
     context.current.attempts[key] = input; context.current.recoveryLease = input.lease_token; persist()
     const saved = await deskCall<DeskResult>('submit', input)
+    if (input.original_lease_token && saved.outcome !== 'lease-lost') { input.original_lease_token = input.lease_token; persist() }
     setResult(saved)
     if (saved.outcome === 'recorded' || saved.outcome === 'recorded-empty') {
       setSubmissionRevision(value => value + 1)

@@ -1,11 +1,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Decisions } from '../Decisions'
+import { AskProvider } from '../../ask/Ask'
+import { fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
+import { initialPresentation } from '../presentation'
+import { workflowMarkers } from '../../shared/workflowMarkers'
 import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => workspace.value }))
-vi.mock('../DecisionSourceContext', () => ({ DecisionSourceContext: () => <p>Canonical source context</p>, DecisionCardContext: () => <p>Canonical source evidence</p> }))
+
 let leaseToken: string, claimCode: string | undefined
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
@@ -20,7 +24,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     const path = String(url).split('/').pop()!, body = init?.body ? JSON.parse(String(init.body)) : null
     let data: unknown
-    if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', expires_at: new Date(Date.now() + 86400000).toISOString(), label: 'Browser review', device: 'desktop', held: null }] }
+    if (String(url).includes('/card-context?')) data = { blocks: [{ id: 'source', text: 'Exact supporting evidence' }] }
+    else if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', expires_at: new Date(Date.now() + 86400000).toISOString(), label: 'Browser review', device: 'desktop', held: null }] }
     else if (path.startsWith('packet?id=')) data = packet
     else if (path === 'submission-state') data = { submissions: [] }
     else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
@@ -294,4 +299,104 @@ it('restores the current unresolved packet after successive expiries before atte
   fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
   await screen.findByText('No prepared decisions ready.')
   expect(submits.at(-1)).toEqual(original)
+})
+
+it('advances transfer proof through repeated failed transfers of one source operation', async () => {
+  outcome = 'lease-lost'; await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await screen.findByRole('button', { name: 'Re-claim & revalidate' })
+  const original = submits[0]!
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  let bound = original.lease_token
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/sessions') && init?.method === 'GET') return new Response(JSON.stringify({ ok: true, data: { sessions: [] } }))
+    if (String(url).endsWith('/submit')) {
+      const input = JSON.parse(String(init?.body))
+      if (input.lease_token !== bound) {
+        expect(input.original_lease_token).toBe(bound)
+        bound = input.lease_token
+      }
+    }
+    return fallback(url, init)
+  })
+  for (const replacement of ['session-b-lease', 'session-c-lease']) {
+    leaseToken = replacement
+    fireEvent.click(screen.getByRole('button', { name: 'Re-claim & revalidate' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry without advancing' })).toBeEnabled())
+    outcome = 'not-saved'
+    fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+    await screen.findByText('Answer was not saved. Your selection is retained. Retry without advancing.')
+    expect(bound).toBe(replacement)
+    expect(submits.at(-1)).toMatchObject({ operation_id: original.operation_id, option_id: original.option_id, request_id: original.request_id })
+    expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
+    outcome = 'lease-lost'
+    fireEvent.click(screen.getByRole('button', { name: 'Retry without advancing' }))
+    await screen.findByRole('button', { name: 'Re-claim & revalidate' })
+  }
+})
+
+it('submits only exact source option IDs and vocabulary with the bounded next state', async () => {
+  packet.packet.binding.options = [{ id: 'r1', label: 'One copy' }, { id: 'r3', label: 'Three copies' }]
+  packet.packet.recommended_option_id = 'r1'
+  render(<Decisions />)
+  fireEvent.click(await screen.findByRole('radio', { name: 'Three copies' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
+  await waitFor(() => expect(submits).toHaveLength(1))
+  expect(submits[0]).toMatchObject({ packet_id: packet.id, packet_version: packet.version, request_id: packet.packet.binding.request_id, option_id: 'r3', next: { owner: 'Firstmate', status: 'Queued' } })
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => /dismiss|workflow/.test(String(url)))).toBe(false)
+})
+
+it('shows real source evidence read-only, cleans protocol metadata and keeps canonical links', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => String(url).includes('/card-context?')
+    ? new Response(JSON.stringify({ ok: true, data: { blocks: [{ id: 'source', text: ['Question: Keep one replica or recommend three?', ...Object.values(workflowMarkers).map(marker => `${marker} {"id":"private-request"}`)].join('\n') }] } })) : fallback(url, init))
+  workspace.value = { scene: fixtureScene(), send: vi.fn() }
+  await ready()
+  fireEvent.click(screen.getAllByRole('button', { name: 'Source request & discussion' })[0]!)
+  const evidence = await screen.findByText('Question: Keep one replica or recommend three?', { selector: 'p' })
+  expect(evidence).toBeVisible()
+  expect(evidence).not.toHaveTextContent('private-request')
+  const source = document.querySelector('.dd-source-context')! as HTMLElement
+  expect(within(source).getByRole('link', { name: /Read Notion card/ })).toHaveAttribute('href', `https://www.notion.so/${packet.packet.binding.card_id}`)
+  expect(within(source).queryByText('Answer decision')).toBeNull()
+  fireEvent.click(within(source).getByRole('button', { name: 'Open related work' }))
+  expect(workspace.value.send).toHaveBeenCalledWith({ type: 'navigate-card', cardId: packet.packet.binding.card_id })
+  expect(submits).toHaveLength(0)
+})
+
+it('sends text and voice-capable discussion with exact request context without answering', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  const questions: unknown[] = []
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (String(url).includes('/api/ask/')) {
+      if (init?.body) { questions.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ ok: false, error: { message: 'Fixture delivery unavailable' } })) }
+      return new Response(JSON.stringify({ ok: true, data: [] }))
+    }
+    return fallback(url, init)
+  })
+  const scene = fixtureScene()
+  workspace.value = { scene }
+  render(<AskProvider scene={scene} state={initialPresentation()} send={vi.fn()} onReturn={vi.fn()}><Decisions /></AskProvider>)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  fireEvent.click(screen.getAllByRole('button', { name: 'Source request & discussion' })[0]!)
+  expect(await screen.findByText('Exact supporting evidence')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Record voice question' })).toBeVisible()
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'What evidence supports this choice?' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  await waitFor(() => expect(questions).toHaveLength(1))
+  expect(questions[0]).toMatchObject({ target: { kind: 'decision', id: packet.packet.binding.request_key }, view: { scene: 'decisions', request_key: packet.packet.binding.request_key }, question: 'What evidence supports this choice?' })
+  expect(submits).toHaveLength(0)
+})
+
+it('retains source-delivery receipts and worker replies in Preparation without treating delivery as acceptance', async () => {
+  workspace.value = { messages: [{ kind: 'message', requestId: 'receipt', home: 'fixture-home', taskId: 'retired-worker', text: 'Retained source delivery', state: 'saved', announced: true, reply: 'Please verify source evidence' }], workers: [] }
+  await ready()
+  fireEvent.click(screen.getByRole('button', { name: 'Preparation' }))
+  fireEvent.click(screen.getByText('Source delivery details'))
+  expect(screen.getByText('Retained source delivery')).toBeVisible()
+  expect(screen.getByText('First Mate replied')).toBeVisible()
+  expect(screen.getByText('Please verify source evidence')).toBeVisible()
+  expect(screen.getByText('Delivery details').closest('details')).not.toHaveAttribute('open')
+  expect(submits).toHaveLength(0)
 })
