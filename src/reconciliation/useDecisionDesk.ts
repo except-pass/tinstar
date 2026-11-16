@@ -106,7 +106,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
     if (!response.next) throw new Error(response.message ?? 'Release not confirmed. Current card retained.')
     context.current.release = undefined
     context.current.selections = {}; context.current.attempts = {}
-    setTargetBlocked(false); setResult(null); setNotice(pending.action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
+    setTargetBlocked(false); setResult(null); setNotice(pending.action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer.')
     accept(response.next)
     return response.next
   }, [accept, persist])
@@ -295,6 +295,10 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
     newSession: () => run(async () => {
       if (context.current.release || context.current.lease || Object.keys(context.current.attempts).length) throw new Error('Finish or skip this session’s held decision before creating another here. Other browser contexts can create independent sessions.')
       context.current = fresh(); persist(); await claimNext()
+    }),
+    prepareNow: (cardId: string, requestId: string) => run(async () => {
+      const prepared = await deskCall<{ outcome: string; explanation: string }>('prepare', { card_id: cardId, request_id: requestId, reason: 'Prepare this decision now' })
+      setNotice(prepared.explanation)
     }),
     savePolicy: async (values: DeskPolicy['values']) => {
       if (!policy) throw new Error('Effective policy unavailable')

@@ -7,6 +7,7 @@ import { cardIdSchema } from '../../shared/workIdentity'
 import type { DecisionEvidence, DecisionPacketBinding } from '../../shared/decisionPacket'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets } from './decisionPackets'
+import type { PreparationReport } from './decisionPrep'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
 export const preparedClaimInput = z.object({ operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), card_id: cardIdSchema.optional() }).strict()
@@ -20,8 +21,14 @@ const sessionLifetime = 24 * 60 * 60 * 1000
 
 /** Explicit contexts, not inferred conversations. Packet validation, canonical
  * lease allocation and held version binding commit in the same transaction. */
+const unconfiguredPreparation = (): PreparationReport => ({
+  configured: false, preparer: 'Tinstar Decision Prep', explanation: 'The preparer webhook is not configured.',
+  preparing: 0, automatic_replenishment: false, jobs: [],
+})
+
 export class PreparedReviews {
   private initialized?: Promise<void>
+  reportPreparation: () => Promise<PreparationReport> | PreparationReport = unconfiguredPreparation
   constructor(readonly packets: DecisionPackets, readonly scope: string, private evidence: (card: string) => DecisionEvidence,
     private queue: () => PreparedQueue, private now = Date.now) {}
   private get leases() { return this.packets.leases }
@@ -77,6 +84,7 @@ export class PreparedReviews {
   /** Complete cached-source UI projection; never dispatches research or writes source. */
   async snapshot() {
     await this.initialize()
+    const prep = await this.reportPreparation()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
       const evidenceByCard = new Map(queue.card_ids.map(card => [card, this.evidence(card)]))
@@ -106,14 +114,20 @@ export class PreparedReviews {
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })
+      for (const row of pending) {
+        const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && ['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state))
+        if (!job) continue
+        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : job.state === 'failed' ? 'Failed' : 'Blocked'
+        if (job.reason) row.reasons = [...new Set([...row.reasons, job.reason])]
+      }
       const verified = queue.coverage === 'complete' && !sourceFailures.length
       return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: verified ? 'complete' : 'unknown',
         counts: { ready: verified ? new Set(ready.map(packet => packet.packet.binding.card_id)).size : null,
-          leased: verified ? held.size : null, preparing: 0,
+          leased: verified ? held.size : null, preparing: prep.preparing,
           needs_repreparation: verified ? current.filter(packet => !this.packets.pendingAnswerInStorage(db, packet.id) && needsResearch(packet)).length : null,
           to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
           requests: verified ? queue.requests : null },
-        runner: { configured: false, explanation: 'No preparation runner is configured. Pending work is not being prepared.' },
+        runner: { configured: prep.configured, preparer: prep.preparer, explanation: prep.explanation },
         ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
         recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
           ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],

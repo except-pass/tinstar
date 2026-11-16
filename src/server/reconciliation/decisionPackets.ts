@@ -149,8 +149,28 @@ export class DecisionPackets {
     db.prepare('INSERT OR IGNORE INTO decision_desk_policy VALUES(?,0,?,NULL,NULL)').run(scope, JSON.stringify(defaultDecisionPolicy))
     const row = db.prepare('SELECT * FROM decision_desk_policy WHERE scope = ?').get(scope) as { scope: string; version: number; body: string; updated_by: string | null; updated_at: string | null }
     const { body, ...metadata } = row
-    return { ...metadata, values: decisionPolicyValuesSchema.parse(JSON.parse(body)) }
+    let values = decisionPolicyValuesSchema.parse(JSON.parse(body))
+    // P1 inserted replenishment ON. That row must not dispatch after this step
+    // ships. One audit marks the cutover; only a later explicit save turns it on.
+    const shipped = (db.prepare("SELECT detail FROM decision_packet_events WHERE type = 'policy'").all() as Array<{ detail: string }>).some(event => {
+      try { const detail = JSON.parse(event.detail); return detail.migration === 'replenishment-off' && detail.scope === scope } catch { return false }
+    })
+    if (!shipped) {
+      if (values.automatic_replenishment) {
+        values = { ...values, automatic_replenishment: false }
+        db.prepare('UPDATE decision_desk_policy SET body = ? WHERE scope = ?').run(JSON.stringify(values), scope)
+      }
+      this.event(db, null, 'policy', 'decision-desk', { scope, version: row.version, values, migration: 'replenishment-off', reason: 'Shipped replenishment off until the owner turns it on from Preparation' })
+    }
+    return { ...metadata, values }
   }
+  async recordEvent(actor: string, type: string, detail: unknown, packetId: string | null = null) {
+    z.string().trim().min(1).max(200).parse(actor)
+    z.string().trim().min(1).max(80).parse(type)
+    await this.initialize()
+    return this.leases.writeStorage(db => this.event(db, packetId, type, actor, detail))
+  }
+  policyInStorage(db: DatabaseSync, scope: string) { return this.policy(db, scope) }
   async readPolicy(scope: string) {
     z.string().trim().min(1).max(2048).parse(scope)
     await this.initialize()

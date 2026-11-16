@@ -21,7 +21,7 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
   const fixture = preparedDecisionFixture()
   packet = { id: '00000000-0000-4000-8000-000000000001', version: 1, content_hash: 'fixture', prepared_by: 'Test preparer', published_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60_000).toISOString(), packet: fixture.packet, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 60_000).toISOString() }, ready: false, reasons: [] }
-  policy = { version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } }
+  policy = { version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: false } }
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     const path = String(url).split('/').pop()!, body = init?.body ? JSON.parse(String(init.body)) : null
     let data: unknown
@@ -30,7 +30,7 @@ beforeEach(() => {
     else if (path.startsWith('packet?id=')) data = packet
     else if (path === 'submission-state') data = { submissions: [] }
     else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
-    else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [] }
+    else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, preparer: 'Tinstar Decision Prep', explanation: 'The preparer webhook is not configured.' }, ready: [], recorded_requests: [], pending: [] }
     else if (path === 'policy') { if (body) policy = { version: policy.version + 1, values: body.values }; data = policy }
     else if (path === 'metrics') data = { reviewed_today_utc: 0, scope: 'test', recording_started_at: new Date().toISOString() }
     else if (path === 'submit') { submits.push(body); data = { outcome, selection: body, message: outcome, operation_id: body.operation_id, ...(outcome === 'recorded-empty' ? { next: { outcome: 'no-prepared-decisions' } } : {}) } }
@@ -98,8 +98,8 @@ it('shows unavailable metrics honestly and persists effective policy through the
   expect(screen.getByRole('slider', { name: 'Target ready depth' })).toHaveValue('16')
   fireEvent.click(screen.getByRole('switch'))
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save queue policy' })))
-  expect(policy.values).toEqual({ target_ready: 16, max_preparers: 3, automatic_replenishment: false })
-  await screen.findByText('Queue policy saved. No preparation runner is configured.')
+  expect(policy.values).toEqual({ target_ready: 16, max_preparers: 3, automatic_replenishment: true })
+  await screen.findByText('Queue policy saved. The preparer webhook is not configured.')
 })
 
 it('blocks a lost lease, preserves the selection and reclaims before retrying the original source operation', async () => {
