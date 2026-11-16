@@ -438,9 +438,9 @@ Admission uses the saved ready depth and preparer cap. A job is posted only when
 ready unleased packets plus in-flight jobs are below the target, in-flight jobs
 are below the cap, and the request is unanswered, not reviewer-leased, not Todo,
 and not already in flight or Ready for that source revision. Unknown source
-coverage does not fill the queue. Automatic retries stop after three failures
-for a revision; Prepare now remains the explicit retry. There is no token limit
-or spend record.
+coverage does not fill the queue. Prior preparation attempts do not prevent
+later automatic replenishment; Prepare now remains available for explicit
+preparation. There is no token limit or spend record.
 
 `publish_prepared_packet` stores the packet through the P1 store. The packet is
 Ready only when that validation passes. The tool does not answer, claim a lease,

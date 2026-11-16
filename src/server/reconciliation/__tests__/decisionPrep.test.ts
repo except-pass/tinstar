@@ -123,7 +123,7 @@ it('prepare now dispatches one audited job while automatic replenishment is off'
   expect(JSON.stringify(events)).not.toContain('isolated-prep-sender')
 })
 
-it('records a webhook failure without the sender key and stops automatic retries after three attempts', async () => {
+it('records webhook failures without the sender key and replenishes beyond three attempts', async () => {
   const { prep, posts, fixture, rows, turnOn } = await harness({ status: 500 })
   rows[1]!.card_status = 'Todo'
   await turnOn()
@@ -131,12 +131,12 @@ it('records a webhook failure without the sender key and stops automatic retries
   await prep.replenish()
   await prep.replenish()
   await prep.replenish()
-  expect(posts).toHaveLength(3)
+  expect(posts).toHaveLength(4)
   expect((await prep.status()).explanation).toContain('HTTP 500')
   expect(JSON.stringify(await prep.status())).not.toContain('isolated-prep-sender')
   const manual = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Retry this decision explicitly' })
   expect(manual.outcome).toBe('failed')
-  expect(posts).toHaveLength(4)
+  expect(posts).toHaveLength(5)
 })
 
 it('publishes a valid packet to Ready and keeps an invalid packet out of Ready without claiming or answering', async () => {

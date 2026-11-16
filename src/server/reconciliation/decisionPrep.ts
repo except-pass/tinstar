@@ -7,7 +7,6 @@ import { decisionPacketSchema, type DecisionEvidence } from '../../shared/decisi
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
 
 const exec = promisify(execFile)
-const attemptLimit = 3
 const attemptMs = 10 * 60 * 1000
 /** One Clavis bundle. `url` and `key` are fields, not separate secret names. */
 export const prepSecretName = 'grok/tinstar-decision-prep'
@@ -156,8 +155,6 @@ export class DecisionPreparation {
     const inflight = this.inflight(db)
     if (inflight >= policy.values.max_preparers) return { outcome: 'at-capacity', explanation: 'All preparer slots are in use. Wait for a job to finish or raise the maximum parallel preparers.' }
     if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
-    const attempts = Number((db.prepare('SELECT count(*) AS n FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND mode = ?').get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, 'automatic') as { n: number }).n)
-    if (mode === 'automatic' && attempts >= attemptLimit) return { outcome: 'attempts-exhausted', explanation: 'Automatic preparation stopped after 3 attempts. Use Prepare now to try again.' }
     const id = randomUUID(), at = new Date(this.now()).toISOString()
     const prior = Number((db.prepare('SELECT count(*) AS n FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?').get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as { n: number }).n)
     const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
