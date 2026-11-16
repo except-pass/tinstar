@@ -118,6 +118,27 @@ it('keeps incomplete comment history ineligible and refreshes after cache expiry
   expect(posts).toHaveLength(1)
 }, 20_000)
 
+it('recovers failed background history through snapshots with automatic preparation off', async () => {
+  const { sources, cardId, denyComments, allowComments, reads, posts, reconcile } = await setup()
+  denyComments()
+  const failed = await loadedSnapshot(sources)
+  expect(failed.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', retry_at: expect.any(String) }))
+  const retryAt = Date.parse(failed.history.find(row => row.card_id === cardId)!.retry_at!)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(retryAt - 1)
+  allowComments()
+  const before = reads.length
+  await sources.preparedReviews.snapshot()
+  expect(reads).toHaveLength(before)
+  clock.mockReturnValue(retryAt + 1)
+  const recovered = await loadedSnapshot(sources)
+  expect(recovered.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'available', retry_at: null }))
+  expect(recovered.source_failures).toEqual([])
+  expect((await sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
+  expect(posts).toEqual([])
+  expect(reconcile).not.toHaveBeenCalled()
+  expect(sources.leases.status(cardId)).toBeNull()
+}, 20_000)
+
 it('shows a missing exact source binding without treating complete history as unavailable', async () => {
   const { sources, cardId, removeBinding, posts } = await setup()
   removeBinding()

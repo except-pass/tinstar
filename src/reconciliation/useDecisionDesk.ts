@@ -61,7 +61,6 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
   // History arrives progressively. This read only updates the desk projection;
   // it does not claim cards or disturb an answer being edited.
   useEffect(() => {
-    if (!snapshot?.history?.some(row => row.state === 'loading')) return
     let active = true, pending = false
     const timer = setInterval(() => {
       if (document.hidden || pending) return
@@ -69,7 +68,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
       void deskCall<DeskSnapshot>('snapshot').then(value => { if (active) setSnapshot(value) }).catch(() => {}).finally(() => { pending = false })
     }, 2000)
     return () => { active = false; clearInterval(timer) }
-  }, [snapshot])
+  }, [])
   const ensureSession = useCallback(async () => {
     if (context.current.token) {
       const { sessions: valid } = await deskCall<{ sessions: DeskSession[] }>('sessions')

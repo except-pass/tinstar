@@ -46,14 +46,16 @@ export class NotionApi {
     const started = Date.now()
     try {
       await waitForTurn(prior, init?.signal)
-      const delay = this.nextAt - Date.now()
-      if (delay > 0) await new Promise<void>((resolve, reject) => {
-        const signal = init?.signal
-        const abort = () => { clearTimeout(timer); reject(signal?.reason) }
-        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, delay)
-        if (signal?.aborted) abort()
-        else signal?.addEventListener('abort', abort, { once: true })
-      })
+      while (this.nextAt > Date.now()) {
+        const delay = this.nextAt - Date.now()
+        await new Promise<void>((resolve, reject) => {
+          const signal = init?.signal
+          const abort = () => { clearTimeout(timer); reject(signal?.reason) }
+          const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, delay)
+          if (signal?.aborted) abort()
+          else signal?.addEventListener('abort', abort, { once: true })
+        })
+      }
       init?.signal?.throwIfAborted()
       const url = new URL(String(input)), method = init?.method ?? 'GET'
       const operation = `${method} ${url.pathname.split('/')[2] ?? 'other'}${url.pathname.endsWith('/query') ? '/query' : ''}`
