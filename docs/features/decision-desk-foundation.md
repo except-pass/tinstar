@@ -87,13 +87,14 @@ Each completed read, when automatic replenishment is enabled, schedules a coales
 replenishment pass, so an eligible decision can be admitted before its history
 expires. Prepare now waits only for the selected card, prioritizing it ahead of
 queued background reads and reusing an in-flight read. Snapshots expose per-card
-history loading/available/unavailable states; the Preparation view refreshes those
-states while reads are pending. Reads settle after a 20-second deadline;
+history loading/available/unavailable states; while the page is visible, the Desk
+refreshes its snapshot every two seconds, including through history retry
+deadlines and pending configuration lookup with automatic replenishment off.
+Reads settle after a 20-second deadline;
 failures include a reason and retry time, with backoff from 30 seconds to five
 minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
-for snapshots. Generic MCP claims use the current property census and cached
-history, and return card metadata without waiting for prose or operational
-reconciliation. Use get_work with details for the selected card's history.
+for snapshots. Generic MCP claim reads and admission follow the
+[session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
 Expired history leaves coverage unknown. These reads retain
 the existing per-card bounds and 30-second cache, including cached failures.
 Other source readers can also populate caches;
