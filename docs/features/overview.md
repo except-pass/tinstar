@@ -36,6 +36,20 @@ separate title. The shelf places Active filters beside stacked Workers and
 Cards legends on desktop; its zones stack on narrower screens. Tokens and
 status buttons wrap with full labels rather than clipping or scrolling horizontally.
 
+Two small hierarchy controls beside the organizer presets independently toggle
+**Initiatives** and **Epics**. Initiatives applies when Outer is Initiative;
+Epics applies when Inner is Epic, only within expanded outer groups. For each
+control, any expanded target means **collapse all**; all collapsed means
+**expand all**. Tooltips and accessible names identify the level and current
+action. A control with no applicable visible groups is disabled; if every
+initiative is collapsed, the Epic tooltip prompts you to expand an initiative.
+Collapsing initiatives preserves child expansion preferences, and toggling epics
+never changes initiative expansion. Individual group toggles keep using the same
+expansion state. These controls follow the current organizer and filtered tree;
+in [Waiting For](#waiting-for-dependency-groups), they apply to the worker tree,
+leaving dependency-group expansion separate. They change only UI expansion,
+preserving filters and source records.
+
 | Preset | Outer | Inner | Order |
 | --- | --- | --- | --- |
 | By Initiative (default) | Initiative, alphabetical | Manager, alphabetical | Operational status |

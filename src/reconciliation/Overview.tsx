@@ -19,7 +19,7 @@ import { SmartSearch } from './SmartSearch'
 import { directNeighbors, hasSearch, searchSeeds, targetKey } from '../shared/smartSearch'
 import { decisionItems } from '../shared/reconciliationQueue'
 import { hasDonutFilter } from '../shared/floorStatus'
-import { resolveFloorGroup, floorFields } from '../shared/floorOrganization'
+import { resolveFloorGroup, floorFields, waitingForWorkerScope } from '../shared/floorOrganization'
 import { ageLabel, checkIn, taskFields, workBreadcrumb, workerBreadcrumb, propertyText, propertyDate, compactCheckIn } from './recordFields'
 import { CompactConnections } from './CompactConnections'
 import { saveOverviewDensity } from './overviewDensity'
@@ -371,8 +371,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   useEffect(() => { if (waiting && scene && waitingOpen === null) setWaitingOpen(new Set(waitingProjection.initial)) }, [waiting, scene, waitingOpen, waitingProjection])
   // Waiting For changes the Work presentation only. Keep the worker organizer,
   // status choices and relationship roots in the existing presentation state.
-  const waitingWorkerScope = useMemo(() => waiting ? { ...state, donutFilter: { ...state.donutFilter, cards: [], workers: state.donutFilter?.workers ?? [] },
-    ...(state.statusFilter?.preset === 'custom' && state.statusFilter.statuses.length === 1 && state.statusFilter.statuses[0] === 'Waiting For' ? { statusFilter: { preset: 'operational' as const, statuses: [] } } : {}) } : undefined, [waiting, state])
+  const waitingWorkerScope = useMemo(() => waiting ? waitingForWorkerScope(state) : undefined, [waiting, state])
   const waitingWorkers = useMemo(() => scene && waitingWorkerScope
     ? canonicalOverviewGroups(overviewGroups(scene, waitingWorkerScope, now, !!error, expanded)).filter(group => group.workers.length > 0) : [], [scene, waitingWorkerScope, now, error, expanded])
   useEffect(() => {
@@ -440,7 +439,7 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const history = scene.executions.filter(e => e.kind !== 'secondmate' && historyRecord(e, now))
   return <div ref={root} role="region" aria-label="Overview" className={`ov ov-density-${density}`} data-density={density} data-arrangement={state.arrangement} data-outer={state.organizer?.outer} data-inner={state.organizer?.inner} data-order={state.organizer?.order} data-direction={state.organizer?.direction} data-preset={state.statusFilter?.preset} data-revision={state.revision} data-scene-id={connection?.scene_id} onKeyDown={e => { if (e.key === 'Escape' && search.active) { e.preventDefault(); e.stopPropagation(); if (search.open) search.dismiss(); else search.restore(); return } if (e.key === 'Escape') { send({ type: 'clear-selection' }); send({ type: 'close-queue' }); send({ type: 'clear-transient' }); setDiagnostics(false) } }}>
     <div className="ov-columns"><div className="ov-main">
-      <FloorToolbar workerScope={waitingWorkerScope} sessionControl={<SessionConnection />} patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
+      <FloorToolbar treeGroups={waiting ? waitingWorkers : displayGroups} workerScope={waitingWorkerScope} sessionControl={<SessionConnection />} patternCoverage={patternCoverage} onInspectPatternCoverage={() => {
         const targets = patternCoverage?.unavailableCardIds.map(id => target('card', id)) ?? []
         if (targets.length) { search.choose(targets[0]!, targets); setOpenRelationships([]) }
       }} sync={{ refresh, refreshing, lastSuccessfulSyncAt, error }} searchControl={<SmartSearch scene={scene} state={state} now={now} open={search.open} focused={search.focused} onOpen={search.begin} onDismiss={search.dismiss} onRestore={search.restore} onChoose={search.choose} />} now={now} visibleWorkers={visibleWorkers} visibleCards={visibleCards} countNotes={{ workers: workerCountNote, cards: notionUnavailable ? 'last known' : undefined }} sourceLabel={notionUnavailable ? `${workProvider} unavailable` : fleetDelayed ? 'Workers need a refresh' : checksSuspended ? 'Coverage incomplete' : 'Sources connected'} onSourceDetails={() => setDiagnostics(!diagnostics)} scene={scene} state={state} send={send} gaps={gaps} density={density} onDensityChange={value => {

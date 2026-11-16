@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { cardStatusName, currentStatusOptions, defaultOrganizer, organizerPresets, organizerPreset, statusProjection, defaultStatusFilter, floorFields, operationalStatuses, type FloorField, type Organizer } from '../shared/floorOrganization'
+import { cardStatusName, currentStatusOptions, defaultOrganizer, organizerPresets, organizerPreset, statusProjection, defaultStatusFilter, floorFields, operationalStatuses, type FloorField, type FloorGroup, type Organizer } from '../shared/floorOrganization'
 import { floorWorkerStatus } from '../shared/floorStatus'
 import { FloorRefresh, type FloorSync } from './FloorRefresh'
 import { waitingForActive } from './waitingFor'
@@ -9,8 +9,9 @@ import { ActiveFilters } from './ActiveFilters'
 import { StatusDonut, type StatusCount } from './StatusDonut'
 import type { OverviewDensity } from './overviewDensity'
 import type { FloorScene, PresentationAction, PresentationState, Target } from './presentation'
+import { LevelToggles } from './LevelToggles'
 
-export function FloorToolbar({ scene, state, workerScope, send, gaps, density, onDensityChange, now = Date.now(), visibleWorkers, visibleCards, sourceLabel, onSourceDetails, countNotes, searchControl, sync, patternCoverage, onInspectPatternCoverage, sessionControl }: { scene: FloorScene; state: PresentationState; workerScope?: PresentationState; send: (action: PresentationAction) => void; gaps: Target[]; density?: OverviewDensity; onDensityChange?: (density: OverviewDensity) => void; countNotes?: { cards?: string; workers?: string }; now?: number; visibleWorkers?: number; visibleCards?: number; sourceLabel?: string; onSourceDetails?: () => void; searchControl?: ReactNode; sync?: FloorSync; patternCoverage?: PatternCoverage | null; onInspectPatternCoverage?: () => void; sessionControl?: ReactNode }) {
+export function FloorToolbar({ scene, state, workerScope, send, gaps, density, onDensityChange, now = Date.now(), visibleWorkers, visibleCards, sourceLabel, onSourceDetails, countNotes, searchControl, sync, patternCoverage, onInspectPatternCoverage, sessionControl, treeGroups = [] }: { scene: FloorScene; state: PresentationState; workerScope?: PresentationState; send: (action: PresentationAction) => void; gaps: Target[]; density?: OverviewDensity; onDensityChange?: (density: OverviewDensity) => void; countNotes?: { cards?: string; workers?: string }; now?: number; visibleWorkers?: number; visibleCards?: number; sourceLabel?: string; onSourceDetails?: () => void; searchControl?: ReactNode; sync?: FloorSync; patternCoverage?: PatternCoverage | null; onInspectPatternCoverage?: () => void; sessionControl?: ReactNode; treeGroups?: readonly FloorGroup[] }) {
   const [panel, setPanel] = useState<'customize' | null>(null)
   const [advanced, setAdvanced] = useState<'filters' | 'fields' | null>(null), [chosen, setChosen] = useState<FloorField | null>(null)
   const organizer = state.organizer ?? defaultOrganizer(), filter = state.statusFilter ?? defaultStatusFilter()
@@ -40,6 +41,7 @@ export function FloorToolbar({ scene, state, workerScope, send, gaps, density, o
     <div className="ov-toolbar" role="toolbar" aria-label="Arrange work">
       {sessionControl}
       <div className="ov-preset-scroll" role="group" aria-label="Organizer presets">{(Object.keys(organizerPresets) as Array<keyof typeof organizerPresets>).map(preset => <button type="button" key={preset} aria-pressed={organizerPreset(organizer) === preset} onClick={() => send({ type: 'set-organizer', organizer: { ...organizerPresets[preset] } })}>By {preset === 'initiative' ? 'Initiative' : preset === 'machine' ? 'Machine' : 'Manager'}</button>)}</div>
+      <LevelToggles groups={treeGroups} state={state} send={send} />
       <button type="button" className="ov-customize-trigger" aria-label="Customize" aria-expanded={panel === 'customize'} aria-controls="floor-customize" onClick={event => { trigger.current = event.currentTarget; setPanel(panel === 'customize' ? null : 'customize') }}>⚙<span> Customize{!organizerPreset(organizer) ? ' •' : ''}</span></button>
       {searchControl}
       {sync && <FloorRefresh sync={sync} scene={scene} now={now} />}

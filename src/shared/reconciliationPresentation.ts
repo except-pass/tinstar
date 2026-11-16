@@ -3,7 +3,7 @@ import { emptyDonutFilter, type DonutFilter } from './floorStatus'
 import { emptySearch, type SearchFilter } from './smartSearch'
 import type { Pattern } from './workHealth'
 import type { SearchIndexRead } from './searchDocuments'
-import { defaultOrganizer, defaultStatusFilter, organizedGroups, type Organizer, type StatusFilter } from './floorOrganization'
+import { defaultOrganizer, defaultStatusFilter, organizedGroups, waitingForActive, waitingForWorkerScope, type Organizer, type StatusFilter } from './floorOrganization'
 import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
@@ -79,7 +79,7 @@ export function targetExists(scene: FloorScene, target: Target, state?: Presenta
     case 'execution': return scene.executions.some(execution => execution.id === target.id)
     case 'claim': return [...scene.claims, ...scene.claimHistory].some(claim => claim.id === target.id)
     case 'manager': return scene.coverage.homes.some(home => home.source.home === target.id)
-    case 'group': return Object.values(scene.arrangements).some(groups => groups.some(group => group.id === target.id)) || !!state && organizedGroups(scene, state, now).some(g => g.id === target.id || g.outerId === target.id)
+    case 'group': return Object.values(scene.arrangements).some(groups => groups.some(group => group.id === target.id)) || !!state && [...organizedGroups(scene, state, now), ...(waitingForActive(state) ? organizedGroups(scene, waitingForWorkerScope(state), now) : [])].some(g => g.id === target.id || g.outerId === target.id)
     case 'you': case 'firstMate': return target.id === 'root'
     case 'pull': return false // Releases owns PR selection; it is never an Overview worker/work node.
   }
