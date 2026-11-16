@@ -7,6 +7,7 @@ import { ok, fail } from '../api/envelope'
 import { PreparedReviews, reviewSessionInput, preparedClaimInput, preparedReleaseInput } from './preparedReviews'
 import { CardLeaseError, leaseFailure, leaseHash } from './cardLeases'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
+import type { DecisionPreparation } from './decisionPrep'
 import type { DecisionEvidence } from '../../shared/decisionPacket'
 import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { workReadback } from './workReadback'
@@ -32,10 +33,10 @@ async function policyBody(req: IncomingMessage) {
 export class DecisionDeskApi {
   constructor(private packets: DecisionPackets, private scope: string, private evidence: (cardId: string) => DecisionEvidence,
     private authorized: (req: IncomingMessage) => Promise<boolean>, private reviews?: PreparedReviews,
-    private recovery?: { list(): unknown; reconcile(card: string, operation: string, actor: string, reason: string): Promise<unknown> }, private submissions?: PreparedSubmissions) {}
+    private recovery?: { list(): unknown; reconcile(card: string, operation: string, actor: string, reason: string): Promise<unknown> }, private submissions?: PreparedSubmissions, private preparation?: DecisionPreparation) {}
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? '/', 'http://local')
-    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['snapshot', 'submit', 'submission-state', 'metrics', 'review-events', 'sessions', 'claim', 'release', 'close-session', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
+    const paths = ['/api/reconciliation/decision-desk/policy', '/api/reconciliation/decision-desk/evidence', '/api/reconciliation/decision-desk/packets', '/api/reconciliation/decision-desk/packet', '/api/reconciliation/decision-desk/events', ...['snapshot', 'submit', 'submission-state', 'metrics', 'review-events', 'sessions', 'claim', 'release', 'close-session', 'prepare', 'source-writes', 'reconcile-source-write'].map(path => `/api/reconciliation/decision-desk/${path}`)]
     if (!paths.includes(url.pathname)) return false
     const origin = req.headers.origin, allowlist = currentOriginAllowlist()
     const headers = { ...resolveCorsHeaders({ origin, allowlist }), 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin', 'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Tinstar-UI' }
@@ -70,6 +71,10 @@ export class DecisionDeskApi {
       if (this.recovery && url.pathname.endsWith('/reconcile-source-write') && req.method === 'POST') {
         const input = z.object({ card_id: cardIdSchema, operation: z.string().uuid(), earlier_request_settled: z.literal(true), reason: z.string().trim().min(1).max(4000) }).strict().parse(await policyBody(req))
         return ok(res, await this.recovery.reconcile(input.card_id, input.operation, req.headers['tailscale-user-login'], input.reason), { headers })
+      }
+      if (this.preparation && url.pathname.endsWith('/prepare') && req.method === 'POST') {
+        const input = z.object({ card_id: cardIdSchema, request_id: z.string().min(1).max(128), reason: z.string().trim().min(1).max(1000) }).strict().parse(await policyBody(req))
+        return ok(res, await this.preparation.prepareNow(req.headers['tailscale-user-login'], input), { headers })
       }
       if (url.pathname.endsWith('/policy')) {
         if (req.method === 'GET') return ok(res, await this.packets.readPolicy(this.scope), { headers })

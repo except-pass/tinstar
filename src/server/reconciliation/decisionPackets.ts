@@ -66,25 +66,26 @@ export class DecisionPackets {
     return validation
   }
   async publish(input: unknown, evidence: DecisionEvidence, actor: string, operationId: string) {
+    await this.initialize()
+    return this.leases.writeStorage(db => this.publishInStorage(db, input, evidence, actor, operationId))
+  }
+  publishInStorage(db: DatabaseSync, input: unknown, evidence: DecisionEvidence, actor: string, operationId: string) {
     const packet = decisionPacketSchema.parse(input)
     z.string().trim().min(1).max(200).parse(actor); z.string().trim().min(1).max(128).parse(operationId)
-    await this.initialize()
-    return this.leases.writeStorage(db => {
-      const publicationKey = JSON.stringify([actor, operationId]), contentHash = packetContentHash(packet)
-      const previous = db.prepare('SELECT * FROM decision_packets WHERE publication_key = ?').get(publicationKey) as PacketRow | undefined
-      if (previous) {
-        if (previous.content_hash !== contentHash) throw new DecisionDeskConflict('Publication operation already used for different packet meaning')
-        return { ...unpack(previous), validation: this.latestValidation(db, previous.id), replayed: true }
-      }
-      const sourceKey = JSON.stringify([packet.binding.card_id, requestAnchor(packet.binding.source_request), packet.binding.request_id])
-      const version = Number((db.prepare('SELECT coalesce(max(version),0)+1 AS version FROM decision_packets WHERE source_key = ?').get(sourceKey) as { version: number }).version)
-      const id = randomUUID(), publishedAt = new Date(this.now()).toISOString(), expiresAt = new Date(this.now() + packet.review_within_ms).toISOString()
-      db.prepare('INSERT INTO decision_packets VALUES(?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey)
-      for (const dependency of packet.dependencies) db.prepare('INSERT INTO decision_packet_dependencies VALUES(?,?,?,?)').run(id, dependency.kind, dependency.key, dependency.revision)
-      this.event(db, id, 'publication', actor, { version, content_hash: contentHash, source_revision: packet.binding.source_revision })
-      const validation = this.attest(db, id, packet, evidence, actor)
-      return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: expiresAt, packet, validation, replayed: false }
-    })
+    const publicationKey = JSON.stringify([actor, operationId]), contentHash = packetContentHash(packet)
+    const previous = db.prepare('SELECT * FROM decision_packets WHERE publication_key = ?').get(publicationKey) as PacketRow | undefined
+    if (previous) {
+      if (previous.content_hash !== contentHash) throw new DecisionDeskConflict('Publication operation already used for different packet meaning')
+      return { ...unpack(previous), validation: this.latestValidation(db, previous.id), replayed: true }
+    }
+    const sourceKey = JSON.stringify([packet.binding.card_id, requestAnchor(packet.binding.source_request), packet.binding.request_id])
+    const version = Number((db.prepare('SELECT coalesce(max(version),0)+1 AS version FROM decision_packets WHERE source_key = ?').get(sourceKey) as { version: number }).version)
+    const id = randomUUID(), publishedAt = new Date(this.now()).toISOString(), expiresAt = new Date(this.now() + packet.review_within_ms).toISOString()
+    db.prepare('INSERT INTO decision_packets VALUES(?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey)
+    for (const dependency of packet.dependencies) db.prepare('INSERT INTO decision_packet_dependencies VALUES(?,?,?,?)').run(id, dependency.kind, dependency.key, dependency.revision)
+    this.event(db, id, 'publication', actor, { version, content_hash: contentHash, source_revision: packet.binding.source_revision })
+    const validation = this.attest(db, id, packet, evidence, actor)
+    return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: expiresAt, packet, validation, replayed: false }
   }
   async validate(id: string, evidence: DecisionEvidence, actor: string) {
     z.string().trim().min(1).max(200).parse(actor)
@@ -149,8 +150,28 @@ export class DecisionPackets {
     db.prepare('INSERT OR IGNORE INTO decision_desk_policy VALUES(?,0,?,NULL,NULL)').run(scope, JSON.stringify(defaultDecisionPolicy))
     const row = db.prepare('SELECT * FROM decision_desk_policy WHERE scope = ?').get(scope) as { scope: string; version: number; body: string; updated_by: string | null; updated_at: string | null }
     const { body, ...metadata } = row
-    return { ...metadata, values: decisionPolicyValuesSchema.parse(JSON.parse(body)) }
+    let values = decisionPolicyValuesSchema.parse(JSON.parse(body))
+    // P1 inserted replenishment ON. That row must not dispatch after this step
+    // ships. One audit marks the cutover; only a later explicit save turns it on.
+    const shipped = (db.prepare("SELECT detail FROM decision_packet_events WHERE type = 'policy'").all() as Array<{ detail: string }>).some(event => {
+      try { const detail = JSON.parse(event.detail); return detail.migration === 'replenishment-off' && detail.scope === scope } catch { return false }
+    })
+    if (!shipped) {
+      if (values.automatic_replenishment) {
+        values = { ...values, automatic_replenishment: false }
+        db.prepare('UPDATE decision_desk_policy SET body = ? WHERE scope = ?').run(JSON.stringify(values), scope)
+      }
+      this.event(db, null, 'policy', 'decision-desk', { scope, version: row.version, values, migration: 'replenishment-off', reason: 'Shipped replenishment off until the owner turns it on from Preparation' })
+    }
+    return { ...metadata, values }
   }
+  async recordEvent(actor: string, type: string, detail: unknown, packetId: string | null = null) {
+    z.string().trim().min(1).max(200).parse(actor)
+    z.string().trim().min(1).max(80).parse(type)
+    await this.initialize()
+    return this.leases.writeStorage(db => this.event(db, packetId, type, actor, detail))
+  }
+  policyInStorage(db: DatabaseSync, scope: string) { return this.policy(db, scope) }
   async readPolicy(scope: string) {
     z.string().trim().min(1).max(2048).parse(scope)
     await this.initialize()

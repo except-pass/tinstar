@@ -35,8 +35,8 @@ it('serves isolated evidence/storage APIs through existing owner authentication 
   expect((await fetch(`${base}/policy`, { headers: { ...headers, 'Tailscale-User-Login': 'intruder' } })).status).toBe(403)
   expect((await fetch(`${base}/policy`, { headers: { ...headers, Origin: 'https://evil.test' } })).status).toBe(403)
   expect((await fetch(`${base}/policy`, { headers: { 'Tailscale-User-Login': 'preview-owner@example.test' } })).status).toBe(403)
-  expect((await (await fetch(`${base}/policy`, { headers })).json()).data).toMatchObject({ version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } })
-  const update = { expected_version: 0, values: { target_ready: 8, max_preparers: 2, automatic_replenishment: false } }
+  expect((await (await fetch(`${base}/policy`, { headers })).json()).data).toMatchObject({ version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: false } })
+  const update = { expected_version: 0, values: { target_ready: 8, max_preparers: 2, automatic_replenishment: true } }
   const saved = await fetch(`${base}/policy`, { method: 'PUT', headers, body: JSON.stringify(update) })
   expect(saved.status).toBe(200); expect((await saved.json()).data).toMatchObject({ version: 1, values: update.values, updated_by: 'preview-owner@example.test' })
   expect((await fetch(`${base}/policy`, { method: 'PUT', headers, body: JSON.stringify(update) })).status).toBe(409)
@@ -47,7 +47,7 @@ it('serves isolated evidence/storage APIs through existing owner authentication 
   expect((await (await fetch(`${base}/packet?id=${published.id}`, { headers })).json()).data).toMatchObject({ id: published.id, ready: true })
   const inventory = (await (await fetch(`${base}/packets`, { headers })).json()).data
   expect(inventory.packets).toHaveLength(1); expect(inventory).not.toHaveProperty('ready_count')
-  expect((await (await fetch(`${base}/events`, { headers })).json()).data.map((event: { type: string }) => event.type)).toEqual(['publication', 'validation', 'policy'])
+  expect((await (await fetch(`${base}/events`, { headers })).json()).data.map((event: { type: string }) => event.type)).toEqual(['publication', 'validation', 'policy', 'policy'])
   expect((await fetch(`${base}/packets`, { method: 'POST', headers, body: '{}' })).status).toBe(405)
   expect(leases.status(fixture.cardId)).toBe(null)
   expect(evidence).toHaveBeenCalledTimes(2)

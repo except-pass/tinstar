@@ -119,7 +119,7 @@ it('appends coverage attestations for unchanged revalidation and targets invalid
 
 it('persists validated default policy, serializes competing saves, and refuses invalid settings', async () => {
   const { packets, root } = await store()
-  expect(await packets.readPolicy('board')).toMatchObject({ version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } })
+  expect(await packets.readPolicy('board')).toMatchObject({ version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: false } })
   const rival = new DecisionPackets(new CardLeases(root, () => now), () => now)
   const update = { expected_version: 0, values: { target_ready: 15, max_preparers: 2, automatic_replenishment: false } }
   const results = await Promise.allSettled([packets.updatePolicy('board', update, 'owner-a'), rival.updatePolicy('board', update, 'owner-b')])
@@ -128,6 +128,16 @@ it('persists validated default policy, serializes competing saves, and refuses i
   expect(await new DecisionPackets(new CardLeases(root), () => now).readPolicy('board')).toMatchObject({ version: 1, values: update.values })
   for (const values of [{ ...update.values, target_ready: 31 }, { ...update.values, max_preparers: 0 }, { ...update.values, automatic_replenishment: 'yes' }]) await expect(packets.updatePolicy('board', { expected_version: 1, values }, 'owner')).rejects.toThrow()
   expect(await packets.readPolicy('board')).toMatchObject({ version: 1 })
+})
+
+it('ships a pre-existing replenishment-on row off until a later explicit save', async () => {
+  const { packets, leases } = await store()
+  await packets.ids()
+  await leases.writeStorage(db => db.prepare('INSERT INTO decision_desk_policy VALUES(?,?,?,?,?)').run('board', 0, JSON.stringify({ target_ready: 10, max_preparers: 3, automatic_replenishment: true }), 'Will', '2026-11-01T00:00:00.000Z'))
+  expect(await packets.readPolicy('board')).toMatchObject({ version: 0, updated_by: 'Will', values: { automatic_replenishment: false } })
+  expect((await packets.events()).some(event => event.type === 'policy' && JSON.parse(String(event.detail)).migration === 'replenishment-off')).toBe(true)
+  expect((await packets.updatePolicy('board', { expected_version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } }, 'Will')).values.automatic_replenishment).toBe(true)
+  expect((await packets.readPolicy('board')).values.automatic_replenishment).toBe(true)
 })
 
 it('keeps evidence projection pure and reports unavailable histories and changed worker/source', async () => {

@@ -5,14 +5,15 @@ backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 12 and 14** on [the Decision Desk card](https://www.notion.so/41950ce6d42281068ca9dc6d065fc210).
 P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
 P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
-P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
+P4 adds [preparation jobs](#p4--preparation-jobs). P5 is the two-view UI below. P6 is later integrated acceptance.
 Generic claims, source answers, receipts and `search_work` filters/coverage
 retain their behavior. P5 adds a Decisions mode as described below.
 
-P1 starts no workers, dispatches no jobs and spends nothing on preparation.
-Automatic replenishment is stored ON by default, ready depth 10 (1–30), maximum
-preparers 3 (1–8). These are persisted owner policy values, not a hidden activation
-flag. The preparer/runtime/spending and first activation decisions remain separate.
+P1 stores packets and policy. [P4](#p4--preparation-jobs) dispatches preparation.
+Automatic replenishment is stored OFF until the owner turns it on from Preparation.
+Ready depth 10 (1–30) and maximum preparers 3 (1–8) stay the other defaults.
+These are persisted owner policy values. The visible replenishment control is the
+only on/off switch. P4 does not track tokens or spend.
 
 ## Storage and readiness
 
@@ -50,8 +51,8 @@ exposure, consequences/affected parties/prerequisites, authorization/next owner
 and status/gates, references, dependencies and review freshness policy. P1 does
 not normalize sources, invent alternatives or add a multipart grouping schema.
 Risk/confidence prose is preparer advice, not an independent verification or
-authorization. Publication is currently an **internal service method**; a
-job-scoped publisher API belongs to the later preparer contract.
+authorization. See [P4 publication](#p4--preparation-jobs) for the bot's
+job-scoped path into this store.
 
 Semantic hashing normalizes object keys, set-like option/reference/dependency
 ordering and line endings. Publication/observation timestamps are outside the
@@ -116,9 +117,10 @@ returned only by the [review operations below](#p2-registered-review-sessions-an
 | `GET /packets` | Bounded publication inventory (at most 50), explicitly **not** a Ready counter |
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
+| `POST /prepare` | Audited preparation of one decision `{card_id, request_id, reason}`; see [P4 admission](#p4--preparation-jobs) |
 
-Publication and worker dispatch have no endpoint here. Review and source-write
-recovery routes are described below; answer submission is owned by the
+The packet publish path is MCP `publish_prepared_packet`, not this owner UI.
+Review and source-write recovery routes are described below; answer submission is owned by the
 [P3 API contract](#p3-durable-source-bound-submit-and-recovery). Unsupported methods return 405.
 Public source-derived prose is redacted independently of exact internal validation
 data; review capabilities and source answer identities remain intact. Existing `coverage.intentions` and
@@ -416,6 +418,47 @@ servers. It uses no live root, tokens, board or bridge. These fixture measuremen
 are not production latency or P6 integrated acceptance. No P3 screen changed;
 first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
 
+## P4 — preparation jobs
+
+The preparer is the Tinstar Decision Prep bot. Tin Star posts one job per eligible
+decision to the bot's webhook and does not run a Codex preparer. Each JSON body
+carries `request_id` (the Tin Star decision/request id), `card_url` (the Notion
+card URL), and `publish.tool` / `publish.job_id` for `publish_prepared_packet`.
+The sender key is sent only as `Authorization: Bearer`. It is never logged,
+returned, or stored in the job row.
+
+The webhook URL and sender key are the `url` and `key` fields of one Clavis
+secret, `grok/tinstar-decision-prep`. When either field is absent, replenishment
+and Prepare now do nothing and the Preparation view says the preparer webhook
+is not configured. The rest of Decision Desk keeps working. A row that already
+had replenishment on is set off once, with a policy audit, so deploying this
+step does not start posting. A later save from Preparation is the switch-on.
+
+Automatic admission requires ready unleased packets plus in-flight jobs to be
+below the saved target depth and source coverage to be complete. Both automatic
+admission and Prepare now require in-flight jobs below the preparer cap, fresh
+eligible source evidence, an unanswered request, no review lease or source-write
+reservation, a card outside Todo, and no job in flight or Ready packet for that
+source revision. Prepare now bypasses the target depth. Prior preparation attempts do not prevent
+later automatic replenishment; Prepare now remains available for explicit
+preparation. There is no token limit or spend record.
+
+`publish_prepared_packet` stores the packet through the P1 store. The packet is
+Ready only when that validation passes. The tool does not answer, claim a lease,
+or change card status. A mismatched card, request, or revision is rejected
+before anything is stored.
+
+A validation-blocked attempt can publish a correction within its ten-minute
+window. Admitting a retry cancels older blocked attempts for the same source
+revision; they can no longer publish over the retry's packet. Publication and
+job completion share one transaction, and a later webhook response preserves
+the completed publication state.
+
+Prepare now posts one audited job for one decision while replenishment is off,
+using the eligibility rules above. Open attempts, including validation-blocked
+attempts, expire after ten minutes from dispatch (or admission if not dispatched).
+Automatic replenishment checks at startup and every 30 seconds.
+
 ## P5 — Review and Preparation UI
 
 The existing **Decisions** entry defaults to the source workbench, preserving its
@@ -461,7 +504,7 @@ be reviewed without a verified canonical card and prepared packet.
 **Submit decision & next →** records the selected source option before advancing.
 **Skip** releases without answering. **Need more research** accepts an optional
 reason, withdraws the packet and serves the next eligible decision; it does not
-start a preparer. An unconfirmed release retains its original operation and session/
+answer or post a preparation job by itself. An unconfirmed release retains its original operation and session/
 lease capabilities for reconciliation before another claim or submission. A
 definitive rejection clears the pending release; an expired or lost lease then
 requires re-claim and revalidation. Unresolved answers and local selections remain
@@ -476,20 +519,20 @@ Review uses the approved three/two/one-column layout, source-bound radio choices
 scoped high-risk confirmation and readback-confirmed submit/next. Expired leases,
 invalidated evidence and unavailable sources block submission. Definite and
 unconfirmed saves retain the selection and operation; retries use the same ID.
-Preparation saves the effective versioned queue policy. No preparation runner is
-configured in P5, and no setting starts or schedules one. Unknown source totals
+Preparation saves the effective versioned queue policy and shows whether the
+Tinstar Decision Prep webhook is configured, along with job failures and pending
+rows. See [P4](#p4--preparation-jobs) for configuration and admission rules. Unknown source totals
 are unavailable, not zero. The cached-source `/snapshot` projection supplies full
 latest-packet inventory/counts and pending rows without researching or mutating
 source cards; it is separate from the bounded publication inventory.
 
 **Multipart boundary:** P5 reviews each independently identified source request
 separately through P3. Same-card requests are not inferred to form a bundle.
-Combined A/B/C submission and its partial-save screen remain outstanding pending
-owner fork C (source grouping, required parts, aggregate transitions and retaining
-one lease across parts). Firstmate confirmed this scope in task instruction
-`001.msg` on 2026-11-15. Recorded progress is per source request, never a claim that
-an unspecified bundle is complete. P4 (preparer runner) and P6 (integrated
-acceptance/activation evidence) follow.
+The owner selected C1 with option buttons and free text always available,
+including for multi-part asks, on 2026-11-16. That flow, combined A/B/C submission
+and its partial-save screen remain later work. Recorded progress is per source
+request, never a claim that an unspecified bundle is complete. Integrated
+acceptance also follows separately.
 
 The isolated running-UI harness is
 `scripts/decision-desk-ui-preview.ts <task-proof-directory>`, after `npm run

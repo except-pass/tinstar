@@ -2,6 +2,8 @@ import { CardLeases, CardLeaseError } from './cardLeases'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
+import { DecisionPreparation, type PrepCandidate } from './decisionPrep'
+import { cardSourceUrl } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
@@ -52,6 +54,7 @@ export class ReconciliationSources {
   readonly leases: CardLeases
   readonly decisionPackets: DecisionPackets
   readonly preparedReviews: PreparedReviews
+  readonly preparation: DecisionPreparation
   readonly preparedSubmissions: PreparedSubmissions
   readonly reviewAudit: ReviewDeploymentAudit
   releaseDesk?: () => Promise<import('./queue').QueueItem[]>
@@ -77,20 +80,10 @@ export class ReconciliationSources {
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot()) {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
-    this.preparedReviews = new PreparedReviews(this.decisionPackets, config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board', id => this.preparationEvidence(id), () => {
-      const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
-      const complete = queue.coverage.intentions.status === 'fresh' && queue.coverage.intentions.coverage === 'complete' && queue.coverage.fleet.length > 0 && queue.coverage.fleet.every(home => home.status === 'fresh' && home.coverage === 'complete')
-      const cards = snapshot.intentions.data?.cards.filter(card => !card.archived && !card.in_trash && !['Done', 'Archived'].includes(String(card.properties.Status?.value))) ?? []
-      // Property coverage alone cannot prove there are no body/comment asks.
-      // Absence is certified only when all active card histories are cached and
-      // fresh as well; otherwise the empty response discloses unknown demand.
-      const historiesComplete = cards.every(card => {
-        const history = this.context.cachedDecisionHistory(card.id)
-        return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
-      })
-      const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
-      return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' : 'unknown', requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
-    })
+    const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
+    this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: () => this.prepCandidates(), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id))
+    this.preparedReviews.reportPreparation = () => this.preparation.status()
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
@@ -152,6 +145,40 @@ export class ReconciliationSources {
       fleet: this.fleet.map(({ source, observation }) => ({ source: { ...source, machineBasis: source.machine ? 'configured' : 'unknown' },
         observation: observation.peek() ?? { status: 'unknown', coverage: 'unknown', data: null, observedAt: null,
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
+  }
+
+  /** Cached queue used by prepared review and preparation admission. No source writes. */
+  private decisionQueue() {
+    const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
+    const complete = queue.coverage.intentions.status === 'fresh' && queue.coverage.intentions.coverage === 'complete' && queue.coverage.fleet.length > 0 && queue.coverage.fleet.every(home => home.status === 'fresh' && home.coverage === 'complete')
+    const cards = snapshot.intentions.data?.cards.filter(card => !card.archived && !card.in_trash && !['Done', 'Archived'].includes(String(card.properties.Status?.value))) ?? []
+    // Property coverage alone cannot prove there are no body/comment asks.
+    // Absence is certified only when all active card histories are cached and
+    // fresh as well; otherwise the empty response discloses unknown demand.
+    const historiesComplete = cards.every(card => {
+      const history = this.context.cachedDecisionHistory(card.id)
+      return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
+    })
+    const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
+    return { card_ids: [...new Set(queue.items.flatMap(item => item.cardIds))], coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
+  }
+
+  /** Eligible-source facts for one preparation pass. Admission itself rechecks leases. */
+  private prepCandidates(): PrepCandidate[] {
+    const snapshot = this.knownSnapshot(), queue = this.decisionQueue()
+    const held = this.leases.readStorage(db => new Set(queue.card_ids.filter(id => this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reservedInStorage(db, id))))
+    const candidates: PrepCandidate[] = []
+    let rank = 0
+    for (const cardId of queue.card_ids) {
+      const card = snapshot.intentions.data?.cards.find(item => item.id === cardId)
+      const evidence = this.preparationEvidence(cardId)
+      for (const request of evidence.requests) candidates.push({
+        rank: rank++, card_id: cardId, request_id: request.binding?.request_id ?? '', source_revision: request.binding?.source_revision ?? '',
+        card_url: cardSourceUrl(cardId), card_status: card ? String(card.properties.Status?.value ?? '') : null,
+        answered: request.answered, leased: held.has(cardId), reasons: [...evidence.reasons, ...request.reasons],
+      })
+    }
+    return candidates
   }
 
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never

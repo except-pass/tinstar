@@ -43,7 +43,9 @@ export const decisionPacketSchema = z.object({
 export type DecisionPacket = z.infer<typeof decisionPacketSchema>
 export const decisionPolicyValuesSchema = z.object({ target_ready: z.number().int().min(1).max(30), max_preparers: z.number().int().min(1).max(8), automatic_replenishment: z.boolean() }).strict()
 export const decisionPolicyUpdateSchema = z.object({ expected_version: z.number().int().nonnegative(), values: decisionPolicyValuesSchema }).strict()
-export const defaultDecisionPolicy = { target_ready: 10, max_preparers: 3, automatic_replenishment: true } as const
+/** Replenishment stays off until Preparation saves it on. That visible control is
+ * the only switch, so a deploy does not post jobs before the owner turns it on. */
+export const defaultDecisionPolicy = { target_ready: 10, max_preparers: 3, automatic_replenishment: false } as const
 
 /** Canonicalize object/set ordering and line endings, not timestamps or text
  * meaning. Call sites explicitly choose which fields are semantic. */
