@@ -36,11 +36,11 @@ const entryText = (text: string) => /[\r\n]/.test(text) || text.startsWith('"') 
 
 /** The exact Waiting For line a later resolve must match. */
 export function waitLine(value: { dependency: string; unblocks_when: string; follow_up_by: string; type: string; id: string }): string {
-  return `Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)} | Type: ${value.type} | ID: ${entryText(value.id)}`
+  return `${value.type === 'Actor' && value.id === 'Will' ? 'Will: ' : ''}Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)} | Type: ${value.type} | ID: ${entryText(value.id)}`
 }
 
 export function parseWaitLine(line: string): { type: WaitingForType; id: string; dependency: string; unblocks_when: string; follow_up_by: string } | null {
-  const match = /^Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
+  const match = /^(?:Will: )?Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
   if (!match) return null
   const decode = (text: string) => {
     if (!text.startsWith('"')) return text

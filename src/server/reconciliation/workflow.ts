@@ -1,4 +1,5 @@
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
+import { responsibleMate, strictlyNeedsWill } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -37,7 +38,7 @@ const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, c
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
 class WorkflowError extends Error { constructor(readonly code: string, message: string, readonly requiresNewOperationId = false) { super(message) } }
-export interface WorkflowChange { before?: WorkCard; card: WorkCard; actor: string; operationId: string; properties: Record<string, unknown>; notes?: string[]; sections?: string[]; sectionTexts?: string[] }
+export interface WorkflowChange { kind?: UpdateWorkInput['kind']; before?: WorkCard; card: WorkCard; actor: string; operationId: string; properties: Record<string, unknown>; notes?: string[]; sections?: string[]; sectionTexts?: string[] }
 export class WorkflowOperations {
   validateReview?: (input: Extract<ReviewOperation, { kind: 'submit_for_review' }>) => Promise<void>
   decisionDelivery?: DecisionDelivery
@@ -74,6 +75,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.startUnchecked(clean, actor) })
   }
   update(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
+    if (input.kind === 'not_for_me' && !this.reader.leases?.status(input.card_id)) return Promise.resolve({ outcome: 'not-saved', code: 'claim-required', message: 'Not for me requires a current card lease', saved_fields: [], operation_id: input.operation_id })
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   /** Desk-only persistence boundary. Legacy update() still waits for its
@@ -162,14 +164,16 @@ export class WorkflowOperations {
     void result.finally(() => { if (this.locks.get(cardId) === result) this.locks.delete(cardId) }).catch(() => {})
     if (this.receipts.size >= 1000) { const oldest = this.receipts.keys().next().value!; this.receipts.delete(oldest); this.noteRepairs.delete(oldest) }
     this.receipts.set(key, { input: signature, until: Date.now() + 600_000, result })
-    void result.then(value => { if (value.code === 'firstmate-pending' || value.outcome === 'not-saved' || value.outcome === 'partially-saved' && !('kind' in input)) this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
+    void result.then(value => { if (value.code === 'firstmate-pending' || value.outcome === 'not-saved' || value.outcome === 'partially-saved' && (!('kind' in input) || input.kind === 'not_for_me')) this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
     return result
   }
   private async changed(change: WorkflowChange) {
     this.onRecordedChange?.(change.card.id)
     // Pilot issues are synthetic: recording a queue/start never offers live pickup.
     if (change.card.source?.synthetic) return
-    await this.onChange?.(change).catch(() => {})
+    if (change.kind === 'not_for_me' && !change.notes?.length) return
+    if (change.kind === 'not_for_me') await this.onChange?.(change)
+    else await this.onChange?.(change).catch(() => {})
   }
 
   private startUnchecked(input: StartWorkInput, actor: string): Promise<StartWorkResult> {
@@ -571,6 +575,20 @@ export class WorkflowOperations {
       note = `${cp.request_id ? `Check-in request: ${cp.request_id}\n` : ''}Date: ${at}\nBy: ${actor}\nProgress: ${proseLine(cp.assessment)}\nEvidence: ${proseLine(cp.evidence)}\nBlocker/owner: ${proseLine(cp.blocker ?? 'none')}\nNext action: ${proseLine(cp.next_action)}\nNext check-in: ${new Date(next).toISOString()}\nAppointment: ${cp.confirmation}`
       const requestId = cp.request_id ?? 'unrequested-checkpoint'
       if (!checkInReport(cp.request_id ? note : `Check-in request: ${requestId}\n${note}`, requestId)) throw new WorkflowError('invalid-checkpoint', 'Serialized checkpoint must satisfy the existing watchdog requirements for substantive progress/evidence and non-placeholder fields')
+    } else if (input.kind === 'not_for_me') {
+      if (!this.onChange) throw new WorkflowError('bridge-unavailable', 'The Firstmate workflow bridge is unavailable; the claim is retained.')
+      if (!strictlyNeedsWill(card)) throw new WorkflowError('ask-changed', 'This card no longer has the same structured Will ask. Refresh before returning it.')
+      const mate = responsibleMate(card, notes)
+      if (!mate) throw new WorkflowError('mate-unknown', 'No responsible mate is declared in First Mate tasks or Last touched by. Firstmate must repair the route; the claim is retained.')
+      transition(mate.owner, 'Waiting For')
+      const previous = String(card.properties['Waiting For']?.value ?? '')
+      const remaining = previous.split('\n').filter(line => line.trim() && !(line.startsWith('Will:') || parseWaitLine(line)?.type === 'Actor' && parseWaitLine(line)?.id === 'Will'))
+      const returned = waitLine({ type: 'Actor', id: mate.id, dependency: `Review the owner's not-for-me return: ${input.reason}`, unblocks_when: 'The responsible mate corrects the request or supplies the missing work', follow_up_by: mate.owner })
+      set('Waiting For', [returned, ...remaining].join('\n'))
+      set('Waiting For Type', 'Actor'); set('Waiting For ID', mate.id)
+      set('Will action', [])
+      set('Next check-in', new Date(checkInCeiling(Date.now())).toISOString())
+      note += `\nNot for me: ${input.reason}\nReturned to: ${mate.id}\nPrevious Will ask: ${JSON.stringify(previous)}`
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const publications = await this.proposals?.read(card.id, notes)
       const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
@@ -724,7 +742,7 @@ export class WorkflowOperations {
       if (receipt) {
         this.noteRepairs.delete(key)
         this.reader.confirm(card)
-        await this.changed({ card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
+        await this.changed({ kind: input.kind, card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
         return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
       }
       if (repair) {
@@ -772,14 +790,14 @@ export class WorkflowOperations {
         }
         this.reader.confirm(card)
         saved.push(...Object.keys(plan.desired).filter(name => this.matches(card!, name, plan.desired[name])))
-        await this.changed({ before, card, actor, operationId: input.operation_id, properties: Object.fromEntries(Object.keys(plan.desired).filter(name => saved.includes(name)).map(name => [name, card!.properties[name]?.value])) })
+        await this.changed({ kind: input.kind, before, card, actor, operationId: input.operation_id, properties: Object.fromEntries(Object.keys(plan.desired).filter(name => saved.includes(name)).map(name => [name, card!.properties[name]?.value])) })
         if (Object.keys(plan.desired).some(name => !this.matches(card!, name, plan.desired[name]))) return { ...result('partially-saved', 'readback-mismatch', 'Only listed properties confirmed saved. Review current state and re-issue with a new operation_id; no properties will be replayed.'), requires_new_operation_id: true }
         contentBefore = card
         for (const [name, text] of Object.entries(plan.sections)) {
           attempted = true
           await this.content.section(card.id, name, text, plan.sectionOriginal[name])
           saved.push(name)
-          await this.changed({ before: card, card, actor, operationId: input.operation_id, properties: {}, sections: [name], sectionTexts: [sectionText(name, text)] })
+          await this.changed({ kind: input.kind, before: card, card, actor, operationId: input.operation_id, properties: {}, sections: [name], sectionTexts: [sectionText(name, text)] })
         }
         card = await this.reader.card(card.id, true)
         notePending = plan.note
@@ -789,7 +807,7 @@ export class WorkflowOperations {
       saved.push('note')
       this.noteRepairs.delete(key)
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
-      await this.changed({ before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
+      await this.changed({ kind: input.kind, before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
       return result('saved', heldWait ? 'wait-remains' : 'saved', heldWait
         ? 'The named wait was resolved, but another independent wait remains, so status stayed Waiting For. Other asks, tags and worker history were preserved.'
         : 'Workflow changes and history saved and confirmed')

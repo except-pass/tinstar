@@ -512,3 +512,23 @@ it('revalidates legacy workflow reservations on a sweep without changing retry b
   await restarted.sweep(true)
   expect((await restarted.bridgeWork()).pending).toEqual(offered)
 })
+
+it('delivers one daily malformed-asks report grouped by declared mate through the existing bridge', async () => {
+  const f = await fixture()
+  f.card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  f.card.properties['Last touched by']!.value = 'Clawson'
+  f.card.properties.Status!.value = 'Waiting For'
+  const sources = { ...f.sources, willAskCensus: vi.fn(async () => structuredClone(f.observation)) }
+  const feed = new FirstmateUpdates(sources, f.root, f.settings, f.now)
+  await feed.sweep(true); f.advance(); await feed.sweep(true)
+  const first = await feed.bridgeWork()
+  const malformed = first.pending.find(notice => notice.body.includes('Malformed Needs Will ask'))!
+  expect(malformed).toBeDefined()
+  expect(payload(malformed.body).changes).toMatchObject([{ card_id: f.card.id, current: { mate: { owner: 'Clawson' }, issues: expect.arrayContaining(['Owner must be Will', 'Waiting For must start Will:']) } }])
+  await delivered(feed, malformed)
+  await new FirstmateUpdates(sources, f.root, f.settings, f.now).sweep(true)
+  expect((await feed.bridgeWork()).pending.some(notice => notice.body.includes('Malformed Needs Will ask'))).toBe(false)
+  f.advance(86400_000)
+  await feed.sweep(true); f.advance(); await feed.sweep(true)
+  expect((await feed.bridgeWork()).pending.some(notice => notice.body.includes('Malformed Needs Will ask'))).toBe(true)
+})

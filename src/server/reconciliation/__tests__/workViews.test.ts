@@ -88,7 +88,8 @@ it('refreshes cached request history after another process answers a decision', 
   const card = snapshot.intentions.data!.cards[0]!
   snapshot.intentions.data!.cards = [card]
   card.properties.Owner!.value = 'Will'
-  card.properties.Status!.value = 'Backlog'
+  card.properties.Status!.value = 'Waiting For'
+  for (const [name, value] of Object.entries({ 'Waiting For': 'Will: Approve the exception', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) card.properties[name] = { id: name, type: 'rich_text', value, hasMore: false }
   card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
   card.properties['Next action'] = { id: 'next', type: 'rich_text', value: '', hasMore: false }
   const notes = [{ id: 'request', rich_text: [{ plain_text: 'Tin Star request: {"id":"approval","action":"Decision"}\nRequested from: Will\nQuestion: Approve the exception?' }] }]

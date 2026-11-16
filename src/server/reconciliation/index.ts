@@ -1,4 +1,6 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
+import { decisionRequests } from '../../shared/workflowRequests'
+import { matchesClaimFilters, type ClaimFilters } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
@@ -290,6 +292,9 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
+  async claimHistory(id: string) { return this.context.commentDetails(id, true) }
+  async willAskCensus() { return this.workReader.query({}) }
+  async claimViews(filters: ClaimFilters) { return this.queue(undefined, undefined, false, 'claim', filters) }
   mainWaitNotionConfig() { return this.config.notion }
   releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
@@ -391,7 +396,8 @@ export class ReconciliationSources {
   async updateWork(input: UpdateWorkInput, actor: string) {
     const result = await this.workflow.update(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
-    return { ...workReadback(result), lease: this.leases.status(input.card_id) }
+    const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
+    return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
   async createWork(input: CreateWorkInput, actor: string) {
     return workReadback(await this.workflow.create(input, actor))
@@ -494,13 +500,13 @@ export class ReconciliationSources {
     return workReadback(queue)
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' | 'claim' = 'reconcile', filters: ClaimFilters = {}) {
     let reviewWarning: string | null = null
     const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode === 'read'), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
@@ -510,6 +516,18 @@ export class ReconciliationSources {
       states.set(url, { status: 'unknown', state: 'unknown', observedAt: null, expiresAt: null, head: null, draft: false, checks: 'unknown', mergeability: 'unknown' })
     }
     const queue = buildQueue(snapshot, states, Date.now(), pullRead ?? null)
+    if (mode === 'claim') {
+      // Narrow from the census and cached request timestamps before reading any
+      // individual card. Unknown request age cannot satisfy an age limit.
+      const matching = new Set(queue.claimCards.filter(card => {
+        const requests = decisionRequests(this.context.cachedComments(card.id)?.blocks ?? []).filter(request => !request.answered && request.requestedFrom === 'Will')
+        const since = requests.flatMap(request => request.since ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
+        return matchesClaimFilters(card, filters, since)
+      }).map(card => card.id))
+      queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))
+      queue.claimCards = queue.claimCards.filter(card => matching.has(card.id))
+      if (filters.max_age_days !== undefined) queue.warnings.push('Max age uses recorded request history; cards with unknown request age are excluded. Refresh get_work_views to load request ages.')
+    }
     if (this.releaseDesk && snapshot.intentions.status === 'fresh' && snapshot.intentions.coverage === 'complete' && snapshot.intentions.data) {
       try { queue.items.push(...await this.releaseDesk()) }
       catch { queue.warnings.push('Release verification receipts unavailable; inspect Releases before concluding that no production checks remain.') }
@@ -526,6 +544,10 @@ export class ReconciliationSources {
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
     const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
     let contexts = collectedContexts
+    if (mode === 'claim') for (const id of ids) {
+      const cached = this.context.cachedComments(id)
+      if (cached) collectedContexts.set(id, cached)
+    }
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {

@@ -430,8 +430,12 @@ operation-id replays also include these fields, using current queue evidence;
 when evidence for the card is unavailable, `readiness` is `unknown` and
 `readiness_reasons` explains the missing evidence. Check the card before acting
 when it is not certified ready. New leases skip parked/no-request, future or
-conditional, unverified, Done and Archived candidates. A concrete approval or
-decision on Backlog work can be actionable now without changing its work status.
+conditional, unverified, Done and Archived candidates. New next-card leases
+require exact structured fields: Owner `Will`, Status `Waiting For`, at least one
+`Will action` of `Decision`, `Do`, `Merge`, `Elevated command`, `Waiting For`
+starting `Will:`, `Waiting For Type` `Actor`, and `Waiting For ID` `Will`.
+Legacy or malformed asks can remain visible for verification but are not claimable.
+Backlog approvals must be formed as a current Will wait before next-card admission.
 Eligibility is checked before claiming and again in the lease allocation
 transaction; a Tin Star source write during queue/history collection or the fresh
 exact-card read invalidates that snapshot, and pending source writes prevent
@@ -446,6 +450,34 @@ claim can select the card after history loads. Cached recorded answers and
 pending resolutions exclude their exact request/source anchor, preserving
 independent unanswered requests on the same card. Claim responses include card
 metadata only; use `get_work` with `details: true` for the selected card's prose.
+
+Optional `will_action`, `initiative`, `area`, and `max_age_days` filters intersect.
+Action and area use exact labels; initiative accepts its exact label or relation
+ID. Max age is elapsed days since the oldest recorded open Will request, not card
+edit time. Unknown ages do not satisfy this filter; `get_work_views` loads the
+existing bounded request history when needed. The census and cached timestamps
+narrow candidates before individual reads. The selected candidate gets fresh
+properties and comment history; a stale or newly answered candidate is skipped.
+No unrelated histories are refreshed on the claim path.
+
+`not_for_me(card_id, operation_id, lease_token, reason)` returns a leased ask with
+a one-line reason. The workflow writer records that reason, clears all Will
+badges, preserves worker links and independent waits, and replaces the Will wait
+with a typed mate blocker and a future check-in. Declared First Mate tasks take
+precedence; otherwise the last mate touch or retained workflow receipt supplies
+the mate. The existing Firstmate workflow bridge receives the reason and exact
+route; Firstmate routes the notification to that mate. Confirmed storage of both
+the card note and bridge notice precedes lease release. Unknown mate, failed note
+or notice storage retains the lease and reports the failure; retry the identical
+operation for an interrupted save. An unresolved provider write uses the existing
+audited source-write recovery before retry. After a lost final response, read `get_work`
+for the recorded return and current lease before retrying.
+
+The existing Firstmate workflow-notice surface also receives one daily UTC
+malformed-asks report, grouped by declared mate, from a fresh complete census.
+It lists each violating field and explicitly labels unknown mate ownership.
+It adds no dispatch, status or delivery channel. `search_work` owner/status
+filters and `coverage.intentions` retain their existing contracts.
 
 When none qualifies, `no-unclaimed-card` means no currently unclaimed actionable
 card in the covered queue. Its `coverage` and `warnings` retain stale, unknown,

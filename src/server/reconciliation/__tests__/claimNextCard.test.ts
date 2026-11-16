@@ -27,7 +27,7 @@ const secIds = ['40d50ce6d422814dac1dca0111512c71', '40d50ce6d422819abdc4c77fbc9
 const parked = 'Parked in Backlog per Will. No active decision or approval requested until reprioritized.'
 function card(id = 'a'.repeat(32), values: Record<string, unknown> = {}): WorkCard {
   const base = structuredClone(fixtureSources().intentions.data!.cards[0]!)
-  return { ...base, id, properties: Object.fromEntries(Object.entries({ Name: 'Owner decision', Owner: 'Will', Status: 'In Progress',
+  return { ...base, id, properties: Object.fromEntries(Object.entries({ Name: 'Owner decision', Owner: 'Will', Status: 'Waiting For', 'Waiting For': 'Will: Approve the security exception', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will',
     'Will action': ['Decision'], 'Next action': 'Approve the security exception', ...values }).map(([name, value]) =>
     [name, { id: name, type: 'rich_text', value, hasMore: false }])) }
 }
@@ -167,22 +167,15 @@ it('skips both reported parked SEC cards, even when the stale queue still lists 
   for (const id of secIds) expect(f.leases.status(id)).toBeNull()
 })
 
-it('claims a concrete approval on Backlog work without altering UI ordering or workflow status', async () => {
+it('excludes legacy Backlog approval asks until they have the strict owner fields', async () => {
   const approval = card('b'.repeat(32), { Owner: 'Firstmate', Status: 'Backlog', 'Will action': ['Approval'] })
   const f = await fixture([approval])
-  const before = structuredClone(f.current.get(approval.id)), ui = decisionItems(f.queue)
-  const first = await f.call('claim_next_card', claim('approval'))
-  expect(first).toMatchObject({ outcome: 'claimed', lease: { card_id: approval.id }, readiness: 'ready-now' })
-  expect(first.readiness_reasons).not.toContain('Planned work or an agreed future start; no immediate owner decision')
-  expect(await f.call('release_claim', { lease_token: first.lease_token, reason: 'Approval smoke complete' })).toMatchObject({ outcome: 'released' })
-  expect(f.current.get(approval.id)).toEqual(before)
-  expect(decisionItems(f.queue)).toEqual(ui)
-  expect(f.queue.needsWill![0]!.readiness).toBe('future-or-conditional')
-  expect(f.leases.status(approval.id)).toBeNull()
+  expect(await f.call('claim_next_card', claim('approval'))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.currentCard).not.toHaveBeenCalled()
 })
 
-it('accepts a current concrete owner request from complete request history on Backlog work', async () => {
-  const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': '' })])
+it('accepts a current concrete owner request from complete request history on a structured Will ask', async () => {
+  const f = await fixture([card('a'.repeat(32), { 'Next action': '' })])
   const row = f.queue.needsWill![0]!
   row.requests = [{ id: 'approval', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: false, options: undefined, requestedFrom: 'Will',
     question: 'Approve the security exception?', since: new Date().toISOString(), sourceId: 'request-note', answered: false }]
@@ -191,11 +184,11 @@ it('accepts a current concrete owner request from complete request history on Ba
 })
 
 it('treats waiting for Will approval as the current request while retaining real prerequisites', async () => {
-  const f = await fixture([card('a'.repeat(32), { Owner: 'Firstmate', Status: 'Backlog', 'Waiting For': 'Will to approve the security exception' })])
+  const f = await fixture([card('a'.repeat(32), { 'Waiting For': 'Will: approve the security exception' })])
   const first = await f.call('claim_next_card', claim('owner-wait'))
   expect(first).toMatchObject({ outcome: 'claimed', readiness: 'ready-now' })
   await f.call('release_claim', { lease_token: first.lease_token, reason: 'Request reviewed' })
-  f.current.get('a'.repeat(32))!.properties['Waiting For']!.value = 'Will to approve after the security review'
+  f.current.get('a'.repeat(32))!.properties['Waiting For']!.value = 'Will: approve after the security review'
   expect(await f.call('claim_next_card', claim('real-prerequisite'))).toMatchObject({ outcome: 'no-unclaimed-card' })
 })
 
@@ -298,7 +291,7 @@ it('rejects a source write crossing the exact-card read before the atomic lease 
 
 
 it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request masked by a concrete Next action', async mode => {
-  const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': 'Implement security policy' })])
+  const f = await fixture([card('a'.repeat(32), { 'Next action': 'Implement security policy' })])
   f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: mode === 'conditional' ? 'Approve the exception after the security review' :
       mode === 'no-request' ? 'No active decision requested' : 'Approve the exception?',
@@ -308,7 +301,7 @@ it.each(['conditional', 'future', 'no-request'])('rejects a %s recorded request 
 })
 
 it.each(['candidate', 'sibling'])('fences a %s source write during request-history collection', async mode => {
-  const f = await fixture([card('a'.repeat(32), { Status: 'Backlog', 'Next action': '' })])
+  const f = await fixture([card('a'.repeat(32), { 'Next action': '' })])
   f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: 'Approve the exception?', since: new Date().toISOString(), sourceId: 'request-note', answered: false }]
   f.workViews.mockImplementationOnce(async () => {
@@ -320,4 +313,49 @@ it.each(['candidate', 'sibling'])('fences a %s source write during request-histo
   })
   expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
   expect(f.leases.status('a'.repeat(32))).toBeNull()
+})
+
+it.each(['Decision', 'Do', 'Elevated command'])('filters exact Will action %s before reading another card', async action => {
+  const first = card('a'.repeat(32)), second = card('b'.repeat(32), { 'Will action': [action] })
+  if (action === 'Decision') first.properties['Will action']!.value = ['Do']
+  const f = await fixture([first, second])
+  expect(await f.call('claim_next_card', { operation_id: `action-${action}`, will_action: action })).toMatchObject({ outcome: 'claimed', lease: { card_id: second.id } })
+  expect(f.currentCard.mock.calls).toEqual([[second.id]])
+})
+
+it.each(['initiative', 'area', 'max_age_days'])('filters %s before fresh exact reads', async filter => {
+  const f = await fixture([card('a'.repeat(32), { Initiative: 'Other', Area: 'Other' }), card('b'.repeat(32), { Initiative: ['initiative-id'], Area: 'Engineering' })])
+  f.queue.needsWill![0]!.requestSince = new Date(Date.now() - 10 * 86400_000).toISOString()
+  f.queue.needsWill![1]!.requestSince = new Date(Date.now() - 3600_000).toISOString()
+  const args = filter === 'initiative' ? { initiative: 'initiative-id' } : filter === 'area' ? { area: 'Engineering' } : { max_age_days: 1 }
+  expect(await f.call('claim_next_card', { operation_id: filter, ...args })).toMatchObject({ outcome: 'claimed', lease: { card_id: 'b'.repeat(32) } })
+  expect(f.currentCard.mock.calls).toEqual([['b'.repeat(32)]])
+})
+
+it('intersects filters and excludes unknown request age without reading a card', async () => {
+  const f = await fixture([card('a'.repeat(32), { Area: 'Engineering', Initiative: 'Tin Star' })])
+  expect(await f.call('claim_next_card', { operation_id: 'unknown-age', area: 'Engineering', initiative: 'Tin Star', max_age_days: 3 })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.currentCard).not.toHaveBeenCalled()
+  expect(await f.call('claim_next_card', { operation_id: 'intersection', area: 'Other', initiative: 'Tin Star' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.currentCard).not.toHaveBeenCalled()
+})
+
+it.each([
+  { Owner: 'Firstmate' }, { Status: 'Backlog' }, { 'Will action': [] }, { 'Will action': ['Approval'] },
+  { 'Waiting For': 'Somebody mentioned Will' }, { 'Waiting For Type': 'Event' }, { 'Waiting For ID': 'Other' },
+])('excludes malformed asks %j before fresh reads', async changed => {
+  const f = await fixture([card('a'.repeat(32), changed)])
+  expect(await f.call('claim_next_card', { operation_id: 'malformed' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(f.currentCard).not.toHaveBeenCalled()
+})
+
+it('filters Merge while retaining the existing verified PR readiness requirement', async () => {
+  const other = card('a'.repeat(32)), merge = card('b'.repeat(32), { 'Will action': ['Merge'], 'Next action': 'Merge the reviewed security change', Link: 'https://github.com/except-pass/tinstar/pull/100' })
+  const f = await fixture([other, merge])
+  expect(await f.call('claim_next_card', { operation_id: 'unverified-merge', will_action: 'Merge' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const row = f.queue.needsWill!.find(item => item.cardIds.includes(merge.id))!
+  row.readiness = 'ready-now'
+  row.sources.forEach(source => { source.readiness = 'ready-now' })
+  expect(await f.call('claim_next_card', { operation_id: 'verified-merge', will_action: 'Merge' })).toMatchObject({ outcome: 'claimed', lease: { card_id: merge.id } })
+  expect(f.currentCard.mock.calls.flat()).not.toContain(other.id)
 })

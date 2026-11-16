@@ -10,6 +10,7 @@ import type { PullReadiness } from './queuePulls'
 import { decisionRequests } from '../../shared/workflowRequests'
 
 export interface NeedsWillItem extends QueueItem {
+  requestReadiness?: QueueItem['readiness']
   prDetails?: string
   requestSince: string | null
   ageBasis: 'request-history' | 'unknown'
@@ -52,6 +53,6 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     const proposalHistoryComplete = item.cardIds.every(id => contexts.get(id)?.outcome === 'available')
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = since.length ? since.sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null
-    return [{ ...item, currentProposalAnswerId: current?.answer_id ?? null, proposalHistoryComplete, ...(!proposalHistoryComplete ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'Publication history is incomplete; refresh before choosing'] } : {}), proposals: published, ...(proposal?.source.kind === 'firstmate-request' ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
+    return [{ ...item, requestReadiness: item.readiness, currentProposalAnswerId: current?.answer_id ?? null, proposalHistoryComplete, ...(!proposalHistoryComplete ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'Publication history is incomplete; refresh before choosing'] } : {}), proposals: published, ...(proposal?.source.kind === 'firstmate-request' ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]
   })
 }
