@@ -29,7 +29,8 @@ beforeEach(() => {
   tag(fixtureId(2), 'Tin Star', 'Site Config')
   tag(fixtureId(3), 'Dirt Farm', 'CI')
   tag(fixtureId(6), 'Dirt Farm', 'CI')
-  tag(fixtureId(4), 'Tin Star', 'Site Config')
+  // Keep the Waiting For card separate so the filtered card tree omits Tin Star.
+  tag(fixtureId(4), 'Waiting initiative', 'Site Config')
   observed.scene = scene
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Element.prototype.scrollIntoView = vi.fn()
