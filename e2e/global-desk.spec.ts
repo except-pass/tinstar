@@ -11,6 +11,7 @@ import { resolve, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { decideStaticServe } from '../src/server/staticServe'
 import { fixtureId, fixtureQueue, fixtureScene } from '../test-fixtures/reconciliation/scenes'
+import { preparedDecisionFixture } from '../test-fixtures/reconciliation/preparedDecision'
 import { objectFixture } from '../test-fixtures/releases/objects'
 import type { ReleasePull } from '../src/shared/releases'
 import type { ReleaseTarget } from '../src/shared/releaseObjects'
@@ -739,4 +740,54 @@ test('phone workbench navigation and Full conversation return preserve the exact
   await expect(detail).toBeVisible()
   await expect(detail).toHaveAttribute('data-decision-id', item.id)
   await expect(page.locator('.decisions-search input')).toHaveValue('Build')
+})
+
+
+test('phone Discuss return to a card held elsewhere offers untargeted next without retrying that target', async ({ page }) => {
+  const item = fixtureQueue().items[0]!
+  const a = item.cardIds[0]!, b = fixtureId(2)
+  const record = askItemSchema.parse({ request_id: '00000000-0000-4000-8000-000000000010', conversation_id: '10000000-0000-4000-8000-000000000010',
+    question: 'Explain this request', input_mode: 'text', context: {
+      anchor: { kind: 'decision', page_id: a, label: 'Fixture decision', url: null, observed_at: null },
+      target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id },
+      return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id } },
+    }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered',
+    reply: { summary: 'Evidence for this exact request', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null,
+  })
+  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
+  const claims: Record<string, unknown>[] = []
+  await page.route('**/api/reconciliation/decision-desk/claim', async route => {
+    const input = route.request().postDataJSON(); claims.push(input)
+    const fixture = preparedDecisionFixture().packet
+    fixture.binding.card_id = b; fixture.binding.request_key = 'next-request'
+    const data = input.card_id === a ? { outcome: 'not-saved', code: 'card-held', lease: { holder: 'Other fixture context' } } : {
+      outcome: 'held', lease_token: 'next-fixture-lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() },
+      packet: { id: '00000000-0000-4000-8000-000000000002', version: 1, packet: fixture, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() },
+    }
+    await route.fulfill({ json: { ok: true, data } })
+  })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`${base}/?view=decisions`)
+  await page.locator('.decisions-row').first().click()
+  await page.getByLabel('Selected decision').getByRole('button', { name: 'Full conversation ↗' }).click()
+  const discuss = page.getByRole('dialog', { name: 'Discuss' })
+  await discuss.getByRole('button', { name: 'Return to source' }).click()
+  await expect(discuss).toBeHidden()
+  await openDecisionDesk(page)
+  await expect(page.getByRole('heading', { name: 'This decision is held by another review session.' })).toBeVisible()
+  await expect(page.locator('.dd-rail')).toBeHidden()
+  const next = page.getByRole('button', { name: 'Claim next prepared decision', exact: true })
+  const retry = page.getByRole('button', { name: 'Try this decision again', exact: true })
+  for (const [width, height] of [[390, 844], [430, 932], [768, 1024], [1440, 900], [1920, 1080]] as const) {
+    await page.setViewportSize({ width, height })
+    await expect(next).toBeVisible(); await expect(retry).toBeVisible()
+    expect(await next.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+  await page.setViewportSize({ width: 390, height: 844 })
+  await next.click()
+  await expect(page.locator('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b}`)
+  expect(claims[0]).toHaveProperty('card_id', a)
+  expect(claims.slice(1).length).toBeGreaterThan(0)
+  expect(claims.slice(1).every(input => !input.card_id)).toBe(true)
 })

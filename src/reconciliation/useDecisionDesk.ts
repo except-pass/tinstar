@@ -11,9 +11,11 @@ function load(): ReviewContext {
   try { return JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh() } catch { return fresh() }
 }
 const requestKey = (packet: DeskPacket) => `${packet.packet.binding.card_id}:${packet.packet.binding.request_id}`
-export function useDecisionDesk(initialCard?: string, targetPending = false, initialRequestKey?: string, onAdvance?: () => void) {
-  const initialTarget = useRef(initialCard), initialRequest = useRef(initialRequestKey), advanced = useRef(onAdvance)
-  initialTarget.current = initialCard; initialRequest.current = initialRequestKey; advanced.current = onAdvance
+export interface DecisionTarget { id: string; cardId?: string; requestKey?: string; packetId?: string }
+export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id: string) => void) {
+  const targetRef = useRef(target), consumed = useRef(onTargetConsumed), handledTarget = useRef<string>()
+  targetRef.current = target; consumed.current = onTargetConsumed
+  const [lastTarget, setLastTarget] = useState<DecisionTarget>(), [targetBlocked, setTargetBlocked] = useState(false)
   const context = useRef<ReviewContext>(load())
   const lock = useRef(false), mounted = useRef(true)
   const visibleMeasure = useRef<{ name: string; started: number } | null>(null)
@@ -104,14 +106,14 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     if (!response.next) throw new Error(response.message ?? 'Release not confirmed. Current card retained.')
     context.current.release = undefined
     context.current.selections = {}; context.current.attempts = {}
-    initialTarget.current = undefined; initialRequest.current = undefined; advanced.current?.()
-    setResult(null); setNotice(pending.action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
+    setTargetBlocked(false); setResult(null); setNotice(pending.action === 'skip' ? 'Skipped without an answer.' : 'Research requested without an answer. No preparation runner is configured.')
     accept(response.next)
     return response.next
   }, [accept, persist])
   const claimNext = useCallback(async (cardId?: string, revalidate = false, exactRequestKey?: string, exactPacketId?: string) => {
     const released = await reconcileRelease()
     if (released) return released
+    if (!cardId) setTargetBlocked(false)
     await ensureSession()
     const pending = Object.values(context.current.attempts)[0]
     if (pending) {
@@ -151,6 +153,25 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     performance.measure(`decision-desk.claim-api.${value.outcome}`, { start: started, end: performance.now() })
     return value
   }, [accept, ensureSession, persist, recover, reconcileRelease])
+  const claimTarget = useCallback(async (intent: DecisionTarget) => {
+    handledTarget.current = intent.id
+    setLastTarget(intent)
+    setTargetBlocked(true)
+    try {
+      const response = intent.cardId ? await claimNext(intent.cardId, false, intent.requestKey, intent.packetId) : { outcome: 'requested-unavailable', message: 'The exact source request and canonical card binding are not available in the current source observation. No substitute decision was claimed.' }
+      if (!intent.cardId) {
+        if (!claimRef.current?.packet) accept(response)
+        else setNotice(response.message ?? 'The requested source is not ready. Your held decision is retained.')
+      }
+      const packet = response.packet
+      setTargetBlocked(!packet || packet.packet.binding.card_id !== intent.cardId || !!intent.requestKey && packet.packet.binding.request_key !== intent.requestKey || !!intent.packetId && packet.id !== intent.packetId || response.outcome === 'packet-invalidated' || !packet.validation.valid)
+      return response
+    } finally {
+      // Consume even when refusing a substitute needs release recovery. An
+      // explicit retry can target again; refresh must never re-arm navigation.
+      consumed.current?.(intent.id)
+    }
+  }, [accept, claimNext])
   const run = useCallback(async (action: () => Promise<void>, ambiguous = false) => {
     if (lock.current) return
     lock.current = true; setBusy(true); setError(null)
@@ -163,7 +184,6 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
   }, [refresh])
   useEffect(() => {
     mounted.current = true
-    if (targetPending && !context.current.release) return () => { mounted.current = false }
     void run(async () => {
       if (await reconcileRelease()) return
       await ensureSession()
@@ -181,7 +201,8 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
         const packet = await deskCall<DeskPacket>(`packet?id=${encodeURIComponent(retained.selection.packet_id)}`)
         accept({ outcome: 'lease-lost', packet, lease_token: recoveryLease })
       }
-      const response = await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true, claimRef.current?.packet?.packet.binding.request_key ?? initialRequest.current)
+      const intent = targetRef.current
+      const response = intent && handledTarget.current !== intent.id ? await claimTarget(intent) : await claimNext(undefined, true)
       const held = response.packet ? response : claimRef.current
       for (const attempt of recovered.submissions) {
         if (held?.lease_token && held.packet && attempt.selection.request_id === held.packet.packet.binding.request_id) {
@@ -201,15 +222,18 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
       persist()
     })
     return () => { mounted.current = false }
-  }, [accept, claimNext, ensureSession, persist, recover, reconcileRelease, run, targetPending])
+  }, [accept, claimNext, claimTarget, ensureSession, persist, recover, reconcileRelease, run])
+  useEffect(() => {
+    if (target && handledTarget.current !== target.id && context.current.id && !busy) void run(async () => { await claimTarget(target) })
+  }, [target, busy, claimTarget, run])
   // Cached-source revalidation, never research. Visibility/focus avoid an
   // unattended polling loop; the lease expiry is also enforced locally.
   useEffect(() => {
-    const check = () => { if ((!targetPending || context.current.release) && !document.hidden && !lock.current && !(claimRef.current?.packet && context.current.attempts[requestKey(claimRef.current.packet)])) void run(async () => { await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true, claimRef.current?.packet?.packet.binding.request_key ?? initialRequest.current) }) }
+    const check = () => { if (!document.hidden && !lock.current && !(claimRef.current?.packet && context.current.attempts[requestKey(claimRef.current.packet)])) void run(async () => { await claimNext(undefined, true) }) }
     window.addEventListener('focus', check)
     const timer = setInterval(check, 30_000)
     return () => { window.removeEventListener('focus', check); clearInterval(timer) }
-  }, [claimNext, run, targetPending])
+  }, [claimNext, run])
   const select = (packet: DeskPacket, option: string) => {
     if (context.current.attempts[requestKey(packet)]) return
     context.current.selections[requestKey(packet)] = option; persist()
@@ -218,7 +242,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     if (await reconcileRelease()) return
     await ensureSession()
     if (!context.current.lease && claimRef.current?.packet && !context.current.attempts[requestKey(claimRef.current.packet)]) {
-      await claimNext(claimRef.current.packet.packet.binding.card_id, true, claimRef.current.packet.packet.binding.request_key)
+      await claimNext(undefined, true)
     }
     const current = claimRef.current, packet = current?.packet
     if (!packet || !current?.lease_token) throw new Error('Re-claim and revalidate before submitting.')
@@ -235,8 +259,7 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
     const saved = await deskCall<DeskResult>('submit', input)
     setResult(saved)
     if (saved.outcome === 'recorded' || saved.outcome === 'recorded-empty') {
-      initialTarget.current = undefined; initialRequest.current = undefined; advanced.current?.()
-      setSubmissionRevision(value => value + 1)
+      setTargetBlocked(false); setSubmissionRevision(value => value + 1)
       delete context.current.attempts[key]; delete context.current.selections[key]; context.current.recoveryLease = undefined; persist()
       visibleMeasure.current = { name: `decision-desk.submit-visible.${saved.next?.outcome ?? 'unavailable'}`, started }
       accept(saved.next ?? { outcome: 'next-unavailable' })
@@ -247,15 +270,16 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
   const release = (action: 'skip' | 'research', reason = '') => run(async () => {
     if (await reconcileRelease()) return
     await ensureSession()
-    if (!context.current.lease) { await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true, claimRef.current?.packet?.packet.binding.request_key ?? initialRequest.current); return }
+    if (!context.current.lease) { await claimNext(undefined, true); return }
     context.current.release = { operation_id: crypto.randomUUID(), action, reason: reason.trim() || (action === 'skip' ? 'Reviewer skipped without an answer' : 'Reviewer requested more research'), review_session_token: context.current.token, lease_token: context.current.lease }
     persist()
     await reconcileRelease()
   })
   return { claim, parts: claim?.packet ? [claim.packet] : [], snapshot, policy, sessions, busy, error, result, notice, revision, submissionRevision,
-    currentSession: context.current.id, selections: context.current.selections, attempts: context.current.attempts,
+    lastTarget, targetBlocked, currentSession: context.current.id, selections: context.current.selections, attempts: context.current.attempts,
     select, submit, release, refresh, retryClaim: () => run(async () => {
-      const held = await claimNext(claimRef.current?.packet?.packet.binding.card_id ?? initialTarget.current, true, claimRef.current?.packet?.packet.binding.request_key ?? initialRequest.current)
+      setNotice('')
+      const held = await claimNext(undefined, true)
       if (held.packet && held.lease_token) {
         const attempt = context.current.attempts[requestKey(held.packet)]
         if (attempt && (attempt.lease_token !== held.lease_token || attempt.packet_id !== held.packet.id)) {
@@ -265,8 +289,9 @@ export function useDecisionDesk(initialCard?: string, targetPending = false, ini
         if (held.outcome !== 'packet-invalidated') setResult(null)
       }
     }),
-    claimAvailable: () => run(async () => { await claimNext(undefined, true) }),
-    claimCard: (card: string, exactRequestKey?: string, exactPacketId?: string) => run(async () => { await claimNext(card, false, exactRequestKey, exactPacketId) }),
+    claimAvailable: () => run(async () => { setTargetBlocked(false); setNotice(''); await claimNext(undefined, true) }),
+    retryTarget: (cardId?: string) => run(async () => { if (lastTarget) await claimTarget({ ...lastTarget, cardId: cardId ?? lastTarget.cardId }) }),
+    claimCard: (card: string, exactRequestKey?: string, exactPacketId?: string) => run(async () => { await claimTarget({ id: crypto.randomUUID(), cardId: card, requestKey: exactRequestKey, packetId: exactPacketId }) }),
     newSession: () => run(async () => {
       if (context.current.release || context.current.lease || Object.keys(context.current.attempts).length) throw new Error('Finish or skip this session’s held decision before creating another here. Other browser contexts can create independent sessions.')
       context.current = fresh(); persist(); await claimNext()

@@ -19,3 +19,5 @@
 .dd-review-content{padding-bottom:calc(var(--dd-action-height) + env(safe-area-inset-bottom) + var(--dd-nav-clearance));min-width:0}
 .dd-main>.dd-actions{flex-shrink:0}
 @media(max-width:660px){.decision-desk{--dd-nav-clearance:56px}}
+
+.dd-target-recovery { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }

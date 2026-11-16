@@ -8,7 +8,7 @@ import { workflowMarkers } from '../../shared/workflowMarkers'
 import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown>, consumed: null as string | null }))
-vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ ...workspace.value, consumedDecisionTarget: workspace.consumed, consumeDecisionTarget: (target: string) => { workspace.consumed = target } }) }))
+vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ ...workspace.value, decisionTarget: (workspace.value.decisionTarget as { id: string } | undefined)?.id === workspace.consumed ? undefined : workspace.value.decisionTarget, consumeDecisionTarget: (target: string) => { workspace.consumed = target } }) }))
 
 let leaseToken: string, claimCode: string | undefined
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
@@ -138,14 +138,16 @@ it('reconciles an ambiguous original operation after reload even when its own pa
   expect(submits[1]).toEqual(first)
 })
 
-it('waits for an exact source-return binding instead of claiming a substitute from an older scene selection', async () => {
+it('consumes an unavailable source binding without claiming a substitute, and only retries it explicitly', async () => {
   packet.packet.binding.request_key = 'exact-return'
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'exact-return' } }, state: { selection: { kind: 'card', id: 'another-card' } } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: 'exact-return' }, origin: { section: 'decisions', target: { kind: 'decision', id: 'exact-return' } }, state: { selection: { kind: 'card', id: 'another-card' } } }
   const view = render(<Decisions />)
   await screen.findByText('Requested source request is not ready for review.')
   expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))).toHaveLength(0)
   workspace.value = { ...workspace.value, queue: { items: [{ id: 'exact-return', cardIds: [packet.packet.binding.card_id] }] } }
   view.rerender(<Decisions />)
+  expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))).toHaveLength(0)
+  fireEvent.click(screen.getByRole('button', { name: 'Try this decision again' }))
   await screen.findByRole('radio', { name: /Authorize preview only/ })
   const claim = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith('/claim'))!
   expect(JSON.parse(String(claim[1]?.body)).card_id).toBe(packet.packet.binding.card_id)
@@ -467,7 +469,7 @@ it.each(['first request returned', 'second request returned', 'release unavailab
   second.packet.binding.request_id = 'source-b'
   second.packet.title = 'Second independent request'
   packet = scenario === 'second request returned' ? second : first
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-a', cardIds: [first.packet.binding.card_id] }, { id: 'request-b', cardIds: [second.packet.binding.card_id] }] } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: 'request-b' }, origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-a', cardIds: [first.packet.binding.card_id] }, { id: 'request-b', cardIds: [second.packet.binding.card_id] }] } }
   const releases: Record<string, unknown>[] = []
   const fallback = vi.mocked(fetch).getMockImplementation()!
   vi.mocked(fetch).mockImplementation(async (url, init) => {
@@ -514,7 +516,7 @@ it.each(['held', 'packet-invalidated'])('retains a same-card %s request and sele
     }
     return fallback(url, init)
   })
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-b', cardIds: [packet.packet.binding.card_id] }] } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: 'request-b' }, origin: { section: 'decisions', target: { kind: 'decision', id: 'request-b' } }, queue: { items: [{ id: 'request-b', cardIds: [packet.packet.binding.card_id] }] } }
   view.rerender(<Decisions />)
   await screen.findByText('This session already holds a different decision. Finish or skip it before switching.')
   expect(screen.getByRole('radio', { name: /Authorize preview only/ })).toBeChecked()
@@ -532,7 +534,7 @@ it('retains an already-held decision when a different request is requested', asy
     if (String(url).endsWith('/claim')) return new Response(JSON.stringify({ ok: true, data: { outcome: 'already-holding', packet, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } } }))
     return fallback(url, init)
   })
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'other-request' } }, queue: { items: [{ id: 'other-request', cardIds: ['other-card'] }] } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: 'other-request' }, origin: { section: 'decisions', target: { kind: 'decision', id: 'other-request' } }, queue: { items: [{ id: 'other-request', cardIds: ['other-card'] }] } }
   // Keep the mounted reviewing context while delivering a new destination.
   fireEvent.click(screen.getByRole('button', { name: 'Preparation' }))
   fireEvent.click(screen.getByRole('button', { name: 'Review' }))
@@ -552,7 +554,7 @@ it.each([
   second.id = '00000000-0000-4000-8000-000000000002'
   second.packet.binding.card_id = 'b'.repeat(32)
   second.packet.binding.request_key = 'request-b'
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] }, state: { revision: 1 } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: first.packet.binding.request_key }, origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] }, state: { revision: 1 } }
   let advanced = false, available = false
   const claims: Record<string, unknown>[] = []
   const fallback = vi.mocked(fetch).getMockImplementation()!
@@ -596,7 +598,7 @@ it.each([
   await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${second.packet.binding.card_id}`))
   expect(claims.at(-1)).not.toHaveProperty('card_id')
   expect(claims.at(-1)).not.toHaveProperty('lease_token')
-  workspace.value = { state: { revision: 3, queueCardId: first.packet.binding.card_id, navigation: { cardId: first.packet.binding.card_id, revision: 3 } } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), cardId: first.packet.binding.card_id }, state: { revision: 3, queueCardId: first.packet.binding.card_id, navigation: { cardId: first.packet.binding.card_id, revision: 3 } } }
   view.rerender(<Decisions />)
   await waitFor(() => expect(claims.at(-1)).toMatchObject({ card_id: first.packet.binding.card_id }))
 })
@@ -604,7 +606,7 @@ it.each([
 it.each(['not-saved', 'save-unconfirmed'])('retains exact navigation and operation after %s', async failure => {
   outcome = failure
   packet.packet.binding.request_key = 'request-a'
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: 'request-a' } }, queue: { items: [{ id: 'request-a', cardIds: [packet.packet.binding.card_id] }] } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: 'request-a' }, origin: { section: 'decisions', target: { kind: 'decision', id: 'request-a' } }, queue: { items: [{ id: 'request-a', cardIds: [packet.packet.binding.card_id] }] } }
   await ready()
   fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
@@ -717,7 +719,7 @@ it.each(['skip', 'research'])('recovers a definitely rejected %s after expiry, f
 
 it('keeps a completed Discuss target consumed across the Workbench and Desk mode boundary', async () => {
   const first = structuredClone(packet)
-  workspace.value = { origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] } }
+  workspace.value = { decisionTarget: { id: crypto.randomUUID(), requestKey: first.packet.binding.request_key }, origin: { section: 'decisions', target: { kind: 'decision', id: first.packet.binding.request_key } }, queue: { items: [{ id: first.packet.binding.request_key, cardIds: [first.packet.binding.card_id] }] } }
   outcome = 'recorded-empty'
   const view = render(<Decisions />)
   await screen.findByRole('radio', { name: /Authorize preview only/ })
@@ -732,4 +734,79 @@ it('keeps a completed Discuss target consumed across the Workbench and Desk mode
   const claims = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/claim'))
   expect(JSON.parse(String(claims.at(-1)![1]?.body))).not.toHaveProperty('card_id')
   expect(screen.queryByText('Requested source request is not ready for review.')).toBeNull()
+})
+
+it.each(['claimed', 'held', 'already-holding', 'card-held', 'mismatch', 'no-prepared-decisions'])('consumes a one-shot target after %s; refresh and unrelated revisions never re-target', async firstOutcome => {
+  const original = structuredClone(packet)
+  const next = structuredClone(packet)
+  next.id = '00000000-0000-4000-8000-000000000002'
+  next.packet.binding.card_id = 'b'.repeat(32)
+  next.packet.binding.request_key = 'request-b'
+  const target = { id: 'one-shot-intent', cardId: original.packet.binding.card_id, requestKey: original.packet.binding.request_key }
+  workspace.value = { decisionTarget: target }
+  const claims: Record<string, unknown>[] = [], releases: Record<string, unknown>[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    const input = init?.body ? JSON.parse(String(init.body)) : undefined
+    let data: unknown
+    if (String(url).endsWith('/claim')) {
+      claims.push(input)
+      if (claims.length > 1) data = { outcome: 'held', packet: next, lease_token: 'next-lease' }
+      else if (firstOutcome === 'card-held') data = { outcome: 'not-saved', code: 'card-held', lease: { holder: 'Other real context' } }
+      else if (firstOutcome === 'no-prepared-decisions') data = { outcome: firstOutcome }
+      else data = { outcome: firstOutcome === 'mismatch' ? 'claimed' : firstOutcome, packet: ['mismatch', 'already-holding'].includes(firstOutcome) ? next : original, lease_token: 'first-lease' }
+    } else if (String(url).endsWith('/release')) { releases.push(input); data = { outcome: 'released' } }
+    else return fallback(url, init)
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  const view = render(<Decisions />)
+  await waitFor(() => expect(workspace.consumed).toBe(target.id))
+  await waitFor(() => expect(screen.queryByText('Decision Desk operation in progress.')).toBeNull())
+  expect(claims).toHaveLength(1)
+  expect(claims[0]).toMatchObject({ card_id: target.cardId })
+  expect(releases).toHaveLength(firstOutcome === 'mismatch' ? 1 : 0)
+  const blocked = ['already-holding', 'card-held', 'mismatch', 'no-prepared-decisions'].includes(firstOutcome)
+  if (blocked) {
+    expect(screen.getByRole('button', { name: 'Claim next prepared decision' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Try this decision again' })).toBeVisible()
+  }
+  // A new queue observation and a presentation revision are not navigation.
+  workspace.value = { ...workspace.value, queue: { items: [] }, state: { revision: 99, queueCardId: target.cardId } }
+  view.rerender(<Decisions />)
+  await act(async () => {})
+  expect(claims).toHaveLength(1)
+  await act(async () => { fireEvent.focus(window) })
+  await waitFor(() => expect(claims).toHaveLength(2))
+  expect(claims[1]).not.toHaveProperty('card_id')
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${next.packet.binding.card_id}`))
+  expect(screen.queryByRole('button', { name: 'Try this decision again' })).toBeNull()
+  // Unmounting the opt-in Desk cannot resurrect a consumed source target.
+  view.rerender(<div>Workbench</div>)
+  view.rerender(<Decisions />)
+  await waitFor(() => expect(claims).toHaveLength(3))
+  expect(claims[2]).not.toHaveProperty('card_id')
+})
+
+it('allows a quiet explicit one-shot retry after conflict, then claims the next card without retrying the target', async () => {
+  const target = { id: 'conflicting-return', cardId: packet.packet.binding.card_id }
+  workspace.value = { decisionTarget: target }
+  const claims: Record<string, unknown>[] = []
+  const fallback = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (!String(url).endsWith('/claim')) return fallback(url, init)
+    const input = JSON.parse(String(init?.body)); claims.push(input)
+    const data = input.card_id ? { outcome: 'not-saved', code: 'card-held' } : { outcome: 'held', packet, lease_token: 'next-lease' }
+    return new Response(JSON.stringify({ ok: true, data }))
+  })
+  render(<Decisions />)
+  await screen.findByRole('button', { name: 'Try this decision again' })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Try this decision again' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Try this decision again' }))
+  await waitFor(() => expect(claims).toHaveLength(2))
+  expect(claims[1]).toHaveProperty('card_id', target.cardId)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Claim next prepared decision' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: 'Claim next prepared decision' }))
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  expect(claims).toHaveLength(3)
+  expect(claims[2]).not.toHaveProperty('card_id')
 })

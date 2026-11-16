@@ -446,8 +446,16 @@ allocated substitute without answering and reports that the requested decision i
 not ready or is held. An existing held claim, including another request on the same
 card, retains its lease and local selection with an explanation that this session
 holds a different decision. It never presents that claim as the requested destination.
-Explicit Discuss returns re-arm navigation even to the same request; completed
-targets remain consumed across mode changes and ordinary refreshes. Unlinked requests cannot
+Each explicit Return to source or card/request selection creates a **one-shot**
+claim target. Its first result consumes it, whether claimed, retained by this
+session, held elsewhere, refused as a substitute, or not ready. Queue observations,
+ordinary revisions, refreshes and mode changes do not re-arm it. Subsequent claims,
+including Refresh and continuation after submit/skip/research, are untargeted
+next-ready claims (the backend still resumes this session's unresolved held card).
+A requested-target conflict/refusal/not-ready screen exposes **Claim next prepared
+decision** as its primary action at every width and **Try this decision again** as
+a quiet, explicitly targeted retry. Retained answers and pending release recovery
+remain bound to their original source and operation; this does not discard them. Unlinked requests cannot
 be reviewed without a verified canonical card and prepared packet.
 
 **Submit decision & next →** records the selected source option before advancing.

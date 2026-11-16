@@ -19,32 +19,13 @@ function Section({ label, children }: { label: string; children: ReactNode }) { 
 export function DecisionDesk() {
   const workspace = useDeskWorkspace()
   const entries = workspace.queue?.needsWill ?? workspace.queue?.items ?? []
-  const originKey = workspace.origin?.section === 'decisions' && workspace.origin.target.kind === 'decision' ? workspace.origin.target.id : null
-  const target = originKey ?? workspace.state?.queueItemId
-  const navigation = workspace.state?.navigation
-  const targetIdentity = JSON.stringify([workspace.decisionReturnRevision, originKey, workspace.state?.queueItemId, workspace.state?.queueCardId, workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : null, navigation?.revision])
-  const ignoreTarget = workspace.consumedDecisionTarget === targetIdentity
-  const newestNavigation = navigation?.revision === workspace.state?.revision ? navigation?.cardId : undefined
-  const requested = ignoreTarget ? undefined : originKey ? entries.find(item => item.id === originKey)?.cardIds[0]
-    : newestNavigation ?? workspace.state?.queueCardId ?? entries.find(item => item.id === target)?.cardIds[0] ?? (workspace.state?.selection?.kind === 'card' ? workspace.state.selection.id : undefined) ?? navigation?.cardId
-  const requestedKey = ignoreTarget ? undefined : originKey ?? (!newestNavigation && !workspace.state?.queueCardId ? workspace.state?.queueItemId ?? undefined : undefined)
-  const pendingTarget = !ignoreTarget && !!originKey && !requested
-  const desk = useDecisionDesk(requested, pendingTarget, requestedKey, () => workspace.consumeDecisionTarget(targetIdentity))
-  const handledTarget = useRef<string | null>(null)
+  const intent = workspace.decisionTarget
+  const target = intent ? { ...intent, cardId: intent.cardId ?? entries.find(item => item.id === intent.requestKey)?.cardIds[0] } : undefined
+  const desk = useDecisionDesk(target, workspace.consumeDecisionTarget)
   const [tab, setTab] = useState<'review' | 'preparation'>('review'), [sourceOpen, setSourceOpen] = useState(false)
   const packet = desk.claim?.packet
-  useEffect(() => {
-    if (desk.busy || !desk.currentSession || !requested) return
-    const key = `${targetIdentity}:${requested}:${requestedKey ?? ''}`
-    if (handledTarget.current === key) return
-    const initialRefusal = handledTarget.current === null && desk.claim?.outcome === 'requested-unavailable'
-    handledTarget.current = key
-    if (initialRefusal) return
-    if (requested === packet?.packet.binding.card_id && (!requestedKey || requestedKey === packet.packet.binding.request_key)) return
-    void desk.claimCard(requested, requestedKey)
-  }, [desk.busy, desk.currentSession, requested, requestedKey, targetIdentity, packet?.packet.binding.card_id, packet?.packet.binding.request_key])
   const openSource = () => setSourceOpen(value => !value)
-  const nextWithoutTarget = () => { workspace.consumeDecisionTarget(targetIdentity); workspace.clearOrigin?.(); if (desk.currentSession) void desk.claimAvailable() }
+  const nextWithoutTarget = () => { workspace.clearOrigin?.(); void desk.claimAvailable() }
   const counts = desk.snapshot?.counts
   return <section className="decision-desk" aria-label="Decisions" data-presentation-scene data-scene-id={workspace.connection?.scene_id} data-revision={workspace.state?.revision}>
     <header className="dd-top"><div className="dd-brand"><span aria-hidden="true">✦</span> Tin Star <span className="dd-slash">/</span> <strong>Decision Desk</strong></div><nav aria-label="Decision Desk views">{(['review', 'preparation'] as const).map(view => <button key={view} type="button" aria-current={tab === view ? 'page' : undefined} onClick={() => setTab(view)}>{view === 'review' ? 'Review' : 'Preparation'}</button>)}</nav></header>
@@ -53,7 +34,7 @@ export function DecisionDesk() {
     <div className="dd-sr" role="status" aria-live="polite">{desk.busy ? 'Decision Desk operation in progress.' : desk.notice || desk.result?.message || (packet ? 'Prepared decision loaded.' : desk.claim?.outcome)}</div>
     {tab === 'preparation' ? <Preparation desk={desk} /> : <div className="dd-layout">
       <aside className="dd-rail"><Section label="REVIEW SESSIONS">{desk.sessions.length ? desk.sessions.map(session => <div className={`dd-session ${desk.currentSession === session.id ? 'dd-current' : ''}`} key={session.id}><strong><span aria-hidden="true">{session.device === 'phone' ? '▯' : '▣'}</span> {session.label}{desk.currentSession === session.id ? ' · this session' : ''}</strong><p>{session.held?.title ?? 'No held decision'}</p></div>) : <p>Session list unavailable.</p>}<p className="dd-caption">Sessions are independent reviewing contexts. Open the original browser context to resume another session.</p><button type="button" className="dd-secondary" disabled={desk.busy || !!desk.claim?.lease} onClick={() => void desk.newSession()}>+ New review session</button></Section><Section label="PREPARED · UNLEASED">{desk.snapshot?.ready.length ? desk.snapshot.ready.slice(0, 5).map(item => <button className="dd-ready-row" key={item.id} type="button" disabled={desk.busy || !!desk.claim?.lease} onClick={() => void desk.claimCard(item.card_id, undefined, item.id)}><strong>{item.title}</strong><small>{item.risk} risk · {item.card_id}</small></button>) : <p>{desk.snapshot ? 'No validated, unleased packets in the covered source scope.' : 'Prepared inventory unavailable.'}</p>}</Section></aside>
-      <main className="dd-main">{desk.notice && <p className="dd-notice" role="status">{desk.notice}</p>}{packet ? <Review key={packet.packet.binding.card_id} desk={desk} onSource={openSource} sourceOpen={sourceOpen} onNextAvailable={nextWithoutTarget} /> : <Empty desk={desk} requestedUnavailable={pendingTarget} nextWithoutTarget={nextWithoutTarget} />}</main>
+      <main className="dd-main">{packet && desk.targetBlocked && <TargetRecovery desk={desk} nextWithoutTarget={nextWithoutTarget} />}{desk.notice && <p className="dd-notice" role="status">{desk.notice}</p>}{packet ? <Review key={packet.packet.binding.card_id} desk={desk} onSource={openSource} sourceOpen={sourceOpen} onNextAvailable={nextWithoutTarget} /> : <Empty desk={desk} nextWithoutTarget={nextWithoutTarget} />}</main>
       <aside className="dd-inspector" aria-label="Decision evidence inspector">{packet ? <Inspector packet={packet} count={desk.parts.length} onSource={openSource} /> : <Section label="PREPARATION SUMMARY"><p>{desk.snapshot?.runner.explanation ?? 'Preparation status unavailable.'}</p></Section>}</aside>
     </div>}
   </section>
@@ -63,12 +44,20 @@ function ReviewedCount({ refreshKey }: { refreshKey: number }) {
   useEffect(() => { let active = true; void deskCall<NonNullable<typeof data>>('metrics').then(value => { if (active) setData(value) }).catch(() => {}); return () => { active = false } }, [refreshKey])
   return <span title={data ? `Confirmed source requests today, UTC, in ${data.scope}; recording since ${data.recording_started_at ?? 'unavailable'}. Worker acknowledgment is separate.` : 'Reviewed metrics could not be verified'}>Reviewed today (UTC) <b>{metric(data?.reviewed_today_utc)}</b></span>
 }
-function Empty({ desk, requestedUnavailable = false, nextWithoutTarget }: { desk: DecisionDeskState; requestedUnavailable?: boolean; nextWithoutTarget: () => void }) {
+function Empty({ desk, nextWithoutTarget }: { desk: DecisionDeskState; nextWithoutTarget: () => void }) {
   const outcome = desk.claim?.outcome
-  requestedUnavailable ||= outcome === 'requested-unavailable'
+  const requestedUnavailable = outcome === 'requested-unavailable'
   const conflict = desk.claim?.code === 'card-held'
   const title = requestedUnavailable ? 'Requested source request is not ready for review.' : conflict ? 'This decision is held by another review session.' : desk.error || outcome === 'source-unavailable' || outcome === 'next-unavailable' ? 'Decision Desk unavailable.' : outcome === 'no-decision-requests' ? 'No decision requests in the verified source scope.' : !desk.claim ? 'Opening your review session…' : 'No prepared decisions ready.'
-  return <div className="dd-empty"><span className="dd-eyebrow">REVIEW</span><h1>{title}</h1><p>{requestedUnavailable ? desk.error ?? desk.claim?.message ?? 'The exact source request and canonical card binding are not available in the current source observation. No substitute decision was claimed.' : conflict ? `Held by ${desk.claim?.lease?.holder ?? 'another reviewer'} until ${desk.claim?.lease?.expires_at ?? 'unavailable'}. Claim the next prepared decision to continue.` : desk.error ?? (outcome === 'no-decision-requests' ? 'There are no unanswered source requests in the verified scope.' : desk.snapshot?.runner.explanation ?? 'Source coverage and preparation status could not be verified. Outstanding decisions may still exist.')}</p>{desk.snapshot && outcome !== 'no-decision-requests' && <p>{metric(desk.snapshot.counts.preparing)} preparing · {desk.snapshot.coverage === 'complete' ? 'Source coverage complete at the last observation.' : 'Source coverage incomplete or unavailable.'}</p>}<button type="button" className="dd-secondary" disabled={desk.busy} onClick={() => requestedUnavailable ? nextWithoutTarget() : void desk.retryClaim()}>{requestedUnavailable ? 'Claim next prepared decision' : 'Refresh prepared decisions'}</button></div>
+  return <div className="dd-empty"><span className="dd-eyebrow">REVIEW</span><h1>{title}</h1><p>{requestedUnavailable ? desk.error ?? desk.claim?.message ?? 'The exact source request and canonical card binding are not available in the current source observation. No substitute decision was claimed.' : conflict ? `Held by ${desk.claim?.lease?.holder ?? 'another reviewer'} until ${desk.claim?.lease?.expires_at ?? 'unavailable'}. Claim the next prepared decision to continue.` : desk.error ?? (outcome === 'no-decision-requests' ? 'There are no unanswered source requests in the verified scope.' : desk.snapshot?.runner.explanation ?? 'Source coverage and preparation status could not be verified. Outstanding decisions may still exist.')}</p>{desk.snapshot && outcome !== 'no-decision-requests' && <p>{metric(desk.snapshot.counts.preparing)} preparing · {desk.snapshot.coverage === 'complete' ? 'Source coverage complete at the last observation.' : 'Source coverage incomplete or unavailable.'}</p>}<TargetRecovery desk={desk} nextWithoutTarget={nextWithoutTarget} /></div>
+}
+function TargetRecovery({ desk, nextWithoutTarget }: { desk: DecisionDeskState; nextWithoutTarget: () => void }) {
+  const workspace = useDeskWorkspace()
+  const retryCard = desk.lastTarget?.cardId ?? (workspace.queue?.needsWill ?? workspace.queue?.items ?? []).find(item => item.id === desk.lastTarget?.requestKey)?.cardIds[0]
+  return <div className="dd-target-recovery">{desk.targetBlocked ? <>
+    <button type="button" className="dd-primary" disabled={desk.busy} onClick={nextWithoutTarget}>Claim next prepared decision</button>
+    <button type="button" className="dd-text" disabled={desk.busy} onClick={() => void desk.retryTarget(retryCard)}>Try this decision again</button>
+  </> : <button type="button" className="dd-secondary" disabled={desk.busy} onClick={() => void desk.retryClaim()}>Refresh prepared decisions</button>}</div>
 }
 const failureCopy: Record<string, string> = {
   'not-saved': 'Answer was not saved. Your selection is retained. Retry without advancing.',

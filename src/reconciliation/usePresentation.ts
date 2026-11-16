@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../apiClient'
-import { applyPresentationAction, type FloorScene, type PresentationAction } from './presentation'
+import { applyPresentationAction, type FloorScene, type PresentationAction, type PresentationState } from './presentation'
 import { loadPresentationPreferences, savePresentationPreferences } from './presentationPreferences'
 import { retainedQueueItemId, type DeskQueue } from '../shared/reconciliationQueue'
 import { presentationTargets, type RenderedObservation } from '../shared/presentationObservation'
@@ -10,13 +10,15 @@ import type { CommandResult, ViewCommand } from '../shared/reconciliationCommand
 
 /** Clicks and assistant commands synchronously enter the same transition. The
  * acknowledgment is released only by the effect after React commits the view. */
-export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true, decisionsActive = false, queueReadFailed = false, onAssistantPresent?: (action: PresentationAction) => void) {
+export function usePresentation(scene: FloorScene | null, queue: DeskQueue | null, readFailed = false, active = true, decisionsActive = false, queueReadFailed = false, onAssistantPresent?: (action: PresentationAction) => void, onAppliedAction?: (action: PresentationAction, state: PresentationState) => void) {
   const [state, setState] = useState(loadPresentationPreferences)
   const [connection, setConnection] = useState<{ scene_id: string; session_code: string; designated: boolean } | null>(null)
   const [pendingFocus, setPendingFocus] = useState(false)
   const designate = useRef<() => Promise<void>>(async () => {})
   const useThisTab = useCallback(() => designate.current(), [])
   const assistantPresent = useRef(onAssistantPresent)
+  const appliedAction = useRef(onAppliedAction)
+  appliedAction.current = onAppliedAction
   const navigate = assistantPresent
   assistantPresent.current = onAssistantPresent
   const surface = useRef<'overview' | 'decisions' | 'other'>('overview')
@@ -58,6 +60,7 @@ export function usePresentation(scene: FloorScene | null, queue: DeskQueue | nul
     const applied = applyPresentationAction(current.current, action, latestScene.current, Date.now(), latestQueue.current)
     current.current = applied.state
     setState(applied.state)
+    if (applied.outcome === 'applied') appliedAction.current?.(action, applied.state)
     // Manual and MCP navigation must reveal the same surface before the ack.
     // Repeated commands also reopen a previously browsed canonical item.
     if (action.origin !== 'assistant' && applied.outcome === 'applied' && ['open-queue', 'navigate-queue', 'navigate-card', 'reveal-search'].includes(action.type)) navigate.current?.(action)
