@@ -28,3 +28,21 @@ it('marks unverifiable counts unavailable and distinguishes unknown demand from 
   const reviews = new PreparedReviews(backend.packets, 'scope', () => fixture.fixtures[0]!.evidence, () => ({ card_ids: [], coverage: 'unknown', requests: null }))
   expect(await reviews.snapshot()).toMatchObject({ counts: { ready: null, leased: null, needs_repreparation: null, to_prepare: null, requests: null }, omissions: [expect.any(String)] })
 })
+
+it('excludes readback-confirmed requests from re-preparation even before the source observation catches up, and counts stale held research honestly', async () => {
+  root = await mkdtemp(join(tmpdir(), 'desk-snapshot-'))
+  const fixture = decisionSubmitFixture(3), backend = await fixture.build(root)
+  const session = await backend.reviews.create('owner', { operation_id: 'open', label: 'Actual session' })
+  const held = await backend.reviews.claim('owner', 'Owner', { operation_id: 'claim', review_session_token: session.review_session_token })
+  const f = fixture.fixtures.find(f => f.cardId === held.lease!.card_id)!
+  const revision = f.evidence.requests[0]!.binding!.source_revision
+  f.evidence.requests[0]!.binding!.source_revision = 'new-source-revision'
+  expect((await backend.reviews.snapshot()).counts.needs_repreparation).toBe(1)
+  f.evidence.requests[0]!.binding!.source_revision = revision
+  const saved = await backend.submissions.submit('owner', 'Owner', 'fixture-actor', { operation_id: 'save', lease_token: held.lease_token!, packet_id: held.packet!.id, packet_version: held.packet!.version, request_id: held.packet!.packet.binding.request_id, option_id: 'preview', next: { owner: 'Firstmate', status: 'Queued' } })
+  expect(saved.outcome).toBe('recorded')
+  const snapshot = await backend.reviews.snapshot()
+  expect(snapshot.counts.needs_repreparation).toBe(0)
+  expect(snapshot.pending.some(row => row.card_id === f.cardId)).toBe(false)
+  expect(snapshot.recorded_requests).toEqual([expect.objectContaining({ card_id: f.cardId, request_id: 'preview-question' })])
+})

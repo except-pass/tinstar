@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
-import type { DecisionEvidence } from '../../shared/decisionPacket'
+import type { DecisionEvidence, DecisionPacketBinding } from '../../shared/decisionPacket'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets } from './decisionPackets'
 
@@ -79,21 +79,25 @@ export class PreparedReviews {
     await this.initialize()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
+      const answers = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
+        ? db.prepare('SELECT 1 FROM decision_desk_confirmed_answers WHERE scope = ? AND card = ? AND request_id = ? AND source_revision = ?') : null
+      const recorded = (binding: DecisionPacketBinding) => !!answers?.get(this.scope, binding.card_id, binding.request_id, binding.source_revision)
       const rows = db.prepare(`SELECT id FROM decision_packets p WHERE version =
         (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`).all() as Array<{ id: string }>
       const current = rows.map(row => {
         const stored = this.packets.readInStorage(db, row.id)!
         return this.packets.readInStorage(db, row.id, this.evidence(stored.packet.binding.card_id))!
-      }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id))
+      }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id) && !recorded(stored.packet.binding))
+      const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now || Date.parse(packet.expires_at) <= now
       const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
       const ready = current.filter(stored => stored.ready)
       const pending = queue.card_ids.flatMap(card => {
         const evidence = this.evidence(card)
-        return evidence.requests.filter(request => !request.answered).map(request => {
+        return evidence.requests.filter(request => !request.answered && (!request.binding || !recorded(request.binding))).map(request => {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
           return { card_id: card, request_id: request.binding?.request_id ?? null,
             title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
-            state: packet?.ready ? 'Ready' : held.has(card) ? 'Leased' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
+            state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })
@@ -101,7 +105,7 @@ export class PreparedReviews {
       return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: queue.coverage,
         counts: { ready: verified ? new Set(ready.map(packet => packet.packet.binding.card_id)).size : null,
           leased: verified ? held.size : null, preparing: 0,
-          needs_repreparation: verified ? current.filter(packet => !packet.ready && !held.has(packet.packet.binding.card_id)).length : null,
+          needs_repreparation: verified ? current.filter(packet => !this.packets.pendingAnswerInStorage(db, packet.id) && needsResearch(packet)).length : null,
           to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
           requests: queue.requests },
         runner: { configured: false, explanation: 'No preparation runner is configured. Pending work is not being prepared.' },
