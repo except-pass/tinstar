@@ -51,8 +51,8 @@ exposure, consequences/affected parties/prerequisites, authorization/next owner
 and status/gates, references, dependencies and review freshness policy. P1 does
 not normalize sources, invent alternatives or add a multipart grouping schema.
 Risk/confidence prose is preparer advice, not an independent verification or
-authorization. Publication stays the P1 store method. P4's `publish_prepared_packet` tool is
-the preparer's only write, and it only calls that store.
+authorization. See [P4 publication](#p4--preparation-jobs) for the bot's
+job-scoped path into this store.
 
 Semantic hashing normalizes object keys, set-like option/reference/dependency
 ordering and line endings. Publication/observation timestamps are outside the
@@ -117,7 +117,7 @@ returned only by the [review operations below](#p2-registered-review-sessions-an
 | `GET /packets` | Bounded publication inventory (at most 50), explicitly **not** a Ready counter |
 | `GET /packet?id=...` | Immutable body/metadata plus current evidence and lease/expiry eligibility |
 | `GET /events?after=0` | At most 50 durable instrumentation events in sequence order |
-| `POST /prepare` | Audited preparation of one decision `{card_id, request_id, reason}`. Works while automatic replenishment is off. Refuses with a plain message when the preparer webhook is not configured |
+| `POST /prepare` | Audited preparation of one decision `{card_id, request_id, reason}`; see [P4 admission](#p4--preparation-jobs) |
 
 The packet publish path is MCP `publish_prepared_packet`, not this owner UI.
 Review and source-write recovery routes are described below; answer submission is owned by the
@@ -434,11 +434,12 @@ is not configured. The rest of Decision Desk keeps working. A row that already
 had replenishment on is set off once, with a policy audit, so deploying this
 step does not start posting. A later save from Preparation is the switch-on.
 
-Admission uses the saved ready depth and preparer cap. A job is posted only when
-ready unleased packets plus in-flight jobs are below the target, in-flight jobs
-are below the cap, and the request is unanswered, not reviewer-leased, not Todo,
-and not already in flight or Ready for that source revision. Unknown source
-coverage does not fill the queue. Prior preparation attempts do not prevent
+Automatic admission requires ready unleased packets plus in-flight jobs to be
+below the saved target depth and source coverage to be complete. Both automatic
+admission and Prepare now require in-flight jobs below the preparer cap, fresh
+eligible source evidence, an unanswered request, no review lease or source-write
+reservation, a card outside Todo, and no job in flight or Ready packet for that
+source revision. Prepare now bypasses the target depth. Prior preparation attempts do not prevent
 later automatic replenishment; Prepare now remains available for explicit
 preparation. There is no token limit or spend record.
 
@@ -447,10 +448,16 @@ Ready only when that validation passes. The tool does not answer, claim a lease,
 or change card status. A mismatched card, request, or revision is rejected
 before anything is stored.
 
-Automatic replenishment ships off. The owner turns it on from Preparation.
+A validation-blocked attempt can publish a correction within its ten-minute
+window. Admitting a retry cancels older blocked attempts for the same source
+revision; they can no longer publish over the retry's packet. Publication and
+job completion share one transaction, and a later webhook response preserves
+the completed publication state.
+
 Prepare now posts one audited job for one decision while replenishment is off,
-still using the same eligibility rules. In-flight jobs expire after ten minutes
-if the bot never publishes, so a slot cannot stay stuck.
+using the eligibility rules above. Open attempts, including validation-blocked
+attempts, expire after ten minutes from dispatch (or admission if not dispatched).
+Automatic replenishment checks at startup and every 30 seconds.
 
 ## P5 — Review and Preparation UI
 
@@ -514,19 +521,18 @@ invalidated evidence and unavailable sources block submission. Definite and
 unconfirmed saves retain the selection and operation; retries use the same ID.
 Preparation saves the effective versioned queue policy and shows whether the
 Tinstar Decision Prep webhook is configured, along with job failures and pending
-rows. Automatic replenishment stays off until that page saves it on. Unknown source totals
+rows. See [P4](#p4--preparation-jobs) for configuration and admission rules. Unknown source totals
 are unavailable, not zero. The cached-source `/snapshot` projection supplies full
 latest-packet inventory/counts and pending rows without researching or mutating
 source cards; it is separate from the bounded publication inventory.
 
 **Multipart boundary:** P5 reviews each independently identified source request
 separately through P3. Same-card requests are not inferred to form a bundle.
-Combined A/B/C submission and its partial-save screen remain outstanding pending
-owner fork C (source grouping, required parts, aggregate transitions and retaining
-one lease across parts). Firstmate confirmed this scope in task instruction
-`001.msg` on 2026-11-15. Recorded progress is per source request, never a claim that
-an unspecified bundle is complete. P6 (integrated acceptance, including
-multi-part answers and free text) follows.
+The owner selected C1 with option buttons and free text always available,
+including for multi-part asks, on 2026-11-16. That flow, combined A/B/C submission
+and its partial-save screen remain later work. Recorded progress is per source
+request, never a claim that an unspecified bundle is complete. Integrated
+acceptance also follows separately.
 
 The isolated running-UI harness is
 `scripts/decision-desk-ui-preview.ts <task-proof-directory>`, after `npm run
