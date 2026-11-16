@@ -144,3 +144,82 @@ it('keeps a prerelease record out of production even with a stable-looking tag',
   const result = await new GithubReleaseReader(nativeFixtureRead({ records: [prerelease] }), () => now).get(data())
   expect(result.releases[0]!.kind).toBe('candidate')
 })
+
+/** Cold reader with two awaited merges split across consecutive release tags.
+ * The latest Changes range deliberately contains only the second merge. */
+function cumulativeFixture(prerelease = false) {
+  const scene = fixtureScene(); scene.cards = scene.cards.slice(0, 1)
+  const card = scene.cards[0]!.source, a = '1'.repeat(40), b = '2'.repeat(40), base = '0'.repeat(40)
+  const urls = [1, 2].map(number => `https://github.com/${nativeRepo}/pull/${number}`)
+  card.properties.Status!.value = 'Waiting for Prod Release'
+  card.properties['GitHub PRs'] = { id: 'prs', type: 'rich_text', hasMore: false, value: urls.join('\n') }
+  const data = releaseAssociations(scene)
+  data.pulls.forEach((pull, index) => Object.assign(pull, { state: 'merged', freshness: 'fresh', mergeSha: index ? b : a }))
+  const tags = [{ name: 'v1.0.1', commit: { sha: b } }, { name: 'v1.0.0', commit: { sha: a } }, { name: 'v0.9.0', commit: { sha: base } }]
+  const records = tags.map(tag => ({ ...nativeRecord, tag_name: tag.name, html_url: `https://github.com/${nativeRepo}/releases/tag/${tag.name}`, prerelease: prerelease && tag.name === 'v1.0.0' }))
+  let failContainment = false
+  const read = vi.fn(async (path: string): Promise<unknown> => {
+    if (path.endsWith('/branches/main')) return { commit: { sha: b } }
+    if (path.includes('/tags?')) return tags
+    if (path.includes('/releases?')) return records
+    if (path.includes('/actions/runs?')) return { total_count: 0, workflow_runs: [] }
+    if (path.includes('/compare/')) {
+      const [from, to] = path.split('/compare/')[1]!.split('?')[0]!.split('...')
+      if (failContainment && !path.includes('?')) throw new Error('private failed ancestry read')
+      if (from === a && to === b) return { status: 'ahead', merge_base_commit: { sha: a }, total_commits: 1, commits: [{ sha: b }], files: [] }
+      if (from === b && to === b) return { status: 'identical', merge_base_commit: { sha: b }, total_commits: 0, commits: [], files: [] }
+      if (from === base && to === a) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 1, commits: [{ sha: a }], files: [] }
+      return { status: 'diverged', merge_base_commit: { sha: base }, total_commits: 1, commits: [], files: [] }
+    }
+    if (path.includes('/commits/')) {
+      const number = path.includes(`/commits/${a}/`) ? 1 : 2, merge = number === 1 ? a : b
+      return [{ number, title: `Required change ${number}`, html_url: urls[number - 1], merged_at: nativeTime, merge_commit_sha: merge, head: { sha: merge }, base: { ref: 'main' } }]
+    }
+    throw new Error(`Unexpected GitHub fixture request: ${path}`)
+  })
+  const reader = new GithubReleaseReader(read, () => now)
+  const releases = { read: async () => {
+    const native = await reader.get(data)
+    return { ...data, releases: native.releases, releaseSource: { status: native.status, observedAt: native.observedAt, warnings: native.warnings } }
+  } }
+  return { scene, card, data, a, b, urls, read, reader, releases, failContainment: () => { failContainment = true } }
+}
+
+it.each([false, true])('resolves cumulative production containment after a cold start (earlier tag prerelease: %s)', async prerelease => {
+  const f = cumulativeFixture(prerelease)
+  const { DomainReadTools } = await import('../../reconciliation/domainReads')
+  const { ProductionWaitWriter, productionWaits } = await import('../productionWaits')
+  const domain = new DomainReadTools({ read: async () => { throw new Error('unused') }, inspect: async () => { throw new Error('unused') } }, f.releases)
+  const status = await domain.releaseStatus({ offset: 0, limit: 25 })
+  if (status.outcome !== 'available' || !status.releases) throw new Error('Expected release read')
+  const latest = status.releases[0]!
+  expect(latest.pulls.map(pull => pull.url)).toEqual([f.urls[1]])
+  expect(latest.containedPulls).toEqual(f.urls.map((pull, index) => expect.objectContaining({ pull, mergeSha: index ? f.b : f.a, state: 'included' })))
+  const data = await f.releases.read()
+  expect(productionWaits(data, f.scene)).toEqual([expect.objectContaining({ requiredPulls: f.urls })])
+  const notes: string[] = []
+  const transport = { card: async () => f.card, hasNote: async () => false, note: async (_id: string, text: string) => { notes.push(text) }, transition: async (_card: unknown, proposal: { to: string }) => { f.card.properties.Status!.value = proposal.to } }
+  expect(await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()).toMatchObject({ completed: [f.card.id], unconfirmed: [] })
+  expect(f.card.properties.Status!.value).toBe('Done')
+  expect(notes[0]).toContain(f.urls[0]); expect(notes[0]).toContain(f.urls[1])
+})
+
+it('keeps failed containment unknown instead of using the latest Changes range as cumulative proof', async () => {
+  const f = cumulativeFixture(); f.failContainment()
+  const { productionWaits } = await import('../productionWaits')
+  const data = await f.releases.read()
+  expect(data.releases![0]!.containedPulls).toEqual(f.urls.map(pull => expect.objectContaining({ pull, state: 'unknown' })))
+  expect(JSON.stringify(data)).not.toContain('private failed ancestry read')
+  expect(productionWaits(data, f.scene)).toEqual([])
+})
+
+it('revalidates containment for a changed effective merge immediately before a scheduled write', async () => {
+  const f = cumulativeFixture()
+  const { ProductionWaitWriter } = await import('../productionWaits')
+  const transition = vi.fn(async () => {})
+  const transport = { card: async () => f.card, hasNote: async () => false,
+    note: async () => { f.data.pulls[0]!.mergeSha = 'e'.repeat(40) }, transition }
+  await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()
+  expect(transition).not.toHaveBeenCalled()
+  expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
+})

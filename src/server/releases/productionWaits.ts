@@ -1,8 +1,14 @@
+import { hasActiveTypedWait } from '../../shared/waitingForPolicy'
+import { withSourceOperation } from '../reconciliation/cardLeases'
+import type { WorkCard } from '../reconciliation/workReader'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { activeReleaseLinks, releasePull, type ReleasesRead } from '../../shared/releases'
 import type { ReleaseTransitionProposal } from '../../shared/releaseAutomation'
 import { receiptHash } from './cmsandbox'
 import type { ReleaseTransport } from './writer'
+
+const hasBlocker = (card: WorkCard) => hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''),
+  id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })
 
 /** Membership is a release milestone, not proof of deployment or acceptance.
  * Keep the existing verification route for cards that explicitly require it. */
@@ -10,12 +16,15 @@ export function productionWaits(data: ReleasesRead, scene: FloorScene): ReleaseT
   if (!data.associationsComplete || !data.releaseSource || data.releaseSource.status === 'unknown' ||
     scene.coverage.intentions.status !== 'fresh' || scene.coverage.intentions.coverage !== 'complete') return []
   return scene.cards.flatMap(card => {
-    if (card.source.archived || card.source.in_trash || card.source.properties.Status?.value !== 'Waiting for Prod Release') return []
+    if (card.source.archived || card.source.in_trash || card.source.properties.Status?.value !== 'Waiting for Prod Release' || hasBlocker(card.source)) return []
     const requiredPulls = data.pulls.filter(pull => activeReleaseLinks(pull).some(link => link.cardId === card.id)).map(pull => pull.url).sort()
     if (!requiredPulls.length) return []
-    const releases = requiredPulls.map(url => data.releases?.find(release => release.kind === 'production' &&
-      !release.provenance.historical && release.membership.status === 'complete' && release.github?.record === 'available' &&
-      !!release.github.publishedAt && release.pulls.some(pull => pull.id === releasePull(url)?.id)))
+    const releases = requiredPulls.map(url => data.releases?.find(release => {
+      if (release.kind !== 'production' || release.provenance.historical || release.github?.record !== 'available' || !release.github.publishedAt) return false
+      const pull = data.pulls.find(pull => pull.url === url)
+      const contained = release.containedPulls?.some(proof => proof.pull === url && proof.state === 'included' && !!proof.mergeSha && proof.mergeSha === pull?.mergeSha && pull.state === 'merged' && pull.freshness === 'fresh')
+      return contained || release.membership.status === 'complete' && release.pulls.some(pull => pull.id === releasePull(url)?.id)
+    }))
     if (releases.some(release => !release)) return []
     const owner = String(card.source.properties.Owner?.value ?? '').trim()
     const verify = card.source.properties['Requires production verification']?.value === true
@@ -44,19 +53,24 @@ export class ProductionWaitWriter {
     for (const proposal of productionWaits(data, scene)) {
       const marker = `Tin Star production wait: ${proposal.id}`
       try {
-        let card = await this.transport.card(proposal.cardId)
-        const matches = () => !card.archived && !card.in_trash && card.properties.Status?.value === proposal.from &&
-          String(card.properties.Owner?.value ?? '').trim() === proposal.owner &&
-          (card.properties['Requires production verification']?.value === true) === (proposal.to === 'In Progress')
-        if (!matches()) continue
-        if (!await this.transport.hasNote(card.id, marker)) await this.transport.note(card.id, proposal.auditText, marker)
-        card = await this.transport.card(card.id)
-        const fresh = await this.read()
-        // Re-read all associations before the write: a newly added required PR
-        // must not inherit an earlier release's membership.
-        if (!matches() || !productionWaits(fresh.data, fresh.scene).some(row => row.id === proposal.id)) continue
-        await this.transport.transition(card, proposal)
-        completed.push(proposal.cardId)
+        // Card identity is stable even if a newer production release changes the
+        // proposal. Recover only our immutable audit receipts, never a mutable PATCH.
+        await withSourceOperation('Tin Star production release writer', `production-wait:${proposal.cardId}`, async () => {
+          await this.transport.recoverAppliedWrite?.(proposal.cardId)
+          let card = await this.transport.card(proposal.cardId)
+          const matches = () => !card.archived && !card.in_trash && card.properties.Status?.value === proposal.from && !hasBlocker(card) &&
+            String(card.properties.Owner?.value ?? '').trim() === proposal.owner &&
+            (card.properties['Requires production verification']?.value === true) === (proposal.to === 'In Progress')
+          if (!matches()) return
+          if (!await this.transport.hasNote(card.id, marker)) await this.transport.note(card.id, proposal.auditText, marker)
+          card = await this.transport.card(card.id)
+          const fresh = await this.read()
+          // Re-read all associations before the write: a newly added required PR
+          // must not inherit an earlier release's membership.
+          if (!matches() || !productionWaits(fresh.data, fresh.scene).some(row => row.id === proposal.id)) return
+          await this.transport.transition(card, proposal)
+          completed.push(proposal.cardId)
+        })
       } catch {
         // Surface an uncertain write to the scheduler; the next pass recovers
         // from the card/receipt instead of silently claiming success.

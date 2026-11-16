@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ReleaseObject, NativeReleaseEvidence } from '../../shared/releaseObjects'
+import type { ReleaseObject, NativeReleaseEvidence, ReleaseContainment } from '../../shared/releaseObjects'
 import { activeReleaseLinks, type ReleasesRead } from '../../shared/releases'
 import { githubJson } from '../pulls/github'
 import { ReleaseMembershipReader } from './membership'
@@ -45,6 +45,8 @@ export class GithubReleaseReader {
   private selectedTag: string | undefined
   private pending: Promise<GithubReleaseRead> | null = null
   private details = new Map<string, { at: number; observedAt: string | null; runs: NativeReleaseEvidence['runs']; known: boolean }>()
+  private containment = new Map<string, ReleaseContainment & { retryAt: number }>()
+  private containmentPending: Promise<void> | null = null
   private memberships: ReleaseMembershipReader
   constructor(private read: Read = githubJson, private now = Date.now) { this.memberships = new ReleaseMembershipReader(read, now) }
 
@@ -58,6 +60,7 @@ export class GithubReleaseReader {
       }).finally(() => { this.pending = null })
       await this.pending
     }
+    await this.refreshContainment(data)
     return this.project(data)
   }
 
@@ -66,6 +69,31 @@ export class GithubReleaseReader {
   display(data: ReleasesRead, tag?: string): GithubReleaseRead {
     void this.get(data, tag).catch(() => {})
     return this.project(data)
+  }
+
+  private containmentKey(merge: string, source: string) { return `${repository}:${merge}:${source}` }
+  private async refreshContainment(data: ReleasesRead) {
+    if (this.containmentPending) return this.containmentPending
+    const release = this.project(data).releases.find(release => release.kind === 'production' && !release.provenance.historical &&
+      release.github?.record === 'available' && !!release.github.publishedAt && !!release.sourceSha)
+    if (!release?.sourceSha) return
+    const source = release.sourceSha
+    const candidates = data.pulls.filter(pull => pull.repository === repository && pull.state === 'merged' && pull.freshness === 'fresh' && sha.safeParse(pull.mergeSha).success)
+      .map(pull => ({ pull, key: this.containmentKey(pull.mergeSha!, source) }))
+      .filter(({ key }) => { const prior = this.containment.get(key); return !prior || prior.state === 'unknown' && prior.retryAt <= this.now() })
+      // Unread pairs go first so an unavailable comparison cannot starve later PRs.
+      .sort((a, b) => Number(this.containment.has(a.key)) - Number(this.containment.has(b.key))).slice(0, 4)
+    this.containmentPending = Promise.all(candidates.map(async ({ pull, key }) => {
+      let state: ReleaseContainment['state'] = 'unknown', reason: string | null = 'Production merge ancestry is unavailable'
+      try {
+        const result = await this.read(`/repos/${repository}/compare/${pull.mergeSha}...${source}`, '{status,merge_base_commit:{sha:.merge_base_commit.sha}}') as { status?: string; merge_base_commit?: { sha?: string } }
+        if (['ahead', 'identical'].includes(result.status ?? '') && result.merge_base_commit?.sha === pull.mergeSha) { state = 'included'; reason = null }
+        else if (['behind', 'diverged'].includes(result.status ?? '')) { state = 'absent'; reason = 'Effective merge is not an ancestor of the production release source' }
+      } catch { /* Unknown comparisons retry; no CLI stderr or credentials escape. */ }
+      this.containment.set(key, { pull: pull.url, mergeSha: pull.mergeSha, state, observedAt: new Date(this.now()).toISOString(), reason, retryAt: this.now() + 60_000 })
+      if (this.containment.size > 512) this.containment.delete(this.containment.keys().next().value!)
+    })).then(() => {}).finally(() => { this.containmentPending = null })
+    return this.containmentPending
   }
 
   private project(data: ReleasesRead): GithubReleaseRead {
@@ -84,7 +112,13 @@ export class GithubReleaseReader {
       } : {}
       const gaps = [...release.gaps]
       if (release.kind === 'production' && !readable) gaps.push(detail ? 'Actions evidence is pending, stale or unreadable; retained runs are last known.' : 'Actions evidence pending; release activity is unknown until read.')
-      return { ...release, ...actions, gaps, pulls, supportingPulls: data.pulls.filter(pull => !ids.has(pull.id) && activeReleaseLinks(pull).some(link => cards.has(link.cardId))) }
+      const containedPulls = release.kind === 'production' ? data.pulls.filter(pull => pull.repository === repository).map((pull): ReleaseContainment => {
+        const proof = pull.mergeSha && release.sourceSha && pull.state === 'merged' && pull.freshness === 'fresh'
+          ? this.containment.get(this.containmentKey(pull.mergeSha, release.sourceSha)) : undefined
+        return { pull: pull.url, mergeSha: pull.mergeSha, state: proof?.state ?? 'unknown', observedAt: proof?.observedAt ?? null,
+          reason: proof?.reason ?? (proof?.state === 'included' ? null : 'Fresh effective merge and production ancestry comparison pending') }
+      }) : undefined
+      return { ...release, ...actions, gaps, pulls, containedPulls, supportingPulls: data.pulls.filter(pull => !ids.has(pull.id) && activeReleaseLinks(pull).some(link => cards.has(link.cardId))) }
     })
     const status = value.status === 'unknown' ? 'unknown' : value.warnings.length || releases.some(release => release.kind === 'production' && release.github?.runsStatus === 'unknown') ? 'partial' : 'fresh'
     return { ...value, status, refreshing: !!this.pending, releases }
