@@ -85,9 +85,7 @@ export class ReconciliationSources {
     this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status()
     this.preparedReviews.refreshEvidence = async () => {
-      const evidence = new Map<string, ReturnType<typeof projectDecisionEvidence>>()
-      for await (const id of this.readPreparationHistory()) evidence.set(id, this.preparationEvidence(id))
-      return evidence
+      for await (const id of this.readPreparationHistory()) void id
     }
     this.notionApi = api ?? new NotionApi(fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)

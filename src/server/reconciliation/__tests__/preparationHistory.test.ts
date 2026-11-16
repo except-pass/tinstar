@@ -98,7 +98,7 @@ it('explains queue cards whose complete history has no recorded decision request
 }, 20_000)
 
 for (const mode of ['automatic', 'snapshot'] as const) {
-  it(`consumes fresh histories on a paced 64-card board for ${mode}`, async () => {
+  it(`enforces freshness at ${mode} consumption on a paced 64-card board`, async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const { sources, cardId, posts, reads, reconcile } = await setup({ cards: 64, onRead: () => { now += 350 } })
@@ -110,8 +110,10 @@ for (const mode of ['automatic', 'snapshot'] as const) {
       expect((await sources.preparation.status()).jobs).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'dispatched' }))
     } else {
       const snapshot = await sources.preparedReviews.snapshot()
-      expect(snapshot.pending).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'Queued', reasons: [] }))
-      expect(snapshot.source_failures.flatMap(row => row.reasons)).not.toContain('Complete cached decision history is unavailable')
+      expect(snapshot.pending).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'Blocked', reasons: expect.arrayContaining(['Complete cached decision history is unavailable']) }))
+      expect(snapshot.source_failures).toContainEqual(expect.objectContaining({ card_id: cardId, reasons: expect.arrayContaining(['Complete cached decision history is unavailable']) }))
+      expect(snapshot.coverage).toBe('unknown')
+      expect(snapshot.counts).toMatchObject({ ready: null, leased: null, needs_repreparation: null, to_prepare: null, requests: null })
       expect(posts).toEqual([])
     }
     expect(now - started).toBeGreaterThan(44_000)
