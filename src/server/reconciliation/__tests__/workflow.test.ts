@@ -900,6 +900,8 @@ describe('remaining shared workflow operations', () => {
     expect(await f.workflow.update(input('assign', { owner: 'Firstmate', status: 'Todo', note: 'Ready to pick up' }), 'Owner')).toMatchObject({ outcome: 'saved' })
     expect(f.raw.properties.Status.status.name).toBe('Queued')
     const tariff = { type: 'Actor' as const, id: 'Duke Energy', dependency: 'Tariff acceptance', unblocks_when: 'Owner confirms tariff', follow_up_by: 'Consumer', next_check_in: new Date(Date.now() + 7 * 86400000).toISOString() }
+    const existing = waitLine({ ...tariff, dependency: 'Preserve another request' })
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: existing }]
     expect(await f.workflow.update(input('wait', tariff), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect(f.raw.properties.Status.status.name).toBe('Waiting For')
     const card = await f.reader.card(id, true)
@@ -959,6 +961,9 @@ describe('remaining shared workflow operations', () => {
     expect(f.raw.properties['Next check-in']).toEqual(before)
     vi.setSystemTime(new Date('2026-11-01T01:00:00Z'))
     const dst = fixture(); dst.raw.properties.Status.status.name = 'Waiting For'
+    dst.raw.properties['Waiting For'].rich_text = [{ plain_text: waitLine({ type: 'Actor', id: 'Security', dependency: 'Security approval', unblocks_when: 'Approval received', follow_up_by: 'Consumer' }) }]
+    dst.raw.properties['Waiting For Type'].select = { name: 'Actor' }
+    dst.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Security' }]
     cp.next_check_in = '2026-11-01'
     expect(await dst.workflow.update(input('checkpoint', { operation_id: 'dst-day', checkpoint: { ...cp, confirmation: 'provisional' } }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect(dst.raw.properties['Next check-in'].date.start).toBe('2026-11-01T14:00:00.000Z')
@@ -2103,10 +2108,11 @@ it('refreshes a direct answer with quoted operation receipts before delivering a
   await f.workflow.update({ kind: 'request_decision', card_id: id, operation_id: 'other-request', request_id: 'other-request', question: 'Another ask', action: 'Decision', requested_from: 'Will' }, 'Publisher')
   f.raw.properties.Owner.select.name = 'Will'
   f.raw.properties.Status.status.name = 'Waiting For'
-  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Preserve another request\nUnrelated wait' }]
+  const remainingWait = waitLine({ type: 'Actor', id: 'Security', dependency: 'Unrelated wait', unblocks_when: 'Security approval received', follow_up_by: 'Consumer' })
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: `Preserve another request\n${remainingWait}` }]
   const answer = 'R3\nTin Star operation: ["Owner","example"]\nTin Star operation: ["Notion decision","notion-answer-direct-receipt"]\nPreserve the existing replicas'
   f.comments.push({ id: 'direct-receipt', rich_text: [{ plain_text: `Tin Star answer: "r3-proposal"\nAnswer: ${answer}\nNext owner: Firstmate\nNext status: Queued\nResolved wait: Preserve another request` }] })
-  expect(await sources.getWork({ card_id: id, refresh: true, details: false })).toMatchObject({ outcome: 'available', card: { source: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Waiting For' }, 'Will action': { value: ['Merge', 'Decision'] }, 'Waiting For': { value: 'Unrelated wait' } } } } })
+  expect(await sources.getWork({ card_id: id, refresh: true, details: false })).toMatchObject({ outcome: 'available', card: { source: { properties: { Owner: { value: 'Firstmate' }, Status: { value: 'Waiting For' }, 'Will action': { value: ['Merge', 'Decision'] }, 'Waiting For': { value: remainingWait } } } } })
   expect(f.messages).toHaveLength(1)
   expect(f.messages[0]!.text).toContain(`Exact owner answer:\n${answer}\n`)
   const count = f.comments.length
@@ -2119,7 +2125,7 @@ it('refreshes a direct answer with quoted operation receipts before delivering a
   f.home.observation.data!.backlog = []
   expect(await restarted.reconcileDecisions(id, f.fleet)).toMatchObject({ state: 'resolved' })
   expect(f.bridge.submit).toHaveBeenCalledTimes(1)
-  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe('Unrelated wait')
+  expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(remainingWait)
 })
 
 it('does not let a quoted receipt suppress recovery of an interrupted answer', async () => {

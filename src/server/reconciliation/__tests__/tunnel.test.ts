@@ -135,9 +135,9 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const text = await response.text()
   const tools: Tool[] = JSON.parse(text).result.tools
   expect(tools).toHaveLength(31)
-  // 45 KiB today, including all eleven operations that the old 29 KiB catalog
-  // omitted. Catch accidental catalog expansion without an exact byte snapshot.
-  expect(Buffer.byteLength(text)).toBeLessThan(64 * 1024)
+  // About 65 KiB with structured waits and exact legacy-wait repair inputs.
+  // Catch accidental catalog expansion without an exact byte snapshot.
+  expect(Buffer.byteLength(text)).toBeLessThan(72 * 1024)
   const ajv = new Ajv2020({ strict: false })
   addFormats(ajv)
   const assertNoRefs = (value: unknown): void => {
