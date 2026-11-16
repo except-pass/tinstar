@@ -124,8 +124,9 @@ and screenshots use fixtures and do not establish live acceptance.
 
 `create_work` and `update_work` extend `WorkflowOperations`, the existing
 `start_work` policy, and the authenticated MCP/tunnel. `create_work` requires a
-name, owner and area. The Inspector's **Update work** form collects each update
-operation's coupled inputs and needs no Notion window. Inspector details include
+name, owner and area. The Inspector's **Update work** form collects ordinary update
+inputs and needs no Notion window; card returns use the leased MCP operation and
+reviews use their dedicated controls. Inspector details include
 bounded comments as well as body prose. A card leaving the current filter remains in the
 Inspector with its last confirmed readback so a partial save can still be seen and retried.
 
@@ -140,6 +141,7 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | kind | Inputs / changes |
 | --- | --- |
 | `submit_for_review`, `accept_review`, `request_review_changes` | See [deployed feature review](#deployed-feature-review) for evidence, response and recovery contracts. |
+| `not_for_me` | Held lease and one-line `reason`; see the [card return contract](reconciliation-mcp.md#session-scoped-card-leases). |
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`, optional exact `resolve_wait`. Firstmate is always Queued. Leaving Waiting For requires that exact wait; another remaining wait keeps the card Waiting For. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |

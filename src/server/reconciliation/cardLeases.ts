@@ -272,6 +272,12 @@ export class CardLeases {
       return { outcome: 'released', card_id: row.card }
     })
   }
+  async releaseCurrent(card: string, reason: string) {
+    const context = access.getStore()
+    if (!context?.token || !this.status(card)) throw new CardLeaseError(null)
+    this.assertWritable(card)
+    return this.release(context.caller, context.token, reason)
+  }
   releaseInStorage(db: SqliteDatabase, row: LeaseRow, reason: string, actor: string) {
     if (this.reservedInStorage(db, row.card)) throw new SourceWritePending()
     this.auditInStorage(db, row.card, 'released', { generation: row.generation, reason, actor })

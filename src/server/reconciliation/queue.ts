@@ -13,6 +13,8 @@ import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
 import type { ExecutionWarning } from './workflowViews'
+import { strictlyNeedsWill } from './claimPolicy'
+import { parseWaitLine } from '../../shared/waitingForPolicy'
 import { requestText, isCoordinationRequest, displayRequestText } from '../../shared/requestText'
 
 export type QueueReadiness = 'ready-now' | 'needs-readiness-verification' | 'future-or-conditional'
@@ -128,7 +130,15 @@ function context(item: QueueItem, card: Card, observation: Pick<Observation<unkn
   const wait = word(card, 'Waiting For')
   if (wait && !ownerDecision && !(immediateRequest && /\bWill\b/.test(wait))) lower(item, 'future-or-conditional', `Published dependency/wait: ${wait}`)
   else if (!wait && status === 'waiting for' && !ownerDecision) lower(item, 'future-or-conditional', 'Waiting For status without a named next action; verify the prerequisite')
-  if (word(card, 'Waiting For ID')) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
+  if (wait && (ownerDecision || immediateRequest || strictlyNeedsWill(card))) {
+    for (const line of wait.split('\n').filter(line => line.trim())) {
+      const typed = parseWaitLine(line)
+      if (!typed && !strictlyNeedsWill(card) && !line.startsWith('Will:')) continue
+      if (typed ? typed.type !== 'Actor' || typed.id !== 'Will' : !line.startsWith('Will:')) lower(item, 'future-or-conditional', `Published dependency/wait: ${line}`)
+      else restrictAction(item, typed?.dependency ?? line)
+    }
+  }
+  if (word(card, 'Waiting For ID') && !strictlyNeedsWill(card)) lower(item, 'future-or-conditional', 'Published structured dependency must clear before the decision is immediate')
   if (!fresh(observation)) lower(item, 'needs-readiness-verification', 'Notion observation is stale or unavailable; last-known action only')
   if (card.properties['Will action']?.hasMore || !word(card, 'Owner') || !word(card, 'Status')) {
     lower(item, 'needs-readiness-verification', 'Owner, status or action context is incomplete')
@@ -150,6 +160,7 @@ function verifiedClaimRequest(item: ClaimItem) {
   return item.kind === 'decision' && !item.pulls?.some(pull => !pull.readiness)
 }
 export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()) {
+  if (!strictlyNeedsWill(card)) return null
   const current = word(card, 'Next action') ?? word(card, 'Next Action')
   const actions = prop(card, 'Will action')
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
@@ -159,7 +170,9 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   // an answer bound to another source does not close an independent request.
   if (item.requests?.some(request => request.cardId === card.id && request.answered &&
     request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action)) &&
-    (!request.sourceRequest || !item.sources.some(source => source.kind === 'firstmate' && source.request) ||
+    (!request.sourceRequest || !item.sources.some(source => source.request?.home != null) &&
+      !item.requests?.some(open => open.cardId === card.id && !open.answered &&
+        open.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(open.action))) ||
       item.sources.some(source => source.request && source.request.home !== null &&
         requestAnchor(source.request) === requestAnchor(request.sourceRequest!))))) return null
   const propertyAsk = normalize(word(card, 'Owner') ?? '') === 'will' &&
@@ -174,8 +187,8 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const requests = item.proposalHistoryComplete === true ? item.requests?.filter(request => request.cardId === card.id && !request.answered &&
     request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(normalize(request.action))) ?? [] : []
   const request = requests[0]
-  const concrete = current ?? request?.question
   const wait = word(card, 'Waiting For')
+  const concrete = current ?? request?.question
   const ownerWait = !!wait && /\bWill\b/.test(wait)
   const ownerRequest = !!concrete && (normalize(word(card, 'Owner') ?? '') === 'will' || decisionRequest || !!request || ownerWait)
   if (!verifiedClaimRequest(item) || item.readiness !== 'ready-now' && !ownerRequest) return null
@@ -200,9 +213,6 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   }
   context(checked, card, { status: 'fresh', data: card }, now, keyedRequest, ownerRequest)
   restrictAction(checked, action, keyedRequest ? 'owner-question' : 'action')
-  // Waiting for Will's answer is the request itself, but its wording must not
-  // hide a prerequisite such as approval after a later review.
-  if (ownerWait && !keyedRequest) restrictAction(checked, wait)
   if (checked.readiness !== 'ready-now') return null
   return { readiness: checked.readiness, reasons: [...new Set([...(item.readiness === 'ready-now' ? item.reasons : []), ...checked.reasons,
     'Fresh exact-card evidence confirms a concrete owner-only action now'])] }
@@ -311,7 +321,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
     const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
     if (resolvedMerge) resolvedMerges.add(item)
-    context(item, card, intentions, now, ownerDecisions.has(card.id))
+    context(item, card, intentions, now, ownerDecisions.has(card.id), strictlyNeedsWill(card))
     if (resolvedMerge && remainingAction !== action) lower(item, 'needs-readiness-verification', 'Merge request resolved; verify the concrete next action for the remaining asks')
     item.sources.push({ ...source(card.id.startsWith('jira:') ? 'jira' : 'notion', card.id, 'Owner/Status/Will action/Waiting For/Next action/Start Date/Next check-in/Link/Evidence', intentions),
       actions: tags, request: { home: null, taskId: null, id: card.id, kind: card.id.startsWith('jira:') ? 'jira-card' : 'notion-card' } })
@@ -322,7 +332,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       if (item.readiness === 'ready-now') tagOnlyCandidates.add(item)
       lower(item, 'needs-readiness-verification', 'A Will action tag/owner alone does not establish a concrete owner-only next action')
     }
-    if (!merge && tags.some(tag => !['decision'].includes(normalize(tag)))) {
+    if (!merge && !strictlyNeedsWill(card) && tags.some(tag => !['decision'].includes(normalize(tag)))) {
       tagOnlyCandidates.delete(item)
       lower(item, 'needs-readiness-verification', 'Command/release readiness requires prerequisite and authority verification')
     }
@@ -377,7 +387,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       const questionLinks = (call.headline.match(/https:\/\/[^\s<>"']+/g) ?? []).map(url => url.replace(/[),.;!?]+$/, '')).filter(url => parsePullUrl(url))
       for (const url of questionLinks) link(item, url)
       explicitPulls.set(item, pullIds([text(hold?.pr_url), ...questionLinks]))
-      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision)
+      if (canonicalRelationship) for (const card of known) context(item, card, intentions, now, ownerDecision, strictlyNeedsWill(card))
       if (canonicalRelationship && known.some(card => !accountable(card, request.home))) {
         lower(item, 'needs-readiness-verification', 'Card owner is outside the reconciled First Mate/Will request; verify accountability')
       }
@@ -488,6 +498,9 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
       wholeFarm: 'not-certified' as const, cardBodies: 'not-collected' as const, emptyQueueMeansAllClear: false as const },
     warnings: [...input.warnings, 'Card-body-only next actions/evidence are not collected; verify candidates against the card. A checkpoint is not readiness proof.'],
     needsWill: undefined as NeedsWillItem[] | undefined, operationalExceptions: undefined as ExecutionWarning[] | undefined,
+    // Only the small property projection needed before a claim's exact read.
+    claimCards: [...cards.values()].filter(strictlyNeedsWill).map(card => ({ ...card, properties: Object.fromEntries(
+      ['Owner', 'Status', 'Will action', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Initiative', 'Area'].flatMap(name => card.properties[name] ? [[name, card.properties[name]!]] : [])) })),
     pullCoverage: undefined as Pick<import('../../shared/pulls').PullsRead, 'repositories' | 'warnings' | 'associationsComplete'> | undefined,
     reviews: reviewView(intentions, undefined, now),
     reviewRecoveries: [] as Array<{ cardId: string; result: import('../../shared/workflow').StartWorkResult }>,

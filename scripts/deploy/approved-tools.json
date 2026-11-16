@@ -19,6 +19,7 @@
   "list_prs",
   "list_ui_sessions",
   "next_queue_item",
+  "not_for_me",
   "open_prepared_review_session",
   "present_view",
   "read_record",

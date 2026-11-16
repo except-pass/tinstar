@@ -68,7 +68,7 @@ it('loads cold history for automatic admission only after replenishment is turne
   expect(reconcile).not.toHaveBeenCalled()
 }, 20_000)
 
-it('warms cold claim history through MCP without blocking and claims only after history loads', async () => {
+it('claims through MCP while cold history remains blocked and preserves Desk preparation requirements', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   const details = vi.spyOn(CardContextReader.prototype, 'decisionDetails')
@@ -89,8 +89,9 @@ it('warms cold claim history through MCP without blocking and claims only after 
     })])
     expect(performance.now() - started).toBeLessThan(2000)
     const result = JSON.parse((raw.content as Array<{ text: string }>)[0]!.text)
-    expect(result).toMatchObject({ outcome: 'no-unclaimed-card', warnings: expect.arrayContaining([expect.stringContaining('publication history is unavailable')]) })
-    expect(cardIds.every(id => sources.leases.status(id) === null)).toBe(true)
+    expect(result).toMatchObject({ outcome: 'claimed', warnings: expect.arrayContaining([expect.stringContaining('publication history is unavailable')]) })
+    expect(cardIds.filter(id => sources.leases.status(id) !== null)).toEqual([result.lease.card_id])
+    await client.callTool({ name: 'release_claim', arguments: { lease_token: result.lease_token, reason: 'Cold-history claim verified' } })
     expect(details).toHaveBeenCalledTimes(2)
     const blocked = await sources.preparedReviews.snapshot()
     expect(blocked.history.every(row => row.state === 'loading')).toBe(true)

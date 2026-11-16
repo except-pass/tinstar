@@ -16,7 +16,10 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const fixture = preparedDecisionFixture()
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
   card.properties.Area = { id: 'Area', type: 'select', value: 'Engineering', hasMore: false }
-  card.properties.Status!.value = options.independentRequest ? 'In Progress' : options.cardStatus ?? 'Waiting For'
+  card.properties.Status!.value = options.cardStatus ?? 'Waiting For'
+  if (card.properties.Status!.value === 'Waiting For') for (const [name, value] of Object.entries({ Owner: 'Will', 'Waiting For': 'Will: Choose the bounded preview route?', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) {
+    card.properties[name] = { id: name, type: name === 'Waiting For' ? 'rich_text' : 'select', value, hasMore: false }
+  }
   const dataSourceId = 'f'.repeat(32)
   const homes = fixture.snapshot.fleet.map((home, index) => ({ ...home, source: { ...home.source, home: join(root, `home-${index}`) } }))
   let historyText = fixture.history.context.blocks[0]!.text
@@ -36,7 +39,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   card.properties['Last touched by'] = { id: 'Last touched by', type: 'select', value: 'Fixture publisher', hasMore: false }
   const properties: Record<string, Record<string, unknown>> = Object.fromEntries(Object.entries(card.properties).map(([name, prop]) => {
     const value = prop.value
-    const type = name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
+    const type = name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' || name === 'Waiting For' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
     const content = type === 'title' || type === 'rich_text' ? [{ plain_text: String(value), text: { content: String(value) } }]
       : type === 'multi_select' ? (value as string[]).map(name => ({ name }))
       : type === 'relation' ? (value as string[]).map(id => ({ id })) : { name: value }

@@ -29,6 +29,11 @@ import { digest, implementationContract } from '../implementationContract'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { workerLinkRecord } from '../workerLinks'
 import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/originAllowlist'
+// These legacy notice tests isolate contextual updates from the independently
+// covered daily malformed-asks report.
+function noticeSources(sources: ReconciliationSources) {
+  return { firstmateWork: sources.firstmateWork.bind(sources), currentCard: sources.currentCard.bind(sources), updateContext: sources.updateContext.bind(sources), updateComments: sources.updateComments.bind(sources) }
+}
 const id = 'a'.repeat(32), dataSourceId = 'b'.repeat(32)
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
 async function completeQueueDisplay(url: string, headers: Record<string, string> = {}) {
@@ -54,6 +59,8 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const blocks: any[] = [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: prose.body }] } }]
   const pages = new Map<string, any>([[id, raw]])
   let queryPageSize = 100
+  let historyMode: 'normal' | 'partial' | 'unavailable' | 'pending' = 'normal'
+  let resumeHistory: (() => void) | undefined
   let onRead: (() => void) | undefined
   const requests: Array<{ url: string; method: string; body?: any }> = []
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -104,7 +111,11 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
       if (lostNote) { lostNote = false; throw new Error('lost comment response') }
       return json(comment)
     }
-    if (path === '/v1/comments') return json({ has_more: false, results: comments })
+    if (path === '/v1/comments') {
+      if (historyMode === 'pending') await new Promise<void>(resolve => { resumeHistory = resolve })
+      if (historyMode === 'unavailable') return json({}, 503)
+      return json({ has_more: historyMode === 'partial', results: comments.filter(comment => !comment.pageId || comment.pageId === new URL(String(url)).searchParams.get('block_id')) })
+    }
     if (path.includes('/blocks/') && path.endsWith('/children')) {
       const blockPage = path.split('/')[3]!
       if (method === 'PATCH') {
@@ -140,7 +151,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
     sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
-    controls: { append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
+    controls: { history: (mode: typeof historyMode) => { historyMode = mode }, resumeHistory: () => { historyMode = 'normal'; resumeHistory?.() }, append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 const handoffInput = (overrides: Partial<SubmitHandoffInput> = {}): SubmitHandoffInput => ({
@@ -405,7 +416,7 @@ describe('one-call approved implementation handoff', () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-10T15:00:00Z'))
     const f = await setup(), sources = f.sources(f.root)
     f.pages.delete(id) // Keep the periodic census scoped to this handoff's card.
-    const feed = new FirstmateUpdates(sources, f.root, async () => ({ deliveryEnabled: true }))
+    const feed = new FirstmateUpdates(noticeSources(sources), f.root, async () => ({ deliveryEnabled: true }))
     f.workflow.onChange = change => feed.confirmed(change)
     f.workflow.deliveryStatus = (cardId, operationId) => feed.deliveryStatus(cardId, operationId)
     const mcp = new ReconciliationMcp({ scene: async () => fixtureSources() as any, card: async () => ({}), queue: async () => ({ outcome: 'queue-source-unavailable', message: 'fixture' }), workerLinkReport: async () => ({} as any),
@@ -1292,7 +1303,7 @@ it('observes comment-only edits through rotating and explicit refreshes without 
     return fetcher(url, init)
   })
   const root = await mkdtemp(join(tmpdir(), 'workflow-comment-rotation-')); roots.push(root)
-  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  const sources = f.sources(root), feed = new FirstmateUpdates(noticeSources(sources), root, async () => ({ deliveryEnabled: true }))
   sources.onWorkRefresh = async cards => { for (const card of cards) await feed.refreshComments(card) }
   const comment = (commentId: string, text: string) => ({ id: commentId, created_by: { id: 'human-author' }, created_time: new Date().toISOString(), rich_text: [{ plain_text: text }] })
   await feed.sweep(true)
@@ -1352,7 +1363,7 @@ it('does not wake for successful Firstmate notes when unsupported body blocks le
   const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
   f.blocks.push({ id: 'unsupported-image', type: 'image', image: { type: 'external', external: { url: 'https://fixture.example/image.png' } } })
   const root = await mkdtemp(join(tmpdir(), 'workflow-self-comment-partial-body-')); roots.push(root)
-  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  const sources = f.sources(root), feed = new FirstmateUpdates(noticeSources(sources), root, async () => ({ deliveryEnabled: true }))
   sources.workflow.onChange = change => feed.confirmed(change)
   await feed.sweep(true)
   expect(await sources.updateContext(id)).toMatchObject({ outcome: 'partial', commentsOutcome: 'available' })
@@ -1382,7 +1393,7 @@ it.each(['brief', 'acceptance_criteria', 'both-sections', 'note', 'comment', 'pr
   const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
   for (const name of ['brief', 'acceptance_criteria']) f.blocks.push({ id: name, type: 'paragraph', paragraph: { rich_text: [{ plain_text: `Tin Star section: ${name}\nOriginal ${name}` }] } })
   const root = await mkdtemp(join(tmpdir(), 'workflow-confirmed-effects-')); roots.push(root)
-  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  const sources = f.sources(root), feed = new FirstmateUpdates(noticeSources(sources), root, async () => ({ deliveryEnabled: true }))
   sources.workflow.onChange = change => feed.confirmed(change)
   await feed.sweep(true)
   const initial = await sources.currentCard(id)
@@ -1421,7 +1432,7 @@ it.each(['brief', 'acceptance_criteria'] as const)('adopts unknown cold-start bo
   const f = fixture(); f.raw.properties.Status.status.name = 'In Progress'
   f.blocks.push({ id: 'unsupported-image', type: 'image', image: {} })
   const root = await mkdtemp(join(tmpdir(), 'workflow-cold-partial-')); roots.push(root)
-  const sources = f.sources(root), feed = new FirstmateUpdates(sources, root, async () => ({ deliveryEnabled: true }))
+  const sources = f.sources(root), feed = new FirstmateUpdates(noticeSources(sources), root, async () => ({ deliveryEnabled: true }))
   sources.workflow.onChange = change => feed.confirmed(change)
   await feed.sweep(true)
   for (let round = 0; round < 3; round++) {
@@ -2562,13 +2573,16 @@ it.each(['closed', 'rebound'].flatMap(change => ['work', 'ask'].map(producer => 
 it('shares durable leases across real MCP chats, workflow writers and owner UI release', async () => {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'card-leases-integration-')); roots.push(root)
   f.raw.properties.Owner.select.name = 'Will'
-  f.raw.properties.Status.status.name = 'In Progress'
-  f.raw.properties['Waiting For'].rich_text = []
   f.raw.properties['Next action'] = { type: 'rich_text', rich_text: [{ plain_text: 'Choose the next step' }] }
+  f.raw.properties.Status.status.name = 'Waiting For'
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Will: Choose the next step' }]
+  f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
+  f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
   const secondId = 'c'.repeat(32), second = structuredClone(f.raw)
   second.id = secondId; second.url = `https://www.notion.so/${secondId}`; f.pages.set(secondId, second)
   const sources = f.sources(root)
   const queue = buildQueue(fixtureSources())
+  queue.claimCards = [await sources.currentCard(id), await sources.currentCard(secondId)]
   queue.needsWill = undefined
   queue.items = [id, secondId].map(cardId => ({ id: cardId, title: 'Actionable fixture', action: 'Choose the next step', kind: 'decision', readiness: 'ready-now', reasons: [], cardIds: [cardId], executionIds: [], homeIds: [], decisionKeys: [], evidence: [], checkpoint: null, oneTouch: true, sources: [{ kind: 'notion', id: cardId, field: 'Will action', observedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300_000).toISOString(), status: 'fresh', coverage: 'complete' }] }))
   const mcp = new ReconciliationMcp({ leases: sources.leases, scene: async () => fixtureSources() as any, card: id => sources.card(id), queue: async () => { throw new Error('Claims must use the fresh tool view') }, workViews: async () => queue, currentCard: id => sources.currentCard(id), workerLinkReport: async () => ({} as any), getWork: input => sources.getWork(input), updateWork: (input, actor) => sources.updateWork(input, actor), authorizePulls: async req => req?.headers['tailscale-user-login'] === 'owner@example.test' }, root)
@@ -2899,3 +2913,283 @@ describe('Waiting For status semantics', () => {
     expect(visible.coverage.intentions).toBeTruthy()
   })
 })
+
+it('owner-chatgpt HTTP preview filters before fresh reads and bounces the lease through the existing bridge', async () => {
+  const root = await mkdtemp(join(process.env.TINSTAR_CLAIM_PROOF_DIR ?? tmpdir(), 'claim-preview-')); roots.push(root)
+  const f = fixture()
+  f.raw.properties.Owner.select.name = 'Will'
+  f.raw.properties.Status.status.name = 'Waiting For'
+  f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: waitLine({ type: 'Actor', id: 'Will', dependency: 'Approve the security exception', unblocks_when: 'Will supplies the decision', follow_up_by: 'Firstmate' }) }]
+  f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
+  f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
+  f.raw.properties['Last touched by'].rich_text = [{ plain_text: 'Firstmate' }]
+  f.raw.properties['Next action'] = { type: 'rich_text', rich_text: [{ plain_text: 'Approve the security exception' }] }
+  Object.assign(f.raw.properties['First Mate tasks'], workerLinkRecord([{ fm_home: '/fixture/mate', task_id: 'claim-filter', first_observed_spawn_gen: 'attempt-1' }]).properties['First Mate tasks'])
+  const wrong = structuredClone(f.raw), secondId = 'c'.repeat(32)
+  wrong.id = secondId; wrong.url = `https://www.notion.so/${secondId}`
+  wrong.properties.Area.select.name = 'Other'; wrong.properties.Initiative.select.name = 'Other'
+  wrong.properties['Will action'].multi_select = [{ name: 'Do' }]
+  f.pages.set(secondId, wrong)
+  f.comments[0].created_time = new Date(Date.now() - 3600_000).toISOString()
+  f.comments[0].rich_text = [{ plain_text: 'Requested from: Will\nQuestion: Approve the security exception?\nTin Star request: {"id":"preview-ask","action":"Decision","preserve_action":false}' }]
+  const sources = f.sources(root)
+  let now = Date.now()
+  const feed = new FirstmateUpdates(noticeSources(sources), root, async () => ({ deliveryEnabled: true }), () => now)
+  sources.workflow.onChange = change => feed.confirmed(change)
+  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { fleet: [], notion: { token: 'fixture-token-only', dataSourceId } }, checkInWatchdog: { previewDeliveryEnabled: true } }))
+  const mcp = new ReconciliationMcp(sources, root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  const port = Number(process.env.TINSTAR_CLAIM_PROOF_PORT ?? 0)
+  await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve))
+  const actualPort = (server.address() as { port: number }).port
+  seedOriginAllowlist(actualPort)
+  const facadeToken = 'isolated-owner-proof-token-0000000000000000'
+  const facade = createTunnelFacade({ upstreamPort: actualPort, installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'owner-chatgpt', token: facadeToken, allowView: false }, configRoot: root })
+  await facade.listen(Number(process.env.TINSTAR_CLAIM_PROOF_FACADE_PORT ?? 0)); servers.push(facade.server)
+  const facadePort = (facade.server.address() as { port: number }).port
+  const client = new Client({ name: 'owner-chatgpt-preview', version: '1' }); clients.push(client)
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${facadePort}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${facadeToken}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+  const timings: Array<{ filter: string; ms: number; exact_reads: number; comment_reads: number }> = []
+  const transcript: unknown[] = []
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = JSON.parse((await client.callTool({ name, arguments: args }) as { content: Array<{ text: string }> }).content[0]!.text)
+    transcript.push({ name, args, response })
+    if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'owner-chatgpt-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
+    return response
+  }
+  const exactArgs = { card_id: id, operation_id: 'http-lost-response' }
+  const held = await call('claim_card', exactArgs)
+  expect(held.outcome).toBe('claimed')
+  f.raw.properties.Owner.select.name = 'Firstmate'
+  expect(await call('claim_card', exactArgs)).toMatchObject({ outcome: 'claimed', lease_token: held.lease_token, lease: held.lease })
+  expect(await call('claim_card', { card_id: id, operation_id: 'http-held', lease_token: held.lease_token })).toMatchObject({ outcome: 'held' })
+  await call('release_claim', { lease_token: held.lease_token, reason: 'Verify new grant admission' })
+  expect(await call('claim_card', { card_id: id, operation_id: 'http-refuse' })).toMatchObject({ outcome: 'unavailable', issues: ['Owner must be Will'], message: expect.stringContaining('owning mate must fix or retag') })
+  f.raw.properties.Owner.select.name = 'Will'
+
+  for (const [field, malformed] of Object.entries({ Owner: { select: { name: 'Firstmate' } }, Status: { status: { name: 'Backlog' } }, 'Will action': { multi_select: [] }, 'Waiting For': { rich_text: [{ plain_text: 'Unstructured owner ask' }] }, 'Waiting For Type': { select: { name: 'Event' } }, 'Waiting For ID': { rich_text: [] } })) {
+    const original = structuredClone(f.raw.properties[field])
+    Object.assign(f.raw.properties[field], malformed)
+    expect(await call('claim_card', { card_id: id, operation_id: `http-strict-${field}` })).toMatchObject({ outcome: 'unavailable', message: expect.stringContaining('owning mate must fix or retag') })
+    await sources.snapshot(true)
+    expect(await call('claim_next_card', { operation_id: `http-auto-strict-${field}`, will_action: 'Decision' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+    f.raw.properties[field] = original
+  }
+  await sources.snapshot(true)
+  f.comments.unshift({ id: 'old-do', created_time: new Date(Date.now() - 10 * 86400_000).toISOString(), rich_text: [{ plain_text: 'Requested from: Will\nQuestion: Implement?\nTin Star request: {"id":"old-do","action":"Do"}' }] })
+  // The independent census and timestamps are ready before the proof begins.
+  await sources.workViews()
+  for (const filters of [{ will_action: 'Decision' }, { initiative: 'Tin Star' }, { area: 'Engineering' }, { max_age_days: 1 }, { will_action: 'Decision', initiative: 'Tin Star', area: 'Engineering', max_age_days: 1 }]) {
+    const before = f.requests.length, start = performance.now()
+    const selected = await call('claim_next_card', { operation_id: `preview-${timings.length}`, ...filters })
+    expect(selected).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+    const reads = f.requests.slice(before).filter(row => row.method === 'GET' && new URL(row.url).pathname.startsWith('/v1/pages/'))
+    expect(reads.map(row => new URL(row.url).pathname)).toEqual([`/v1/pages/${id}`])
+    const commentReads = f.requests.slice(before).filter(row => row.method === 'GET' && new URL(row.url).pathname === '/v1/comments')
+    expect(commentReads).toHaveLength(0)
+    timings.push({ filter: JSON.stringify(filters), ms: Math.round(performance.now() - start), exact_reads: reads.length, comment_reads: commentReads.length })
+    expect(timings.at(-1)!.ms).toBeLessThan(10_000)
+    await call('release_claim', { lease_token: selected.lease_token, reason: 'Preview filter checked' })
+  }
+  for (const [index, filters] of [{ will_action: 'Elevated command' }, { initiative: 'No matching initiative' }, { area: 'No matching area' }, { max_age_days: 0 }].entries()) {
+    expect(await call('claim_next_card', { operation_id: `no-match-${index}`, ...filters })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  }
+  expect(await call('claim_next_card', { operation_id: 'too-old', will_action: 'Decision', max_age_days: 0 })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const willWait = structuredClone(f.raw.properties['Waiting For'])
+  f.raw.properties['Waiting For'].rich_text[0].plain_text += '\n' + waitLine({ type: 'Event', id: 'security', dependency: 'Security review', unblocks_when: 'Review complete', follow_up_by: 'Firstmate' })
+  const independent = await call('claim_next_card', { operation_id: 'independent-wait', will_action: 'Decision' })
+  expect(independent).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+  expect(await call('release_claim', { lease_token: independent.lease_token, reason: 'Independent wait property claim checked' })).toMatchObject({ outcome: 'released', card_id: id })
+  f.raw.properties['Waiting For'] = willWait
+  const selected = await call('claim_next_card', { operation_id: 'preview-bounce-claim', area: 'Engineering' })
+  const reason = 'The mate can resolve this without the owner'
+  expect(await call('not_for_me', { card_id: id, operation_id: 'preview-bounce', lease_token: 'wrong-token', reason })).toMatchObject({ code: 'claim-lost' })
+  const bounced = await call('not_for_me', { card_id: id, operation_id: 'preview-bounce', lease_token: selected.lease_token, reason })
+  expect(bounced).toMatchObject({ outcome: 'saved', lease_release: { outcome: 'released', card_id: id } })
+  expect(sources.leases.status(id)).toBeNull()
+  const current = await sources.currentCard(id)
+  expect(current.properties.Owner!.value).toBe('Firstmate')
+  expect(current.properties.Status!.value).toBe('Waiting For')
+  expect(current.properties['Will action']!.value).toEqual([])
+  expect(current.properties['Waiting For ID']!.value).toBe('/fixture/mate/claim-filter')
+  expect(JSON.stringify(f.comments)).toContain(reason)
+  expect(JSON.stringify(f.comments)).not.toContain(selected.lease_token)
+  now += 10_001
+  await feed.sweep(true)
+  const notice = (await feed.bridgeWork()).pending.find(notice => notice.body.includes(reason))
+  expect(notice).toBeDefined()
+  expect(notice!.body).toContain('/fixture/mate/claim-filter')
+  expect(await call('claim_next_card', { operation_id: 'after-bounce', area: 'Engineering' })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  // A UI touch must never replace the last responsible mate route.
+  wrong.properties['First Mate tasks'].rich_text = []
+  wrong.properties['Last touched by'].rich_text = [{ plain_text: 'Tin Star UI' }]
+  f.comments.push({ id: 'mate-ask', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Clawson","mate-ask"]' }] })
+  const fallback = await call('claim_card', { card_id: secondId, operation_id: 'http-fallback' })
+  expect(fallback.outcome).toBe('claimed')
+  expect(await call('not_for_me', { card_id: secondId, operation_id: 'http-fallback-bounce', lease_token: fallback.lease_token, reason: 'Clawson can decide' })).toMatchObject({ outcome: 'saved' })
+  expect((await sources.currentCard(secondId)).properties.Owner!.value).toBe('Clawson')
+  expect((await sources.currentCard(secondId)).properties['Waiting For ID']!.value).toBe('Clawson')
+  // Exercise the real daily census/report service with legacy structured tags.
+  wrong.properties.Owner.select.name = 'Firstmate'
+  wrong.properties['Will action'].multi_select = [{ name: 'Approval' }]
+  wrong.properties['Waiting For'].rich_text = [{ plain_text: 'Will to approve the exception' }]
+  wrong.properties['Waiting For ID'].rich_text = []
+  const proseOnlyId = 'd'.repeat(32), proseOnly = structuredClone(wrong)
+  proseOnly.id = proseOnlyId
+  proseOnly.properties['Will action'].multi_select = []
+  f.pages.set(proseOnlyId, proseOnly)
+  const reportRoot = await mkdtemp(join(tmpdir(), 'http-malformed-')); roots.push(reportRoot)
+  const reports = new FirstmateUpdates(f.sources(reportRoot), reportRoot, async () => ({ deliveryEnabled: true }), () => now)
+  await reports.sweep(true); now += 10_001; await reports.sweep(true)
+  const report = (await reports.bridgeWork()).pending.find(row => row.body.includes('Malformed Needs Will ask'))
+  expect(report).toBeDefined()
+  expect(report!.body).toContain(secondId)
+  expect(report!.body).not.toContain(proseOnlyId)
+  await reports.sweep(true)
+  expect((await reports.bridgeWork()).pending.filter(row => row.body.includes('Malformed Needs Will ask'))).toHaveLength(1)
+  transcript.push({ daily_malformed_report: report })
+  if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'owner-chatgpt-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
+  if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'http-timings.json'), JSON.stringify({ port: actualPort, caller: 'owner-chatgpt', source: 'isolated Notion fixture; real HTTP MCP and durable lease/bridge stores', timings, bounce: 'confirmed reason, mate wait, cleared badges, bridge offer and lease release; absent on next claim' }, null, 2))
+}, 60_000)
+
+it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-notice'])('returns a leased ask using the last mate touch (%s) and keeps failed returns recoverable', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'claim-bounce-')); roots.push(root)
+  const f = fixture()
+  f.raw.properties.Owner.select.name = 'Will'
+  f.raw.properties.Status.status.name = 'Waiting For'
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Will: Approve the exception' }]
+  f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
+  f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
+  f.raw.properties['Last touched by'].rich_text = [{ plain_text: mode === 'missing' ? 'owner-chatgpt' : mode.startsWith('ui-') ? 'Tin Star UI' : 'Clawson' }]
+  if (mode === 'ui-touch') f.comments.push({ id: 'mate-ask', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Clawson","mate-ask"]' }] })
+  if (mode.startsWith('ui-')) f.comments.push({ id: 'owner-edit', rich_text: [{ plain_text: 'Operation: edit\nTin Star operation: ["Tin Star UI","owner-edit"]' }] })
+  const sources = f.sources(root), changed = vi.fn(async () => {})
+  sources.workflow.onChange = changed
+  const held = await sources.leases.claim([id], 'bounce-test', 'Will', 'bounce-test-claim', undefined, true)
+  if (!('lease_token' in held)) throw new Error('Fixture must own its card')
+  const input = { kind: 'not_for_me' as const, card_id: id, operation_id: `bounce-${mode}`, reason: 'Clawson has authority to resolve this' }
+  const update = () => withLeaseCaller('bounce-test', held.lease_token, () => sources.updateWork(input, 'owner-chatgpt'))
+  if (mode === 'failed-note') f.controls.failNote()
+  if (mode === 'failed-notice') changed.mockRejectedValue(new Error('Notice storage unavailable'))
+  const result = await update()
+  if (mode === 'missing' || mode === 'ui-only') {
+    expect(result).toMatchObject({ outcome: 'not-saved', code: 'mate-unknown' })
+    expect(sources.leases.status(id)).not.toBeNull()
+    expect(f.requests.some(row => row.method === 'PATCH')).toBe(false)
+    return
+  }
+  if (mode.startsWith('failed-')) {
+    expect(result.outcome).toBe('partially-saved')
+    expect(sources.leases.status(id)).not.toBeNull()
+    f.controls.failNote(false); changed.mockResolvedValue(undefined)
+    if (mode === 'failed-note') {
+      const pending = sources.leases.pendingWrites()[0]!
+      expect(pending).toBeDefined()
+      await sources.leases.reconcileWrite(id, pending.operation, 'preview-owner', 'Fixture server confirmed request finished and comment absent', async () => 'different')
+    }
+    expect(await update()).toMatchObject({ outcome: 'saved', lease_release: { outcome: 'released' } })
+  } else expect(result).toMatchObject({ outcome: 'saved', lease_release: { outcome: 'released' } })
+  expect(sources.leases.status(id)).toBeNull()
+  expect((await sources.currentCard(id)).properties.Owner!.value).toBe('Clawson')
+  expect((await sources.currentCard(id)).properties['Waiting For ID']!.value).toBe('Clawson')
+  expect((await sources.currentCard(id)).properties['Will action']!.value).toEqual([])
+  expect(f.comments.filter(comment => JSON.stringify(comment).includes(input.reason))).toHaveLength(1)
+  expect(changed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'not_for_me', notes: expect.arrayContaining([expect.stringContaining(input.reason)]) }))
+})
+
+
+it('owner-chatgpt HTTP admits record-free asks across real history failures and filters grouped ages per card', async () => {
+  const transcript: unknown[] = []
+  async function setup() {
+    const root = await mkdtemp(join(tmpdir(), 'claim-boundary-http-')); roots.push(root)
+    const f = fixture()
+    Object.assign(f.raw.properties, {
+      Owner: { type: 'select', select: { name: 'Will' } },
+      Status: { type: 'status', status: { name: 'Waiting For' } },
+      'Will action': { type: 'multi_select', multi_select: [{ name: 'Decision' }] },
+      'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: 'Will: Approve the security exception' }] },
+      'Waiting For Type': { type: 'select', select: { name: 'Actor' } },
+      'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'Will' }] },
+      'Next action': { type: 'rich_text', rich_text: [] },
+    })
+    f.comments.splice(0)
+    const sources = f.sources(root), mcp = new ReconciliationMcp(sources, root)
+    const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+    await new Promise<void>(resolve => server.listen(5295, '127.0.0.1', resolve))
+    const client = new Client({ name: 'owner-chatgpt-boundary', version: '1' }); clients.push(client)
+    await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:5295/api/reconciliation/mcp'), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+    let operation = 0
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const start = performance.now()
+      const response = JSON.parse((await client.callTool({ name, arguments: name === 'search_work' ? args : { operation_id: `boundary-${operation++}`, ...args } }) as { content: Array<{ text: string }> }).content[0]!.text)
+      transcript.push({ name, args, response, ms: Math.round(performance.now() - start) })
+      return response
+    }
+    const close = async () => { await client.close(); await new Promise<void>(resolve => server.close(() => resolve())) }
+    return { f, sources, call, close }
+  }
+  for (const mode of ['cold', 'partial', 'unavailable', 'pending'] as const) {
+    const { f, sources, call, close } = await setup()
+    if (mode !== 'cold') {
+      f.controls.history(mode)
+      const loading = sources.updateComments(id, true)
+      if (mode !== 'pending') await loading
+    }
+    for (const next of ['', 'Approve the security exception']) {
+      f.raw.properties['Next action'].rich_text = next ? [{ plain_text: next }] : []
+      const started = performance.now()
+      const claimed = await call('claim_next_card', { will_action: 'Decision', area: 'Engineering', initiative: 'Tin Star' })
+      expect(claimed).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+      expect(performance.now() - started).toBeLessThan(2000)
+      transcript.push({ history: mode, next_action: next, outcome: claimed.outcome })
+      await call('release_claim', { lease_token: claimed.lease_token, reason: 'Boundary checked' })
+    }
+    if (mode === 'cold') {
+      const unknown = await call('claim_next_card', { max_age_days: 1 })
+      expect(unknown).toMatchObject({ outcome: 'no-unclaimed-card' })
+      expect(JSON.stringify(unknown)).toContain('unknown request age')
+      for (const action of ['Do', 'Merge', 'Elevated command']) {
+        f.raw.properties['Will action'].multi_select = [{ name: action }]
+        await sources.snapshot(true)
+        const selected = await call('claim_next_card', { will_action: action })
+        expect(selected).toMatchObject({ outcome: 'claimed', lease: { card_id: id } })
+        await call('release_claim', { lease_token: selected.lease_token, reason: 'Action filter checked' })
+      }
+    }
+    f.controls.resumeHistory()
+    await close()
+  }
+  const { f, sources, call, close } = await setup()
+  // Fresh exact-card properties fence future, closed and archived automatic claims.
+  for (const mode of ['future', 'Done', 'archived']) {
+    if (mode === 'future') f.raw.properties['Start Date'] = { type: 'date', date: { start: '2099-01-01' } }
+    else if (mode === 'Done') f.raw.properties.Status.status.name = 'Done'
+    else f.raw.archived = true
+    expect(await call('claim_next_card')).toMatchObject({ outcome: 'no-unclaimed-card' })
+    delete f.raw.properties['Start Date']; f.raw.properties.Status.status.name = 'Waiting For'; f.raw.archived = false
+  }
+  const secondId = 'c'.repeat(32), second = structuredClone(f.raw)
+  second.id = secondId; second.url = `https://www.notion.so/${secondId}`
+  for (const page of [f.raw, second]) page.properties.Link = { type: 'url', url: 'https://github.com/acme/app/pull/42' }
+  f.pages.set(secondId, second)
+  const request = (pageId: string, requestId: string, age: number, action = 'Decision') => ({ pageId, id: requestId, created_time: new Date(Date.now() - age).toISOString(), rich_text: [{ plain_text: `Requested from: Will\nQuestion: Approve the security exception?\nTin Star request: ${JSON.stringify({ id: requestId, action })}` }] })
+  f.comments.push(request(id, 'old-a', 10 * 86400000), request(secondId, 'recent-b', 3600000), request(secondId, 'old-do-b', 10 * 86400000, 'Do'))
+  await sources.snapshot(true)
+  await sources.updateContext(id); await sources.updateContext(secondId)
+  const grouped = await call('claim_next_card', { max_age_days: 1 })
+  expect(grouped).toMatchObject({ outcome: 'claimed', lease: { card_id: secondId } })
+  await call('release_claim', { lease_token: grouped.lease_token, reason: 'Grouped age checked' })
+  const simultaneous = await Promise.all([call('claim_next_card'), call('claim_next_card')])
+  expect(new Set(simultaneous.map(result => result.lease.card_id))).toEqual(new Set([id, secondId]))
+  for (const held of simultaneous) await call('release_claim', { lease_token: held.lease_token, reason: 'Concurrent allocation checked' })
+  f.comments.push({ pageId: secondId, id: 'answer-b', rich_text: [{ plain_text: 'Tin Star answer: "recent-b"' }] })
+  await sources.updateContext(secondId)
+  expect(await call('claim_next_card', { max_age_days: 1 })).toMatchObject({ outcome: 'no-unclaimed-card' })
+  const visible = await call('search_work', { owner: 'Will', statuses: ['Waiting For'] })
+  expect(visible.records.map((row: { card?: { id: string } }) => row.card?.id).sort()).toEqual([id, secondId].sort())
+  expect(visible.coverage.intentions).toBeTruthy()
+  expect(await call('search_work', { owner: 'Clawson', statuses: ['In Progress'] })).toMatchObject({ records: [], coverage: { intentions: expect.anything() } })
+  await close()
+  if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'claim-boundaries-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
+}, 60_000)

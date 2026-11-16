@@ -1,4 +1,5 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
+import { matchesClaimFilters, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
@@ -290,6 +291,7 @@ export class ReconciliationSources {
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
+  async willAskCensus() { return this.workReader.query({}) }
   mainWaitNotionConfig() { return this.config.notion }
   releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
@@ -391,7 +393,8 @@ export class ReconciliationSources {
   async updateWork(input: UpdateWorkInput, actor: string) {
     const result = await this.workflow.update(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
-    return { ...workReadback(result), lease: this.leases.status(input.card_id) }
+    const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
+    return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
   async createWork(input: CreateWorkInput, actor: string) {
     return workReadback(await this.workflow.create(input, actor))
@@ -458,7 +461,7 @@ export class ReconciliationSources {
   /** A claim allocates a card; it must not await the board's comment history
    * or operational reconciliation. Exact active-card validation still happens
    * before allocation, and get_work remains the explicit prose reader. */
-  async claimQueue() {
+  async claimQueue(filters: ClaimFilters = {}) {
     const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
@@ -489,6 +492,12 @@ export class ReconciliationSources {
       item.requests.push(...decisionRequests(this.context.cachedClaimBlocks(id)).filter(request => request.answered)
         .map(request => ({ ...request, cardId: id })))
     }
+    const matching = new Set(queue.claimCards.filter(card => matchesClaimFilters(card, filters,
+      oldestOpenRequestSince(currentWillRequests(contexts.get(card.id)?.blocks ?? [], card.properties['Will action']?.value)))).map(card => card.id))
+    queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))
+    queue.needsWill = queue.needsWill.filter(item => item.cardIds.some(id => matching.has(id)))
+    queue.claimCards = queue.claimCards.filter(card => matching.has(card.id))
+    if (filters.max_age_days !== undefined) queue.warnings.push('Max age uses recorded request history; cards with unknown request age are excluded. Refresh get_work_views to load request ages.')
     if (queue.needsWill.some(item => !item.proposalHistoryComplete)) queue.warnings.push('Complete cached publication history is unavailable for some claim candidates; bounded background history reads are scheduled.')
     queue.warnings.push('Claim selection uses cached history. Read get_work with details for the selected card before deciding; claims do not wait for history or reconcile answers.')
     return workReadback(queue)
@@ -500,7 +509,7 @@ export class ReconciliationSources {
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
     if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode === 'read'), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode !== 'reconcile'), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
