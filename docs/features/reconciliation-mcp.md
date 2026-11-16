@@ -424,9 +424,12 @@ MCP and workflow request bodies remain bounded at 256 KiB. UI registration and s
 For “next card”, call `claim_next_card(operation_id)` without a browser session.
 Generate a fresh UUID operation_id for the first attempt and reuse it only for
 an identical retry. It claims the first unclaimed Needs Will card in existing queue
-order, ready-now cards first, and includes that card's readiness and readiness
-reasons with source coverage. Check the card before acting when it is not
-certified ready. An unavailable source is not an empty queue.
+order, ready-now cards first, and includes that card's `readiness` and
+`readiness_reasons` with source coverage. Successful repeat claims and
+operation-id replays also include these fields, using current queue evidence;
+when evidence for the card is unavailable, `readiness` is `unknown` and
+`readiness_reasons` explains the missing evidence. Check the card before acting
+when it is not certified ready. An unavailable source is not an empty queue.
 `claim_card(card_id, operation_id)` instead claims
 an exact active card on the configured board.
 
