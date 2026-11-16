@@ -6,6 +6,9 @@ Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`dec
 
 MCP `get_work_views` and `claim_next_card` refresh the source census for each
 request and read the same bounded request histories (up to 20 candidate cards).
+Foreground history waits have a ten-second budget; unfinished reads continue
+warming the shared cache. The response reports how many histories were inspected
+and leaves the remaining rows at verification-required readiness with unknown age.
 They schedule operational review/decision recovery and uncached review submission
 history through the display's shared background refresh, rather than waiting for
 a board-wide recovery pass inside the connector's 60-second deadline. All request

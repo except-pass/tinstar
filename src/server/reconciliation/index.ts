@@ -424,13 +424,25 @@ export class ReconciliationSources {
     // disclosed; it never becomes a fabricated request age or answer.
     const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
-    const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    let contexts = collectedContexts
+    const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
-      for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-        contexts.set(id, await this.context.commentDetails(id, force))
-      }))
+      for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
+        await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
+          collectedContexts.set(id, await this.context.commentDetails(id, force))
+        }))
+      }
     }
-    if (mode === 'read') await readContexts()
+    if (mode === 'read') {
+      // Twenty paced reads can outlive the connector deadline on a slow board.
+      // Keep warming the shared cache, but freeze the evidence included in this
+      // response after ten seconds. Unfinished histories stay explicitly unknown.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try { await Promise.race([readContexts(), new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
+      finally { clearTimeout(timer) }
+      contexts = new Map(collectedContexts)
+    }
     const resolutions = new Map<string, DecisionResolution>()
     const resolutionIds = new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.filter(item => item.sources.some(source => source.kind === 'firstmate')).flatMap(item => item.cardIds)])
     const census = this.workflow.decisionCensus()
@@ -469,7 +481,7 @@ export class ReconciliationSources {
     }
     if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
     if (mode === 'reconcile') await readContexts()
-    if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
+    if (contexts.size < ids.length) queue.warnings.push(`Request history inspected for ${contexts.size} of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.${mode === 'read' && contexts.size < Math.min(ids.length, 20) ? ' Foreground history wait reached its ten-second budget; unfinished reads continue warming the cache in the background.' : ''}`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()

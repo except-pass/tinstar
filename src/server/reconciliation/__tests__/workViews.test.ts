@@ -6,7 +6,7 @@ import { ReconciliationSources } from '../index'
 import { CardContextReader } from '../cardContext'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 it('returns the full fresh census with bounded history while shared operational recovery is blocked', async () => {
   const root = await mkdtemp(join(tmpdir(), 'work-views-'))
@@ -45,5 +45,35 @@ it('returns the full fresh census with bounded history while shared operational 
     expect(second.needsWill).toHaveLength(78)
     expect(second.reviews.items).toHaveLength(14)
     expect(recovery).toHaveBeenCalledTimes(1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+}, 2000)
+
+it('bounds slow history waits while retaining every request with honest readiness', async () => {
+  vi.useFakeTimers()
+  const root = await mkdtemp(join(tmpdir(), 'work-views-deadline-'))
+  const snapshot = fixtureSources({ now: Date.now() })
+  const card = snapshot.intentions.data!.cards[0]!
+  card.properties.Owner!.value = 'Will'
+  card.properties.Status!.value = 'In Progress'
+  card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
+  card.properties['Next action'] = { id: 'next', type: 'rich_text', value: 'Choose an option', hasMore: false }
+  snapshot.intentions.data!.cards = [card]
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] }, fetch, undefined, root)
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  vi.spyOn(sources.workflow, 'reconcileReviews').mockImplementation(() => new Promise(() => {}))
+  let finish!: (value: { outcome: 'available'; blocks: [] }) => void
+  vi.spyOn(CardContextReader.prototype, 'commentDetails').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  try {
+    const pending = sources.workViews()
+    await vi.advanceTimersByTimeAsync(10_000)
+    const result = await pending
+    expect(result.needsWill).toHaveLength(1)
+    expect(result.needsWill![0]).toMatchObject({ readiness: 'needs-readiness-verification', oneTouch: false, proposalHistoryComplete: false, ageBasis: 'unknown' })
+    expect(result.warnings).toContainEqual(expect.stringContaining('0 of 1 candidate cards'))
+    expect(result.warnings).toContainEqual(expect.stringContaining('ten-second budget'))
+    finish({ outcome: 'available', blocks: [] })
+    await vi.advanceTimersByTimeAsync(0)
+    // Completing background evidence cannot mutate the already-returned view.
+    expect(result.needsWill![0]!.proposalHistoryComplete).toBe(false)
   } finally { await rm(root, { recursive: true, force: true }) }
 }, 2000)
