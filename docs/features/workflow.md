@@ -124,8 +124,9 @@ and screenshots use fixtures and do not establish live acceptance.
 
 `create_work` and `update_work` extend `WorkflowOperations`, the existing
 `start_work` policy, and the authenticated MCP/tunnel. `create_work` requires a
-name, owner and area. The Inspector's **Update work** form collects each update
-operation's coupled inputs and needs no Notion window. Inspector details include
+name, owner and area. The Inspector's **Update work** form collects ordinary update
+inputs and needs no Notion window; card returns use the leased MCP operation and
+reviews use their dedicated controls. Inspector details include
 bounded comments as well as body prose. A card leaving the current filter remains in the
 Inspector with its last confirmed readback so a partial save can still be seen and retried.
 
