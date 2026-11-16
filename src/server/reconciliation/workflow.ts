@@ -9,7 +9,7 @@ import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decis
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
-import { canonicalWorkId, independentWaitIssue, parseWaitLine, waitLine, waitingForException, coverageFromObservation, workIdShape } from '../../shared/waitingForPolicy'
+import { canonicalWorkId, independentWaitIssue, parseWaitLine, waitLine, hasActiveTypedWait, waitingForException, coverageFromObservation, workIdShape } from '../../shared/waitingForPolicy'
 import { ContractError, ImplementationContracts } from './implementationContract'
 import { HandoffOperations } from './workflowHandoff'
 import { codexTurn } from '../../shared/codexActivity'
@@ -23,6 +23,7 @@ import type { SourceSnapshot } from './index'
 import type { WorkReader, WorkCard } from './workReader'
 
 const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ owner: card.properties.Owner?.value ?? null, status: card.properties.Status?.value ?? null,
+  waiting_for: card.properties['Waiting For']?.value ?? null, waiting_for_type: card.properties['Waiting For Type']?.value ?? null, waiting_for_id: card.properties['Waiting For ID']?.value ?? null,
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -463,16 +464,16 @@ export class WorkflowOperations {
     if (match.archived || status === 'Done' || status === 'Archived') throw new WorkflowError('work-not-blocking', `Waiting For ID ${workId} is ${status || 'archived'}, so it is not an unfinished blocker. Nothing was written.`)
   }
   private async validateWaitState(card: WorkCard, desired: Record<string, unknown>, resolve?: string) {
+    if (!['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in'].some(name => name in desired)) return
     const value = (name: string) => name in desired ? desired[name] : card.properties[name]?.value
     const status = String(value('Status') ?? '')
-    if (card.properties.Status?.value === 'Waiting For' && status !== 'Waiting For') {
+    if ((card.properties.Status?.value === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })) && status !== 'Waiting For') {
       const entries = String(card.properties['Waiting For']?.value ?? '').split('\n').filter(line => line.trim())
       if (!resolve || entries.filter(line => line === resolve).length !== 1 || entries.some(line => line !== resolve) || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
     }
-    if (status !== 'Waiting For' || !['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in'].some(name => name in desired)) return
     const waitingFor = String(value('Waiting For') ?? '')
     const workIds = [String(value('Waiting For Type')) === 'Work' ? String(value('Waiting For ID')) : '', ...waitingFor.split('\n').flatMap(line => { const wait = parseWaitLine(line); return wait?.type === 'Work' ? [wait.id] : [] })].filter(Boolean)
-    const source = workIds.length ? await this.reader.query({ history: true }, true) : undefined
+    const source = status === 'Waiting For' && workIds.length ? await this.reader.query({ history: true }, true) : undefined
     const exception = waitingForException({ cardId: card.id, status, type: String(value('Waiting For Type') ?? ''), id: String(value('Waiting For ID') ?? ''), waitingFor,
       nextCheckIn: value('Next check-in') as { start?: string; time_zone?: string } | null,
       observedAt: card.last_edited_time ?? null, coverage: source ? coverageFromObservation(source.status, source.coverage) : 'complete',
@@ -511,7 +512,7 @@ export class WorkflowOperations {
       note += `\n${line}`
     }
     const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
-      const wasWaiting = String(card.properties.Status?.value ?? '') === 'Waiting For'
+      const wasWaiting = String(card.properties.Status?.value ?? '') === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })
       const entries = waitText().split('\n')
       if (!wasWaiting) {
         if (!resolve) return

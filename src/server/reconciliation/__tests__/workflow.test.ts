@@ -2642,6 +2642,31 @@ describe('Waiting For status semantics', () => {
     expect((await f.reader.card(id, true)).properties['Waiting For ID']!.value).toBe(name)
   })
 
+  it.each(['Queued', 'Todo', 'Backlog', 'In Progress'])('reports and refuses a direct Notion status bypass to %s', async status => {
+    const f = readyFixture(), blocker = actor()
+    expect(await f.workflow.update(op('wait', blocker), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    f.raw.properties.Status.status.name = status
+    const sources = f.sources()
+    expect(await sources.getWork({ card_id: id, details: false, refresh: true })).toMatchObject({ waiting_for_exception: { card_id: id, field: 'Waiting For', reason: expect.stringContaining('unresolved typed blocker') } })
+    const search = await sources.searchWork({ refresh: true })
+    expect(search.records.find(record => record.card?.id === id)?.waiting_for_exception?.reason).toMatch(/unresolved typed blocker/)
+    const before = patches(f)
+    expect(await f.workflow.start(f.native, 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+    expect(await f.workflow.start({ ...f.external, operation_id: 'bypassed-external' }, 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+    expect(patches(f)).toBe(before)
+    expect(await f.workflow.update(op('edit', { note: 'Inspecting the bypassed card' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: waitLine(blocker) }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Waiting For ID']!.value).toBe('')
+    expect(await f.workflow.start({ ...f.native, operation_id: 'after-explicit-resolution' }, 'Consumer')).toMatchObject({ outcome: 'saved' })
+  })
+
+  it('rejects dispatch suffixes and accepts matching event names through the writer', async () => {
+    const f = readyFixture(), before = patches(f)
+    expect(await f.workflow.update(op('wait', actor({ dependency: 'Waiting for worker assignment', unblocks_when: 'A worker is assigned to this card' })), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'not-independent' })
+    expect(patches(f)).toBe(before)
+    expect(await f.workflow.update(op('wait', actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware source publication', unblocks_when: 'The firmware source is published', operation_id: 'publication-event' })), 'Consumer')).toMatchObject({ outcome: 'saved' })
+  })
+
   it('rejects a decision that removes its deduplicated replacement before writing', async () => {
     const f = readyFixture(), blocker = actor()
     expect(await f.workflow.update(op('wait', blocker), 'Consumer')).toMatchObject({ outcome: 'saved' })
@@ -2697,11 +2722,10 @@ describe('Waiting For status semantics', () => {
     expect(String(grouped.properties['Waiting For']!.value)).toContain('Type: Actor')
   })
 
-  it('refuses missing fields, a self work id, a placeholder, a past check-in and an unverifiable work id before writing', async () => {
+  it('refuses missing fields, a self work id, a past check-in and an unverifiable work id before writing', async () => {
     const f = readyFixture(), before = patches(f)
     expect(await f.workflow.update(op('wait', { dependency: 'Owner acceptance' }), 'Consumer')).toMatchObject({ code: 'invalid-input' })
     expect(await f.workflow.update(op('wait', { ...actor(), id: id, type: 'Work', operation_id: 'self' }), 'Consumer')).toMatchObject({ code: 'work-self' })
-    expect(await f.workflow.update(op('wait', { ...actor(), id: 'Firstmate', dependency: 'Firstmate', operation_id: 'placeholder' }), 'Consumer')).toMatchObject({ code: 'placeholder-blocker' })
     expect(await f.workflow.update(op('wait', { ...actor(), next_check_in: '2020-01-01', operation_id: 'past' }), 'Consumer')).toMatchObject({ code: 'invalid-check-in' })
     expect(await f.workflow.update(op('wait', { ...actor(), unblocks_when: undefined, operation_id: 'no-unblock' }), 'Consumer')).toMatchObject({ code: 'invalid-input' })
     vi.spyOn(f.reader, 'query').mockResolvedValue({ status: 'stale', coverage: 'unknown', data: null, observedAt: null, attemptedAt: new Date().toISOString(), expiresAt: null, error: 'stale' } as Awaited<ReturnType<typeof f.reader.query>>)

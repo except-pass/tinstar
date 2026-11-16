@@ -151,6 +151,17 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 
 A wait is an independent blocker. The server rejects a reason that only says a worker has not been assigned or attached, that First Mate has not picked the card up, that the card is queued behind other tasks, or that the only fact is a check-in date. Those cards stay Queued until `start_work` records current tracked execution. A Work id must be another unfinished card when source coverage is fresh and complete; a stale or failed source refuses the write and does not invent an id. `Waiting for Prod Release` stays on the release lifecycle. Direct Notion edits can still write an invalid status. `search_work` and `get_work` then report `waiting_for_exception` with the field, reason, card id, last observed time and source coverage, and do not rewrite the card. Unknown coverage is not evidence that a worker is gone.
 
+The dispatch phrase set is case-insensitive: worker assignment/start/attachment
+(including “A worker is assigned to this card”), First Mate pickup, queue position
+behind other work, and a bare check-in date. The unblock outcome is checked;
+when it only refers back to the dependency (“when that happens”), that dependency
+is checked instead. Actor names are not exemptions or grounds for rejection.
+Other complete typed waits pass, including an Event whose ID and dependency are
+both “Firmware source publication”. Work references still require verification.
+Every active Work line is checked, including secondary blockers. A typed blocker
+left on Queued, Todo, Backlog or In Progress is reported as an exception and
+prevents starting work until explicitly resolved or restored to Waiting For.
+
 Ordinary properties are Name, Area, Priority, Sub-area, Attention, Initiative,
 Epic, Parent item, Link, Due Date, Start Date and Next action. The server uses the actual
 Notion property type; relation classifications accept canonical page ID arrays.

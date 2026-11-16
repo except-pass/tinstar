@@ -22,8 +22,8 @@ describe('Waiting For independence', () => {
     expect(dispatch(dependency)?.code).toBe('not-independent')
   })
 
-  it('rejects a placeholder used as the blocker and allows a real one', () => {
-    expect(independentWaitIssue({ type: 'Actor', id: 'Firstmate', dependency: 'Firstmate', unblocks_when: 'Later' })?.code).toBe('placeholder-blocker')
+  it('accepts complete fields without classifying actor names', () => {
+    expect(independentWaitIssue({ type: 'Actor', id: 'Firstmate', dependency: 'Firstmate', unblocks_when: 'Later' })).toBeNull()
     allow('Owner acceptance of the tariff')
     allow('Security approval of the firmware publication', 'The image is published', 'Release engineering')
     allow('Duke Energy interconnection approval', 'The utility confirms the tariff', 'Duke Energy')
@@ -72,4 +72,34 @@ for (const workId of [id, 'invalid', other]) {
 it.each(['First Mate', 'Release engineering', 'Build crew'])('judges outcomes independently of actor %s', actor => {
   expect(independentWaitIssue({ type: 'Actor', id: actor, dependency: `Waiting for ${actor} to publish the firmware source`, unblocks_when: 'The firmware source is published' })).toBeNull()
   expect(independentWaitIssue({ type: 'Actor', id: actor, dependency: 'Security release', unblocks_when: 'The worker starts' })?.code).toBe('not-independent')
+})
+
+it.each([
+  'A worker is assigned to this card', 'The worker starts on this card',
+  'The worker attaches to this card', 'First Mate picks up this card', 'First Mate to pick it up',
+  'Queued behind other work', 'Check in on Friday',
+])('rejects the minimum dispatch outcome: %s', unblocks_when => {
+  const wait = { type: 'Actor', id: 'Release engineering', dependency: 'Waiting for worker assignment', unblocks_when }
+  expect(independentWaitIssue(wait)?.code).toBe('not-independent')
+  expect(independentWaitIssue({ ...wait, unblocks_when: unblocks_when.toUpperCase() })?.code).toBe('not-independent')
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine({ ...wait, follow_up_by: 'Consumer' }), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })?.reason).toMatch(/independent blocker/)
+})
+
+it('accepts matching event identity and dependency', () => {
+  const wait = { type: 'Event', id: 'Firmware source publication', dependency: 'Firmware source publication', unblocks_when: 'The firmware source is published', follow_up_by: 'Consumer' }
+  expect(independentWaitIssue(wait)).toBeNull()
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toBeNull()
+})
+
+it.each(['Queued', 'Todo', 'Backlog', 'In Progress'])('reports unresolved typed blockers in %s', status => {
+  const wait = { type: 'Actor', id: 'Security', dependency: 'Security approval', unblocks_when: 'Security approves the image', follow_up_by: 'Consumer' }
+  const base = { cardId: id, status, type: wait.type, id: wait.id, waitingFor: waitLine(wait), observedAt: '2026-11-16T00:00:00Z', coverage: 'complete' as const }
+  expect(waitingForException(base)).toMatchObject({ card_id: id, field: 'Waiting For', observed_at: base.observedAt, coverage: 'complete', reason: expect.stringContaining('unresolved typed blocker') })
+  expect(waitingForException({ ...base, type: '', id: '' })?.reason).toMatch(/unresolved typed blocker/)
+  expect(waitingForException({ ...base, waitingFor: '' })?.reason).toMatch(/unresolved typed blocker/)
+})
+
+it.each(['dependency', 'unblocks_when', 'follow_up_by'] as const)('reports missing %s on directly edited waits', field => {
+  const wait = { type: 'Actor', id: 'Will', dependency: 'Security approval', unblocks_when: 'Security approves', follow_up_by: 'Consumer', [field]: '' }
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })?.field).toBe('Waiting For')
 })

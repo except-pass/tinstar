@@ -62,12 +62,17 @@ function scheduleOnly(text: string): boolean {
 export function dispatchOnlyWait(dependency: string, unblocksWhen: string): boolean {
   const outcome = unblocksWhen.trim()
   const text = !outcome || /^(?:when )?(?:that|this|it) happens[.!]?$/i.test(outcome) ? dependency.trim() : outcome
-  return scheduleOnly(text) || /^(?:(?:waiting|wait) for |pending |when |once |after )?(?:(?:a |the |this |our )?(?:worker|card|task|work)(?: to be| is| gets| has been| to)? (?:assigned|started|attached|picked up|dispatched|starts|attaches)|.+? (?:to |is |will |can )?(?:pick(?:s|ing)? up|start(?:s|ing)?(?:\/attach)?|attach(?:es|ing)?|assign(?:s|ing)?) (?:a |the |this |our )?(?:worker|card|task|work)|.+? (?:to )?pick up|queued behind (?:other )?(?:tasks|work|cards)|behind other (?:tasks|work|cards|items))[.!]?$/i.test(text)
+  return scheduleOnly(text) || [
+    /^(?:(?:waiting|wait) for |pending |when |once |after )?(?:a |the |this |our )?worker(?: to be| is| gets| has been| to)? (?:assign(?:ed|ment)|start(?:ed|s|ing)?|attach(?:ed|es|ing)?)(?:\b|$)/i,
+    /^(?:(?:waiting|wait) for |pending |when |once |after )?.+? (?:to |is |will |can )?(?:start(?:s|ing)?(?:\/attach)?|attach(?:es|ing)?|assign(?:s|ing)?) (?:a |the |this |our )?worker\b/i,
+    /^(?:(?:waiting|wait) for |pending |when |once |after )?(?:first\s*mate|hilda(?: mate)?) (?:to |is |will |can )?pick(?:s|ing)?\s*(?:(?:it|this card)\s+)?up\b/i,
+    /^(?:queued behind|behind other) (?:other )?(?:tasks|work|cards|items)\b/i,
+  ].some(phrase => phrase.test(text))
 }
 
 export function independentWaitIssue(wait: { type: string; id: string; dependency: string; unblocks_when: string }): WaitIssue | null {
-  if (!wait.dependency.trim() || !wait.unblocks_when.trim() || wait.dependency.trim().toLowerCase() === wait.id.trim().toLowerCase()) {
-    return { code: 'placeholder-blocker', field: 'dependency', message: `${DISPATCH_WAIT_REASON} Supply a distinct dependency and its unblock outcome.` }
+  if (!wait.dependency.trim() || !wait.unblocks_when.trim()) {
+    return { code: 'placeholder-blocker', field: 'dependency', message: `${DISPATCH_WAIT_REASON} Supply a dependency and its unblock outcome.` }
   }
   if (dispatchOnlyWait(wait.dependency, wait.unblocks_when)) return { code: 'not-independent', field: 'unblocks_when', message: DISPATCH_WAIT_REASON }
   return null
@@ -96,6 +101,10 @@ export function waitingForFieldIssue(input: { cardId: string; status: string; ty
     if (!known.has(canonicalWorkId(id)!)) return 'Waiting For ID does not resolve to a Work card in the loaded source. The reference needs verification.'
   }
   return null
+}
+
+export function hasActiveTypedWait(input: { type: string; id: string; waitingFor: string }): boolean {
+  return !!input.type.trim() || !!input.id.trim() || input.waitingFor.split('\n').some(line => parseWaitLine(line) !== null)
 }
 
 /** Structural and dispatch-only problems on a card Tin Star did not rewrite.
@@ -132,6 +141,7 @@ export function waitingForException(input: {
     return null
   }
   if (['Queued', 'Todo', 'Backlog', 'In Progress'].includes(input.status)) {
+    if (hasActiveTypedWait(input)) return { ...base, field: 'Waiting For', reason: `Status is ${input.status}, but an unresolved typed blocker remains. Resolve the exact active wait or restore Waiting For; no fields were rewritten.` }
     for (const line of input.waitingFor.split('\n').filter(line => line.trim())) {
       const wait = parseWaitLine(line)
       if (dispatchOnlyWait(wait?.dependency ?? line, wait?.unblocks_when ?? '')) return { ...base, field: 'Waiting For', reason: `${DISPATCH_WAIT_REASON} Status is ${input.status}; this text was not rewritten.` }
