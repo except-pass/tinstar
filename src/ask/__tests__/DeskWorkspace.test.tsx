@@ -593,7 +593,7 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   function SharedModes() {
     const [origin, setOrigin] = useState<AskReturn>()
     const [desk, setDesk] = useState(true)
-    return <DeskWorkspace origin={origin} onNavigate={setOrigin} overviewActive={false} decisionsActive decisionDeskActive={desk} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}>
+    return <DeskWorkspace origin={origin} onNavigate={value => setOrigin({ ...value })} overviewActive={false} decisionsActive decisionDeskActive={desk} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}>
       <ReturnControl /><button onClick={() => setDesk(value => !value)}>Toggle mode</button>
       {desk ? <DecisionDesk /> : <div>Workbench mode</div>}
     </DeskWorkspace>
@@ -602,6 +602,7 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   await screen.findByRole('radio', { name: /Authorize preview only/ })
   fireEvent.click(screen.getByRole('button', { name: 'Explicit source return' }))
   await act(async () => {})
+  expect(claims).toHaveLength(2) // The App-style cloned origin is the same explicit return.
   fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
   await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`))
   fireEvent.click(screen.getByRole('button', { name: 'Toggle mode' }))

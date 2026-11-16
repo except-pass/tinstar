@@ -16,6 +16,9 @@ import type { DecisionTarget } from '../reconciliation/useDecisionDesk'
 import type { Target } from '../reconciliation/presentation'
 import { useViewSnapshot, type WorkspaceHistory } from './workspaceHistory'
 
+const decisionSourceKey = (value?: AskReturn) => value?.section === 'decisions' && value.target.kind === 'decision' ? value.target.id : undefined
+const sourceTarget = (value?: AskReturn): DecisionTarget | undefined => { const requestKey = decisionSourceKey(value); return requestKey ? { id: crypto.randomUUID(), requestKey } : undefined }
+
 function overviewTarget(target: AskReturn['target']) {
   return target.kind === 'card' || target.kind === 'execution' || target.kind === 'claim' ? target : null
 }
@@ -38,16 +41,14 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   decisionsActive?: boolean; decisionDeskActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
-  const sourceTarget = (value?: AskReturn): DecisionTarget | undefined => value?.section === 'decisions' && value.target.kind === 'decision' ? { id: crypto.randomUUID(), requestKey: value.target.id } : undefined
   const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | undefined>(() => sourceTarget(origin))
   const consumeDecisionTarget = useCallback((id: string) => setDecisionTarget(current => current?.id === id ? undefined : current), [])
-  const targetOrigin = useRef(origin)
+  const originRequest = decisionSourceKey(origin), targetOrigin = useRef(originRequest)
   useLayoutEffect(() => {
-    if (targetOrigin.current === origin) return
-    targetOrigin.current = origin
-    const target = sourceTarget(origin)
-    if (target) setDecisionTarget(target)
-  }, [origin])
+    if (targetOrigin.current === originRequest) return
+    targetOrigin.current = originRequest
+    if (originRequest) setDecisionTarget({ id: crypto.randomUUID(), requestKey: originRequest })
+  }, [originRequest])
   const [history, setHistory] = useState(false)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
@@ -122,7 +123,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const workspace = { decisionTarget, consumeDecisionTarget, views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
     <AskProvider decisionUnavailable={!!queueError || !!floor.error} decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
-      targetOrigin.current = destination
+      targetOrigin.current = decisionSourceKey(destination)
       const target = sourceTarget(destination)
       if (target) setDecisionTarget(target)
       if (destination.section === 'overview') search.remember()
