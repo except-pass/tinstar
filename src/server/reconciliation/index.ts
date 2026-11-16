@@ -421,7 +421,7 @@ export class ReconciliationSources {
    * Reuse the display's shared refresh for recovery and review prose; exact
    * workflow writes still perform their own fresh source/lease checks. */
   async workViews() {
-    const queue = await this.queue(undefined, undefined, false, 'read')
+    const queue = await this.queue(undefined, undefined, true, 'read')
     // A fresh tool census can observe source closure outside this process.
     // Do not serve a pre-answer display or publish an older in-flight refresh.
     this.invalidateQueueDisplays()
