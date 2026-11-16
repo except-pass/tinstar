@@ -494,7 +494,7 @@ export class WorkflowOperations {
       set('Owner', owner); set('Status', status)
     }
     const waitText = () => String(desired['Waiting For'] ?? card.properties['Waiting For']?.value ?? '')
-    const wait = async (value: { type: 'Actor' | 'Event' | 'Work'; id: string; dependency: string; unblocks_when: string; follow_up_by: string; next_check_in: string }) => {
+    const wait = async (value: { type: 'Actor' | 'Event' | 'Work'; id: string; dependency: string; unblocks_when: string; follow_up_by: string; next_check_in: string }, replace?: string) => {
       if (String(card.properties.Status?.value ?? '') === 'Waiting for Prod Release') throw new WorkflowError('release-lifecycle', 'Waiting for Prod Release stays on the release lifecycle. This operation does not convert it to generic Waiting For. Nothing was written.')
       const issue = independentWaitIssue(value)
       if (issue) throw new WorkflowError(issue.code, `${issue.message} Nothing was written.`)
@@ -502,11 +502,16 @@ export class WorkflowOperations {
       const line = waitLine(value)
       const old = waitText()
       const lines = old.split('\n').filter(entry => entry.length > 0)
-      set('Waiting For', lines.includes(line) ? lines.join('\n') : [...lines, line].join('\n'))
-      const primaryType = String(card.properties['Waiting For Type']?.value ?? ''), primaryId = String(card.properties['Waiting For ID']?.value ?? '').trim()
+      if (replace !== undefined) {
+        if (lines.filter(entry => entry === replace).length !== 1 || parseWaitLine(replace) || value.dependency !== replace) throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one untyped current line and preserve that exact line as its dependency. Nothing was written.')
+        set('Waiting For', lines.map(entry => entry === replace ? line : entry).join('\n'))
+        set('Waiting For Type', value.type); set('Waiting For ID', value.id.trim())
+        note += `\nRepaired legacy wait: ${JSON.stringify(replace)}`
+      } else set('Waiting For', lines.includes(line) ? lines.join('\n') : [...lines, line].join('\n'))
+      const primaryType = String(desired['Waiting For Type'] ?? card.properties['Waiting For Type']?.value ?? ''), primaryId = String(desired['Waiting For ID'] ?? card.properties['Waiting For ID']?.value ?? '').trim()
       const samePrimary = primaryType === value.type && primaryId.toLowerCase() === value.id.trim().toLowerCase()
       const appointment = this.futureCheckIn(value.next_check_in)
-      const currentAppointment = checkInTime((card.properties['Next check-in']?.value as { start?: string } | null)?.start ?? null, (card.properties['Next check-in']?.value as { time_zone?: string } | null)?.time_zone)
+      const currentAppointment = checkInTime(((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { start?: string } | null)?.start ?? null, ((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { time_zone?: string } | null)?.time_zone)
       if (!primaryType || !primaryId || samePrimary) { set('Waiting For Type', value.type); set('Waiting For ID', value.id.trim()) }
       if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || currentAppointment <= Date.now() || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
       note += `\n${line}`
@@ -547,6 +552,10 @@ export class WorkflowOperations {
       resolveWait(input.resolve_wait, requested)
       if (input.note) note += `\nHandoff: ${input.note}`
     } else if (input.kind === 'wait') {
+      if (input.repair_waits) {
+        if (card.properties.Status?.value !== 'Waiting For' || ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].some(name => !input.expected || !(name in input.expected) || !this.matches(card, name, input.expected[name]))) throw new WorkflowError('wait-repair-precondition', 'Legacy wait repair requires exact expected Status, Waiting For, Waiting For Type and Waiting For ID from the current card. Nothing was written.')
+        for (const repair of input.repair_waits) await wait(repair.replacement, repair.current)
+      }
       transition(String(card.properties.Owner?.value ?? ''), 'Waiting For')
       await wait(input)
       if (input.note) note += `\n${input.note}`

@@ -65,7 +65,7 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
-  z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, note: prose.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, repair_waits: z.array(z.object({ current: z.string().min(1).max(12000), replacement: waitSchema }).strict()).min(1).max(100).optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(), proposal: decisionProposalSchema.optional(),
     action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
   answerDecisionSchema,

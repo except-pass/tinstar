@@ -32,7 +32,7 @@ export function coverageFromObservation(status?: string, coverage?: string): Sou
   return 'unknown'
 }
 
-const entryText = (text: string) => /[\r\n]/.test(text) ? JSON.stringify(text) : text
+const entryText = (text: string) => /[\r\n]/.test(text) || text.startsWith('"') ? JSON.stringify(text) : text
 
 /** The exact Waiting For line a later resolve must match. */
 export function waitLine(value: { dependency: string; unblocks_when: string; follow_up_by: string; type: string; id: string }): string {
@@ -44,7 +44,7 @@ export function parseWaitLine(line: string): { type: WaitingForType; id: string;
   if (!match) return null
   const decode = (text: string) => {
     if (!text.startsWith('"')) return text
-    try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : '' } catch { return '' }
+    try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : text } catch { return text }
   }
   const value = { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4] as WaitingForType, id: decode(match[5]!) }
   return Object.values(value).every(field => field.trim()) ? value : null

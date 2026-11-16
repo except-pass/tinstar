@@ -22,7 +22,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
-import { waitLine } from '../../../shared/waitingForPolicy'
+import { waitLine, parseWaitLine } from '../../../shared/waitingForPolicy'
 import { externalWorkers, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
 import { CreationReceipts } from '../workflowReceipts'
 import { digest, implementationContract } from '../implementationContract'
@@ -2665,6 +2665,39 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('wait', actor({ dependency: 'Waiting for worker assignment', unblocks_when: 'A worker is assigned to this card' })), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'not-independent' })
     expect(patches(f)).toBe(before)
     expect(await f.workflow.update(op('wait', actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware source publication', unblocks_when: 'The firmware source is published', operation_id: 'publication-event' })), 'Consumer')).toMatchObject({ outcome: 'saved' })
+  })
+
+  it('repairs all legacy blockers atomically with exact current-state preconditions', async () => {
+    const f = readyFixture(), first = actor({ dependency: 'Security approval' }), second = actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware publication', unblocks_when: 'The firmware source is published' })
+    f.raw.properties.Status.status.name = 'Waiting For'
+    const unrelated = actor({ id: 'Legal', dependency: 'Legal acceptance', unblocks_when: 'Legal approves' })
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: `Security approval\nFirmware publication\n${waitLine(unrelated)}` }]
+    const card = await f.reader.card(id, true)
+    const expected = Object.fromEntries(['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].map(name => [name, card.properties[name]?.value ?? null]))
+    const repair_waits = [{ current: 'Security approval', replacement: first }, { current: 'Firmware publication', replacement: second }]
+    const before = patches(f)
+    expect(await f.workflow.update(op('wait', { ...first, repair_waits }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-repair-precondition' })
+    expect(await f.workflow.update(op('wait', { ...first, repair_waits, expected: { ...expected, 'Waiting For': 'Changed text' }, operation_id: 'stale-repair' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'conflict' })
+    expect(await f.workflow.update(op('wait', { ...first, repair_waits: [repair_waits[0]], expected, operation_id: 'incomplete-repair' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-invalid' })
+    expect(await f.workflow.update(op('wait', { ...first, repair_waits: [{ ...repair_waits[0], replacement: { ...first, dependency: 'Different blocker' } }, repair_waits[1]], expected, operation_id: 'changed-dependency' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-repair-conflict' })
+    expect(patches(f)).toBe(before)
+    expect(await f.workflow.update(op('edit', { properties: { Name: 'Legacy repair fixture' }, note: 'Legacy repair inspection' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(op('wait', { ...first, repair_waits, expected, operation_id: 'repair-all' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    const repaired = await f.reader.card(id, true)
+    expect(repaired.properties.Status!.value).toBe('Waiting For')
+    expect(String(repaired.properties['Waiting For']!.value).split('\n').map(parseWaitLine)).toEqual([expect.objectContaining({ dependency: 'Security approval', type: 'Actor' }), expect.objectContaining({ dependency: 'Firmware publication', type: 'Event' }), expect.objectContaining({ dependency: 'Legal acceptance', id: 'Legal' })])
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: waitLine(first) }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe([waitLine(second), waitLine(unrelated)].join('\n'))
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: waitLine(second), operation_id: 'resolve-repaired-second' }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: waitLine(unrelated), operation_id: 'resolve-repaired-last' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+  })
+
+  it.each(['dependency', 'unblocks_when', 'follow_up_by', 'id'] as const)('writes and resolves an ordinary quoted %s', async field => {
+    const f = readyFixture(), blocker = actor({ [field]: '"Security approval" must be recorded' })
+    expect(await f.workflow.update(op('wait', blocker), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    const line = String((await f.reader.card(id, true)).properties['Waiting For']!.value)
+    expect(parseWaitLine(line)).toMatchObject({ [field]: blocker[field] })
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'saved' })
   })
 
   it('rejects a decision that removes its deduplicated replacement before writing', async () => {

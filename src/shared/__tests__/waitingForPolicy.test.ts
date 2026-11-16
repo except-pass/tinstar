@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape, waitLine } from '../waitingForPolicy'
+import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape, waitLine, parseWaitLine } from '../waitingForPolicy'
 
 const id = 'a'.repeat(32)
 const other = 'e'.repeat(32)
@@ -102,4 +102,19 @@ it.each(['Queued', 'Todo', 'Backlog', 'In Progress'])('reports unresolved typed 
 it.each(['dependency', 'unblocks_when', 'follow_up_by'] as const)('reports missing %s on directly edited waits', field => {
   const wait = { type: 'Actor', id: 'Will', dependency: 'Security approval', unblocks_when: 'Security approves', follow_up_by: 'Consumer', [field]: '' }
   expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })?.field).toBe('Waiting For')
+})
+
+describe('wait text round trips', () => {
+  const original = { type: 'Actor' as const, id: 'Security', dependency: 'Security approval', unblocks_when: 'Approval is recorded', follow_up_by: 'Consumer' }
+  it.each(['dependency', 'unblocks_when', 'follow_up_by', 'id'] as const)('preserves quoted %s through serialization and diagnostics', field => {
+    for (const text of ['"Security approval" must be recorded', '"Security approval"', 'Security "approval" is required', '"Security"\nLegal approval', '"Security \\"approval\\""']) {
+      const wait = { ...original, [field]: text }
+      const line = waitLine(wait)
+      expect(parseWaitLine(line)).toEqual(wait)
+      expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: line, nextCheckIn: { start: '2027-01-01' }, coverage: 'complete', observedAt: null })).toBeNull()
+    }
+  })
+  it('reads existing single-line quoted prose', () => {
+    expect(parseWaitLine('Dependency: "Security approval" must be recorded | Unblocks when: "Approval" is recorded | Follow-up: "Consumer" team | Type: Actor | ID: "Security" team')).toEqual({ type: 'Actor', id: '"Security" team', dependency: '"Security approval" must be recorded', unblocks_when: '"Approval" is recorded', follow_up_by: '"Consumer" team' })
+  })
 })

@@ -151,6 +151,15 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 
 A wait is an independent blocker. The server rejects a reason that only says a worker has not been assigned or attached, that First Mate has not picked the card up, that the card is queued behind other tasks, or that the only fact is a check-in date. Those cards stay Queued until `start_work` records current tracked execution. A Work id must be another unfinished card when source coverage is fresh and complete; a stale or failed source refuses the write and does not invent an id. `Waiting for Prod Release` stays on the release lifecycle. Direct Notion edits can still write an invalid status. `search_work` and `get_work` then report `waiting_for_exception` with the field, reason, card id, last observed time and source coverage, and do not rewrite the card. Unknown coverage is not evidence that a worker is gone.
 
+For a legacy Waiting For card, `wait` also accepts `repair_waits` entries of
+`{current, replacement}`. Each `current` must match exactly one untyped line;
+its replacement is a complete wait whose dependency preserves that exact line.
+Supply exact `expected` values for Status, Waiting For, Waiting For Type and
+Waiting For ID. Repair all malformed lines in one operation; unrelated waits
+remain intact, and final validation runs before any write. The normal wait
+fields can repeat one replacement, which is deduplicated. Ordinary edits remain
+available before repair.
+
 The dispatch phrase set is case-insensitive: worker assignment/start/attachment
 (including “A worker is assigned to this card”), First Mate pickup, queue position
 behind other work, and a bare check-in date. The unblock outcome is checked;
