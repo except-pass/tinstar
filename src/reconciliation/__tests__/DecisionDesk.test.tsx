@@ -642,7 +642,9 @@ it.each([
         committed = true; lost = true
         throw new Error('Dropped release response')
       }
-      if (body.operation_id === releases[0].operation_id) {
+      const originalRelease = releases[0]
+      if (!originalRelease) throw new Error('Expected the original release request')
+      if (body.operation_id === originalRelease.operation_id) {
         expect(body).toEqual(releases[0])
         return new Response(JSON.stringify({ ok: true, data: { outcome: 'released', next: { outcome: 'held', packet: second, lease_token: 'second-lease' } } }))
       }
@@ -671,7 +673,10 @@ it.each([
   await screen.findByText('No prepared decisions ready.')
   expect(finished).toBe(true)
   expect(releases).toHaveLength(3)
-  expect(releases[2].operation_id).not.toBe(releases[0].operation_id)
+  const originalRelease = releases[0]
+  const nextRelease = releases[2]
+  if (!originalRelease || !nextRelease) throw new Error('Expected original and next release requests')
+  expect(nextRelease.operation_id).not.toBe(originalRelease.operation_id)
   expect(submits).toHaveLength(0)
 })
 
@@ -705,7 +710,9 @@ it.each(['skip', 'research'])('recovers a definitely rejected %s after expiry, f
   fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
   await screen.findByText('No prepared decisions ready.')
   expect(submits).toHaveLength(1)
-  expect(submits[0].lease_token).toBe('renewed-lease')
+  const submission = submits[0]
+  if (!submission) throw new Error('Expected a submission with the renewed lease')
+  expect(submission.lease_token).toBe('renewed-lease')
 })
 
 it('keeps a completed Discuss target consumed across the Workbench and Desk mode boundary', async () => {
