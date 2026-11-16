@@ -4,13 +4,11 @@
 
 Each item has a semantic `id`, `title`, nullable concrete `action`, `kind` (`decision`, `blocked`, `merge`), `readiness`, explanatory `reasons`, canonical `cardIds`, `executionIds`, `homeIds`, `decisionKeys`, evidence URLs, checkpoint and per-source observation/expiry/coverage metadata. Every request source retains its own `request` tuple (`home`, `taskId`, `id`, `kind`). First Mate kinds are `hold` and `decision`; Notion uses `notion-card`, its exact card ID, and null home/task. Each request source has its own `readiness`, `action`, and `reasons`. A First Mate source may carry a `responseAnchor` for that exact tuple; aggregate ID arrays and the queue item ID are never response targets. GitHub observations and the Notion feed observation used to verify request context are supporting evidence rather than request identities. Their expiry still suspends actionable presentation. `oneTouch` is true only for a concrete ready-now request; it is presentation data, not permission or a domain action. Counts are scoped to returned deduplicated decisions, not all work or the whole farm. `emptyQueueMeansAllClear` is always false; read `coverage`, including failed homes and last-known sources.
 
-Decisions shows the existing canonical requests, with verification and conditional states kept visible. See [Decisions navigation](#decisions-tab) for the visible-list controls and their distinction from MCP navigation. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
+The operational queue retains canonical requests and their verification and conditional states. The [Decisions surface](#decisions-tab) presents those requests and offers prepared review. Discuss contains conversations only; raw holds and queue candidates never enter its tabs. The [Ask reference](ask.md) owns the inbox layout. A worker's keyed question alone does not establish Will as next actor. It needs an owner-actionable hold whose ID exactly equals the decision key, or a canonical card with an explicit `Will action = Decision` and one open keyed decision. If multiple tasks share that key, the hold must explicitly name the matching origin task. Fleet answer routes still require the exact owner-actionable hold; classification does not add transport permission. Legacy aliases, matching text and card ownership alone never supply routing.
 
-Each First Mate source shows its own sanitized question beside its Answer/Dismiss controls. Controls appear only while both the item and that source are ready and current. Each source retains its existing worker terminal link. The link is emitted only when the existing resolver returns that exact full home/task identity. Unavailable or ambiguous targets offer no terminal link. Notion sources open their own card and never acquire First Mate response controls.
-
-Answer uses the existing `/api/fleet/messages` inbox/receipt path, with a source anchor resolved against the current explicit request inventory. Dismiss uses the existing `/api/fleet/dismiss` route, resolving either one worker decision key or one captain hold. Neither uses the legacy attention title/key fallback. A failed fleet read removes response routes while retaining last-known display data. Outbox records retain the exact source anchor, and both initial submission and retry include it in the First Mate inbox note, preserving home, task, request ID and source kind even when a decision and hold share an ID and summary. Receipts track that request rather than another request sharing a key; pending/saved responses remain visible on returning to the source. Reading and Next never choose a response; delivery of recorded answers follows the [decision reconciliation contract](workflow.md#first-mate-decision-reconciliation).
-
-Expand **Evidence and delivery details** in the decision detail to inspect the retained response receipt. Failed saves and confirmed wake failures offer **Retry delivery** with the existing request ID; a successfully delivered response awaiting an answer does not.
+Source-bound answer transport, receipt reconciliation and delivery recovery follow the
+[shared workflow contract](workflow.md#first-mate-decision-reconciliation).
+The [Decisions controls](#decisions-tab) describe workbench review and source discussion.
 
 Items are ordered by readiness, then checkpoint, then stable ID. A checkpoint affects ordering only; overdue is not proof of an actionable decision and an upcoming checkpoint does not hide a ready one.
 
@@ -78,6 +76,11 @@ The live discovery proof is saved outside the repository at `/home/farm/fm-home/
 
 ## Decisions tab
 
+The [Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui)
+owns mode selection and prepared Review / Preparation. The workbench controls
+below apply to the source-request list. Queue navigation alone does not establish
+a prepared packet or a review lease.
+
 `?view=decisions` lists the shared `needsWill` projection across all three
 readiness categories, including future/conditional requests. Operational coordination
 bundles appear only under diagnostics rather than as one answerable decision. See the
@@ -85,7 +88,8 @@ bundles appear only under diagnostics rather than as one answerable decision. Se
 for ask inclusion, PR evidence, request age and advisory execution warnings.
 Legacy encoded text is decoded before readiness checks, so “After the next prod
 release” remains conditional. Source warnings and retained worker notes remain
-available on demand near the footer.
+available under the header’s **Source status** / **Some sources need verification**
+disclosure and **Technical diagnostics**.
 Search by title, question, card ID or readiness. Selecting a compact row opens
 its action workbench beside the queue on desktop; mobile shows the queue or detail
 one pane at a time, with **All decisions** returning to the list. The persistent

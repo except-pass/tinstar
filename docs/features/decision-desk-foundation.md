@@ -1,4 +1,4 @@
-# Decision Desk backend foundation (P1–P3)
+# Decision Desk foundation and review UI
 
 P1 is the preparation-storage slice of the Decision Desk sequence. It advances the
 backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
@@ -6,8 +6,8 @@ backend portions of acceptance criteria **1 and 2**, and foundations for **3, 8,
 P2 adds [registered review sessions and prepared claims](#p2-registered-review-sessions-and-prepared-claims).
 P3 adds [durable source-bound submit and recovery](#p3-durable-source-bound-submit-and-recovery).
 P4–P6 cover preparation workers, the two-view UI, and integrated acceptance/activation.
-Existing Decisions screens, generic claims, source answers, receipts and
-`search_work` filters/coverage retain their behavior.
+Generic claims, source answers, receipts and `search_work` filters/coverage
+retain their behavior. P5 adds a Decisions mode as described below.
 
 P1 starts no workers, dispatches no jobs and spends nothing on preparation.
 Automatic replenishment is stored ON by default, ready depth 10 (1–30), maximum
@@ -366,8 +366,12 @@ An explicit replacement context may also supply `original_lease_token` to prove
 access to an older retained selection. After reclaim, submit accepts a fresh
 packet version only when its source binding/revision and authorization are
 identical, preserving the source operation ID. Transfer to a different review
-context also requires that original capability. A changed source revision cannot
-be rescued by an old selection or operation.
+context also requires the capability for the latest server-bound context. Recovery
+returns `binding_matches_original_lease` for each operation, identifying whether the
+supplied capability matches that binding. After a lost transfer response or a
+lease-lost result, reconcile the retained candidate capabilities through recovery
+before another transfer; retain the exact operation and selection. A changed source
+revision cannot be rescued by an old selection or operation.
 MCP exposes `submit_prepared_decision` and `get_prepared_submission_state` with
 these same semantics; no scene ID or invented conversation identity is used.
 
@@ -411,3 +415,88 @@ source delay and the scope/limitations in `api-proof.json`, then closes both
 servers. It uses no live root, tokens, board or bridge. These fixture measurements
 are not production latency or P6 integrated acceptance. No P3 screen changed;
 first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
+
+## P5 — Review and Preparation UI
+
+The existing **Decisions** entry defaults to the source workbench, preserving its
+request list, answering controls, receipts, evidence, and Discuss behavior. The
+**Workbench / Decision Desk** mode control makes prepared review explicit. No
+prepared session is created or packet claimed while only the workbench is open.
+The mode is retained across in-app navigation so returning from Discuss keeps the
+selected surface; it is not persisted as a new default. A page reload starts with
+the workbench. The owner must explicitly enable the future Desk default (fork F);
+packet availability never switches it automatically.
+
+The selected Decision Desk mode uses the prepared-review APIs for one real,
+server-registered review context. Session capabilities, exact selections and
+submission operation IDs are retained in session storage and sent only as API
+arguments. Duplicate browser contexts with cloned storage resume that same real
+session; a distinct context must explicitly create a new session. The rail lists
+actual server contexts and explains that other contexts must be resumed in their
+original browser. Discuss remains available as an explicitly opened overlay in the Desk mode; the
+workbench retains its existing responsive Discuss behavior.
+
+Open **Source request & discussion** from the evidence inspector (or the inline
+**Evidence, confidence & execution boundaries** disclosure on smaller screens)
+to inspect card context, receipt history, an available exact source terminal link,
+and the request-bound text/voice composer. **Open source conversation in Discuss**
+resumes its existing thread. Returning from Discuss retains the exact request key;
+if the card-only claim returns a different request, the desk releases a newly
+allocated substitute without answering and reports that the requested decision is
+not ready or is held. An existing held claim, including another request on the same
+card, retains its lease and local selection with an explanation that this session
+holds a different decision. It never presents that claim as the requested destination.
+Each explicit Return to source or card/request selection creates a **one-shot**
+claim target. Its first result consumes it, whether claimed, retained by this
+session, held elsewhere, refused as a substitute, or not ready. Queue observations,
+ordinary revisions, refreshes and mode changes do not re-arm it. Subsequent claims,
+including Refresh and continuation after submit/skip/research, are untargeted
+next-ready claims (the backend still resumes this session's unresolved held card).
+A requested-target conflict/refusal/not-ready screen exposes **Claim next prepared
+decision** as its primary action at every width and **Try this decision again** as
+a quiet, explicitly targeted retry. Retained answers and pending release recovery
+remain bound to their original source and operation; this does not discard them. Unlinked requests cannot
+be reviewed without a verified canonical card and prepared packet.
+
+**Submit decision & next →** records the selected source option before advancing.
+**Skip** releases without answering. **Need more research** accepts an optional
+reason, withdraws the packet and serves the next eligible decision; it does not
+start a preparer. An unconfirmed release retains its original operation and session/
+lease capabilities for reconciliation before another claim or submission. A
+definitive rejection clears the pending release; an expired or lost lease then
+requires re-claim and revalidation. Unresolved answers and local selections remain
+retained through this recovery.
+
+Retained worker notes are under **Preparation → Source delivery
+details**. MCP navigation still uses the operational queue, but visible delivery
+uses the visible selected mode: the workbench retains its searchable request list,
+while prepared Review requires its exact leased packet to be painted.
+
+Review uses the approved three/two/one-column layout, source-bound radio choices,
+scoped high-risk confirmation and readback-confirmed submit/next. Expired leases,
+invalidated evidence and unavailable sources block submission. Definite and
+unconfirmed saves retain the selection and operation; retries use the same ID.
+Preparation saves the effective versioned queue policy. No preparation runner is
+configured in P5, and no setting starts or schedules one. Unknown source totals
+are unavailable, not zero. The cached-source `/snapshot` projection supplies full
+latest-packet inventory/counts and pending rows without researching or mutating
+source cards; it is separate from the bounded publication inventory.
+
+**Multipart boundary:** P5 reviews each independently identified source request
+separately through P3. Same-card requests are not inferred to form a bundle.
+Combined A/B/C submission and its partial-save screen remain outstanding pending
+owner fork C (source grouping, required parts, aggregate transitions and retaining
+one lease across parts). Firstmate confirmed this scope in task instruction
+`001.msg` on 2026-11-15. Recorded progress is per source request, never a claim that
+an unspecified bundle is complete. P4 (preparer runner) and P6 (integrated
+acceptance/activation evidence) follow.
+
+The isolated running-UI harness is
+`scripts/decision-desk-ui-preview.ts <task-proof-directory>`, after `npm run
+build:all`. It creates a fresh config root and SQLite database, uses a disposable
+Notion-compatible source adapter, and serves preview-only fault controls outside
+production routes. No live home, token, board, bridge or preparer is enrolled.
+Browser proof uses a named `chrome-devtools-axi` session which must be stopped
+after capture. Browser Performance measures distinguish claim API/visible and
+submit API/visible timings, with outcomes separating filled-buffer, empty and
+unavailable cases; source prose and capability tokens are never measure names.

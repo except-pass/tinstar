@@ -229,6 +229,7 @@ export class PreparedSubmissions {
       return { submissions: rows.map(row => {
         const answer: Answer = JSON.parse(row.answer)
         return { operation_id: row.operation, selection: JSON.parse(row.selection), state: row.state,
+          binding_matches_original_lease: !!input.original_lease_token && JSON.parse(row.binding).token_hash === leaseHash(input.original_lease_token),
           next: workReadback(answer.next), resolve_wait: workReadback(answer.resolve_wait), confirmed_at: row.confirmed === null ? null : new Date(row.confirmed).toISOString(),
           detail: workReadback(JSON.parse(row.detail)), recovery: 'Retry the original operation ID and selection after reclaiming/revalidating an expired lease. Ambiguous provider writes use the existing audited source-write reconciliation API.' }
       }) }

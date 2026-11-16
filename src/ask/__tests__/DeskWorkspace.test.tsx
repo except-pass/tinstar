@@ -2,10 +2,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import App from '../../App'
+import { preparedDecisionFixture } from '../../../test-fixtures/reconciliation/preparedDecision'
 import { observeTargets } from '../../reconciliation/presentationVisibility'
 import { Overview } from '../../reconciliation/Overview'
 import { DeskWorkspace, useDeskWorkspace } from '../DeskWorkspace'
-import { AskCardAction } from '../Ask'
+import { DecisionDesk } from '../../reconciliation/DecisionDesk'
+import type { AskReturn } from '../../shared/ask'
+import { AskCardAction, useAskControls } from '../Ask'
 import { DeskRail } from '../DeskRail'
 import { clampDeskWidth, deskPreferencesKey, loadDeskPreferences } from '../deskPreferences'
 import { fixtureId, fixtureScene, fixtureQueue } from '../../../test-fixtures/reconciliation/scenes'
@@ -19,7 +22,7 @@ let items: ReturnType<typeof record>[]
 beforeEach(() => {
   window.history.replaceState(null, '', '/')
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null; source.queueError = null
+  localStorage.clear(); sessionStorage.clear(); items = [record(), record()]; source.scene = fixtureScene(); source.queue = null; source.queueError = null
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
   vi.stubGlobal('matchMedia', () => ({ matches: window.innerWidth <= 850, addEventListener() {}, removeEventListener() {} }))
@@ -27,6 +30,19 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false }
   read.mockReset().mockImplementation(async (url: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : null
+    if (url.includes('/decision-desk/')) {
+      const value = preparedDecisionFixture().packet
+      const cardId = body?.card_id ?? sessionStorage.getItem('test-held-card') ?? value.binding.card_id
+      sessionStorage.setItem('test-held-card', cardId)
+      const request = (source.queue?.needsWill ?? source.queue?.items ?? []).find(item => item.cardIds.includes(cardId))
+      value.binding.card_id = cardId
+      value.binding.request_key = request?.id ?? value.binding.request_key
+      const packet = { id: 'fixture-packet', version: 1, packet: value, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() }
+      const data = url.endsWith('/sessions') ? body ? { session: { id: 'browser' }, review_session_token: 'session' } : { sessions: [{ id: 'browser', label: 'Browser', expires_at: new Date(Date.now() + 86400000).toISOString() }] }
+        : url.endsWith('/claim') ? { outcome: 'held', packet, lease_token: 'lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } }
+        : url.endsWith('/submission-state') ? { submissions: [] } : {}
+      return new Response(JSON.stringify({ ok: true, data }))
+    }
     const data = url === '/api/fleet' ? { ready: true, workers: [], attention: [], errors: [] }
       : url === '/api/fleet/messages' ? []
       : url === '/api/releases' ? { pulls: [], unassociatedCards: [], warnings: [], associationsComplete: true, associationsWritable: false }
@@ -516,4 +532,88 @@ it.each(['navigate-card', 'focus', 'flash', 'reveal-search'] as const)('delivers
   expect(observeTargets(expected, 'overview')).toMatchObject({ stage: 'foreground-visible', rendered_targets: expected, visible_targets: expected, pending: false })
   const acknowledgments = read.mock.calls.flatMap(([url, init]) => url === '/api/reconciliation/ui' ? JSON.parse(String(init?.body)).acknowledgments ?? [] : [])
   expect(acknowledgments).toEqual(expect.arrayContaining([expect.objectContaining({ command_id: '2', delivery: expect.objectContaining({ stage: 'foreground-visible', visible_targets: expected, pending: false }) })]))
+})
+
+
+it('keeps the source workbench as default and claims a prepared packet only after explicit mode selection', async () => {
+  source.queue = fixtureQueue()
+  window.history.replaceState(null, '', '/?view=decisions')
+  render(<App />)
+  await screen.findByText('Choose a decision to resolve')
+  expect(document.querySelectorAll('.decisions-row').length).toBeGreaterThan(0)
+  expect(document.querySelector('.decision-desk')).toBeNull()
+  expect(read.mock.calls.some(([url]) => String(url).includes('/decision-desk/'))).toBe(false)
+  const modes = screen.getByRole('navigation', { name: 'Decisions mode' })
+  fireEvent.click(within(modes).getByRole('button', { name: 'Decision Desk' }))
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  expect(read.mock.calls.some(([url]) => String(url).endsWith('/decision-desk/claim'))).toBe(true)
+  fireEvent.click(within(modes).getByRole('button', { name: 'Workbench' }))
+  expect(document.querySelectorAll('.decisions-row').length).toBeGreaterThan(0)
+  expect(document.querySelector('.decision-desk')).toBeNull()
+  cleanup()
+  render(<App />)
+  await screen.findByText('Choose a decision to resolve')
+  expect(document.querySelector('.decision-desk')).toBeNull()
+})
+
+it('re-arms an identical explicit Discuss return while retaining the next held lease across modes', async () => {
+  source.queue = fixtureQueue()
+  const request = (source.queue.needsWill ?? source.queue.items)[0]!
+  const delivered = record()
+  delivered.context.target = { kind: 'decision', id: request.id }
+  delivered.context.view = { scene: 'decisions', request_key: request.id }
+  delivered.context.return_to = { section: 'decisions', target: { kind: 'decision', id: request.id }, view: delivered.context.view }
+  items = [delivered]
+  const makePacket = (card: string, key: string) => {
+    const value = preparedDecisionFixture().packet
+    value.binding.card_id = card; value.binding.request_key = key
+    return { id: card, version: 1, packet: value, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() }
+  }
+  const a = makePacket(request.cardIds[0]!, request.id)
+  const b = makePacket(fixtureId(2), 'request-b')
+  let skipped = false
+  const claims: Record<string, unknown>[] = [], releases: Record<string, unknown>[] = []
+  const fallback = read.getMockImplementation()!
+  read.mockImplementation(async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    if (url.endsWith('/decision-desk/claim')) {
+      claims.push(body)
+      return new Response(JSON.stringify({ ok: true, data: { outcome: skipped ? 'already-holding' : 'held', packet: skipped ? b : a, lease_token: skipped ? 'lease-b' : 'lease-a', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } } }))
+    }
+    if (url.endsWith('/decision-desk/release')) {
+      releases.push(body); skipped = true
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'skipped', next: { outcome: 'held', packet: b, lease_token: 'lease-b', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } } } }))
+    }
+    return fallback(url, init)
+  })
+  function ReturnControl() {
+    const controls = useAskControls()
+    return <button onClick={() => controls!.returnToSource(delivered)}>Explicit source return</button>
+  }
+  function SharedModes() {
+    const [origin, setOrigin] = useState<AskReturn>()
+    const [desk, setDesk] = useState(true)
+    return <DeskWorkspace origin={origin} onNavigate={value => setOrigin({ ...value })} overviewActive={false} decisionsActive decisionDeskActive={desk} onOverview={() => {}} workers={[]} messages={[]} submit={vi.fn()}>
+      <ReturnControl /><button onClick={() => setDesk(value => !value)}>Toggle mode</button>
+      {desk ? <DecisionDesk /> : <div>Workbench mode</div>}
+    </DeskWorkspace>
+  }
+  render(<SharedModes />)
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  fireEvent.click(screen.getByRole('button', { name: 'Explicit source return' }))
+  await act(async () => {})
+  expect(claims).toHaveLength(2) // The App-style cloned origin is the same explicit return.
+  fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`))
+  fireEvent.click(screen.getByRole('button', { name: 'Toggle mode' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Toggle mode' }))
+  await screen.findByRole('radio', { name: /Authorize preview only/ })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled())
+  const before = claims.length
+  fireEvent.click(screen.getByRole('button', { name: 'Explicit source return' }))
+  await waitFor(() => expect(claims.length).toBeGreaterThan(before))
+  expect(claims.at(-1)).toMatchObject({ card_id: a.packet.binding.card_id, lease_token: 'lease-b' })
+  await screen.findByText('This session already holds a different decision. Finish or skip it before switching.', { selector: '.dd-notice' })
+  expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`)
+  expect(releases).toHaveLength(1)
 })

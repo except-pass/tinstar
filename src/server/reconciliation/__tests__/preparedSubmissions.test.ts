@@ -387,3 +387,31 @@ it('commits research withdrawal and release when the next allocation is unavaila
   expect(await f.backend.reviews.release('owner', 'Reviewer', input)).toMatchObject({ outcome: 'research-requested', next: { lease: { card_id: f.fixture.fixtures[1]!.cardId } } })
   expect(f.fixture.writes).toHaveLength(0)
 })
+
+it.each(['lost response', 'expired during observation'])('reports the authoritative transfer capability after %s and restart', async failure => {
+  const f = await setup()
+  f.fixture.controls.reject = true
+  await f.submit()
+  await f.backend.reviews.close('owner', f.session.review_session_token, 'Replace A')
+  const sessionB = await f.backend.reviews.create('owner', { operation_id: 'session-b', label: 'B' })
+  const heldB = await f.backend.reviews.claim('owner', 'Reviewer', { operation_id: 'claim-b', review_session_token: sessionB.review_session_token, card_id: f.claim.lease!.card_id })
+  const transferred = { ...f.input, review_session_token: sessionB.review_session_token, lease_token: heldB.lease_token!, original_lease_token: f.input.lease_token }
+  const source = { ...f.backend.source, observe: async (...args: Parameters<typeof f.backend.source.observe>) => {
+    const result = await f.backend.source.observe(...args)
+    if (failure === 'expired during observation') f.backend.leases.readStorage(db => { db.prepare('UPDATE leases SET expires = ? WHERE card = ?').run(Date.now() - 1, f.claim.lease!.card_id) })
+    return result
+  } }
+  const result = await new PreparedSubmissions(f.backend.reviews, source).submit('owner', 'Reviewer', 'owner-actor', transferred)
+  expect(result.outcome).toBe(failure === 'lost response' ? 'not-saved' : 'lease-lost')
+  await f.backend.reviews.close('owner', sessionB.review_session_token, 'Replace B')
+  const restarted = await f.fixture.build(f.root)
+  const sessionC = await restarted.reviews.create('owner', { operation_id: 'session-c', label: 'C' })
+  const lookup = (token: string) => restarted.submissions.recover('owner', { review_session_token: sessionC.review_session_token, original_lease_token: token })
+  expect(await lookup(f.input.lease_token)).toEqual({ submissions: [] })
+  expect(await lookup(heldB.lease_token!)).toMatchObject({ submissions: [{ operation_id: f.input.operation_id, binding_matches_original_lease: true, selection: { option_id: f.input.option_id } }] })
+  const heldC = await restarted.reviews.claim('owner', 'Reviewer', { operation_id: 'claim-c', review_session_token: sessionC.review_session_token, card_id: f.claim.lease!.card_id })
+  const retry = { ...transferred, review_session_token: sessionC.review_session_token, lease_token: heldC.lease_token! }
+  expect(await restarted.submissions.submit('owner', 'Reviewer', 'owner-actor', retry)).toMatchObject({ outcome: 'lease-lost' })
+  f.fixture.controls.reject = false
+  expect(await restarted.submissions.submit('owner', 'Reviewer', 'owner-actor', { ...retry, original_lease_token: heldB.lease_token! })).toMatchObject({ outcome: 'recorded' })
+})

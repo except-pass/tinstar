@@ -12,8 +12,12 @@ import { useSearchSession } from '../reconciliation/useSearchSession'
 import { loadOverviewDensity, type OverviewDensity } from '../reconciliation/overviewDensity'
 import type { AskReturn } from '../shared/ask'
 import { emptySearch } from '../shared/smartSearch'
+import type { DecisionTarget } from '../reconciliation/useDecisionDesk'
 import type { Target } from '../reconciliation/presentation'
 import { useViewSnapshot, type WorkspaceHistory } from './workspaceHistory'
+
+const decisionSourceKey = (value?: AskReturn) => value?.section === 'decisions' && value.target.kind === 'decision' ? value.target.id : undefined
+const sourceTarget = (value?: AskReturn): DecisionTarget | undefined => { const requestKey = decisionSourceKey(value); return requestKey ? { id: crypto.randomUUID(), requestKey } : undefined }
 
 function overviewTarget(target: AskReturn['target']) {
   return target.kind === 'card' || target.kind === 'execution' || target.kind === 'claim' ? target : null
@@ -21,6 +25,7 @@ function overviewTarget(target: AskReturn['target']) {
 
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
+  decisionTarget: DecisionTarget | undefined; consumeDecisionTarget: (id: string) => void
   views?: WorkspaceHistory; origin?: AskReturn; clearOrigin?: () => void
   queue: ReturnType<typeof useDeskQueue>['queue']; queueError: string | null; openDesk: () => void; workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>
 }
@@ -31,11 +36,19 @@ export function useDeskWorkspace() {
   return value
 }
 
-export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, onOverview, onDecisions, workers, messages, submit, children }: {
+export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overviewActive, decisionsActive = false, decisionDeskActive = false, onOverview, onDecisions, workers, messages, submit, children }: {
   views?: WorkspaceHistory; onClearOrigin?: () => void; origin?: AskReturn; onNavigate?: (origin: AskReturn) => void
-  decisionsActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
+  decisionsActive?: boolean; decisionDeskActive?: boolean; overviewActive: boolean; onOverview: () => void; onDecisions?: () => void
   workers: Worker[]; messages: OutboxMessage[]; submit: (draft: Draft) => Promise<SubmitResult>; children: ReactNode
 }) {
+  const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | undefined>(() => sourceTarget(origin))
+  const consumeDecisionTarget = useCallback((id: string) => setDecisionTarget(current => current?.id === id ? undefined : current), [])
+  const originRequest = decisionSourceKey(origin), targetOrigin = useRef(originRequest)
+  useLayoutEffect(() => {
+    if (targetOrigin.current === originRequest) return
+    targetOrigin.current = originRequest
+    if (originRequest) setDecisionTarget({ id: crypto.randomUUID(), requestKey: originRequest })
+  }, [originRequest])
   const [history, setHistory] = useState(false)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
@@ -57,6 +70,16 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     const inDecisions = targets.every(target => target.kind === 'card' && (queue?.needsWill ?? queue?.items ?? []).some(item => !isCoordinationRequest(item.title) && item.cardIds[0] === target.id))
     if (action.type === 'navigate-card' && inDecisions && onDecisions) { if (!decisionsActive) onDecisions() }
     else if (!overviewActive && !inDecisions) onOverview()
+  }, (action, state) => {
+    // Only explicit navigation arms a one-shot prepared claim. Queue refreshes,
+    // restored presentation state and unrelated revisions never create intent.
+    if (action.type === 'focus' && action.target.kind === 'card') setDecisionTarget({ id: crypto.randomUUID(), cardId: action.target.id })
+    else if (action.type === 'navigate-card') setDecisionTarget({ id: crypto.randomUUID(), cardId: action.cardId })
+    else if (action.type === 'open-queue' || action.type === 'navigate-queue') {
+      const requestKey = action.type === 'open-queue' ? action.itemId : state.queueItemId ?? undefined
+      const cardId = action.type === 'open-queue' ? action.cardId : state.queueCardId ?? undefined
+      if (requestKey || cardId) setDecisionTarget({ id: crypto.randomUUID(), cardId, requestKey })
+    }
   })
   // All/custom are explicit requests for records outside the operational scope.
   // MCP work queries choose their own scope and never inherit this UI state.
@@ -97,9 +120,12 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
+  const workspace = { decisionTarget, consumeDecisionTarget, views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
     <AskProvider decisionUnavailable={!!queueError || !!floor.error} decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
+      targetOrigin.current = decisionSourceKey(destination)
+      const target = sourceTarget(destination)
+      if (target) setDecisionTarget(target)
       if (destination.section === 'overview') search.remember()
       if (onNavigate) onNavigate(destination)
       else if (destination.section === 'overview') {
@@ -108,12 +134,12 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
         if (target && search.choose(target)) presentation.send({ type: 'flash', targets: [target] })
       }
     }}>
-      <div className="desk-workspace">{children}<WorkspaceRail closeRequest={closeRequest} openRequest={openRequest} /></div>
+      <div className="desk-workspace">{children}<WorkspaceRail overlay={decisionDeskActive} closeRequest={closeRequest} openRequest={openRequest} /></div>
     </AskProvider>
   </WorkspaceContext.Provider>
 }
-function WorkspaceRail({ closeRequest, openRequest }: {
-  closeRequest: number; openRequest: number
+function WorkspaceRail({ overlay, closeRequest, openRequest }: {
+  overlay?: boolean; closeRequest: number; openRequest: number
 }) {
   const { now } = useDeskWorkspace()
   const controls = useAskControls()
@@ -132,7 +158,7 @@ function WorkspaceRail({ closeRequest, openRequest }: {
     previousExpanded.current = expandedGroup ? { id: expandedGroup.id, view: expandedGroup.view } : null
   }, [expandedGroup, followExpanded])
   const attention = groups.filter(group => group.attention && !group.unread).length
-  return <DeskRail onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
+  return <DeskRail overlay={overlay} onVisibilityChange={controls?.setDeskVisible} closeRequest={closeRequest} openRequest={openRequest} unread={unread} attention={attention}>
     <nav className="desk-tabs" aria-label="Discuss views">{([['needs-you', 'Needs you'], ['waiting', 'Waiting'], ['history', 'History']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setSelectedView(key)}>{label}{' '}<span>{counts[key]}</span></button>)}</nav>
     <AskDesk now={now} view={view} />
   </DeskRail>
