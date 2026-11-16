@@ -80,7 +80,7 @@ alone stays unknown.
 | Valid declaration + exact observed home/task/spawn | Confirmed explicit claim; normal connection in the existing gutter. No worker-side link metadata required. |
 | Valid declaration + unavailable, stale, partial or unconfigured home | Last-known claim and unknown/unavailable diagnostic; no broken-link or absence conclusion, no deletion or invented worker. |
 | Observed executing worker without a declaration + positive Notion-origin evidence | Investigation candidate (`untracked-worker`) only with complete fresh sources and readable declarations; never automatically assigned. |
-| Independent/ad hoc worker without a declaration | Legitimately unlinked; no orphan finding. |
+| Independent/ad hoc worker without a declaration | No invented association; [spawn card exceptions](#spawn-card-and-backlog-closure-exceptions) apply separately. |
 | Declared task absent from a complete fresh home | Unverified declared relationship with an investigation diagnostic; never switch to a similarly named worker. |
 | Same worker on two primary cards, multiple observed attempts with the same ID, or different spawn evidence | Conflicting claims; request First Mate investigation. Hidden/Done cards still participate in duplicate detection. |
 | Done/archived card or changed Owner with a declared relationship | Historical claim retained. Card status/ownership alone is not an identity conflict. Operational expectations are evaluated separately. |
@@ -142,8 +142,7 @@ coordinator. PM Bot may nudge for accountability but does not own worker linkage
    remove declarations only for verified reassignment or duplicate error, with a
    meaningful audit explanation. Done/archived status or Owner changes alone do
 not invalidate identity.
-6. **Ad hoc work:** Intentionally independent work may have no primary card.
-   Escalate an omitted association only with positive evidence of Notion origin.
+6. **Ad hoc work:** Follow the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions); never invent an association from missing evidence.
 
 Use fresh read–merge–write–readback, validating the complete property and merging
 by exact `(fm_home, task_id)`. Preserve every unrelated worker entry and Notion
@@ -250,7 +249,7 @@ Detector codes are `duplicate-primary`, `spawn-evidence` (different generations
 or multiple attempts requiring continuity/ID-reuse investigation, including
 freshly observed generations without any Notion declaration or card reference),
 `declared-absent`, `historical-link`, `invalid-record`, `duplicate-execution`,
-and `unknown-coverage`. Other rows retain their Slice A finding kind as the
+and `unknown-coverage`, plus the [lifecycle detectors](#spawn-card-and-backlog-closure-exceptions). Other rows retain their Slice A finding kind as the
 detector, including confirmed links, legacy candidates (`unverified-conflicting`),
 untracked workers and execution gaps. The report labels existing findings; it does
 not implement another classifier. Positive contradictions remain visible with
@@ -337,7 +336,8 @@ at dispatch, when it selects the canonical card:
 card: 40f50ce6d42281b08375d793820e2e40
 ```
 
-Use `card: none` for intentionally independent work. The key is case-sensitive;
+The parser retains `card: none` as an independent marker, but it does not satisfy
+the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions). The key is case-sensitive;
 standard dashed UUIDs are accepted and normalized. Multiple lines, malformed
 values, spacing changes or disagreeing task/backlog copies are conflicts.
 Other prose, URLs, legacy metadata and equal titles remain candidate-only.

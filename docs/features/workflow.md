@@ -311,7 +311,9 @@ completion or decision age. PR creation is labelled separately. GitHub source
 coverage remains explicit; unavailable inventory never erases an explicit ask.
 A changed inventory head cannot inherit passing checks for another head.
 
-`operationalExceptions` is one advisory list for observed In Progress cards.
+`operationalExceptions` includes the [worker lifecycle exceptions](../notion-worker-links.md#spawn-card-and-backlog-closure-exceptions),
+which can have a null `cardId` and identify the worker by `executionId`.
+Its card execution warnings cover observed In Progress cards.
 Exact native declarations reuse the existing home/task/generation references;
 current external reports retain their consumer provenance. Each linked source
 uses its published expiry (file snapshots already allow five minutes, including

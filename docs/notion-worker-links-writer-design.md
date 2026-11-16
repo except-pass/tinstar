@@ -7,19 +7,10 @@ First Mate after merge; automated tests use fake Notion responses only.
 
 ## Approved dispatch provenance
 
-On 2026-11-05 at 17:52Z the coordinator authorized the dispatch-ledger pilot:
-each home records the selected card in its task's backlog note at dispatch.
-The published snapshot's `backlog.records[].body_lines` or
-`tasks[].backlog.body_lines` carries exactly one line:
-
-```text
-card: 40f50ce6d42281b08375d793820e2e40
-```
-
-`card: none` explicitly means independent work. The case-sensitive key and
-spacing are exact; standard dashed UUIDs normalize to 32 lowercase hex digits.
-Multiple or malformed `card:` lines require investigation, including repeated
-identical lines. Mirrored task/backlog copies must agree. No prose is retained.
+The [coordinator adapter reference](notion-worker-links.md#coordinator-adapter)
+owns the dispatch-line format and collection contract. The current
+[spawn card requirements](notion-worker-links.md#spawn-card-and-backlog-closure-exceptions)
+apply to independent and ad hoc workers too.
 
 This replaces the earlier proposal for a separate typed receipt store. No new
 ledger transport, upstream fork or dispatch flag is needed. These notes and
