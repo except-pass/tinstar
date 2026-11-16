@@ -114,7 +114,7 @@ export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
 export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
-  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions'] | (() => Promise<SourceSnapshot['intentions']>)): Promise<DecisionResolution | undefined> {
+  confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions'] | (() => Promise<SourceSnapshot['intentions']>), mode: 'reconcile' | 'observe' = 'reconcile'): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
   const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success || rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) || rows(notes, 'Tin Star answer data: ').some(answer => answer.request_id === row.id)))
@@ -149,13 +149,14 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
       if (current && (current.source_question !== row.source_question || current.source_spawn_gen !== row.source_spawn_gen)) return verify('source request changed since the proposal was published')
       if (notes.some(note => workflowNoteHasMarker(note, marker))) {
         if (current) return verify('a previously reconciled request is open again')
-        await delivery?.completeDecision(deliveryId)
+        if (mode === 'reconcile') await delivery?.completeDecision(deliveryId)
         return { state: 'resolved', message: 'Resolved', delivery_id: deliveryId }
       }
       if (!delivery) return pending()
       const messages = await delivery.messages(), previous = messages.find(message => message.requestId === deliveryId)
       if (!current && !previous) return verify('source disappeared without a confirmed matching delivery receipt')
       if (!previous || previous.state === 'sending' || previous.state === 'unknown' || previous.announced === false) {
+        if (mode === 'observe') return { ...pending(), delivery_id: deliveryId }
         const submitted = await delivery.submit({ requestId: deliveryId, anchorKey: requestKey(request), kind: 'answer',
           text: `Notion card: ${card.id}\nDecision proposal: ${row.id}\nExact owner answer:\n${answer}\nReconcile only this source request. Keep implementation Queued until a real worker starts; preserve other asks. Report the source reconciliation through the existing receipt path.` },
         { cardId: card.id, requestId: row.id, answerId: row.id })
@@ -165,6 +166,9 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
       // remain unknown because of an unrelated home; its error must not veto
       // this source's own acknowledged receipt.
       if (!current && previous && ['done', 'acknowledged'].includes(previous.state)) {
+        // Fresh source closure plus the exact acknowledged delivery proves
+        // resolution without making a tool read persist its audit marker.
+        if (mode === 'observe') return { state: 'resolved', message: 'Resolved', delivery_id: deliveryId }
         if (!confirm) return pending()
         await confirm('First Mate acknowledged this exact answer and its source request is closed.', marker)
         await delivery.completeDecision(deliveryId)

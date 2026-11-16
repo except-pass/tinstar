@@ -37,7 +37,7 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
-import type { DecisionResolution } from './decisionResolution'
+import { reconcileDecision, type DecisionResolution } from './decisionResolution'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
@@ -117,6 +117,8 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.fetch, this.workReader.jira)
+    this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
 
@@ -158,6 +160,14 @@ export class ReconciliationSources {
     return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now())
   }
 
+  invalidateQueueDisplays() {
+    for (const entry of this.queueDisplays.values()) {
+      entry.value = undefined
+      entry.until = 0
+      if (entry.pending) entry.again = true
+    }
+  }
+
   /** The same queue, progressively displayed from known sources. Operational
    * reconciliation remains shared in the background; selections still use the
    * existing fresh, request-scoped queue and writer validation. */
@@ -169,7 +179,7 @@ export class ReconciliationSources {
     if (force) { entry.until = 0; if (entry.pending) entry.again = true }
     if (!entry.pending && Date.now() >= entry.until) {
       entry.failed = false
-      entry.pending = this.queue(req).then(value => { entry.value = value }, () => { entry.failed = true }).finally(() => {
+      entry.pending = this.queue(req).then(value => { if (!entry.again) entry.value = value }, () => { entry.failed = true }).finally(() => {
         entry.pending = undefined
         entry.until = entry.again ? 0 : Date.now() + 20_000
         entry.again = false
@@ -372,13 +382,25 @@ export class ReconciliationSources {
     return workReadback({ reviews, warnings })
   }
 
-  async queue(req?: IncomingMessage, requestKey?: string, force = false) {
+  /** Tool reads need a fresh census, not a board-wide write-recovery pass.
+   * Reuse the display's shared refresh for recovery and review prose; exact
+   * workflow writes still perform their own fresh source/lease checks. */
+  async workViews() {
+    const queue = await this.queue(undefined, undefined, false, 'read')
+    // A fresh tool census can observe source closure outside this process.
+    // Do not serve a pre-answer display or publish an older in-flight refresh.
+    this.invalidateQueueDisplays()
+    void this.queueDisplay().catch(() => {})
+    return queue
+  }
+
+  async queue(req?: IncomingMessage, requestKey?: string, force = false, mode: 'reconcile' | 'read' = 'reconcile') {
     let reviewWarning: string | null = null
-    const reviewRecoveries = await this.workflow.reconcileReviews().catch(() => null)
+    const reviewRecoveries = mode === 'reconcile' ? await this.workflow.reconcileReviews().catch(() => null) : null
     for (const recovered of reviewRecoveries ?? []) this.context.invalidate(recovered.cardId)
-    try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
+    if (mode === 'reconcile') try { await this.reconcileReviewHandoffs?.(!!req && new URL(req.url ?? '/', 'http://localhost').searchParams.get('refresh') === '1') } catch { reviewWarning = 'Review handoff audit/reconciliation unavailable; retained handoffs remain unconfirmed.' }
     const authorized = !!await this.authorizePulls?.(req)
-    const [snapshot, pullRead] = await Promise.all([this.snapshot(force), authorized ? this.readPulls?.(req).catch(() => null) : null])
+    const [snapshot, pullRead] = await Promise.all([this.snapshot(force || mode === 'read'), authorized ? this.readPulls?.(req).catch(() => null) : null])
     const candidates = buildQueue(snapshot, new Map(), Date.now(), pullRead ?? null)
     const urls = candidates.items.filter(item => (!requestKey || item.id === requestKey) && item.kind === 'merge')
       .flatMap(item => item.evidence.filter(link => link.kind === 'pull-request').map(link => link.url))
@@ -402,14 +424,45 @@ export class ReconciliationSources {
     // disclosed; it never becomes a fabricated request age or answer.
     const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
+    const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    let contexts = collectedContexts
+    const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
+    const readContexts = async () => {
+      for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
+        await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
+          collectedContexts.set(id, await this.context.commentDetails(id, force))
+        }))
+      }
+    }
+    if (mode === 'read') {
+      // Twenty paced reads can outlive the connector deadline on a slow board.
+      // Keep warming the shared cache, but freeze the evidence included in this
+      // response after ten seconds. Unfinished histories stay explicitly unknown.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try { await Promise.race([readContexts(), new Promise<void>(resolve => { timer = setTimeout(resolve, 10_000) })]) }
+      finally { clearTimeout(timer) }
+      contexts = new Map(collectedContexts)
+    }
     const resolutions = new Map<string, DecisionResolution>()
     const resolutionIds = new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.filter(item => item.sources.some(source => source.kind === 'firstmate')).flatMap(item => item.cardIds)])
     const census = this.workflow.decisionCensus()
     for (const id of ids.filter(id => resolutionIds.has(id)).slice(0, 20)) {
       try {
-        const resolution = await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
+        const card = snapshot.intentions.data?.cards.find(card => card.id === id)
+        // Observe already-read comments with the same binding policy, without
+        // a delivery writer or repair pass. Pending answers must not regain
+        // ready-now status just because recovery moved off this request path.
+        const resolution = mode === 'reconcile' ? await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
+          : card && contexts.get(id)?.outcome === 'available' ? await reconcileDecision(card,
+            contexts.get(id)!.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
+            snapshot.fleet, this.workflow.decisionDelivery, undefined, undefined, snapshot.intentions, 'observe') : undefined
         if (resolution) resolutions.set(id, resolution)
+        if (mode === 'reconcile' && resolution?.state === 'resolved') this.context.invalidate(id)
       } catch { resolutions.set(id, { state: 'verification-needed', message: 'Decision reconciliation needs verification: current Notion history unavailable' }) }
+    }
+    if (mode === 'read') for (const message of deliveries) {
+      const id = message.decisionResolution?.cardId
+      if (id && !resolutions.has(id)) resolutions.set(id, { state: 'pending', message: 'Decision recorded · First Mate not yet updated' })
     }
     for (const item of queue.items) for (const id of item.cardIds) {
       const summary = resolutions.get(id)
@@ -427,23 +480,21 @@ export class ReconciliationSources {
         evidence: [{ kind: 'card', url: `https://www.notion.so/${resolution.cardId}` }], sources: [] })
     }
     if (requestKey) queue.items = queue.items.filter(item => item.id === requestKey)
-    const contexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
-    for (let offset = 0; offset < Math.min(ids.length, 20); offset += 4) await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-      contexts.set(id, await this.context.commentDetails(id, force))
-    }))
-    if (ids.length > 20) queue.warnings.push(`Request history inspected for 20 of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.`)
+    if (mode === 'reconcile') await readContexts()
+    if (contexts.size < ids.length) queue.warnings.push(`Request history inspected for ${contexts.size} of ${ids.length} candidate cards. Remaining request ages/answer history are unknown; use get_work for exact context.${mode === 'read' && contexts.size < Math.min(ids.length, 20) ? ' Foreground history wait reached its ten-second budget; unfinished reads continue warming the cache in the background.' : ''}`)
     if ([...contexts.values()].some(context => context.outcome !== 'available')) queue.warnings.push('Some request history is unavailable or partial; retained property asks require verification and their ages may be unknown.')
     const scene = this.reconciler.project(snapshot)
     const reviewNotes = new Map<string, Array<{ text: string }>>()
     for (const item of queue.reviews.items.slice(0, 20)) {
-      const context = contexts.get(item.cardId) ?? await this.context.commentDetails(item.cardId)
-      if (context.outcome === 'available') reviewNotes.set(item.cardId, context.blocks)
+      const context = contexts.get(item.cardId) ?? (mode === 'reconcile' ? await this.context.commentDetails(item.cardId) : this.context.cachedComments(item.cardId))
+      if (context?.outcome === 'available') reviewNotes.set(item.cardId, context.blocks)
     }
     queue.reviews = reviewView(snapshot.intentions, reviewNotes)
     try { queue.reviewExceptions = await this.reviewAudit.exceptions() } catch { reviewWarning = 'Review handoff audit could not be read; exception coverage is unknown.' }
     if (!reviewRecoveries || reviewRecoveries.some(row => row.result.outcome !== 'saved')) queue.warnings.push('Some recorded review writes remain unconfirmed; inspect the existing review receipts before claiming acceptance or handoff completion.')
     queue.reviewRecoveries = reviewRecoveries ?? []
     if (reviewWarning) queue.warnings.push(reviewWarning)
+    if (mode === 'read') queue.warnings.push('Operational review/decision reconciliation and uncached review submission history refresh in the background. Retained handoffs and deliveries remain unconfirmed; read the canonical card before acting on missing review evidence. Exact workflow writes still validate current sources and leases.')
     const histories = new Map(ids.map(id => [id, contexts.get(id)?.blocks ?? []]))
     const publications = (await Promise.all(queue.items.map(item => this.proposalSource.forRequest(item.id, item.cardIds, histories)))).flat()
     queue.needsWill = needsWill(queue, scene, contexts, pullRead ?? null, states, authorized, publications)

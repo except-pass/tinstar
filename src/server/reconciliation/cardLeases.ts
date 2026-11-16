@@ -37,6 +37,7 @@ export const publicLease = (row: LeaseRow): CardLease => ({ card_id: row.card, g
  * writes never expire into a new generation; recovery requires source readback
  * and an audited declaration that the earlier provider request has settled. */
 export class CardLeases {
+  onChange?: () => void
   private path: string
   private secret: string
   constructor(root = getConfigRoot(), private now = Date.now) {
@@ -247,6 +248,7 @@ export class CardLeases {
       db.prepare('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)').run(row.card, row.generation, row.caller, row.holder, row.token_hash, row.expires)
       const result = { outcome: 'claimed', lease: publicLease(row) }
       db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(caller, operation, signature, JSON.stringify(result))
+      this.onChange?.()
       return { ...result, lease_token: leaseToken }
     }
     return { outcome: 'no-unclaimed-card', message: 'No currently unclaimed actionable card in the covered queue; inspect source coverage and waiting requests' }
@@ -266,6 +268,7 @@ export class CardLeases {
   }
   private clear(db: SqliteDatabase, row: LeaseRow) {
     db.prepare('UPDATE leases SET generation = generation + 1, caller = NULL, holder = NULL, token_hash = NULL, expires = 0 WHERE card = ?').run(row.card)
+    this.onChange?.()
   }
   async ownerRelease(card: string, generation: number, reason: string) {
     return this.transaction(db => {

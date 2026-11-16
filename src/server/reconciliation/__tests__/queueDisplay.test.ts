@@ -70,3 +70,28 @@ it('retains previously enriched requests during failure and never shares owner e
   expect(retained.warnings).toContainEqual(expect.stringContaining('could not refresh'))
   await rm(root, { recursive: true, force: true })
 })
+
+it('discards an in-flight display when a lease changes and refreshes without a forced read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'queue-display-invalidation-'))
+  const snapshot = fixtureSources({ now: Date.now() })
+  const sources = new ReconciliationSources({ fleet: [], warnings: [] }, fetch, undefined, root)
+  vi.spyOn(WorkReader.prototype, 'declarations').mockReturnValue(snapshot.intentions)
+  vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
+  const old = buildQueue(snapshot), current = { ...old, items: [], needsWill: [] }
+  let finish!: (value: typeof old) => void
+  const refresh = vi.spyOn(sources, 'queue').mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue(current)
+  try {
+    await sources.queueDisplay()
+    const card = snapshot.intentions.data!.cards[0]!.id
+    const claim = await sources.leases.claim([card], 'fixture', 'Fixture chat', 'claim')
+    finish(old)
+    await vi.waitFor(async () => expect((await sources.queueDisplay()).refreshing).toBe(false))
+    expect((await sources.queueDisplay()).items).toEqual([])
+    expect(refresh).toHaveBeenCalledTimes(2)
+    if (!('lease_token' in claim) || !claim.lease_token) throw new Error('Missing lease')
+    await sources.leases.release('fixture', claim.lease_token, 'Finished')
+    await sources.queueDisplay()
+    await vi.waitFor(async () => expect((await sources.queueDisplay()).refreshing).toBe(false))
+    expect(refresh).toHaveBeenCalledTimes(3)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
