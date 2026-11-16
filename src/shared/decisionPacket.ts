@@ -15,7 +15,8 @@ export interface DecisionDependencyObservation {
   observed_at: string | null; expires_at: string | null
 }
 export const decisionPacketBindingSchema = z.object({
-  card_id: cardIdSchema, request_key: z.string().min(1).max(4096), source_request: firstMateRequestSchema,
+  // Card-native requests bind to their card history record instead of a fleet request.
+  card_id: cardIdSchema, request_key: z.string().min(1).max(4096), source_request: firstMateRequestSchema.nullable(),
   request_id: z.string().min(1).max(128), source_id: z.string().min(1).max(1024),
   source_question: prose, source_spawn_gen: z.string().nullable(), source_revision: z.string().min(1).max(64000),
   options: decisionOptionsSchema,

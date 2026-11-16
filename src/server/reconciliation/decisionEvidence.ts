@@ -32,15 +32,17 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     status: source.status, coverage: source.coverage, observed_at: source.observedAt, expires_at: source.expiresAt })
   const requests = rows.map(row => {
     const issues: string[] = []
+    const cardNative = !row.hasSourceBinding
     if (!currentRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
     if (row.proposal) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
-    if (!row.sourceRequest) issues.push('Request has no exact First Mate source binding')
+    if (!cardNative && !row.sourceRequest) issues.push('Request has no exact First Mate source binding')
+    if (cardNative && (row.requestedFrom !== 'Will' || row.action !== 'Decision')) issues.push('Card-native preparation requires a Decision requested from Will')
     if (!row.options?.length) issues.push('Source-supported option identities are unavailable')
     if (!row.question) issues.push('Exact source question is unavailable')
-    const anchor = row.sourceRequest ? requestAnchor(row.sourceRequest) : row.id
+    const anchor = row.sourceRequest ? requestAnchor(row.sourceRequest) : decisionMeaning(['card-request', cardId, row.id])
     const matches = items.filter(item => item.sources.some(source => source.request && source.request.home !== null && requestAnchor(source.request) === anchor))
     const item = matches.length === 1 ? matches[0] : undefined
-    if (!item || item.readiness !== 'ready-now') issues.push(...(item?.reasons ?? ['Exact source request is not uniquely present in the observed queue']))
+    if (!cardNative && (!item || item.readiness !== 'ready-now')) issues.push(...(item?.reasons ?? ['Exact source request is not uniquely present in the observed queue']))
     if (row.sourceRequest) {
       try {
         const live = bindDecision(snapshot.fleet, row.sourceRequest, cardId, snapshot.intentions, now)
@@ -48,9 +50,10 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
       } catch (error) { issues.push(error instanceof Error ? error.message : 'Source binding cannot be verified') }
     }
     const proposal = row.proposal ? { ...row.proposal, published_at: undefined } : null
-    const revision = decisionMeaning([item ? decisionRequestRevision(item) : null, row.id, row.sourceId, row.question, row.options?.slice().sort((a, b) => a.id.localeCompare(b.id)), proposal])
-    const binding = decisionPacketBindingSchema.safeParse({ card_id: cardId, request_key: item?.id, source_request: row.sourceRequest,
-      request_id: row.id, source_id: row.sourceId, source_question: row.sourceQuestion, source_spawn_gen: row.sourceSpawnGen,
+    const revision = decisionMeaning([item ? decisionRequestRevision(item) : null, row.id, row.sourceId, row.question, row.options?.slice().sort((a, b) => a.id.localeCompare(b.id)), proposal,
+      ...(cardNative ? [row.action, row.preserveAction, row.requestedFrom] : [])])
+    const binding = decisionPacketBindingSchema.safeParse({ card_id: cardId, request_key: cardNative ? anchor : item?.id, source_request: cardNative ? null : row.sourceRequest,
+      request_id: row.id, source_id: row.sourceId, source_question: cardNative ? row.question : row.sourceQuestion, source_spawn_gen: cardNative ? null : row.sourceSpawnGen,
       source_revision: revision, options: row.options })
     if (!binding.success) issues.push(`Incomplete source binding: ${binding.error.issues.map(issue => issue.path.join('.')).join(', ')}`)
     const dependencies = [base('request', anchor, revision), base('card', cardId, card ? decisionMeaning([card.archived, card.in_trash,
@@ -71,6 +74,11 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
       dependencies[0] = { ...dependencies[0]!, status: home?.observation.status ?? 'unknown', coverage: home?.observation.coverage ?? 'unknown', observed_at: home?.observation.observedAt ?? null, expires_at: home?.observation.expiresAt ?? null }
       if (row.sourceRequest.taskId) dependencies.push({ ...base('worker', decisionMeaning([row.sourceRequest.home, row.sourceRequest.taskId]), task ? decisionMeaning([task.identity, task.current_state.state, task.endpoint.exists, task.endpoint.status, task.pr.head]) : null),
         status: home?.observation.status ?? 'unknown', coverage: home?.observation.coverage ?? 'unknown', observed_at: home?.observation.observedAt ?? null, expires_at: home?.observation.expiresAt ?? null })
+    } else if (cardNative) {
+      // The request lives in card history; fleet availability cannot establish
+      // or invalidate its revision. Partial history still blocks stale answers.
+      dependencies[0] = { ...dependencies[0]!, status: freshHistory ? 'fresh' : 'unknown', coverage: completeHistory ? 'complete' : 'unknown',
+        observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }
     }
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }

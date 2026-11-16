@@ -8,14 +8,15 @@ import { NotionApi } from '../../src/server/reconciliation/notionApi'
 import type { ReconciliationConfig } from '../../src/server/reconciliation/config'
 
 export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: {
-  cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number
+  cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number; cardStatus?: 'Queued' | 'Waiting For'
   answered?: boolean; independentRequest?: boolean
   largeContract?: boolean; historySurface?: 'comments' | 'body' | 'none'; commentCount?: number
   wrapFetch?: (fixtureFetch: typeof fetch) => typeof fetch
 } = {}) {
   const fixture = preparedDecisionFixture()
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
-  card.properties.Status!.value = options.independentRequest ? 'In Progress' : 'Waiting For'
+  card.properties.Area = { id: 'Area', type: 'select', value: 'Engineering', hasMore: false }
+  card.properties.Status!.value = options.independentRequest ? 'In Progress' : options.cardStatus ?? 'Waiting For'
   const dataSourceId = 'f'.repeat(32)
   const homes = fixture.snapshot.fleet.map((home, index) => ({ ...home, source: { ...home.source, home: join(root, `home-${index}`) } }))
   let historyText = fixture.history.context.blocks[0]!.text

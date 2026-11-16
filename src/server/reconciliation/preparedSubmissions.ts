@@ -119,7 +119,7 @@ export class PreparedSubmissions {
         if (!option) throw new DecisionDeskConflict('Selection must use this source request option vocabulary')
         if (input.next.owner !== stored.packet.authorization.next_owner || input.next.status !== stored.packet.authorization.next_status) throw new DecisionDeskConflict('Next owner and status must match the prepared authorization scope')
         const answer = answerSchema.parse({ kind: 'answer_decision', card_id: held.binding.card, operation_id: input.operation_id,
-          request_id: input.request_id, option_id: input.option_id, answer: option.label, source_request: stored.packet.binding.source_request,
+          request_id: input.request_id, option_id: input.option_id, answer: option.label, ...(stored.packet.binding.source_request ? { source_request: stored.packet.binding.source_request } : {}),
           next: input.next, ...(input.resolve_wait ? { resolve_wait: input.resolve_wait } : {}) })
         const other = db.prepare(`SELECT operation,state,caller FROM decision_desk_submissions WHERE scope = ? AND json_extract(answer,'$.card_id') = ?
           AND json_extract(answer,'$.request_id') = ? AND state NOT IN ('not-saved','packet-invalidated','answer-conflict','superseded') LIMIT 1`).get(this.reviews.scope, answer.card_id, answer.request_id) as { operation: string; state: string; caller: string } | undefined

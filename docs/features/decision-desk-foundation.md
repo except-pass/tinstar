@@ -482,8 +482,10 @@ Automatic replenishment checks at startup and every 30 seconds.
 ### Publishing a source request and loading history
 
 A mate publishes a structured decision through the existing MCP `update_work`
-tool. Use the exact configured card and First Mate request identities returned
-by `get_work_views` / `get_work`, rather than inventing a home, task or hold ID:
+tool. Card-native decisions use the canonical card ID and a unique request ID
+on that card. Omit `source_request` when the decision originates on the card.
+For First Mate-bound decisions, use the exact configured source identities
+returned by `get_work_views` / `get_work`, rather than inventing a home, task or hold ID:
 
 ```json
 {
@@ -513,8 +515,20 @@ arguments. A successful call adds the Will action tag and a page comment with
 `Tin Star request` record. The server binds the current source question and
 worker generation. Check `outcome: saved`; retry an ambiguous result with the
 same operation ID and input. A free-text comment or Will action tag alone does
-not publish this record. Options and an exact live First Mate binding are
-required for a prepared packet to become Ready.
+not publish this record. Options and complete, fresh request history are required
+for a prepared packet to become Ready.
+
+For a card-native `Decision` requested from `Will`, the packet binding uses
+`card_id`, `request_id`, the request paragraph/comment `source_id` and its semantic
+`source_revision`. Its `request_key` is the canonical JSON encoding of
+`["card-request", card_id, request_id]`; `source_request` and `source_spawn_gen`
+are null, and `source_question` is the card request's question. The evidence API
+returns this binding and the dependencies to copy into the packet. Changed
+questions, options or request records invalidate the old packet; timestamps and
+option ordering do not. First Mate-bound requests retain live source and worker
+generation validation. Both kinds dispatch the same webhook job and save owner
+selections through the existing `answer_decision` operation. Answered requests
+are excluded from the pending list.
 
 Decision history reads all pages of page comments and top-level paragraphs
 (the legacy workflow record surface). Specification code, embeds, and nested

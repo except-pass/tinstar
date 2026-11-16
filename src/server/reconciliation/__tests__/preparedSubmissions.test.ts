@@ -238,7 +238,7 @@ it('tracks two independently identified requests on one card with their own voca
   const fixture = decisionSubmitFixture(1), f = fixture.fixtures[0]!
   const source = { ...f.packet.binding.source_request, id: 'independent-followup' }
   const home = f.snapshot.fleet.find(home => home.source.home === source.home)!.observation.data!
-  const hold = structuredClone(home.backlog!.find(row => row.id === f.packet.binding.source_request.id)!)
+  const hold = structuredClone(home.backlog!.find(row => row.id === f.packet.binding.source_request!.id)!)
   hold.id = source.id; hold.hold_reason = 'Choose the independent evidence format?'; hold.title = hold.hold_reason
   home.backlog!.push(hold)
   home.tasks[0]!.queue!.decisions.push({ key: source.id, verb: 'needs-decision', summary: hold.hold_reason })

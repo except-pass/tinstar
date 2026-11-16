@@ -294,8 +294,8 @@ it('refreshes just an explicitly requested expired card after a sweep outlives t
   } finally { clock.mockRestore() }
 }, 20_000)
 
-it('publishes a structured request through MCP on a large card, dispatches with replenishment off, and publishes Ready', async () => {
-  const f = await setup({ largeContract: true, historySurface: 'none' })
+it.each(['firstmate', 'card-native'] as const)('prepares and answers a %s structured request through MCP on a large card', async kind => {
+  const f = await setup({ largeContract: true, historySurface: 'none', cardStatus: 'Queued' })
   const mcp = new ReconciliationMcp(f.sources, f.root)
   const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -309,15 +309,19 @@ it('publishes a structured request through MCP on a large card, dispatches with 
     }
     const template = preparedDecisionFixture().packet
     expect(await call('update_work', { kind: 'request_decision', card_id: f.cardId, operation_id: 'large-card-request', request_id: f.requestId,
-      question: template.question, requested_from: 'Will', action: 'Decision', options: template.binding.options, source_request: f.sourceRequest })).toMatchObject({ outcome: 'saved' })
+      question: template.question, requested_from: 'Will', action: 'Decision', options: template.binding.options,
+      ...(kind === 'firstmate' ? { source_request: f.sourceRequest } : {}) })).toMatchObject({ outcome: 'saved' })
     expect(f.publishedNotes).toHaveLength(1)
+    expect((await loadedSnapshot(f.sources)).pending).toContainEqual(expect.objectContaining({ card_id: f.cardId, request_id: f.requestId, state: 'Queued' }))
     const prepared = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare published large-card request' })
     expect(prepared).toMatchObject({ outcome: 'dispatched' })
-    expect(f.posts).toHaveLength(1)
+    expect(f.posts).toEqual([{ request_id: f.requestId, card_url: `https://www.notion.so/${f.cardId}`, publish: { tool: 'publish_prepared_packet', job_id: prepared.job_id } }])
     const evidence = f.sources.preparationEvidence(f.cardId), request = evidence.requests[0]!
     expect(evidence.reasons).toEqual([])
     expect(request.reasons).toEqual([])
     template.binding = request.binding!
+    expect(template.binding.source_request).toEqual(kind === 'firstmate' ? f.sourceRequest : null)
+    if (kind === 'card-native') expect(template.binding.source_spawn_gen).toBeNull()
     template.dependencies = request.dependencies.map(dependency => ({ kind: dependency.kind, key: dependency.key, revision: dependency.revision! }))
     expect(await call('publish_prepared_packet', { job_id: prepared.job_id, operation_id: 'large-card-packet', packet: template })).toMatchObject({ outcome: 'ready', ready: true })
     const snapshot = await f.sources.preparedReviews.snapshot()
@@ -325,5 +329,20 @@ it('publishes a structured request through MCP on a large card, dispatches with 
     expect(snapshot.pending).toContainEqual(expect.objectContaining({ card_id: f.cardId, state: 'Ready' }))
     expect((await f.sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
     expect(f.sources.leases.status(f.cardId)).toBeNull()
+    const session = await call('open_prepared_review_session', { operation_id: 'large-card-review', label: 'Isolated decision review' })
+    const claim = await call('claim_next_prepared_decision', { operation_id: 'large-card-claim', review_session_token: session.review_session_token })
+    expect(claim).toMatchObject({ outcome: 'claimed', packet: { packet: { binding: { request_id: f.requestId } } } })
+    const answer = { operation_id: 'large-card-answer', review_session_token: session.review_session_token, lease_token: claim.lease_token,
+      packet_id: claim.packet.id, packet_version: claim.packet.version, request_id: f.requestId, option_id: 'preview',
+      next: { owner: template.authorization.next_owner, status: template.authorization.next_status } }
+    const submitted = await call('submit_prepared_decision', answer)
+    expect(submitted, JSON.stringify(submitted)).toMatchObject({ outcome: 'recorded-empty' })
+    const notes = f.publishedNotes.map(note => JSON.stringify(note.rich_text)).join('\n')
+    expect(notes).toContain('Operation: answer_decision')
+    expect(notes).toContain('Authorize preview only')
+    expect((await loadedSnapshot(f.sources)).pending).not.toContainEqual(expect.objectContaining({ card_id: f.cardId, request_id: f.requestId }))
+    const count = f.publishedNotes.length
+    expect(await call('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(f.publishedNotes).toHaveLength(count)
   } finally { await client.close() }
 }, 20_000)

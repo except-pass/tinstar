@@ -52,7 +52,10 @@ export function decisionRequests(notes: RequestNote[]) {
       const options = decisionOptionsSchema.safeParse(row.options)
       const proposal = decisionProposalSchema.safeParse(row.proposal), sourceRequest = firstMateRequestSchema.safeParse(row.source_request)
       const lines = note.text.split('\n')
+      // Preserve incomplete fleet metadata so a broken binding cannot be
+      // reinterpreted as an independent card-native decision.
       return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true, options: options.success ? options.data : undefined,
+        ...(row.source_request != null || row.source_question != null || row.source_spawn_gen != null ? { hasSourceBinding: true } : {}),
         ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
         requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,

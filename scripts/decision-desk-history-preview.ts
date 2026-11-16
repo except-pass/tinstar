@@ -48,7 +48,8 @@ const secret = async () => JSON.stringify({ url: 'http://127.0.0.1:5294/job', ke
 const cards = Number(process.env.PREVIEW_CARDS ?? 64)
 const largeContract = process.env.PREVIEW_LARGE_CONTRACT === '1'
 const manualPublication = process.env.PREVIEW_PUBLISH_REQUEST === '1'
-const fixture = await preparationHistoryFixture(root, secret, { cards, largeContract, historySurface: manualPublication ? 'none' : 'comments', intervalMs: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350),
+const cardNative = process.env.PREVIEW_CARD_NATIVE === '1'
+const fixture = await preparationHistoryFixture(root, secret, { cards, largeContract, cardStatus: cardNative ? 'Queued' : 'Waiting For', historySurface: manualPublication || cardNative ? 'none' : 'comments', intervalMs: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350),
   wrapFetch: fixtureFetch => {
     syntheticNotion = fixtureFetch
     return (input, init) => { const url = new URL(String(input)); return fetch(`http://127.0.0.1:5295${url.pathname}${url.search}`, init) }
@@ -91,7 +92,7 @@ async function tool(name: string, args: Record<string, unknown>) {
 async function publishRequest() {
   const request = { kind: 'request_decision', card_id: fixture.cardId, operation_id: 'large-contract-publish-request',
     request_id: fixture.requestId, question: 'Authorize bounded preview research?', requested_from: 'Will', action: 'Decision',
-    options: [{ id: 'preview', label: 'Authorize preview only' }, { id: 'defer', label: 'Defer research' }], source_request: fixture.sourceRequest }
+    options: [{ id: 'preview', label: 'Authorize preview only' }, { id: 'defer', label: 'Defer research' }], ...(cardNative ? {} : { source_request: fixture.sourceRequest }) }
   const result = await tool('update_work', request)
   await writeFile(join(output, 'request-publication.json'), JSON.stringify({ request, result }, null, 2))
   return result
@@ -143,7 +144,7 @@ const ui = createServer(async (req, res) => {
 })
 seedOriginAllowlist(5293)
 await listen(ui, 5293)
-const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards, largeContract, manualPublication, card_id: fixture.cardId, request_id: fixture.requestId, notion_interval_ms: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350) }
+const manifest = { url: 'http://127.0.0.1:5293/?view=decisions', config_root: root, head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), ports: [5293, 5294, 5295, 5296], cards, largeContract, manualPublication, cardNative, card_id: fixture.cardId, request_id: fixture.requestId, notion_interval_ms: Number(process.env.PREVIEW_NOTION_INTERVAL_MS ?? 350) }
 await writeFile(join(output, 'preview.json'), JSON.stringify(manifest, null, 2))
 process.stdout.write(`${JSON.stringify(manifest)}\n`)
 function stop() {

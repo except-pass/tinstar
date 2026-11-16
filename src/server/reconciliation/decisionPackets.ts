@@ -78,7 +78,7 @@ export class DecisionPackets {
       if (previous.content_hash !== contentHash) throw new DecisionDeskConflict('Publication operation already used for different packet meaning')
       return { ...unpack(previous), validation: this.latestValidation(db, previous.id), replayed: true }
     }
-    const sourceKey = JSON.stringify([packet.binding.card_id, requestAnchor(packet.binding.source_request), packet.binding.request_id])
+    const sourceKey = JSON.stringify([packet.binding.card_id, packet.binding.source_request ? requestAnchor(packet.binding.source_request) : packet.binding.request_key, packet.binding.request_id])
     const version = Number((db.prepare('SELECT coalesce(max(version),0)+1 AS version FROM decision_packets WHERE source_key = ?').get(sourceKey) as { version: number }).version)
     const id = randomUUID(), publishedAt = new Date(this.now()).toISOString(), expiresAt = new Date(this.now() + packet.review_within_ms).toISOString()
     db.prepare('INSERT INTO decision_packets VALUES(?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey)
