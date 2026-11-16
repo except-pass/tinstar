@@ -112,9 +112,10 @@ workers. Tin Star cannot certify whole-farm absence from configured sources.
 
 ## First Mate workflow
 
-Only the responsible First Mate coordinator writes the field, serializing edits
+The responsible First Mate coordinator maintains associations, serializing edits
 per card. Second mates report changes through their supervision channel to that
-coordinator. PM Bot may nudge for accountability but does not own worker linkage.
+coordinator. Authenticated owners, PM Bot and finish paths can explicitly retire
+a declaration through the [audited close-out operation](features/worker-closeout-release-waits.md).
 
 1. **Pickup:** Read the canonical Notion page, verify current Owner/Status and
    identify the responsible First Mate home. Plan the primary card association
@@ -137,11 +138,11 @@ coordinator. PM Bot may nudge for accountability but does not own worker linkage
    Retain the four-working-hour / next-business-morning ceiling and meaningful
    evidence rules. Link maintenance never advances Next check-in, clears overdue
    commitments or erases missed checkpoints.
-5. **Completion:** Record outcome/status under existing board rules and retain
-   historical links, even when finished workers leave the active floor. Change or
-   remove declarations only for verified reassignment or duplicate error, with a
-   meaningful audit explanation. Done/archived status or Owner changes alone do
-not invalidate identity.
+5. **Completion:** Record outcome/status under existing board rules. Use the
+   [audited close-out operation](features/worker-closeout-release-waits.md) to
+   retire a finished or absent worker declaration. Done/archived status or Owner
+   changes alone do not invalidate identity; retained declarations remain visible
+   as historical links when finished workers leave the active floor.
 6. **Ad hoc work:** Follow the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions); never invent an association from missing evidence.
 
 Use fresh read–merge–write–readback, validating the complete property and merging
