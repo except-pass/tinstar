@@ -423,13 +423,24 @@ MCP and workflow request bodies remain bounded at 256 KiB. UI registration and s
 
 For “next card”, call `claim_next_card(operation_id)` without a browser session.
 Generate a fresh UUID operation_id for the first attempt and reuse it only for
-an identical retry. It claims the first unclaimed Needs Will card in existing queue
-order, ready-now cards first, and includes that card's `readiness` and
+an identical retry. It claims the first currently actionable, unclaimed Needs Will
+request in existing queue order, ready-now cards first, and includes its `readiness` and
 `readiness_reasons` with source coverage. Successful repeat claims and
 operation-id replays also include these fields, using current queue evidence;
 when evidence for the card is unavailable, `readiness` is `unknown` and
 `readiness_reasons` explains the missing evidence. Check the card before acting
-when it is not certified ready. An unavailable source is not an empty queue.
+when it is not certified ready. New leases skip parked/no-request, future or
+conditional, unverified, Done and Archived candidates. A concrete approval or
+decision on Backlog work can be actionable now without changing its work status.
+Eligibility is checked before claiming and again in the lease allocation
+transaction; a Tin Star source write crossing the fresh exact-card read
+invalidates that snapshot. An identical retry or held-token call retains its
+existing lease, even if readiness has since changed.
+
+When none qualifies, `no-unclaimed-card` means no currently unclaimed actionable
+card in the covered queue. Its `coverage` and `warnings` retain stale, unknown,
+partial and body-only evidence limitations; it does not certify all work clear.
+An unavailable source is not an empty queue.
 `claim_card(card_id, operation_id)` instead claims
 an exact active card on the configured board.
 

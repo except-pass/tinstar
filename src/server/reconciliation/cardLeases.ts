@@ -15,6 +15,7 @@ const access = new AsyncLocalStorage<{ caller: string; token?: string }>()
 export const withLeaseCaller = <T>(caller: string, token: string | undefined, perform: () => T) => access.run({ caller, token }, perform)
 export interface LeaseRow { card: string; generation: number; caller: string | null; holder: string | null; token_hash: string | null; expires: number }
 export interface CardLease { card_id: string; generation: number; holder: string; expires_at: string }
+interface ClaimAdmission { eligible(card: string): boolean; sourceRevision: number }
 export class CardLeaseError extends Error {
   readonly code = 'card-held'
   constructor(readonly lease: CardLease | null, message?: string) { super(message ?? (lease ? `held by ${lease.holder} until ${lease.expires_at}` : 'Claim lost; re-read and claim the card again')) }
@@ -212,16 +213,20 @@ export class CardLeases {
     })
   }
   capability(caller: string, operation: string) { return this.token(caller, operation) }
+  private sourceRevisionInStorage(db: SqliteDatabase, card: string) {
+    return (db.prepare("SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE card = ? AND type LIKE 'write-%'").get(card) as { revision: number }).revision
+  }
+  sourceRevision(card: string) { return this.readStorage(db => this.sourceRevisionInStorage(db, card)) }
   private token(caller: string, operation: string) {
     // Reconstruct an identical claim response after a lost response/restart,
     // without storing a plaintext token in a receipt or lease record.
     return createHmac('sha256', this.secret).update(JSON.stringify([caller, operation])).digest('base64url')
   }
-  async claim(cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false) {
+  async claim(cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false, admission?: ClaimAdmission) {
     if (cards.length === 1) await runningWrites.get(JSON.stringify([this.path, cards[0]]))?.catch(() => {})
-    return this.transaction(db => this.claimInStorage(db, cards, caller, holder, operation, token, exact))
+    return this.transaction(db => this.claimInStorage(db, cards, caller, holder, operation, token, exact, admission))
   }
-  claimInStorage(db: SqliteDatabase, cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false) {
+  claimInStorage(db: SqliteDatabase, cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false, admission?: ClaimAdmission) {
     const signature = JSON.stringify([exact ? cards : 'needs-will', token ? leaseHash(token) : null])
     const previous = db.prepare('SELECT signature,result FROM receipts WHERE caller = ? AND operation = ?').get(caller, operation) as { signature: string; result: string } | undefined
     if (previous) {
@@ -243,6 +248,11 @@ export class CardLeases {
       if (this.reservedInStorage(db, card)) { if (exact) throw new SourceWritePending(); continue }
       const old = this.rowInStorage(db, card)
       if (this.activeInStorage(old)) { if (exact) throw new CardLeaseError(publicLease(old)); continue }
+      // Recheck admission under the same writer lock as allocation. Receipts
+      // and held-token retries above deliberately preserve their original lease.
+      // A source write crossing the exact-card read invalidates that snapshot;
+      // in-flight writes are fenced by reservedInStorage above.
+      if (admission && (this.sourceRevisionInStorage(db, card) !== admission.sourceRevision || !admission.eligible(card))) continue
       const leaseToken = this.token(caller, operation)
       const row: LeaseRow = { card, generation: (old?.generation ?? 0) + 1, caller, holder: `${holder} · chat ${leaseHash(leaseToken).slice(0, 6)}`, token_hash: leaseHash(leaseToken), expires: this.now() + leaseDuration }
       db.prepare('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)').run(row.card, row.generation, row.caller, row.holder, row.token_hash, row.expires)
