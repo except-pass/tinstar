@@ -43,8 +43,8 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
-import { decisionRequests } from '../../shared/workflowRequests'
-import { reconcileDecision, type DecisionResolution } from './decisionResolution'
+import { decisionRequests, decisionRequestStates } from '../../shared/workflowRequests'
+import { decisionProposals, reconcileDecision, type DecisionResolution } from './decisionResolution'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
 import { notionReleaseTransport } from '../releases/writer'
@@ -92,7 +92,15 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), renew: () => this.renewPreparedSources(), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), renew: () => this.renewPreparedSources(), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics(),
+      observeOpenRequest: async (cardId, requestId) => {
+        const history = await this.context.observeDecisionHistory(cardId)
+        if (history.outcome !== 'available' || history.commentsOutcome !== 'available') throw new Error('Complete decision history is unavailable.')
+        const notes = history.blocks
+        const request = decisionRequestStates(notes).get(requestId)
+        return !!request && !request.answers.length && !request.verification && decisionProposals(notes).some(row => row.id === requestId)
+      },
+    }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
     this.notionApi = api ?? new NotionApi(fetcher)

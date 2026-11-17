@@ -7,7 +7,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { decisionCycleNotes, decisionRequestStates, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequestStates, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -90,9 +90,8 @@ export class WorkflowOperations {
     // marker in truncated/unavailable history cannot authorize a second write.
     await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
     const notes = await this.preparedHistory(input.card_id)
-    const cycle = decisionCycleNotes(notes, input.request_id)
-    const intents = decisionRecordRows(cycle, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
-    const answers = cycle.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
+    const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
+    const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
     const matches = (value: unknown) => {
       const parsed = updateWorkSchema.safeParse(value)
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
@@ -342,17 +341,18 @@ export class WorkflowOperations {
     if (repair) {
       // Recover a property/comment interruption from the same durable Notion
       // history, including after restart. Never replay a different user edit.
-      for (const note of notes) for (const intent of decisionRecordRows([note], 'Tin Star decision intent: ')) {
+      const states = decisionRequestStates(notes)
+      for (const intent of decisionRecordRows(notes, 'Tin Star decision intent: ')) {
         const input = updateWorkSchema.safeParse(intent.input)
         if (!input.success || input.data.card_id !== cardId || input.data.kind !== 'answer_decision' || typeof intent.actor !== 'string') continue
-        if (!decisionCycleNotes(notes, input.data.request_id).includes(note) || decisionRequestStates(notes).get(input.data.request_id)?.ownerAnswer) continue
+        if (states.get(input.data.request_id)?.ownerAnswer) continue
         const result = await this.performUpdate(input.data, intent.actor)
         if (result.outcome !== 'saved') return { state: 'pending' as const, message: 'Decision recorded · First Mate not yet updated' }
       }
       // Explicit direct Notion answers use the same scoped workflow plan. A
       // prose approval without proposal/answer/next-state fields is ambiguous.
       for (const request of recordedRequests.filter(row => row.source_request)) {
-        const direct = decisionCycleNotes(notes, request.id).filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(request.id) && !workflowReceipt(note))
+        const direct = notes.filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(request.id) && !workflowReceipt(note))
         if (!direct.length) continue
         if (new Set(direct.map(note => JSON.stringify(decisionAnswer(note)))).size !== 1) return { state: 'verification-needed' as const, message: 'Decision reconciliation needs verification: contradictory direct answers' }
         const parsedAnswer = decisionAnswer(direct[0]!)
@@ -618,14 +618,11 @@ export class WorkflowOperations {
       const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
       const states = decisionRequestStates(notes)
       const answered = new Set<string>(decisionRecordRows(notes, 'Tin Star answer: '))
-      for (const [id, state] of states) {
-        if (state.answers.length) answered.add(id)
-        else answered.delete(id)
-      }
+      for (const [id, state] of states) if (state.answers.length) answered.add(id)
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
       if (input.kind === 'request_decision') {
-        if (states.has(input.request_id) && !answered.has(input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID is already open')
+        if (states.has(input.request_id) || answered.has(input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
         const fleet = input.source_request ? await this.fleet() : undefined
         const sourceRequestKey = input.proposal && input.source_request ? queueRequestKey(card, fleet!, input.source_request) : undefined
         if (input.proposal && (!input.source_request || !workProposalMatchesRequest(input.proposal, input.source_request, sourceRequestKey, card.id))) throw new WorkflowError('decision-conflict', 'Published proposal request_key must match its bound First Mate source request and canonical card')
@@ -647,7 +644,7 @@ export class WorkflowOperations {
           }
         }
         if (states.get(input.request_id)?.ownerAnswer) throw new WorkflowError('decision-not-open', 'This specific decision has an owner answer recorded on the card')
-        const savedAnswers = decisionCycleNotes(notes, input.request_id).filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id))
+        const savedAnswers = notes.filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id))
         const published = requests.find(row => row.id === input.request_id)
         if (!request || answered.has(input.request_id) && (!(published?.source_request || input.source_request) || savedAnswers.some(note => decisionAnswerText(note) !== input.answer))) throw new WorkflowError('decision-not-open', 'This specific recorded decision is absent or already answered; no other ask was cleared')
         if ((published?.source_request || input.source_request) && ['In Progress', 'Done', 'Archived'].includes(input.next.status)) throw new WorkflowError('decision-work-queued', 'Source decision approval queues implementation; start work separately with a real worker')
@@ -720,15 +717,14 @@ export class WorkflowOperations {
       const before = card
       stage = 'read card comments'
       const notes: WorkflowNote[] = input.kind === 'request_decision' || input.kind === 'answer_decision' ? await this.preparedHistory(card.id) : await this.content.notes(card.id)
-      const cycle = input.kind === 'answer_decision' ? decisionCycleNotes(notes, input.request_id) : notes
       stage = 'read decision publications'
       const publications = input.kind === 'answer_decision' ? await this.proposals?.read(card.id, notes) : undefined
-      const intents = input.kind === 'answer_decision' ? decisionRecordRows(cycle, 'Tin Star decision intent: ').flatMap(row => {
+      const intents = input.kind === 'answer_decision' ? decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
         const parsed = updateWorkSchema.safeParse(row.input)
         return parsed.success && parsed.data.kind === 'answer_decision' && parsed.data.card_id === input.card_id && parsed.data.request_id === input.request_id && typeof row.actor === 'string'
           ? [{ actor: row.actor as string, input: parsed.data }] : []
       }) : []
-      const recorded = intents.length > 0 || input.kind === 'answer_decision' && cycle.some(note => workflowReceipt(note) && decisionRecordRows([note], 'Tin Star answer data: ').some(row => row.request_id === input.request_id))
+      const recorded = intents.length > 0 || input.kind === 'answer_decision' && notes.some(note => workflowReceipt(note) && decisionRecordRows([note], 'Tin Star answer data: ').some(row => row.request_id === input.request_id))
       const eligibleRequests = input.kind === 'answer_decision' ? recorded ? decisionHistory(notes, publications) : decisionProposals(notes, publications) : []
       if (input.kind === 'answer_decision' && decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id && row.proposal) && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This proposal is no longer current')
       if (input.kind === 'answer_decision' && !recorded) {
@@ -764,11 +760,11 @@ export class WorkflowOperations {
       const pending = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.actor === actor && row.input?.operation_id === input.operation_id)
       const receipt = notes.find(note => workflowNoteHasMarker(note, marker))
       if (input.kind === 'answer_decision' && eligibleRequests.some(row => row.id === input.request_id && row.source_request)) {
-        const existing = cycle.find(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id) && workflowReceipt(note))
+        const existing = notes.find(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id) && workflowReceipt(note))
         if (existing) {
           const data = decisionRecordRows([existing], 'Tin Star answer data: ')[0]
           const proposal = eligibleRequests.find(row => row.id === input.request_id)
-          const intent = decisionRecordRows(cycle, 'Tin Star decision intent: ').find(row => row.input?.request_id === input.request_id && row.input?.answer === data?.answer)
+          const intent = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.input?.request_id === input.request_id && row.input?.answer === data?.answer)
           if (input.source_request && requestKey(proposal.source_request) !== requestKey(input.source_request)) throw new WorkflowError('decision-conflict', 'This proposal is already bound to a different First Mate request')
           if (!data || data.answer !== input.answer || !same(data.next, input.next) || data.resolve_wait !== input.resolve_wait || data.option_id !== input.option_id || (data.legacy_action ?? intent?.input?.legacy_action) !== input.legacy_action) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
           return { ...result('saved', 'already-saved', 'This exact proposal answer is already recorded; no comment or property changes replayed'), saved_fields: ['note'] }

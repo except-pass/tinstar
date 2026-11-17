@@ -1,5 +1,5 @@
-import { decisionProposalSchema } from './decisionProposal'
-import { firstMateRequestSchema } from './deskSource'
+import { currentDecisionProposal, decisionProposalSchema, type DecisionProposal } from './decisionProposal'
+import { firstMateRequestSchema, requestAnchor } from './deskSource'
 import { decisionOptionsSchema } from './workflow'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
@@ -62,20 +62,35 @@ function ownerDecision(note: RequestNote) {
   // A connector comment may wrap the same owner heading in workflow metadata.
   const body = connector ? text.replace(/^(?:Date: [^\n]+\nBy: [^\n]+\n)?Operation: (?:edit|comment)\r?\n/, '') : text
   if (receipt && !connector) return null
-  const heading = /^OWNER DECISION[ \t]*\((Will(?=[ \t,)])[^)\r\n]*)\)[ \t]*:?[ \t]*/i.exec(body)
-  const payload = heading ? body.slice(heading[0].length).trim() : body
-  const requestLine = /^(?:(?:Decision )?request[ _]id|Decision request|Tin Star decision):[ \t]*([^\r\n]+?)[ \t]*\r?$/im.exec(payload)
-  const inlineId = /(?:^|,)\s*request[ _]id:\s*([^,]+)\s*$/i.exec(heading?.[1] ?? '')?.[1]
-  const id = (requestLine?.[1] ?? inlineId)?.trim().replace(/^(["`])(.+)\1$/, '$2')
-  if (heading) {
-    const answer = (requestLine ? payload.replace(requestLine[0], '') : payload).trim()
-    return answer ? { id, answer, optionId: undefined } : null
+  const heading = /^OWNER DECISION (?:\(Will, [^\r\n]+?, via [^)\r\n]+\)|— [^:\r\n]+):/.exec(body)
+  if (!heading) return null
+  const payload = body.slice(heading[0].length).trim()
+  const requestLine = /^Request ID:[ \t]*([^\r\n]+?)[ \t]*\r?$/m.exec(payload)
+  const id = requestLine?.[1]?.trim().replace(/^(["`])(.+)\1$/, '$2')
+  const answer = (requestLine ? payload.replace(requestLine[0], '') : payload).trim()
+  return answer ? { id, answer } : null
+}
+
+export function effectiveDecisionPublications<T extends { proposal?: unknown; source_request?: unknown }>(rows: T[], publications: { value: DecisionProposal }[] = []) {
+  const groups = new Map<string, { row: T; value: DecisionProposal }[]>()
+  const effective = new Set<T>()
+  for (const row of rows) {
+    const proposal = decisionProposalSchema.safeParse(row.proposal)
+    if (!proposal.success) { effective.add(row); continue }
+    const request = firstMateRequestSchema.safeParse(row.source_request)
+    if (!request.success || proposal.data.source.kind !== 'firstmate-request' || proposal.data.source.id !== request.data.id) continue
+    const key = requestAnchor(request.data)
+    const group = groups.get(key) ?? []
+    group.push({ row, value: proposal.data })
+    groups.set(key, group)
   }
-  if (!connector || operation(note) !== 'answer_decision' || !id) return null
-  const optionId = /^Option(?:[ _]id)?:[ \t]*([^\r\n]+)/im.exec(payload)?.[1]?.trim().replace(/^(["`])(.+)\1$/, '$2')
-  if (!optionId) return null
-  const answer = /(?:^|\n)Answer: ([\s\S]*?)(?=\n(?:Next owner|Next status|Option(?:[ _]id)?):|$)/i.exec(payload)?.[1]?.trim()
-  return { id, answer: answer || optionId, optionId }
+  for (const group of groups.values()) {
+    const keys = new Set(group.map(entry => entry.value.request_key))
+    const current = currentDecisionProposal<{ value: DecisionProposal }>([...group, ...publications.filter(entry => keys.has(entry.value.request_key))])
+    const match = group.find(entry => JSON.stringify(entry.value) === JSON.stringify(current?.value))
+    if (match) effective.add(match.row)
+  }
+  return rows.filter(row => effective.has(row))
 }
 
 interface DecisionRequestState<T extends RequestNote> {
@@ -84,12 +99,8 @@ interface DecisionRequestState<T extends RequestNote> {
   answers: T[]
   ownerAnswer?: { note: T; text: string }
   verification?: string
-  reopened: boolean
 }
 
-/** Resolve the current request from the card's own history. A same-ID
- * publication can reopen only after an observed answer and a new workflow
- * request. Existing binding addenda and legacy answers remain readable. */
 export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
   const current = new Map<string, DecisionRequestState<T>>()
   const structured = new Map<string, T[]>()
@@ -99,11 +110,8 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
     ? noteTime(a) < noteTime(b) : order.get(a)! < order.get(b)!
   for (const note of ordered) {
     const [row] = decisionRecordRows([note], 'Tin Star request: ')
-    if (row && typeof row.id === 'string' && typeof row.action === 'string') {
-      const prior = current.get(row.id)
-      const reopened = !!prior && prior.answers.length > 0 && operation(note) === 'request_decision' &&
-        precedes(prior.publication, note) && prior.answers.every(answer => precedes(answer, note))
-      if (!prior || reopened) current.set(row.id, { publication: note, row, answers: [], reopened })
+    if (row && typeof row.id === 'string' && typeof row.action === 'string' && !current.has(row.id)) {
+      current.set(row.id, { publication: note, row, answers: [] })
     }
     const [id] = decisionRecordRows([note], 'Tin Star answer: ')
     if (typeof id === 'string') {
@@ -119,7 +127,9 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
     }
     const decision = ownerDecision(note)
     if (!decision) continue
-    const open = [...current.values()].filter(request => precedes(request.publication, note) && !request.answers.length)
+    const published = [...current.values()].filter(request => precedes(request.publication, note))
+    const effective = new Set(effectiveDecisionPublications(published.map(request => request.row)))
+    const open = published.filter(request => effective.has(request.row) && !request.answers.length)
     const matches = decision.id ? open.filter(request => request.row.id === decision.id) : open
     if (matches.length > 1) {
       for (const request of matches) request.verification = 'Owner decision matches multiple open requests. Verify its request ID.'
@@ -127,10 +137,6 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
     }
     const [request] = matches
     if (!request) continue
-    if (decision.optionId && !decisionOptionsSchema.safeParse(request.row.options).data?.some(option => option.id === decision.optionId)) {
-      request.verification = 'Owner decision names an option that is not recorded on this request'
-      continue
-    }
     request.answers.push(note)
     request.ownerAnswer = { note, text: decision.answer }
     request.verification = undefined
@@ -139,18 +145,10 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
     // Older structured receipts may have no provider time or may be returned
     // before a body publication. They still bind by their explicit request ID.
     for (const answer of structured.get(request.row.id) ?? []) {
-      if (!request.reopened && !request.answers.includes(answer) && !timeOrdered(request.publication, answer)) request.answers.push(answer)
+      if (!request.answers.includes(answer) && !timeOrdered(request.publication, answer)) request.answers.push(answer)
     }
   }
   return current
-}
-
-export function decisionCycleNotes<T extends RequestNote>(notes: T[], requestId: string) {
-  const request = decisionRequestStates(notes).get(requestId)
-  if (!request?.reopened) return notes
-  const start = notes.indexOf(request.publication)
-  return notes.filter((note, index) => timeOrdered(request.publication, note) && noteTime(note) !== noteTime(request.publication)
-    ? noteTime(note) > noteTime(request.publication) : index >= start)
 }
 
 export function decisionRequests(notes: RequestNote[]) {
@@ -159,7 +157,7 @@ export function decisionRequests(notes: RequestNote[]) {
     try {
       if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
       const state = states.get(row.id)!
-      if (state.reopened && state.publication !== note) return []
+      if (state.publication !== note) return []
       const options = decisionOptionsSchema.safeParse(row.options)
       const proposal = decisionProposalSchema.safeParse(row.proposal), sourceRequest = firstMateRequestSchema.safeParse(row.source_request)
       const lines = note.text.split('\n')

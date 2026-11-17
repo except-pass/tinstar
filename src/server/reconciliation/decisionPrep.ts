@@ -82,7 +82,7 @@ export class DecisionPreparation {
   private replenishAgain = false
   private automatic = false
   private lastPass?: RefillPass
-  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; renew?(): Promise<void>; coverage(): 'complete' | 'unknown'; diagnostics?(): { requests: number | null; source_failures: RefillPass['source_failures'] } },
+  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; renew?(): Promise<void>; observeOpenRequest?(cardId: string, requestId: string): Promise<boolean>; coverage(): 'complete' | 'unknown'; diagnostics?(): { requests: number | null; source_failures: RefillPass['source_failures'] } },
     private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
     private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
 
@@ -221,10 +221,14 @@ export class DecisionPreparation {
   private async dispatch(job: Row) {
     const secret = this.secret
     if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
-    if (this.closed(this.evidence(job.card_id), job.request_id)) {
-      await this.mark(job.id, 'cancelled', 'Preparation stopped because the source card is deferred, closed, or answered.')
+    let open: boolean | undefined
+    try { open = await this.source.observeOpenRequest?.(job.card_id, job.request_id) }
+    catch { await this.mark(job.id, 'cancelled', 'Preparation stopped because complete decision history could not be read.'); return }
+    if (open === false || this.closed(this.evidence(job.card_id), job.request_id)) {
+      await this.mark(job.id, 'cancelled', 'Preparation stopped because the source decision is no longer eligible.')
       return
     }
+    if (!this.packets.leases.readStorage(db => db.prepare("SELECT 1 FROM decision_prep_jobs WHERE id = ? AND state = 'admitted'").get(job.id))) return
     const payload = { request_id: job.request_id, card_url: job.card_url, publish: { tool: 'publish_prepared_packet', job_id: job.id } }
     try {
       const response = await this.fetchImpl(secret.url, {
@@ -321,10 +325,11 @@ export class DecisionPreparation {
         }
         for (const job of admitted) await this.dispatch(job)
         pass.admitted = admitted.length
-        const failures = this.packets.leases.readStorage(db => this.rows(db).filter(job => admitted.some(row => row.id === job.id) && job.state === 'failed'))
+        const attempts = this.packets.leases.readStorage(db => this.rows(db).filter(job => admitted.some(row => row.id === job.id)))
+        const failures = attempts.filter(job => job.state === 'failed')
         pass.bot_failures = failures.length
         pass.bot_errors = [...new Set(failures.map(job => job.reason))]
-        pass.outcome = pass.bot_failures ? 'bot-failure' : admitted.length ? 'dispatched' : 'no-admissible-work'
+        pass.outcome = pass.bot_failures ? 'bot-failure' : attempts.some(job => job.state === 'dispatched' || job.published_at) ? 'dispatched' : 'no-admissible-work'
         pass.explanation = `${admitted.length} admitted from ${pass.candidates} exact source requests on ${pass.cards} cards. `
           + (pass.requests === null ? 'Total demand is unknown. ' : '')
           + pass.rejections.map(row => `${row.count}: ${row.explanation}`).join(' ')

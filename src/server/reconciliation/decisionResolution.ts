@@ -1,5 +1,5 @@
-import { currentDecisionProposal, decisionProposalSchema } from '../../shared/decisionProposal'
-import { decisionRecordRows, decisionRequestStates, ownerDecisionOperation, workflowNoteHasMarker, type RequestNote } from '../../shared/workflowRequests'
+import { decisionProposalSchema } from '../../shared/decisionProposal'
+import { decisionRecordRows, decisionRequestStates, effectiveDecisionPublications, ownerDecisionOperation, workflowNoteHasMarker, type RequestNote } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
 import type { StartWorkResult } from '../../shared/workflow'
@@ -59,15 +59,11 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
 export function decisionHistory(notes: RequestNote[], publications?: import('./proposalSource').ProposalPublication[]) {
-  const states = decisionRequestStates(notes)
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
       if (data?.binding && row.id !== data.request_id) throw new DecisionSourceError('answer binding does not match its proposal identity')
       return { row, added: !!data?.binding }
-    }).filter(({ row, added }) => {
-      const state = states.get(row.id)
-      return !state?.reopened || state.publication === note || added && state.answers.includes(note)
     })
   })
   const history = [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
@@ -88,22 +84,7 @@ export function decisionHistory(notes: RequestNote[], publications?: import('./p
   })
 }
 export function decisionProposals(notes: RequestNote[], publications?: import('./proposalSource').ProposalPublication[]) {
-  const history = decisionHistory(notes, publications)
-  const bound = new Map<string, typeof history>()
-  for (const row of history.filter(row => row.source_request)) {
-    const key = requestKey(firstMateRequestSchema.parse(row.source_request))
-    bound.set(key, [...(bound.get(key) ?? []), row])
-  }
-  const current = [...bound.values()].map(group => {
-    const candidates = group.flatMap(row => {
-      const value = decisionProposalSchema.safeParse(row.proposal)
-      return value.success ? [{ value: value.data }] : []
-    })
-    const keys = new Set(candidates.map(entry => entry.value.request_key))
-    const current = currentDecisionProposal([...candidates, ...(publications ?? []).filter(entry => keys.has(entry.value.request_key))])
-    return group.find(row => row.proposal && JSON.stringify(row.proposal) === JSON.stringify(current?.value))
-  })
-  return history.filter(row => !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
+  return effectiveDecisionPublications(decisionHistory(notes, publications), publications)
 }
 export function decisionAnswer(note: { text: string }) {
   const data = rows([note], 'Tin Star answer data: ')[0]
@@ -121,8 +102,9 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
   const states = decisionRequestStates(notes)
-  const ambiguous = [...states.values()].find(request => request.verification && !request.answers.length)
-  const ownerAnsweredProposals = decisionProposals(notes, publications).filter(row => states.get(row.id)?.ownerAnswer)
+  const current = effectiveDecisionPublications(requests, publications)
+  const ambiguous = current.map(row => states.get(row.id)).find(request => request?.verification && !request.answers.length)
+  const ownerAnsweredProposals = current.filter(row => states.get(row.id)?.ownerAnswer)
   const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success ||
     rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) ||
     rows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').some(answer => answer.request_id === row.id) ||
@@ -154,10 +136,9 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
     const answer = texts[0]
     // One immutable answer per published proposal. Semantic identity survives
     // refresh, process restarts and a different caller's operation_id.
-    const identity = state.reopened ? [row.id, state.publication.id] : [row.id]
-    const digest = createHash('sha256').update(JSON.stringify([requestKey(request), card.id, ...identity])).digest('hex').slice(0, 32)
+    const digest = createHash('sha256').update(JSON.stringify([requestKey(request), card.id, row.id])).digest('hex').slice(0, 32)
     const deliveryId = `tinstar-${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20)}`
-    const marker = `Tin Star reconciled: ${JSON.stringify([requestKey(request), ...identity, answer])}`
+    const marker = `Tin Star reconciled: ${JSON.stringify([requestKey(request), row.id, answer])}`
     try {
       const context = sourceContext(fleet, request)
       let census = typeof intentions === 'function' ? undefined : intentions

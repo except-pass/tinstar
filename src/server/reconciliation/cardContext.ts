@@ -70,15 +70,8 @@ export class CardContextReader {
     const cached = this.decisionCache.get(id)
     if (cached && (cached.pending || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
-    const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
-    const comments = this.readComments(id, signal)
-    const body = this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
-      omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
-    const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
-      ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
-      outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
-      omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
-    }))
+    const observed = Date.now()
+    const { value, comments } = this.readDecisionHistory(id)
     const entry = { pending: true, value, resolved: cached?.resolved }
     this.decisionCache.set(id, entry)
     // Positive comment evidence remains useful to claims even if the body
@@ -93,6 +86,23 @@ export class CardContextReader {
       .catch(() => {}).finally(() => { entry.pending = false })
     return value
   }
+  observeDecisionHistory(id: string): Promise<CardContextRead> {
+    return this.readDecisionHistory(id).value
+  }
+
+  private readDecisionHistory(id: string) {
+    const signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
+    const comments = this.readComments(id, signal)
+    const body = this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
+      omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
+    const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
+      ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
+      outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
+      omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
+    }))
+    return { value, comments }
+  }
+
   details(id: string, force = false): Promise<CardContextRead> {
     if (force) this.invalidate(id)
     return Promise.all([this.get(id), this.commentDetails(id, force)]).then(([body, comments]): CardContextRead => ({

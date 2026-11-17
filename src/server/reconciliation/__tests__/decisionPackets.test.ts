@@ -350,7 +350,7 @@ it('rejects duplicate legacy request IDs even if the wording changes after an an
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   f.history.context.blocks.push({ id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
-    text: 'OWNER DECISION (Will): Defer this request.' })
+    text: 'OWNER DECISION — 2026-11-15: Defer this request.' })
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(true)
   f.history.context.blocks.push({ ...request, id: 'new-request-revision', createdAt: new Date(now - 5_000).toISOString(),
     text: request.text.replace('Operation: request_decision\n', '').replace(f.packet.question, 'Authorize the revised preview scope?') })
@@ -360,7 +360,7 @@ it('rejects duplicate legacy request IDs even if the wording changes after an an
   expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
 })
 
-it('matches the Influx card history, flags an unnamed answer when ambiguous, and reopens only on a new request', async () => {
+it('matches the Influx card history, flags an unnamed answer when ambiguous, and preserves the original answer on duplicate publication', async () => {
   const f = cardNativeFixture(), asOf = Date.parse('2026-11-17T19:14:00Z')
   const card = f.snapshot.intentions.data!.cards.find(card => card.id === f.cardId)!
   card.id = '41a50ce6d422817cb434d2fa5de171cb'
@@ -393,6 +393,31 @@ it('matches the Influx card history, flags an unnamed answer when ambiguous, and
   expect(decisionRequests(explicit)).toMatchObject([{ answered: false }, { id: 'independent-ask', answered: true, answer: words }])
 
   const revised = [...notes, { ...request, id: 'new-request', createdAt: '2026-11-17T19:14:00Z' }]
-  expect(decisionRequests(revised)).toMatchObject([{ id: f.packet.binding.request_id, sourceId: 'new-request', answered: false }])
-  expect(await reconcileDecision(card, revised, [])).toBeUndefined()
+  expect(decisionRequests(revised)).toMatchObject([{ id: f.packet.binding.request_id, sourceId: request.id, answered: true, answer: words }])
+  expect(await reconcileDecision(card, revised, [])).toMatchObject({ state: 'verification-needed' })
+})
+
+it.each([undefined, 'prior-proposal', 'current-proposal'])('matches an owner decision against the effective proposal with target %s', async target => {
+  const { snapshot, cardId, history, packet } = preparedDecisionFixture(now)
+  const card = snapshot.intentions.data!.cards.find(card => card.id === cardId)!
+  const publication = history.context.blocks[0]!
+  const prefix = 'Tin Star request: '
+  const row = JSON.parse(publication.text.split(prefix)[1]!)
+  const publish = (id: string, supersedes: string | null, offset: number) => {
+    const at = new Date(now + offset).toISOString()
+    const proposal = { schema: 'tinstar.decision-proposal.v1', proposal_id: id, supersedes, published_at: at,
+      request_key: packet.binding.request_key, source: { kind: 'firstmate-request', id: row.source_request.id, revision: at },
+      question: packet.question, rationale: packet.rationale, recommended_action_id: 'defer',
+      actions: [{ id: 'defer', label: 'Defer', instruction: 'Wait for the preview results' }], references: [] }
+    return { ...publication, id, createdAt: at, text: publication.text.split(prefix)[0] + prefix + JSON.stringify({ ...row, id, proposal }) }
+  }
+  const words = 'Defer the preview.'
+  const notes = [publish('prior-proposal', null, -3000), publish('current-proposal', 'prior-proposal', -2000),
+    { id: 'owner-answer', type: 'comment', createdAt: new Date(now - 1000).toISOString(),
+      text: `OWNER DECISION — 2026-11-15: ${words}${target ? `\nRequest ID: ${target}` : ''}` }]
+  const answered = target !== 'prior-proposal'
+  expect(decisionRequests(notes)).toMatchObject([{ id: 'prior-proposal', answered: false }, { id: 'current-proposal', answered }])
+  const resolution = await reconcileDecision(card, notes, snapshot.fleet)
+  if (answered) expect(resolution).toMatchObject({ request_id: 'current-proposal', answer: words })
+  else expect(resolution).toBeUndefined()
 })
