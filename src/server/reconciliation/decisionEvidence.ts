@@ -3,6 +3,7 @@ import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { requestAnchor } from '../../shared/deskSource'
 import { decisionRequests, decisionRecordRows } from '../../shared/workflowRequests'
 import type { SourceSnapshot } from './index'
+import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
 import { bindDecision, decisionProposals } from './decisionResolution'
 import { buildQueue } from './queue'
@@ -12,10 +13,11 @@ export interface CachedDecisionHistory { context: CardContextRead; observed_at: 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
  * PR/release details are not asserted from a link: they need their own reads. */
-export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number): DecisionEvidence {
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>): DecisionEvidence {
   const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
   const reasons: string[] = []
   if (!card) reasons.push('Canonical card is not in the observed configured board')
+  if (cardObservation && (cardObservation.status !== 'fresh' || cardObservation.coverage !== 'complete' || !cardObservation.expiresAt || Date.parse(cardObservation.expiresAt) <= now)) reasons.push('Canonical card property evidence is unavailable or stale')
   if (card?.archived || card?.in_trash || ['Done', 'Archived'].includes(String(card?.properties.Status?.value))) reasons.push('Source card is closed')
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
@@ -28,7 +30,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const queue = buildQueue(snapshot, new Map(), now)
   const items = queue.items.filter(item => item.cardIds.includes(cardId))
   const observation = snapshot.intentions
-  const base = (kind: DecisionDependencyObservation['kind'], key: string, revision: string | null, source = observation): DecisionDependencyObservation => ({ kind, key, revision,
+  const base = (kind: DecisionDependencyObservation['kind'], key: string, revision: string | null, source: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'> = observation): DecisionDependencyObservation => ({ kind, key, revision,
     status: source.status, coverage: source.coverage, observed_at: source.observedAt, expires_at: source.expiresAt })
   const requests = rows.map(row => {
     const issues: string[] = []
@@ -64,7 +66,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
           try { const links = JSON.parse(value); value = { ...links, tasks: Array.isArray(links.tasks) ? [...links.tasks].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b))) : links.tasks } } catch { /* Invalid link meaning stays visible and blocks canonical binding. */ }
         }
         return [key, value]
-      }))]) : null),
+      }))]) : null, cardObservation ?? observation),
     { ...base('answer', row.id, decisionMeaning(decisionRecordRows(history?.context.blocks ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
       status: freshHistory ? 'fresh' as const : 'unknown' as const, coverage: completeHistory ? 'complete' as const : 'unknown' as const,
       observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }]

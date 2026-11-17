@@ -122,7 +122,7 @@ export class PreparedReviews {
         if (row.state !== 'Queued' || held.has(row.card_id)) continue
         const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && job.source_revision === row.source_revision)
         if (!job || !['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state)) continue
-        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : 'Failed'
+        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : job.state === 'blocked' ? 'Blocked' : 'Failed'
         if (job.reason) row.reasons = [...new Set([...row.reasons, job.reason])]
       }
       const verified = queue.coverage === 'complete' && !sourceFailures.length
@@ -132,7 +132,7 @@ export class PreparedReviews {
           needs_repreparation: verified ? current.filter(packet => !this.packets.pendingAnswerInStorage(db, packet.id) && needsResearch(packet)).length : null,
           to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
           requests: verified ? queue.requests : null },
-        runner: { configured: prep.configured, preparer: prep.preparer, explanation: prep.explanation },
+        runner: { configured: prep.configured, preparer: prep.preparer, explanation: prep.explanation, refill_pass: prep.refill_pass, jobs: prep.jobs },
         ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
         recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
           ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],

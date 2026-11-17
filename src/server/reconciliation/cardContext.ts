@@ -65,9 +65,9 @@ export class CardContextReader {
    * legacy records from top-level paragraphs. Contract chunks (code), embeds,
    * and nested specification content are not workflow publication surfaces.
    * Keep this cache separate: complete decision history is not complete prose. */
-  decisionDetails(id: string): Promise<CardContextRead> {
+  decisionDetails(id: string, force = false): Promise<CardContextRead> {
     const cached = this.decisionCache.get(id)
-    if (cached && (cached.pending || cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
+    if (cached && (cached.pending || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
     const comments = this.readComments(id, signal)

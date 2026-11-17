@@ -13,6 +13,7 @@ import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliat
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
   vi.restoreAllMocks()
+  vi.useRealTimers()
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -346,4 +347,69 @@ it.each(['firstmate', 'card-native'] as const)('prepares and answers a %s struct
     expect(await call('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(f.publishedNotes).toHaveLength(count)
   } finally { await client.close() }
+}, 20_000)
+
+it('keeps one published packet Ready through fresh property/history cycles without another dispatch, then blocks a changed card', async () => {
+  let changed = false, time = Date.now()
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(time)
+  const { sources, cardId, requestId, posts, reads } = await setup({ cards: 52, wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    if (changed && String(input).includes('/v1/pages/')) {
+      const page = await response.json()
+      page.properties.Name = { type: 'title', title: [{ plain_text: 'A materially changed source card' }] }
+      return Response.json(page)
+    }
+    return response
+  } })
+  await loadedSnapshot(sources)
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Repeated refresh proof' })
+  const packet = preparedDecisionFixture().packet
+  const request = sources.preparationEvidence(cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  const published = await sources.preparation.publish({ job_id: job.job_id, operation_id: 'refresh-cycle-packet', packet })
+  expect(published.ready).toBe(true)
+  await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
+  for (let cycle = 0; cycle < 5; cycle++) {
+    time += 16_000
+    vi.setSystemTime(time)
+    await sources.preparation.replenish()
+    await loadedSnapshot(sources)
+    expect((await sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id, card_id: cardId })])
+    expect(posts).toHaveLength(1)
+  }
+  expect(reads.filter(read => read.path === `/v1/pages/${cardId}`)).toHaveLength(5)
+  expect(await sources.decisionPackets.ids()).toEqual([published.packet_id])
+  changed = true; time += 16_000
+  vi.setSystemTime(time)
+  await sources.preparation.replenish()
+  await loadedSnapshot(sources)
+  expect((await sources.preparedReviews.snapshot()).ready).toEqual([])
+  expect((await sources.decisionPackets.read(published.packet_id, sources.preparationEvidence(cardId)))!.reasons.join(' ')).toContain('Dependency changed')
+  expect((await sources.preparation.status()).jobs.find(row => row.id === job.job_id)).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
+  vi.useRealTimers()
+}, 60_000)
+
+it.each(['properties', 'comments'] as const)('blocks a previously Ready packet when priority %s refresh fails, preserving publication', async failure => {
+  let unavailable = false
+  let time = Date.now()
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
+  const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (unavailable && (failure === 'properties' ? path.includes('/v1/pages/') : path === '/v1/comments')) return Response.json({}, { status: 503 })
+    return transport(input, init)
+  } })
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Source failure proof' })
+  const packet = preparedDecisionFixture().packet, request = sources.preparationEvidence(cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'source-failure-packet', packet })).toMatchObject({ ready: true })
+  unavailable = true; time += 16_000; vi.setSystemTime(time)
+  const snapshot = await loadedSnapshot(sources)
+  expect(snapshot.ready).toEqual([])
+  expect(snapshot.source_failures).toContainEqual({ card_id: cardId, reasons: expect.arrayContaining([failure === 'properties' ? 'Canonical card property evidence is unavailable or stale' : 'Complete cached decision history is unavailable']) })
+  expect(snapshot.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.any(String) }))
+  expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
+  expect(posts).toHaveLength(1)
 }, 20_000)

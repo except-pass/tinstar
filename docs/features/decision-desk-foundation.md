@@ -515,7 +515,28 @@ the completed publication state.
 Prepare now posts one audited job for one decision while replenishment is off,
 using the eligibility rules above. Open attempts, including validation-blocked
 attempts, expire after ten minutes from dispatch (or admission if not dispatched).
-Automatic replenishment checks at startup and every 30 seconds.
+Automatic replenishment checks at startup and every five seconds. Each pass
+records its current coverage, known/unknown demand, exact candidates, rejection
+reasons/counts, Ready/in-flight depth, free slots and dispatch failures. Source
+read failures are reported separately from webhook failures in `runner.refill_pass`.
+The runner explanation includes the most recent pass, including exhausted sources.
+
+Current packet cards and in-flight jobs take priority over queued board history
+reads, bounded by the saved target plus maximum preparers. Their canonical card
+properties and complete body/comment history are re-read when less than fifteen
+seconds of history evidence remain. Two readers remain the concurrency bound;
+a slow or failed source can still expire and block review. Revalidation uses the
+same stored packet and semantic dependencies, with the original thirty-second
+source horizon measured from read start. It does not extend packet review expiry,
+and automatic preparation does not recompute an unchanged previously validated
+packet merely to renew source evidence. Changed sources still invalidate it.
+
+Preparation jobs retain the first successful `published_at` and `published` outcome
+across later leases, evidence expiry and restarts. Their current `readiness` and
+blocked reasons are projected separately. Only attempts without a successful
+publication can expire as failed. Legacy publication timestamps are recovered
+from retained successful validation events. Saved target/parallelism values are
+unchanged; target admission still counts Ready packets plus in-flight jobs.
 
 ### Publishing a source request and loading history
 

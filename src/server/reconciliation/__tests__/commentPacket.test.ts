@@ -172,6 +172,13 @@ it('completes an expired matching job from its card comment without redispatch',
   expect(await packets.read((await packets.ids())[0]!, evidence)).toMatchObject({ ready: true })
   expect(posts).toHaveLength(1)
   expect(packets.leases.status(evidence.card_id)).toBeNull()
+  const publishedAt = (await prep.status()).jobs[0]!.published_at
+  await packets.leases.claim([evidence.card_id], 'reviewer', 'Reviewer', 'import-review')
+  await prep.importComments(evidence.card_id, [{ id: 'expired-job-comment', type: 'comment', text }])
+  expect((await prep.status()).jobs[0]).toMatchObject({ state: 'published', published_at: publishedAt, readiness: { ready: false } })
+  now += 11 * 60_000
+  await prep.replenish()
+  expect((await prep.status()).jobs[0]).toMatchObject({ state: 'published', published_at: publishedAt, readiness: { ready: false } })
 })
 
 it('preserves explicit difficult reversibility rather than treating negation as reversible', () => {

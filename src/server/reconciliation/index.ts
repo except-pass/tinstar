@@ -77,6 +77,8 @@ export class ReconciliationSources {
   readonly notionApi
   private context
   private preparationHistory
+  private preparationPriority = new Set<string>()
+  private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
   private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
@@ -89,7 +91,7 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
     this.notionApi = api ?? new NotionApi(fetcher)
@@ -118,7 +120,21 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
-    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), id => this.importCommentPackets(id))
+    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), async id => {
+      await this.importCommentPackets(id)
+      await this.preparation.revalidate(id)
+    }, async id => {
+      if (!this.preparationPriority.has(id)) return
+      const observedAt = new Date().toISOString(), expiresAt = new Date(Date.now() + 30_000).toISOString()
+      try {
+        const card = await this.workReader.card(id, true)
+        this.workReader.confirm(card)
+        this.preparationProperties.set(id, { status: 'fresh', coverage: 'complete', observedAt, expiresAt })
+      } catch {
+        this.preparationProperties.set(id, { status: 'unknown', coverage: 'unknown', observedAt, expiresAt })
+        throw new Error('Canonical card properties could not be refreshed.')
+      }
+    })
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
@@ -179,8 +195,21 @@ export class ReconciliationSources {
    * board-wide history. Original history freshness remains authoritative. */
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
-    this.preparationHistory.warm(ids)
+    const priority = await this.preparation.priorityCards()
+    this.preparationPriority = new Set(priority)
+    this.preparationHistory.warm(ids, priority)
     await Promise.all(ids.map(id => this.importCommentPackets(id)))
+  }
+
+  private preparationDiagnostics() {
+    const queue = this.decisionQueue()
+    return { requests: queue.requests, source_failures: queue.card_ids.flatMap(card_id => {
+      const evidence = this.preparationEvidence(card_id)
+      const reasons = [...new Set([...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)])]
+      const state = this.preparationHistory.state(card_id)
+      if (state.message) reasons.push(state.message)
+      return reasons.length ? [{ card_id, reasons }] : []
+    }) }
   }
 
   private importCommentPackets(cardId: string): Promise<void> {
@@ -201,7 +230,10 @@ export class ReconciliationSources {
       await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
       await this.preparationHistory.read(cardId)
-    } else await this.warmPreparationHistory()
+    } else {
+      await this.snapshot()
+      await this.warmPreparationHistory()
+    }
     return this.prepCandidates(cardId)
   }
 
@@ -227,7 +259,7 @@ export class ReconciliationSources {
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
    * refreshes sources, reconciles receipts, or changes source work. */
   preparationEvidence(cardId: string) {
-    return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now())
+    return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now(), this.preparationProperties.get(cardId))
   }
 
   invalidateQueueDisplays() {
