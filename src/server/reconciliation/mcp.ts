@@ -29,6 +29,7 @@ import { SessionProbe } from './sessionProbe'
 import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
 import type { NeedsWillItem } from './needsWill'
+import { withNotionOperation, type NotionApi } from './notionApi'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -65,6 +66,7 @@ const commandInput = {
   ttl_ms: z.number().int().min(500).max(15_000).default(8000), action: actionSchema,
 }
 export interface PresentationReaders {
+  notionApi?: NotionApi
   leases?: CardLeases
   preparedReviews?: PreparedReviews
   preparedSubmissions?: PreparedSubmissions
@@ -85,7 +87,7 @@ export interface PresentationReaders {
   workerLinkReport(): Promise<WorkerLinkReport>
 }
 type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
-const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
+const toolResult = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
 /** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
 function claimNextCards(queue: DeskQueue) {
   const source = queue.needsWill ?? queue.items
@@ -121,7 +123,11 @@ export class ReconciliationMcp {
   }
   createServer(actor = 'Tin Star MCP', request?: IncomingMessage) {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
-    const catalog = createToolCatalog(server)
+    const catalog = createToolCatalog(server, (name, run) => withNotionOperation(actor, name, run))
+    const result = (value: unknown) => {
+      this.readers.notionApi?.recordSourceResult(value)
+      return toolResult(value)
+    }
     const caller = leaseCaller(actor, request?.headers ?? {})
     const cardCall = async <T extends { lease_token?: string }>(input: T, perform: (clean: CardInput<T>) => Promise<unknown>) => {
       const { lease_token, ...clean } = input
@@ -326,19 +332,19 @@ export class ReconciliationMcp {
   }
   private async submitAndWait(request: Omit<Parameters<SceneSessions['enqueue']>[0], 'scene_id'> & { scene_id?: string; session_code?: string }) {
     const selected = this.sessions.resolveCommand(request)
-    if (!('scene_id' in selected)) return result(selected)
+    if (!('scene_id' in selected)) return toolResult(selected)
     const { session_code: _code, ...rest } = request
     const input = { ...rest, scene_id: selected.scene_id }
     const needsQueue = input.action.type === 'navigate-queue' || input.action.type === 'open-queue' && !input.action.cardId
     const queue = needsQueue ? await this.readers.queue().catch(() => ({ outcome: 'queue-source-unavailable' as const, message: 'Queue source read failed' })) : undefined
     const queued = this.sessions.enqueue(input, await this.sceneForWindow(input.scene_id), queue)
-    if (queued.outcome !== 'queued') return result(queued)
+    if (queued.outcome !== 'queued') return toolResult(queued)
     for (let i = 0; i < 20; i++) {
       await new Promise(resolve => setTimeout(resolve, 100))
       const current = this.sessions.result(input.scene_id, input.command_id)
-      if (current.outcome !== 'queued') return result(current)
+      if (current.outcome !== 'queued') return toolResult(current)
     }
-    return result(this.sessions.result(input.scene_id, input.command_id))
+    return toolResult(this.sessions.result(input.scene_id, input.command_id))
   }
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = (req.url ?? '').split('?')[0]

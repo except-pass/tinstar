@@ -1,7 +1,59 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { NotionApi } from '../notionApi'
+import { NotionApi, withNotionOperation } from '../notionApi'
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+it('starts a foreground read ahead of 50 queued background reads', async () => {
+  vi.useFakeTimers()
+  const url = 'https://api.notion.com/v1/pages/card'
+  const starts: Array<{ input: string; at: number }> = []
+  const api = new NotionApi(async input => {
+    starts.push({ input: String(input), at: Date.now() })
+    if (input === url) await new Promise(resolve => setTimeout(resolve, 200))
+    return new Response('{}')
+  })
+  const priming = api.backgroundFetch('https://api.notion.com/v1/comments')
+  const background = Array.from({ length: 50 }, () => api.backgroundFetch('https://api.notion.com/v1/blocks/card/children'))
+  const requestedAt = Date.now()
+  const foreground = api.fetch(url, undefined, 5_000)
+  await vi.advanceTimersByTimeAsync(550)
+  expect((await foreground).ok).toBe(true)
+  expect(Date.now() - requestedAt).toBeLessThan(1_000)
+  expect(starts[1]).toEqual({ input: url, at: requestedAt + 350 })
+  await vi.runAllTimersAsync()
+  await Promise.all([priming, ...background])
+  expect(starts).toHaveLength(52)
+})
+
+it('starts the HTTP timeout at send after shared backoff and attributes failures to the calling operation', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('HTTP deadline exceeded', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '6' } }))
+    .mockImplementation((_input, init) => new Promise((_resolve, reject) =>
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })))
+  const api = new NotionApi(fetcher)
+  await api.backgroundFetch('https://api.notion.com/v1/comments')
+  const foreground = withNotionOperation('owner-chatgpt', 'get_work', async () => {
+    try { await api.fetch('https://api.notion.com/v1/pages/card', undefined, 5_000) } catch (error) {
+      api.recordSourceResult({ outcome: 'unavailable' })
+      throw error
+    }
+  })
+  const rejected = expect(foreground).rejects.toMatchObject({ name: 'TimeoutError' })
+  await vi.advanceTimersByTimeAsync(5_999)
+  expect(timeout).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(timeout).toHaveBeenCalledOnce()
+  expect(timeout).toHaveBeenCalledWith(5_000)
+  await vi.advanceTimersByTimeAsync(5_000)
+  await rejected
+  expect(api.diagnostics.foreground).toEqual({ '["owner-chatgpt","get_work"]': { timeouts: 1, sourceUnavailable: 1 } })
+})
 
 it.each(['foreground', 'background'] as const)('rechecks backoff for a sleeping %s request after a delayed history 429', async mode => {
   vi.useFakeTimers()

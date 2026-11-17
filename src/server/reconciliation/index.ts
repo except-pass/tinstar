@@ -5,7 +5,7 @@ import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
-import { cardSourceUrl } from '../../shared/workIdentity'
+import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence, preparedDecisionRequests } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
@@ -79,7 +79,7 @@ export class ReconciliationSources {
   private preparationHistory
   private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
   private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
-  private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
+  private commentImports = new Map<string, { revision: string; pending: Promise<void> }>()
   private sourceWriteRecoveryPass?: Promise<void>
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
@@ -108,12 +108,19 @@ export class ReconciliationSources {
       evidence: async (stored, original, desired) => {
         // Forced exact history and source observation on every submit, without
         // queue()/get_work reconciliation or research in the critical path.
-        const [snapshot, blocks] = await Promise.all([this.snapshot(true), this.workflow.preparedHistory(stored.packet.binding.card_id)])
-        return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks, original, desired)
+        const id = stored.packet.binding.card_id
+        const [snapshot, blocks, card] = await Promise.all([this.snapshot(true, {}, false), this.workflow.preparedHistory(id), this.workReader.card(id, true)])
+        const data = snapshot.intentions.data
+        if (data) snapshot.intentions = { ...snapshot.intentions, data: { ...data, cards: data.cards.map(row => row.id === id ? card : row) } }
+        const evidence = projectPreparedSubmitEvidence(snapshot, id, blocks, original, desired)
+        if (evidence.requests.some(request => request.binding?.request_id === stored.packet.binding.request_id && request.answered)) {
+          this.preparationHistory.invalidate(id, false)
+        }
+        return evidence
       },
       write: (input, actor) => this.workflow.answerPrepared(input, actor),
       scheduleReconciliation: card => {
-        this.preparationHistory.invalidate(card)
+        this.preparationHistory.invalidate(card, false)
         // Existing bridge/receipt closure proceeds independently of desk next.
         void this.workflow.reconcileDecisions(card).catch(() => {})
       },
@@ -138,8 +145,12 @@ export class ReconciliationSources {
     }, (id, until) => {
       const properties = this.preparationProperties.get(id)
       return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
-    })
-    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.preparationHistory.invalidate(id); this.invalidateQueueDisplays() }
+    }, id => this.preparationBoardVersion(id))
+    this.workflow.onRecordedChange = (id, bodyChanged) => {
+      this.preparationProjection = undefined
+      this.preparationHistory.invalidate(id, bodyChanged)
+      this.invalidateQueueDisplays()
+    }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -155,8 +166,8 @@ export class ReconciliationSources {
     return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
   }
 
-  async snapshot(force = false, scope: WorkScope = {}) {
-    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force)])
+  async snapshot(force = false, scope: WorkScope = {}, background = true) {
+    const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background)])
     // Scene refreshes read source properties only. Awaiting per-card comments
     // here makes a large board exceed the source deadline. Comment updates use
     // the existing rotating sweep and targeted search_work/get_work refreshes.
@@ -176,6 +187,15 @@ export class ReconciliationSources {
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
   }
 
+  private preparationBoardVersion(id: string) {
+    if (isJiraCard(id)) return undefined
+    const observation = this.workReader.notionDeclarations()
+    const card = observation?.data?.cards.find(row => row.id === id)
+    if (!card || !observation) return null
+    const { status, coverage, observedAt, expiresAt } = observation
+    return { version: card.last_edited_time, status, coverage, observedAt, expiresAt }
+  }
+
   /** Cached queue used by prepared review and preparation admission. No source writes. */
   private decisionQueue() {
     const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
@@ -185,11 +205,11 @@ export class ReconciliationSources {
     // Absence is certified only when all active card histories are cached and
     // fresh as well; otherwise the empty response discloses unknown demand.
     const historiesComplete = cards.every(card => {
-      const history = this.context.cachedDecisionHistory(card.id)
+      const history = this.preparationHistory.evidenceHistory(card.id)
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
     const requestCount = !historiesComplete && queue.items.length ? queue.items.length
-      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
+      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.preparationHistory.evidenceHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
     const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
@@ -201,17 +221,17 @@ export class ReconciliationSources {
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
     const priority = await this.preparation.priorityCards()
-    this.preparationHistory.warm(ids, priority)
+    this.preparationHistory.warm(ids, priority.ids, priority.published)
     await Promise.all(ids.map(id => this.importCommentPackets(id)))
   }
 
   private async renewPreparedSources() {
     const priority = await this.preparation.priorityCards()
-    if (!priority.length) return
+    if (!priority.ids.length) return
     // The existing five-second runner also renews published/in-flight sources
     // with admission off, so a closed Desk does not stop source maintenance.
     await this.snapshot()
-    this.preparationHistory.warm([], priority)
+    this.preparationHistory.warm(priority.published, priority.ids, priority.published)
   }
 
   private preparationDiagnostics() {
@@ -227,12 +247,23 @@ export class ReconciliationSources {
 
   private importCommentPackets(cardId: string): Promise<void> {
     const history = this.context.cachedDecisionHistory(cardId)
-    if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' || Date.parse(history.expires_at) <= Date.now()) return Promise.resolve()
-    const observation = decisionMeaning([history.observed_at, history.expires_at, this.preparationEvidence(cardId)])
+    if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' ||
+      this.preparationHistory.versionChanged(cardId)) return Promise.resolve()
+    const expires = this.preparationHistory.evidenceHistory(cardId)?.expires_at
+    if (!expires || Date.parse(expires) <= Date.now() && !this.preparationHistory.renewalUntil(cardId)) return Promise.resolve()
+    const evidence = this.preparationEvidence(cardId)
+    // A real change in dependencies can make a cached publication eligible,
+    // even when no new Notion history reads are needed.
+    const revision = decisionMeaning([history.observed_at, evidence.source_version, evidence.reasons,
+      evidence.requests.map(({ binding, dependencies, reasons, answered }) => [binding, reasons, answered,
+        dependencies.map(({ kind, key, revision, status, coverage }) => [kind, key, revision, status, coverage])])])
     const previous = this.commentImports.get(cardId)
-    if (previous?.observation === observation) return previous.pending
-    const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => { this.commentImports.delete(cardId); throw error })
-    this.commentImports.set(cardId, { observation, pending })
+    if (previous?.revision === revision) return previous.pending
+    const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => {
+      if (this.commentImports.get(cardId)?.pending === pending) this.commentImports.delete(cardId)
+      throw error
+    })
+    this.commentImports.set(cardId, { revision, pending })
     return pending
   }
 
@@ -281,7 +312,16 @@ export class ReconciliationSources {
     }
     const { snapshot, queue } = this.preparationProjection
     const renewalUntil = this.preparationHistory.renewalUntil(cardId)
-    const evidence = projectDecisionEvidence(snapshot, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue, renewalUntil)
+    const board = this.preparationBoardVersion(cardId)
+    const versionChanged = this.preparationHistory.versionChanged(cardId)
+    const properties = board && renewalUntil && board.observedAt && !versionChanged
+      ? { ...board, status: 'fresh' as const, coverage: 'complete' as const } : board ?? this.preparationProperties.get(cardId)
+    // Keep last-good packet evidence during the bounded board recovery window.
+    // The public census and forced submit continue to use their real coverage.
+    const retainingBoard = !this.config.jira && board?.status === 'stale' && properties?.status === 'fresh' && renewalUntil
+    const source = retainingBoard ? { ...snapshot, intentions: { ...snapshot.intentions, status: 'fresh' as const, coverage: 'complete' as const, expiresAt: renewalUntil } } : snapshot
+    const evidence = projectDecisionEvidence(source, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), properties, retainingBoard ? undefined : queue, renewalUntil)
+    if (versionChanged) evidence.reasons.push('Card version changed; complete decision history must be refreshed')
     const state = this.preparationHistory.state(cardId)
     if (state.message && !renewalUntil) evidence.reasons.push(state.message)
     return evidence
@@ -347,12 +387,12 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string) { return { ...workReadback(await this.context.details(id)), lease: this.leases.status(id) } }
+  async card(id: string) { return { ...workReadback(await this.context.details(id, false, this.notionApi.fetch)), lease: this.leases.status(id) } }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */
   async checkInSnapshot(force = false): Promise<CheckInSnapshot> {
-    const [fleet, checkIns] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({ owner: 'Firstmate', statuses: ['In Progress', 'Waiting For'] }, force)])
+    const [fleet, checkIns] = await Promise.all([this.fleetSnapshot(force), this.workReader.query({ owner: 'Firstmate', statuses: ['In Progress', 'Waiting For'] }, force, true)])
     return { generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings,
       fleet, intentions: ageObservation(this.workReader.declarations()), checkIns: ageObservation({ ...checkIns, data: checkIns.data ? { ...checkIns.data, cards: checkIns.data.cards.filter(card => !card.source?.synthetic) } : null }) }
   }
@@ -433,7 +473,7 @@ export class ReconciliationSources {
     try {
       let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
       if (args.refresh) {
-        this.context.invalidate(args.card_id)
+        this.context.invalidateProse(args.card_id)
         try {
           await this.onWorkRefresh?.([card])
           await this.workflow.reconcileDecisions(card.id, fleet)
@@ -448,7 +488,7 @@ export class ReconciliationSources {
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: card.source?.collectionId ?? this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-source card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
-      const context = args.details ? await this.context.details(card.id) : undefined
+      const context = args.details ? await this.context.details(card.id, false, this.notionApi.fetch) : undefined
       const review = reviewView(intentions, new Map(context && (context.commentsOutcome ?? context.outcome) === 'available' ? [[card.id, context.blocks]] : [])).items[0] ?? null
       const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
         ...(context ? { context } : {}) })
@@ -463,23 +503,23 @@ export class ReconciliationSources {
     }
   }
   async startWork(input: StartWorkInput, actor: string) {
-    const result = await this.workflow.start(input, actor)
-    if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
+    const result = await this.notionApi.foregroundOperation(actor, 'start_work', () => this.workflow.start(input, actor))
+    if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
     return { ...workReadback(result), lease: this.leases.status(input.card_id) }
   }
 
   async updateWork(input: UpdateWorkInput, actor: string) {
-    const result = await this.workflow.update(input, actor)
-    if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
+    const result = await this.notionApi.foregroundOperation(actor, 'update_work', () => this.workflow.update(input, actor))
+    if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
     const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
     return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
   async createWork(input: CreateWorkInput, actor: string) {
-    return workReadback(await this.workflow.create(input, actor))
+    return workReadback(await this.notionApi.foregroundOperation(actor, 'create_work', () => this.workflow.create(input, actor)))
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
-    const result = await this.workflow.submitHandoff(input, actor)
-    if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.context.invalidate(result.record.card_id)
+    const result = await this.notionApi.foregroundOperation(actor, 'submit_handoff', () => this.workflow.submitHandoff(input, actor))
+    if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.preparationHistory.invalidate(result.record.card_id)
     return workReadback(result)
   }
   async firstmateWork(force = false) {
@@ -540,12 +580,12 @@ export class ReconciliationSources {
    * or operational reconciliation. Exact active-card validation still happens
    * before allocation, and get_work remains the explicit prose reader. */
   async claimQueue(filters: ClaimFilters = {}) {
-    const snapshot = await this.snapshot(), scene = this.reconciler.project(snapshot)
+    const snapshot = await this.snapshot(false, {}, false), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
-      const history = this.context.cachedDecisionHistory(id)
+      const history = this.preparationHistory.evidenceHistory(id)
       const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))

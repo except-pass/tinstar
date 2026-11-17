@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { bindingMeaning, decisionMeaning, decisionPacketSchema, decisionPacketReady, defaultDecisionPolicy, decisionPolicyUpdateSchema, dependencyIdentity, validateDecisionPacket,
-  decisionPolicyValuesSchema, type DecisionPacket, type DecisionEvidence, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
+  decisionPolicyValuesSchema, type DecisionPacket, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
 import { requestAnchor } from '../../shared/deskSource'
 import { CardLeases } from './cardLeases'
+import type { ObservedDecisionEvidence as DecisionEvidence } from './decisionEvidence'
 
 export class DecisionDeskConflict extends Error {}
 export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string | null; packet: DecisionPacket }
@@ -37,6 +38,7 @@ export class DecisionPackets {
           PRIMARY KEY(kind,dependency_key));
         CREATE TABLE IF NOT EXISTS decision_packet_events (
           sequence INTEGER PRIMARY KEY, packet_id TEXT, type TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL, detail TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS decision_packet_events_latest ON decision_packet_events(packet_id,sequence);
         CREATE TABLE IF NOT EXISTS decision_packet_validations (
           sequence INTEGER PRIMARY KEY, packet_id TEXT NOT NULL, valid INTEGER NOT NULL, valid_until TEXT, reasons TEXT NOT NULL,
           coverage TEXT NOT NULL);
@@ -49,7 +51,7 @@ export class DecisionPackets {
   private event(db: DatabaseSync, packetId: string | null, type: string, actor: string, detail: unknown) {
     return Number(db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?) RETURNING sequence').get(packetId, type, actor, new Date(this.now()).toISOString(), JSON.stringify(detail))!.sequence)
   }
-  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string) {
+  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string, onlyChanged = false) {
     const validation = validateDecisionPacket(packet, evidence, this.now())
     // A cache read predating a known semantic change cannot resurrect the old
     // packet. Expired evidence may be re-observed with unchanged meaning.
@@ -60,7 +62,10 @@ export class DecisionPackets {
       if (known && !known.revision && (!current?.observed_at || Date.parse(current.observed_at) <= Date.parse(known.invalidated_at))) validation.reasons.push(`Dependency needs re-observation after invalidation: ${dependencyIdentity(dependency)}`)
     }
     if (validation.reasons.length) { validation.valid = false; validation.valid_until = null }
-    const sequence = this.event(db, id, 'validation', actor, { valid: validation.valid, reasons: validation.reasons, valid_until: validation.valid_until })
+    const previous = onlyChanged ? this.latestValidation(db, id) : null
+    if (previous && previous.source_version === evidence.source_version && previous.valid === validation.valid &&
+      decisionMeaning(previous.reasons) === decisionMeaning(validation.reasons)) return validation
+    const sequence = this.event(db, id, 'validation', actor, { ...validation, source_version: evidence.source_version })
     const coverage = evidence.requests.flatMap(request => request.dependencies).map(({ kind, key, status, coverage, observed_at, expires_at, renewal_until }) => ({ kind, key, status, coverage, observed_at, expires_at, renewal_until }))
     db.prepare('INSERT INTO decision_packet_validations VALUES(?,?,?,?,?,?)').run(sequence, id, Number(validation.valid), validation.valid_until, JSON.stringify(validation.reasons), JSON.stringify(coverage))
     return validation
@@ -89,16 +94,16 @@ export class DecisionPackets {
     const validation = this.attest(db, id, packet, evidence, actor)
     return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: null, packet, validation, replayed: false }
   }
-  async validate(id: string, evidence: DecisionEvidence, actor: string) {
+  async validate(id: string, evidence: DecisionEvidence, actor: string, onlyChanged = false) {
     z.string().trim().min(1).max(200).parse(actor)
     await this.initialize()
     return this.leases.writeStorage(db => {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) throw new DecisionDeskConflict('Packet is unavailable')
-      return this.attest(db, id, unpack(row).packet, evidence, actor)
+      return this.attest(db, id, unpack(row).packet, evidence, actor, onlyChanged)
     })
   }
-  private latestValidation(db: DatabaseSync, id: string): DecisionPacketValidation | null {
+  private latestValidation(db: DatabaseSync, id: string): (DecisionPacketValidation & { source_version?: string }) | null {
     const event = db.prepare("SELECT type,detail FROM decision_packet_events WHERE packet_id = ? AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1").get(id) as { type: string; detail: string } | undefined
     if (!event) return null
     const detail = JSON.parse(event.detail)

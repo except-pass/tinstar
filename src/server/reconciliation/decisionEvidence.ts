@@ -9,6 +9,7 @@ import { bindDecision, decisionProposals } from './decisionResolution'
 import { buildQueue } from './queue'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
+export type ObservedDecisionEvidence = DecisionEvidence & { source_version?: string }
 
 const noteTime = (note: CardContextRead['blocks'][number]) => Date.parse(note.createdAt ?? note.created_time ?? '')
 const ownerAnswerNote = (note: CardContextRead['blocks'][number]) => {
@@ -36,7 +37,7 @@ export function preparedDecisionRequests(notes: CardContextRead['blocks']) {
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
  * PR/release details are not asserted from a link: they need their own reads. */
-export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>, renewalUntil?: string | null): DecisionEvidence {
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>, renewalUntil?: string | null): ObservedDecisionEvidence {
   const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
   const reasons: string[] = []
   if (!card) reasons.push('Canonical card is not in the observed configured board')
@@ -114,7 +115,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
-  return { card_id: cardId, requests, reasons, observed_at: observation.observedAt,
+  return { card_id: cardId, requests, reasons, observed_at: observation.observedAt, source_version: card?.last_edited_time,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 

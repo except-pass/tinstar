@@ -16,6 +16,7 @@ import { queueSignals } from '../queueInputs'
 import { applyPresentationAction, initialPresentation } from '../../../shared/reconciliationPresentation'
 import { presentationTargets } from '../../../shared/presentationObservation'
 import { seedOriginAllowlist } from '../../api/originAllowlist'
+import { NotionApi } from '../notionApi'
 let root = '', server: Server | undefined, client: Client | undefined
 const parse = (value: unknown) => JSON.parse((value as { content: Array<{ text: string }> }).content[0]!.text)
 afterEach(async () => { await client?.close(); await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve()); if (root) await rm(root, { recursive: true, force: true }) })
@@ -24,7 +25,8 @@ describe('authenticated real MCP transport', () => {
   it('uses private per-install auth and exposes only scoped reads/presentation', async () => {
     root = await mkdtemp(join(tmpdir(), 'tinstar-mcp-'))
     const scene = fixtureScene()
-    const mcp = new ReconciliationMcp({ workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()), scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [] }), queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Explicit unavailable source test' }) }, root)
+    const notionApi = new NotionApi()
+    const mcp = new ReconciliationMcp({ notionApi, workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()), scene: async () => scene, card: async () => ({ outcome: 'available', blocks: [] }), queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Explicit unavailable source test' }) }, root)
     server = createServer((req, res) => { void mcp.handle(req, res) })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as { port: number }).port, base = `http://127.0.0.1:${port}`
@@ -39,6 +41,7 @@ describe('authenticated real MCP transport', () => {
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
     expect((await client.listTools()).tools.map(t => t.name)).toEqual(['claim_next_card', 'claim_card', 'release_claim', 'not_for_me', 'get_prepared_submission_state', 'submit_prepared_decision', 'open_prepared_review_session', 'list_prepared_review_sessions', 'claim_next_prepared_decision', 'claim_prepared_decision', 'release_prepared_decision', 'publish_prepared_packet', 'session_probe', 'search_work', 'get_work', 'get_work_views', 'get_workflow_rules', 'submit_handoff', 'start_work', 'create_work', 'update_work', 'list_ui_sessions', 'get_scene', 'read_record', 'get_card_context', 'get_queue', 'get_worker_link_report', 'present_view', 'next_queue_item', 'get_command', 'list_prs', 'get_pr', 'get_release_status'])
     expect(parse(await client.callTool({ name: 'get_work_views', arguments: {} })).outcome).toBe('queue-source-unavailable')
+    expect(notionApi.diagnostics.foreground['["Tin Star MCP","get_work_views"]']).toEqual({ timeouts: 0, sourceUnavailable: 1 })
     const sessions = parse(await client.callTool({ name: 'list_ui_sessions', arguments: {} }))
     expect(sessions.sessions[0].scene_id).toBe(identity.scene_id)
     expect(JSON.stringify(sessions)).not.toContain(identity.key)

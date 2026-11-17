@@ -350,7 +350,7 @@ export class DecisionPreparation {
       WHERE json_extract(body,'$.binding.card_id') = ? AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`)
       .all(cardId) as Array<{ id: string }>).map(row => row.id))
     for (const id of ids) {
-      const validation = await this.packets.validate(id, evidence, 'decision-desk')
+      const validation = await this.packets.validate(id, evidence, 'decision-desk', true)
       if (validation.valid) await this.packets.leases.writeStorage(db => {
         db.prepare(`UPDATE decision_prep_jobs SET state = 'published', published_at = coalesce(published_at, ?),
           reason = CASE WHEN published_at IS NULL THEN 'Published packet validated against refreshed source evidence.' ELSE reason END
@@ -365,15 +365,19 @@ export class DecisionPreparation {
     return this.packets.leases.readStorage(db => {
       const policy = this.packets.policyInStorage(db, this.scope)
       const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state)).map(job => job.card_id)
-      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
+      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card,
+        (SELECT json_extract(detail,'$.valid') FROM decision_packet_events
+         WHERE packet_id = p.id AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1) AS valid
+        FROM decision_packets p
         WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
         AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
-        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
-      const reviewable = packets.map(row => row.card).filter(card => {
+        ORDER BY valid DESC, published_at DESC`).all() as Array<{ card: string; valid: number | null }>
+      const reviewable = packets.filter(({ card }) => {
         const evidence = this.evidence(card)
         return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
       })
-      return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
+      return { ids: [...new Set([...jobs, ...reviewable.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers),
+        published: [...new Set(reviewable.filter(row => row.valid).map(row => row.card))] }
     })
   }
 
@@ -437,7 +441,7 @@ export class DecisionPreparation {
     // A restart or a later source refresh renews evidence even when publication
     // was idempotent. Validation failures never become a permanent Ready bit.
     for (const { id, comment } of imported) {
-      await this.packets.validate(id, evidence, commentPacketActor)
+      await this.packets.validate(id, evidence, commentPacketActor, true)
       if (!comment.job_id) continue
       await this.packets.leases.writeStorage(db => {
         const current = this.packets.readInStorage(db, id, evidence)

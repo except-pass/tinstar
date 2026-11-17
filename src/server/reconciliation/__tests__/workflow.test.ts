@@ -682,21 +682,21 @@ describe('workflow exact-card source recovery', () => {
       expect(f.requests.filter(row => row.method === 'PATCH')).toHaveLength(1)
     } finally { timeout.mockRestore() }
   })
-  it('bounds retries to 15.75 seconds even when an earlier source request remains stuck', async () => {
-    const f = setup(), timeout = clockDeadlines()
+  it('bounds queue wait to thirty seconds when an earlier foreground request remains stuck', async () => {
+    const f = setup()
     let release!: (response: Response) => void
     f.fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve }))
     const active = f.api.fetch(`https://api.notion.com/v1/comments`)
     let result: Awaited<ReturnType<WorkflowOperations['update']>> | undefined
     const pending = f.workflow.update(input('complete'), 'Owner').then(value => { result = value })
     try {
-      await vi.advanceTimersByTimeAsync(15_749)
+      await vi.advanceTimersByTimeAsync(29_999)
       expect(result).toBeUndefined()
       await vi.advanceTimersByTimeAsync(1)
       await pending
       expect(result).toMatchObject({ outcome: 'not-saved', code: 'source-unavailable', saved_fields: [] })
       expect(f.fetcher).toHaveBeenCalledTimes(1)
-    } finally { release(json({})); await active; timeout.mockRestore() }
+    } finally { release(json({})); await active }
   })
   it('checks current values again after a transient failure at the second precondition', async () => {
     const f = setup()

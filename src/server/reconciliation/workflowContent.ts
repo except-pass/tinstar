@@ -3,6 +3,7 @@ import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
 import { isJiraCard } from '../../shared/workIdentity'
+import { recordNotionBodyFailure } from './notionApi'
 
 export const richText = (content: string) => {
   const rich_text: Array<{ type: 'text'; text: { content: string } }> = []
@@ -21,7 +22,7 @@ export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'c
 export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
-export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
+export interface WorkflowNote { id: string; text: string; author?: string; authorName?: string; createdAt?: string }
 export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`
 export const decisionMarker = (id: string) => `${workflowMarkers.decision} ${JSON.stringify(id)}`
 export const sectionMarker = (name: string) => `${workflowMarkers.section} ${name}`
@@ -96,7 +97,7 @@ export class WorkflowContent {
       return matches ? 'applied' : 'different'
     } catch { return 'unknown' }
   }
-  async request(path: string, method = 'GET', body?: unknown, signal = AbortSignal.timeout(20_000)) {
+  async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
     if (method !== 'GET') sourceWriteDispatched()
@@ -105,7 +106,7 @@ export class WorkflowContent {
       try {
         response = await this.reader.api.fetch(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal,
           headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, signal ? undefined : 20_000)
         if (response.ok) break
         await response.body?.cancel()
         throw new NotionWriteError(response.status, method)
@@ -113,7 +114,7 @@ export class WorkflowContent {
         // Source reads can recover from transient Notion failures before any
         // mutation. Never retry a write whose provider outcome may be unknown.
         const transient = error instanceof TypeError || error instanceof NotionWriteError && (error.status === 408 || error.status === 429 || error.status >= 500)
-        if (method !== 'GET' || !transient || signal.aborted || attempt >= 2) throw error
+        if (method !== 'GET' || !transient || signal?.aborted || attempt >= 2) throw error
       }
       await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
     }
@@ -128,6 +129,9 @@ export class WorkflowContent {
         if (bytes > 4 * 1024 * 1024) throw new Error('Notion response too large')
         chunks.push(value)
       }
+    } catch (error) {
+      recordNotionBodyFailure(response, error)
+      throw error
     } finally { await stream.cancel().catch(() => {}) }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }
@@ -139,7 +143,8 @@ export class WorkflowContent {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`comments?${query}`, 'GET', undefined, signal)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
-      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
+      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id,
+        ...(typeof item.created_by?.name === 'string' ? { authorName: item.created_by.name } : {}), createdAt: item.created_time })
       if (!body.has_more) return result
       if (!body.next_cursor || body.next_cursor === cursor) break
       cursor = body.next_cursor

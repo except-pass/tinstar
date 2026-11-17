@@ -3,6 +3,7 @@ import { CachedObservation, retainMissing } from './observation'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, readWorkerLinks, type WorkerLinks } from './workerLinks'
 import type { ReconciliationConfig } from './config'
+import { NotionQueueTimeoutError, recordNotionBodyFailure, type NotionFetch } from './notionApi'
 export interface WorkScope { owner?: string; statuses?: string[]; initiative?: string; epic?: string; checkpoint_before?: string; history?: boolean }
 
 // Malformed hyphen strings must not normalize into supposedly canonical links.
@@ -49,12 +50,15 @@ export class NotionCardReadError extends Error {
 
 /** Exact uncached page read, sharing the source parser. Used immediately before
  * inbox delivery and for closure; cached scene data cannot authorize either.
- * Retry only reads: queue deadlines, rate limits and source outages can clear
- * without changing write intent. Each attempt gets a fresh five-second budget. */
-export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: typeof fetch = fetch) {
+ * Retry source errors without changing write intent. Each HTTP attempt gets a
+ * fresh five-second budget, with one bounded queue wait before reporting congestion. */
+const directFetch: NotionFetch = (input, init, timeoutMs = 5_000) => fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+
+export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: NotionFetch = directFetch) {
   if (!config || notionPageId(id) !== id) throw new Error('Notion card unavailable')
   for (let attempt = 0; ; attempt++) {
     try { return await readNotionCardOnce(config, id, fetcher) } catch (error) {
+      if (error instanceof NotionQueueTimeoutError) throw error
       const transient = error instanceof NotionCardReadError ? error.transient
         : error instanceof TypeError || error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name)
       if (!transient || attempt >= 2) throw error
@@ -63,9 +67,9 @@ export async function readNotionCard(config: ReconciliationConfig['notion'], id:
   }
 }
 
-async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['notion']>, id: string, fetcher: typeof fetch) {
-  const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error', signal: AbortSignal.timeout(5_000),
-    headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } })
+async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['notion']>, id: string, fetcher: NotionFetch) {
+  const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error',
+    headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } }, 5_000)
   if (!response.ok) {
     await response.body?.cancel()
     throw new NotionCardReadError(response.status === 408 || response.status === 429 || response.status >= 500 && response.status < 600, response.status)
@@ -81,6 +85,9 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
       if (bytes > 4 * 1024 * 1024) throw new Error('Notion card response too large')
       chunks.push(value)
     }
+  } catch (error) {
+    recordNotionBodyFailure(response, error)
+    throw error
   } finally { await reader.cancel().catch(() => {}) }
   const raw = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
   const result = notionCard(raw)
@@ -92,13 +99,14 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
 // 2,000 cards leaves room beyond the current board size without unbounded
 // pagination. Schema, query pages and relation reads still share one 20s deadline.
 export const NOTION_QUERY_PAGE_LIMIT = 20
-export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board') {
-  return new CachedObservation(async () => {
+export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board', backgroundFetch = fetcher) {
+  return new CachedObservation(async background => {
     if (!config) throw new Error('Notion is not configured')
+    const send = background ? backgroundFetch : fetcher
     // One deadline across schema + pagination; no retries on the UI read path.
     const signal = AbortSignal.timeout(20_000)
     async function request(path: string, body?: unknown) {
-      const response = await fetcher(`https://api.notion.com/v1/${path}`, {
+      const response = await send(`https://api.notion.com/v1/${path}`, {
         method: body === undefined ? 'GET' : 'POST', redirect: 'error', signal,
         headers: { Authorization: `Bearer ${config!.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -117,6 +125,9 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
           if (bytes > 4 * 1024 * 1024) throw new Error('Notion response too large')
           chunks.push(value)
         }
+      } catch (error) {
+        recordNotionBodyFailure(response, error)
+        throw error
       } finally { await reader.cancel().catch(() => {}) }
       return record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
     }
