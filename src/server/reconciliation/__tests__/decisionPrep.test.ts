@@ -120,6 +120,21 @@ it('fills only below the ready target and stops at the preparer cap', async () =
   expect(posts[0]!.body).toMatchObject({ request_id: rows[0]!.request_id })
 })
 
+it('limits published renewal to the current target plus preparers', async () => {
+  const { prep, packets, fixture, turnOn } = await harness()
+  for (const cardId of [fixture.cardId, 'b'.repeat(32), 'c'.repeat(32)]) {
+    const { packet, evidence } = JSON.parse(JSON.stringify({ packet: fixture.packet, evidence: fixture.evidence }).replaceAll(fixture.cardId, cardId)) as Pick<typeof fixture, 'packet' | 'evidence'>
+    const published = await packets.publish(packet, evidence, 'fixture', `publish-${cardId}`)
+    expect(published.validation?.valid).toBe(true)
+  }
+  await turnOn(2, 1)
+  expect((await prep.priorityCards()).published).toHaveLength(3)
+  await packets.updatePolicy('board', { expected_version: 1, values: { target_ready: 1, max_preparers: 1, automatic_replenishment: true } }, 'Will')
+  const priority = await prep.priorityCards()
+  expect(priority.ids).toHaveLength(2)
+  expect(priority.published).toEqual(priority.ids)
+})
+
 it('prepare now dispatches one audited job while automatic replenishment is off', async () => {
   const { prep, posts, packets, fixture, setCoverage } = await harness()
   setCoverage('unknown')

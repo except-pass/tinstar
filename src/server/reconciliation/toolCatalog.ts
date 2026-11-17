@@ -21,12 +21,12 @@ function inputSchema(input: Input): Tool['inputSchema'] {
 }
 
 /** One registration path for the catalog and the SDK's authoritative handlers. */
-export function createToolCatalog(server: McpServer, scope: <T>(name: string, run: () => T) => T = (_name, run) => run()) {
+export function createToolCatalog(server: McpServer, scope: <T>(run: () => T) => T) {
   const tools: Tool[] = []
   return {
     registerTool<Args extends Input>(name: string, config: Pick<Tool, 'description' | 'annotations'> & { inputSchema: Args }, handler: ToolCallback<Args>) {
       const registered = server.registerTool<Input, Input>(name, config, (args: unknown, extra: Parameters<ToolCallback<Input>>[1]) =>
-        scope(name, () => Reflect.apply(handler, undefined, [args, extra])))
+        scope(() => Reflect.apply(handler, undefined, [args, extra])))
       // No tool supports task execution. Omission also keeps the catalog valid
       // for 2026-07-28, whose Tool shape removed the legacy execution field.
       tools.push({ name, description: config.description, inputSchema: inputSchema(config.inputSchema), annotations: config.annotations })

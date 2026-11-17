@@ -376,8 +376,9 @@ export class DecisionPreparation {
         const evidence = this.evidence(card)
         return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
       })
-      return { ids: [...new Set([...jobs, ...reviewable.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers),
-        published: [...new Set(reviewable.filter(row => row.valid).map(row => row.card))] }
+      const ids = [...new Set([...jobs, ...reviewable.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers)
+      const published = new Set(reviewable.filter(row => row.valid).map(row => row.card))
+      return { ids, published: ids.filter(id => published.has(id)) }
     })
   }
 

@@ -1,9 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 export type NotionFetch = (input: Parameters<typeof fetch>[0], init?: RequestInit, timeoutMs?: number) => Promise<Response>
-const operationContext = new AsyncLocalStorage<{ caller: string; operation: string }>()
-export const withNotionOperation = <T>(caller: string, operation: string, run: () => T) =>
-  operationContext.run({ caller, operation }, run)
+type CallerClass = 'owner' | 'mate' | 'pm-bot' | 'background' | 'other'
+const callerContext = new AsyncLocalStorage<CallerClass>()
+function callerClass(actor: string): CallerClass {
+  switch (actor.toLowerCase()) {
+    case 'owner':
+    case 'owner-chatgpt': return 'owner'
+    case 'mate':
+    case 'firstmate':
+    case 'first mate': return 'mate'
+    case 'pm-bot':
+    case 'pm bot': return 'pm-bot'
+    default: return 'other'
+  }
+}
+export const withNotionCaller = <T>(actor: string, run: () => T) => callerContext.run(callerClass(actor), run)
 const bodyFailures = new WeakMap<Response, (error: unknown) => void>()
 export const recordNotionBodyFailure = (response: Response, error: unknown) => bodyFailures.get(response)?.(error)
 
@@ -16,8 +28,8 @@ type RequestJob = { start(): void }
 /** All application Notion traffic shares pacing and Retry-After, including
  * forced refreshes. No automatic write retry: a lost response may have saved. */
 export class NotionApi {
-  readonly diagnostics = { requests: {} as Record<string, number>, cacheHits: 0, rateLimits: 0, latencyMs: 0,
-    foreground: {} as Record<string, { timeouts: number; sourceUnavailable: number }> }
+  readonly diagnostics = { requests: {} as Record<string, number>, cacheHits: 0, rateLimits: 0, latencyMs: 0 }
+  readonly callerFailures: Partial<Record<CallerClass, { timeouts: number; sourceUnavailable: number }>> = {}
   private nextAt = 0
   private foreground: RequestJob[] = []
   private background: RequestJob[] = []
@@ -29,29 +41,28 @@ export class NotionApi {
   readonly backgroundFetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, true)
   readonly fetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, false)
 
-  foregroundOperation<T>(caller: string, operation: string, run: () => Promise<T>) {
-    if (operationContext.getStore()) return run()
-    return withNotionOperation(caller, operation, async () => {
+  foregroundOperation<T>(actor: string, run: () => Promise<T>) {
+    if (callerContext.getStore()) return run()
+    return withNotionCaller(actor, async () => {
       const result = await run()
       this.recordSourceResult(result)
       return result
     })
   }
 
-  private count(kind: 'timeouts' | 'sourceUnavailable', fallback: string, context = operationContext.getStore()) {
-    const key = JSON.stringify([context?.caller ?? 'unattributed', context?.operation ?? fallback])
-    const counts = this.diagnostics.foreground
-    const bucket = counts[key] || Object.keys(counts).length < 256 ? key : 'other'
-    ;(counts[bucket] ??= { timeouts: 0, sourceUnavailable: 0 })[kind]++
+  private count(kind: 'timeouts' | 'sourceUnavailable', caller: CallerClass) {
+    const counts = this.callerFailures[caller] ??= { timeouts: 0, sourceUnavailable: 0 }
+    counts[kind]++
   }
 
   recordSourceResult(result: unknown) {
-    if (!operationContext.getStore() || !result || typeof result !== 'object') return
+    const caller = callerContext.getStore()
+    if (!caller || !result || typeof result !== 'object') return
     const { outcome, code, recovery, context, implementation_contract } = result as {
       outcome?: string; code?: string; recovery?: { code?: string }; context?: { outcome?: string }; implementation_contract?: { code?: string }
     }
     const unavailable = [outcome, code, recovery?.code, implementation_contract?.code].some(value => typeof value === 'string' && value.endsWith('source-unavailable'))
-    if (unavailable || outcome === 'stale' || outcome === 'unavailable' || context?.outcome === 'unavailable') this.count('sourceUnavailable', '')
+    if (unavailable || outcome === 'stale' || outcome === 'unavailable' || context?.outcome === 'unavailable') this.count('sourceUnavailable', caller)
   }
 
   private async cachedRequest(input: Parameters<typeof fetch>[0], init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean) {
@@ -93,9 +104,9 @@ export class NotionApi {
     const started = Date.now()
     const queue = background ? this.background : this.foreground
     const callerSignal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined
-    const context = operationContext.getStore() ?? { caller: 'unattributed', operation }
+    const caller = background ? 'background' : callerContext.getStore() ?? 'other'
     const countTimeout = (error: unknown) => {
-      if (!background && error instanceof Error && error.name === 'TimeoutError') this.count('timeouts', operation, context)
+      if (error instanceof Error && error.name === 'TimeoutError') this.count('timeouts', caller)
     }
     return new Promise<Response>((resolve, reject) => {
       const cleanup = () => {
@@ -124,7 +135,7 @@ export class NotionApi {
         void (async () => {
           try {
             const response = await this.fetcher(input, deadline ? { ...init, signal } : init)
-            if (!background && response.body && signal) bodyFailures.set(response, error => {
+            if (response.body && signal) bodyFailures.set(response, error => {
               countTimeout(signal.aborted ? signal.reason : error)
               bodyFailures.delete(response)
             })

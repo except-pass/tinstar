@@ -580,6 +580,8 @@ describe('config and HTTP boundary', () => {
 
   it('serves the envelope and unknown coverage, rejects writes and foreign origins', async () => {
     const sources = new ReconciliationSources({ fleet: [], warnings: [] })
+    await sources.notionApi.foregroundOperation('owner-chatgpt', async () => ({ outcome: 'unavailable' }))
+    await sources.notionApi.foregroundOperation('private-caller', async () => ({ outcome: 'unavailable' }))
     const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
     server.listen(0, '127.0.0.1'); await once(server, 'listening')
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('no port')
@@ -587,7 +589,15 @@ describe('config and HTTP boundary', () => {
     const url = `http://127.0.0.1:${address.port}/api/reconciliation/sources`
     try {
       const res = await fetch(url); expect(res.headers.get('cache-control')).toBe('no-store')
-      expect(await res.json()).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
+      const payload = await res.json()
+      expect(payload).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
+      expect(payload.data.diagnostics.notion.callerFailures).toEqual({
+        owner: { timeouts: 0, sourceUnavailable: 1 },
+        other: { timeouts: 0, sourceUnavailable: 1 },
+      })
+      expect((await sources.searchWork({})).diagnostics.notion).toEqual({
+        requests: {}, cacheHits: expect.any(Number), rateLimits: 0, latencyMs: 0,
+      })
       expect((await fetch(url, { method: 'POST' })).status).toBe(400)
       expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
       const sceneUrl = url.replace('/sources', '/scene')

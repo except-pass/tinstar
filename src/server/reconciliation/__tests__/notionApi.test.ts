@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { NotionApi, withNotionOperation } from '../notionApi'
+import { NotionApi, withNotionCaller } from '../notionApi'
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -25,7 +25,7 @@ it('starts a foreground read ahead of 50 queued background reads', async () => {
   expect(starts).toHaveLength(52)
 })
 
-it('starts the HTTP timeout at send after shared backoff and attributes failures to the calling operation', async () => {
+it('starts the HTTP timeout at send after shared backoff and attributes failures to the coarse caller class', async () => {
   vi.useFakeTimers()
   const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
     const controller = new AbortController()
@@ -38,7 +38,7 @@ it('starts the HTTP timeout at send after shared backoff and attributes failures
       init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })))
   const api = new NotionApi(fetcher)
   await api.backgroundFetch('https://api.notion.com/v1/comments')
-  const foreground = withNotionOperation('owner-chatgpt', 'get_work', async () => {
+  const foreground = withNotionCaller('owner-chatgpt', async () => {
     try { await api.fetch('https://api.notion.com/v1/pages/card', undefined, 5_000) } catch (error) {
       api.recordSourceResult({ outcome: 'unavailable' })
       throw error
@@ -52,7 +52,7 @@ it('starts the HTTP timeout at send after shared backoff and attributes failures
   expect(timeout).toHaveBeenCalledWith(5_000)
   await vi.advanceTimersByTimeAsync(5_000)
   await rejected
-  expect(api.diagnostics.foreground).toEqual({ '["owner-chatgpt","get_work"]': { timeouts: 1, sourceUnavailable: 1 } })
+  expect(api.callerFailures).toEqual({ owner: { timeouts: 1, sourceUnavailable: 1 } })
 })
 
 it.each(['foreground', 'background'] as const)('rechecks backoff for a sleeping %s request after a delayed history 429', async mode => {

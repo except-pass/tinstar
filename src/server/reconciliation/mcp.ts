@@ -29,7 +29,7 @@ import { SessionProbe } from './sessionProbe'
 import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
 import type { NeedsWillItem } from './needsWill'
-import { withNotionOperation, type NotionApi } from './notionApi'
+import { withNotionCaller, type NotionApi } from './notionApi'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -123,7 +123,7 @@ export class ReconciliationMcp {
   }
   createServer(actor = 'Tin Star MCP', request?: IncomingMessage) {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
-    const catalog = createToolCatalog(server, (name, run) => withNotionOperation(actor, name, run))
+    const catalog = createToolCatalog(server, run => withNotionCaller(actor, run))
     const result = (value: unknown) => {
       this.readers.notionApi?.recordSourceResult(value)
       return toolResult(value)
