@@ -231,12 +231,31 @@ describe('presets, reducer and persisted semantic preferences', () => {
     }
     localStorage.removeItem(preferencesKey)
   })
+  it('groups By Initiative as initiative then epic, leaving a card with no epic in that initiative', () => {
+    const scene = fixtureScene({ now })
+    const withEpic = scene.cards.find(card => card.id === fixtureId(1))!
+    const noEpic = scene.cards.find(card => card.id === fixtureId(2))!
+    const assign = (card: typeof withEpic, initiative: string, epic?: string) => {
+      card.source.properties.Initiative = { id: 'Initiative', type: 'select', value: initiative, hasMore: false }
+      if (epic) card.source.properties.Epic = { id: 'Epic', type: 'select', value: epic, hasMore: false }
+      else delete card.source.properties.Epic
+    }
+    assign(withEpic, 'Tin Star', 'Operational Floor')
+    assign(noEpic, 'Tin Star')
+    const groups = organizedGroups(scene, { ...initialPresentation(), organizer: { ...defaultOrganizer() }, statusFilter: { preset: 'all', statuses: [] } }, now)
+    const epicGroup = groups.find(group => group.cardIds.includes(withEpic.id) && group.outerLabel === 'Tin Star')!
+    const bare = groups.find(group => group.cardIds.includes(noEpic.id) && group.outerLabel === 'Tin Star')!
+    expect(defaultOrganizer()).toEqual({ outer: 'initiative', inner: 'epic', order: 'operational', direction: 'asc' })
+    expect(epicGroup.innerLabel).toBe('Operational Floor')
+    expect(bare.innerLabel).toBe('Unassigned / Unknown')
+    expect(bare.outerId).toBe(epicGroup.outerId)
+  })
   it('starts fresh browsers and resets with the Initiative preset', () => {
     localStorage.removeItem(preferencesKey)
-    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' })
+    expect(loadPresentationPreferences().organizer).toEqual({ outer: 'initiative', inner: 'epic', order: 'operational', direction: 'asc' })
     const scene = fixtureScene({ now })
     const state = applyPresentationAction(stateFor({ outer: 'machine' }), { type: 'reset-floor' }, scene).state
-    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' })
+    expect(state.organizer).toEqual({ outer: 'initiative', inner: 'epic', order: 'operational', direction: 'asc' })
   })
   it('uses current source options and keeps all statuses available under All cards', () => {
     const scene = fixtureScene({ now })
