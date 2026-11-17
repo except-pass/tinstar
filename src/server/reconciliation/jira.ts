@@ -20,8 +20,10 @@ const fieldTypes: Record<string, string> = {
 }
 const nativeFields: Record<string, string> = { Name: 'summary', 'Due Date': 'duedate', 'Start Date': 'customfield_10015' }
 export const jiraPropertyKey = (name: string) => `tinstar.workflow.${encodeURIComponent(name)}`
-const logicalStatus = (name: string) => name === 'To Do' ? 'Todo' : name === 'In Review' ? 'In review' : name
-const nativeStatus = (name: string) => name === 'Todo' ? 'To Do' : name === 'In review' ? 'In Review' : name
+/** Jira Review 10078 is Tin Star Ready for Review. The id pin stops a same-named status from taking that transition. */
+const readyForReviewStatusId = '10078'
+const logicalStatus = (name: string, id?: unknown) => name === 'To Do' ? 'Todo' : name === 'In Review' ? 'In review' : name === 'Review' && String(id) === readyForReviewStatusId ? 'Ready for Review' : name
+const nativeStatus = (name: string) => name === 'Todo' ? 'To Do' : name === 'In review' ? 'In Review' : name === 'Ready for Review' ? 'Review' : name
 export class JiraWriteError extends Error {
   constructor(readonly status: number, readonly method: string, public partial = false) { super(`Jira HTTP ${status}`) }
 }
@@ -112,7 +114,7 @@ export class JiraAdapter {
     if (!Array.isArray(body)) throw new Error('Jira project status inventory unavailable')
     const task = body.find((type: any) => type.id === '10582')
     if (!task || !Array.isArray(task.statuses)) throw new Error('TSSPIKE Task workflow unavailable')
-    return task.statuses.map((status: any) => ({ id: String(status.id), name: logicalStatus(String(status.name)) })) as Array<{ id: string; name: string }>
+    return task.statuses.map((status: any) => ({ id: String(status.id), name: logicalStatus(String(status.name), status.id) })) as Array<{ id: string; name: string }>
   }
   schema() { return { properties: Object.fromEntries(Object.entries(fieldTypes).map(([name, type]) => [name, { type }])) } }
   card(raw: Record<string, any>): WorkCard {
@@ -124,7 +126,7 @@ export class JiraAdapter {
       if (stored && (stored.type !== type || !Object.hasOwn(stored, 'value'))) throw new Error(`Invalid Jira metadata for ${name}`)
       let value: unknown = stored?.value ?? (['multi_select', 'relation'].includes(type) ? [] : type === 'rich_text' ? '' : null)
       if (name === 'Name') value = raw.fields.summary
-      else if (name === 'Status') value = logicalStatus(raw.fields.status.name)
+      else if (name === 'Status') value = logicalStatus(raw.fields.status.name, raw.fields.status.id)
       else if (nativeFields[name]) value = raw.fields[nativeFields[name]!] ? { start: raw.fields[nativeFields[name]!], end: null, time_zone: null } : null
       properties[name] = { id: jiraPropertyKey(name), type, value, hasMore: false,
         ...(name === FIRST_MATE_TASKS ? { workerLinks: readWorkerLinks({ type: 'rich_text', rich_text: typeof value === 'string' ? (value.match(/[\s\S]{1,2000}/g) ?? []).map(plain_text => ({ plain_text })) : [] }) } : {}) }
@@ -163,7 +165,9 @@ export class JiraAdapter {
     const payload = this.payload(properties), itemId = this.issueId(id)
     const before = await this.issue(id)
     const target = payload.status && nativeStatus(payload.status)
-    const transition = target && before.fields.status.name !== target ? await this.transitionId(id, target) : undefined
+    const current = before.fields.status
+    const alreadyThere = target === 'Review' ? current?.name === 'Review' && String(current?.id) === readyForReviewStatusId : current?.name === target
+    const transition = target && !alreadyThere ? await this.transitionId(id, target) : undefined
     let mutated = false
     try {
       if (Object.keys(payload.fields).length || payload.properties.length) {
@@ -185,7 +189,7 @@ export class JiraAdapter {
   private async transitionId(id: string, name: string) {
     const body = await this.request(`issue/${this.issueId(id)}/transitions`)
     if (!Array.isArray(body.transitions)) throw new Error('Incomplete Jira transitions')
-    const candidates = body.transitions.filter((t: any) => t.to?.name === name && t.isAvailable !== false)
+    const candidates = body.transitions.filter((t: any) => t.to?.name === name && t.isAvailable !== false && (name !== 'Review' || String(t.to?.id) === readyForReviewStatusId))
     if (candidates.length !== 1) throw new JiraMappingError(`Jira status ${name} has no unique available native transition`)
     return String(candidates[0].id)
   }
