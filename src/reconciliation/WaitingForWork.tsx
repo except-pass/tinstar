@@ -42,9 +42,8 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
       {category.groups.map(group => {
         const expanded = (searchKey ? !searchClosed.has(group.key) : open.has(group.key)) || group.cards.some(card => flashed(card.id))
         const destination = group.target
-        const needsReview = group.cards.filter(card => projection.issues.has(card.id)).length
         return <section key={group.key} className="ov-waiting-dependency" data-dependency-key={group.key}>
-          <div className="ov-waiting-dependency-head"><button type="button" aria-expanded={expanded} aria-label={`${group.label}, ${group.cards.length} ${group.cards.length === 1 ? 'card' : 'cards'}`} title={group.label === group.id ? group.id : `${group.label} · ${group.id}`} onClick={() => toggle(group.key)}><span className="ov-waiting-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span><strong>{group.label}</strong><small>{group.cards.length} {group.cards.length === 1 ? 'card' : 'cards'}{needsReview > 0 && ` · ${needsReview} to review`}</small></button>
+          <div className="ov-waiting-dependency-head"><button type="button" aria-expanded={expanded} aria-label={`${group.label}, ${group.cards.length} ${group.cards.length === 1 ? 'card' : 'cards'}`} title={group.label === group.id ? group.id : `${group.label} · ${group.id}`} onClick={() => toggle(group.key)}><span className="ov-waiting-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span><strong>{group.label}</strong><small>{group.cards.length} {group.cards.length === 1 ? 'card' : 'cards'}</small></button>
             {destination && (destination.kind === 'url' ? <a href={destination.url} target="_blank" rel="noreferrer" aria-label={`Open ${group.label}`} title={destination.url}>↗</a> : <button type="button" className="ov-waiting-target" aria-label={`Open ${group.label} in Inspector`} onClick={() => {
               // Resolved by the same loaded record used to construct this projection.
               onSelect(destination.id)

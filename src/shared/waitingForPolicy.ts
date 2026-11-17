@@ -109,10 +109,10 @@ const descriptionFields = {
   unblocks_when: 'Unblocks when',
   follow_up_by: 'Follow-up by',
 } as const
-const labels: Record<string, keyof WaitFields> = {
-  dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by', 'follow-up': 'follow_up_by', type: 'type', id: 'id',
+const labels: Record<string, keyof WaitDescription> = {
+  dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by',
 }
-interface WaitEntry { text: string; fields: Partial<WaitFields> }
+interface WaitEntry { text: string; fields: Partial<WaitFields>; implicitIdentity?: boolean }
 
 /** Read the authored text and the generated entries without changing what an exact resolution matches. */
 export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
@@ -121,8 +121,9 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   let implicitIdentityUsed = false
   const finish = () => {
     if (!block) return
-    if (block.fields.type === undefined && block.fields.id === undefined && !implicitIdentityUsed) {
+    if (!implicitIdentityUsed) {
       Object.assign(block.fields, { type: primary.type, id: primary.id })
+      block.implicitIdentity = true
       implicitIdentityUsed = true
     }
     entries.push(block)
@@ -130,7 +131,7 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   }
   for (const line of text.split('\n')) {
     const inline = inlineWait(line.replace(/\r$/, ''))
-    const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up(?: by)?|Type|ID):[ \t]*(.*)$/i.exec(line.trim())
+    const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up by):[ \t]*(.*)$/i.exec(line.trim())
     if (inline || !labeled) {
       finish()
       if (line.trim()) entries.push({ text: line, fields: inline ?? { dependency: line } })
@@ -145,6 +146,12 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   }
   finish()
   return entries
+}
+
+export function retainedWaitText({ text, fields, implicitIdentity }: WaitEntry, primary: WaitIdentity): string {
+  const { type = '', id = '', dependency = '', unblocks_when = '', follow_up_by = '' } = fields
+  if (!implicitIdentity || (!type && !id) || (type === primary.type && id === primary.id)) return text
+  return waitLine({ type, id, dependency, unblocks_when, follow_up_by })
 }
 
 export const typedWaitEntry = (entry: WaitEntry) => typedWait(entry.fields)
