@@ -2743,10 +2743,12 @@ describe('Waiting For status semantics', () => {
     f.raw.properties['Waiting For Type'].select = { name: original.type }
     f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: original.id }]
     f.raw.properties['Next check-in'].date = { start: checkIn() }
+    const originalCheckIn = f.raw.properties['Next check-in'].date.start
+    replacement.next_check_in = new Date(Date.parse(originalCheckIn) + 86_400_000).toISOString()
     const resolve_wait = waitLine(replacement)
     const legacy = waitLine({ ...replacement, type: 'Work' })
     f.raw.properties['Waiting For'].rich_text = [{ plain_text: [
-      waitLine(successor), text, kind === 'wait' ? legacy : resolve_wait,
+      waitLine(successor), text, ...(kind === 'wait' ? ['', legacy, 'Unclassified approval'] : [resolve_wait]),
     ].join('\n') }]
     if (kind === 'wait') {
       const card = await f.reader.card(id, true)
@@ -2755,10 +2757,17 @@ describe('Waiting For status semantics', () => {
       expect(await f.workflow.update(op('wait', { ...replacement, expected, replace_wait: replacement.dependency }), 'Consumer'))
         .toMatchObject({ outcome: 'not-saved', code: 'wait-conflict' })
       expect(patches(f)).toBe(before)
+      expect(await f.workflow.update(op('wait', { ...replacement, type: 'Work', id: 'd'.repeat(32), expected, replace_wait: legacy }), 'Consumer'))
+        .toMatchObject({ outcome: 'not-saved', code: 'work-unverified' })
+      expect(patches(f)).toBe(before)
       expect(await f.workflow.update(op('wait', { ...replacement, expected, replace_wait: legacy }), 'Consumer')).toMatchObject({ outcome: 'saved' })
       const repaired = await f.reader.card(id, true)
-      expect(repaired.properties['Waiting For ID']?.value).toBe(replacement.id)
-      expect(repaired.properties['Waiting For']?.value).toBe([waitLine(successor), waitLine(original), resolve_wait].join('\n'))
+      expect(repaired.properties['Waiting For ID']?.value).toBe(original.id)
+      expect(repaired.properties['Waiting For']?.value).toBe([waitLine(successor), text, '', resolve_wait, 'Unclassified approval'].join('\n'))
+      expect(repaired.properties['Next check-in']?.value).toMatchObject({ start: originalCheckIn })
+      expect(await f.sources().getWork({ card_id: id, details: false, refresh: true })).toMatchObject({
+        waiting_for_issues: expect.arrayContaining([expect.objectContaining({ field: 'Unblocks when', category: 'description' })]),
+      })
       return
     }
     const next = { owner: 'Firstmate', status: 'Queued' }

@@ -516,25 +516,48 @@ export class WorkflowOperations {
       const line = waitLine({ ...value, id })
       const entries = currentWaits()
       const added = { text: line, fields: { ...value, id } }
+      const { type: primaryType, id: primaryId } = waitIdentity()
+      const sameIdentity = (type?: string, entryId?: string) => type?.trim() === primaryType.trim() && (primaryType.trim() === 'Work'
+        ? (canonicalWorkId(entryId?.trim() ?? '') ?? entryId?.trim()) === (canonicalWorkId(primaryId.trim()) ?? primaryId.trim())
+        : entryId?.trim() === primaryId.trim())
+      const appointment = this.futureCheckIn(card, value.next_check_in)
+      const currentDate = card.properties['Next check-in']?.value as ReturnType<typeof waitState>['nextCheckIn']
+      const currentAppointment = checkInTime(currentDate?.start ?? null, currentDate?.time_zone)
       if (replace !== undefined) {
         const matches = entries.filter(entry => entry.text === replace)
         const entry = matches.length === 1 ? matches[0] : undefined
         if (!entry || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
           throw new WorkflowError('wait-conflict', 'The replacement must match exactly one current wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
         }
-        editedWaits = entries.map(item => item === entry ? added : item)
-        set('Waiting For Type', value.type); set('Waiting For ID', id)
+        const primary = entries.find(item => item.implicitIdentity) ?? entries.find(item => sameIdentity(item.fields.type, item.fields.id))
+        const replacesPrimary = entries.length === 1 || entry === primary
+        if (replacesPrimary) {
+          editedWaits = entries.map(item => item === entry ? added : item)
+          set('Waiting For Type', value.type); set('Waiting For ID', id)
+        } else {
+          let offset = 0
+          for (const item of entries) {
+            offset = originalWaitText.indexOf(item.text, offset)
+            if (item === entry) break
+            offset += item.text.length
+          }
+          set('Waiting For', originalWaitText.slice(0, offset) + line + originalWaitText.slice(offset + entry.text.length))
+        }
+        const next = new Date(appointment).toISOString()
+        if (replacesPrimary || !Number.isFinite(currentAppointment) || appointment < currentAppointment) set('Next check-in', next)
+        if (card.properties.Status?.value === 'Waiting For') {
+          await this.validateWaitState(card, {
+            'Waiting For': line, 'Waiting For Type': value.type, 'Waiting For ID': id, 'Next check-in': { start: next },
+          })
+        }
         note += `\nReplaced wait: ${JSON.stringify(replace)}`
       } else {
         editedWaits = entries.some(entry => entry.text === line) ? entries : [...entries, added]
+        const samePrimary = primaryType === value.type && (value.type === 'Work'
+          ? canonicalWorkId(primaryId.trim()) === id : primaryId.trim().toLowerCase() === id.toLowerCase())
+        if (!primaryType || !primaryId || samePrimary) { set('Waiting For Type', value.type); set('Waiting For ID', id) }
+        if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || currentAppointment <= Date.now() || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
       }
-      const { type: primaryType, id: primaryId } = waitIdentity()
-      const samePrimary = primaryType === value.type && (value.type === 'Work'
-        ? canonicalWorkId(primaryId.trim()) === id : primaryId.trim().toLowerCase() === id.toLowerCase())
-      const appointment = this.futureCheckIn(card, value.next_check_in)
-      const currentAppointment = checkInTime(((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { start?: string } | null)?.start ?? null, ((desired['Next check-in'] ?? card.properties['Next check-in']?.value) as { time_zone?: string } | null)?.time_zone)
-      if (!primaryType || !primaryId || samePrimary) { set('Waiting For Type', value.type); set('Waiting For ID', id) }
-      if (!primaryType || !primaryId || samePrimary || !Number.isFinite(currentAppointment) || currentAppointment <= Date.now() || appointment < currentAppointment) set('Next check-in', new Date(appointment).toISOString())
       note += `\n${line}`
     }
     const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
@@ -697,7 +720,9 @@ export class WorkflowOperations {
       }
       set('Waiting For', text)
     }
-    await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
+    if (!(input.kind === 'wait' && input.replace_wait !== undefined && card.properties.Status?.value === 'Waiting For')) {
+      await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
+    }
     for (const name of ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in']) if (name in desired || 'Status' in desired) reads.add(name)
     set('Last touched by', actor)
     const sectionOriginal: Record<string, string> = {}
