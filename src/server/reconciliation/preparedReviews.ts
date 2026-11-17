@@ -1,3 +1,4 @@
+import { commentPacketActor } from './commentPacket'
 import { workReadback } from './workReadback'
 import { performance } from 'node:perf_hooks'
 import { randomUUID } from 'node:crypto'
@@ -30,7 +31,7 @@ const unconfiguredPreparation = (): PreparationReport => ({
 export class PreparedReviews {
   private initialized?: Promise<void>
   reportPreparation: () => Promise<PreparationReport> | PreparationReport = unconfiguredPreparation
-  refreshEvidence: () => void = () => {}
+  refreshEvidence: () => void | Promise<void> = () => {}
   constructor(readonly packets: DecisionPackets, readonly scope: string, private evidence: (card: string) => DecisionEvidence,
     private queue: () => PreparedQueue, private now = Date.now) {}
   private get leases() { return this.packets.leases }
@@ -86,7 +87,7 @@ export class PreparedReviews {
   /** Project known evidence, scheduling history outside the storage transaction. */
   async snapshot() {
     await this.initialize()
-    this.refreshEvidence()
+    await this.refreshEvidence()
     const prep = await this.reportPreparation()
     return this.leases.readStorage(db => {
       const queue = this.queue(), now = this.now()
@@ -113,7 +114,7 @@ export class PreparedReviews {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
           return { card_id: card, request_id: request.binding?.request_id ?? null, source_revision: request.binding?.source_revision ?? null,
             title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
-            state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
+            state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : packet?.prepared_by === commentPacketActor ? 'Blocked' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })

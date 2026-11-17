@@ -76,6 +76,7 @@ export class ReconciliationSources {
   readonly notionApi
   private context
   private preparationHistory
+  private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
@@ -116,7 +117,7 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
-    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded())
+    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), id => this.importCommentPackets(id))
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
@@ -175,8 +176,21 @@ export class ReconciliationSources {
 
   /** Enqueue only; snapshot delivery and automatic admission never wait for
    * board-wide history. Original history freshness remains authoritative. */
-  private warmPreparationHistory() {
-    this.preparationHistory.warm(this.decisionQueue().card_ids)
+  private async warmPreparationHistory() {
+    const ids = this.decisionQueue().card_ids
+    this.preparationHistory.warm(ids)
+    await Promise.all(ids.map(id => this.importCommentPackets(id)))
+  }
+
+  private importCommentPackets(cardId: string): Promise<void> {
+    const history = this.context.cachedDecisionHistory(cardId)
+    if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' || Date.parse(history.expires_at) <= Date.now()) return Promise.resolve()
+    const observation = `${history.observed_at}:${history.expires_at}`
+    const previous = this.commentImports.get(cardId)
+    if (previous?.observation === observation) return previous.pending
+    const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => { this.commentImports.delete(cardId); throw error })
+    this.commentImports.set(cardId, { observation, pending })
+    return pending
   }
 
   private async preparationCandidates(cardId?: string) {
@@ -186,7 +200,7 @@ export class ReconciliationSources {
       await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
       await this.preparationHistory.read(cardId)
-    } else this.warmPreparationHistory()
+    } else await this.warmPreparationHistory()
     return this.prepCandidates(cardId)
   }
 

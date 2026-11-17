@@ -1,0 +1,32 @@
+Prepared packet (Tinstar Decision Prep)
+Decision: influx-lifecycle-decision · Prep job 74fe96a2-8e5b-4045-8e27-1bbabf7d86f0 · Prepared 2026-11-16 6:40 PM ET
+
+Background: The PROD InfluxDB that stores every device reading keeps all data forever. On 2026-11-16 its disk was 87% of 100 GiB and growing 0.53 to 0.88 GiB a day. The 300 GiB disk increase is already approved separately and buys about 8 to 13 months (242 to 399 days). If the disk fills, new readings stop being saved for every customer.
+
+Question: Approve building the staged data lifecycle plan (option 4), with nothing deleted unless you give a separate yes?
+
+Options (as filed):
+- A (recommended): build the staged plan. 2 to 4 weeks. Power and energy kept at full detail for 400 days, other readings for 90 days, then summaries. Exact copy for 7 years. Nothing deleted without a separate yes.
+- B: not now. Nothing changes. The extra disk covers most of a year.
+- C: keep everything at full detail and buy disk each time. Cost rises every year and searches over old data get slower.
+- Free-form answer: always available, e.g. approve A with different retention windows.
+
+Recommendation: A. It is the only option that stops the growth for good. Every reading stays recoverable from the 7-year S3 copy. 400 days at full detail covers year-long energy reports and 93-day KD pulls. The disk runway leaves time to build it calmly.
+
+Risk: Low for now. A only builds and backfills: bucket-aware reads, writer routing, archive backfill. Old raw data is retired only after the archive is proven and you say yes a second time. The main build risk is that charts or reports read from the wrong bucket during the cutover. With B, the risk is the same full-disk deadline about a year out. With C, cost and query slowness keep growing.
+
+Reversibility: A is fully reversible until the separate deletion yes, so it can be stopped at any stage. B is fully reversible. C is reversible, but you keep paying for disk.
+
+Cost and effort (from card): about +20 USD/month for the disk now. Archive about a few USD/month in year one. 2 to 4 engineering weeks.
+
+Confidence: Medium-high. The figures come from the obs options report, as summarized on this card. I could not open the report itself (it is on stewie). The 2 to 4 week estimate has not been checked independently.
+
+Next action after each answer:
+- A: obs (stewie) starts stage 1 (bucket-aware reads and writer routing), then backfill and archive proof. It comes back for a separate yes before any raw data is retired.
+- B: the card is parked. The disk increase goes ahead as already approved, with a reminder to look at this again before the new disk is about 80% full.
+- C: no lifecycle work. Obs sets a disk-growth alert and plans a resize before each limit is hit.
+- Free-form: obs adjusts the plan to your notes and brings back a revised ask if the scope changes.
+
+Sources: this card's body and the Tin Star request_decision comment of 2026-11-16 at 22:27 UTC (https://www.notion.so/41a50ce6d422817cb434d2fa5de171cb). Parent card: Obs platform observability (https://app.notion.com/p/3f950ce6d4228159bc97e1d0c26438ca). Options report cited on the card: stewie:/home/farm/fm-obsf/data/influx-disk-options/report.md (not read directly). No linked PRs.
+
+Prepared read-only. Nothing was answered, and no status or claim was changed. Tin Star's publish_prepared_packet tool isn't available on the connector yet, so the packet is posted here.
