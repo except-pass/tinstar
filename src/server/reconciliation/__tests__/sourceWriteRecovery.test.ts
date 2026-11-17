@@ -7,7 +7,7 @@ import { ReconciliationSources } from '../index'
 import { WorkflowContent } from '../workflowContent'
 import { WorkReader } from '../workReader'
 import { NotionApi } from '../notionApi'
-import { mainWaitNotifier } from '../waitingOnMain'
+import { mainWaitNotifier, MAIN_WAIT_OWNER } from '../waitingOnMain'
 
 const roots: string[] = []
 afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -87,7 +87,7 @@ it('never reconciles a still-running write even when its reservation is old', as
   expect(f.leases.pendingWrites()).toEqual([])
 })
 
-it.each(['applied', 'absent', 'unavailable', 'truncated', 'pending-readback'] as const)('finishes a reminder on its deadline with %s readback and keeps owner admission open', async state => {
+it.each(['applied', 'mentioned', 'absent', 'unavailable', 'truncated', 'pending-readback'] as const)('finishes a reminder on its deadline with %s readback and keeps owner admission open', async state => {
   vi.useFakeTimers()
   // AbortSignal.timeout uses a native timer; use the same timeout contract on
   // the fake clock so this exercises the actual five-second notifier deadline.
@@ -98,11 +98,13 @@ it.each(['applied', 'absent', 'unavailable', 'truncated', 'pending-readback'] as
   })
   const f = fixture()
   let began!: () => void, completeReadback = false
+  const landed = state === 'applied' || state === 'mentioned'
   const started = new Promise<void>(resolve => { began = resolve })
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-    if (String(input).includes('/users/')) return Response.json({})
+    if (String(input).includes('/users/')) return Response.json(state === 'mentioned' ? { id: MAIN_WAIT_OWNER, type: 'person' } : {})
     if (init?.method === 'POST') {
-      if (state === 'applied') f.comments.push({ id: 'reminder', rich_text: JSON.parse(String(init.body)).rich_text })
+      if (landed) f.comments.push({ id: 'reminder', rich_text: JSON.parse(String(init.body)).rich_text.map((part: { type: string; text?: { content: string } }) =>
+        ({ ...part, plain_text: part.type === 'mention' ? '@Will' : part.text?.content ?? '' })) })
       began()
       return new Promise<Response>((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }))
     }
@@ -118,9 +120,9 @@ it.each(['applied', 'absent', 'unavailable', 'truncated', 'pending-readback'] as
     await started
     await vi.advanceTimersByTimeAsync(state === 'pending-readback' ? 10_000 : 5000)
     expect(await writing).toBe('unconfirmed')
-    expect(f.leases.pendingWrites()).toHaveLength(state === 'applied' ? 0 : 1)
+    expect(f.leases.pendingWrites()).toHaveLength(landed ? 0 : 1)
     expect(f.leases.sourceRevision()).toBe(revision)
-    if (state !== 'applied') {
+    if (!landed) {
       const restarted = new CardLeases(f.root)
       expect(await restarted.claim([card], 'owner', 'Browser', 'during-recovery', undefined, true,
         { sourceRevision: revision, eligible: () => true })).toMatchObject({ outcome: 'claimed' })

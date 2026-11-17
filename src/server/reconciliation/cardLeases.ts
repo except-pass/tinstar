@@ -23,7 +23,7 @@ export class CardLeaseError extends Error {
   readonly code = 'card-held'
   constructor(readonly lease: CardLease | null, message?: string) { super(message ?? (lease ? `held by ${lease.holder} until ${lease.expires_at}` : 'Claim lost; re-read and claim the card again')) }
 }
-export interface SourceWriteIntent { readback_can_settle?: boolean; kind: 'properties' | 'append' | 'section' | 'note' | 'reminder'; [key: string]: unknown }
+export interface SourceWriteIntent { readback_can_settle?: boolean; marker?: string; kind: 'properties' | 'append' | 'section' | 'note' | 'reminder'; [key: string]: unknown }
 const writeEvent = (intent: SourceWriteIntent | null | undefined, event: string) => `${intent?.kind === 'reminder' ? 'reminder' : 'write'}-${event}`
 export class SourceWritePending extends CardLeaseError {
   constructor() { super(null, 'Source write unresolved; inspect and reconcile the reserved operation before retrying') }

@@ -59,10 +59,13 @@ export class WorkflowContent {
     return this.request(`blocks/${id}/children`, 'PATCH', { children, ...(atStart ? { position: { type: 'start' } } : {}) })
   }
   /** Recovery reads only; never resend a timed-out write on absence alone. */
-  async reservationReadback(id: string, intent: SourceWriteIntent | null): Promise<'applied' | 'different' | 'unknown'> {
+  async reservationReadback(id: string, intent: SourceWriteIntent | null, signal?: AbortSignal): Promise<'applied' | 'different' | 'unknown'> {
     if (!intent) return 'unknown'
     try {
-      if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id)).some(note => note.text === intent.text) ? 'applied' : 'different'
+      if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id, signal)).some(note =>
+        // Notion supplies display prose for mentions; only the reminder's
+        // unique terminal receipt is invariant under that rendering.
+        intent.kind === 'reminder' && intent.marker ? workflowNoteHasMarker(note, intent.marker) : note.text === intent.text) ? 'applied' : 'different'
       if (intent.kind === 'section') return (await this.sections(id, true, true)).some(block => block.text === intent.text) ? 'applied' : 'different'
       if (intent.kind === 'append') {
         const texts = (await this.sections(id, true, true)).map(block => block.text)

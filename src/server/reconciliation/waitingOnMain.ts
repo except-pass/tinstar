@@ -146,7 +146,8 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
       const body = mainWaitComment(item, withMention, now)
       // A unique immutable receipt lets immediate readback settle a lost POST
       // response without waiting for the five-minute uncertain-write window.
-      body.rich_text.push({ type: 'text', text: { content: `\n${receiptMarker('waiting-on-main', randomUUID())}` } })
+      const marker = receiptMarker('waiting-on-main', randomUUID())
+      body.rich_text.push({ type: 'text', text: { content: `\n${marker}` } })
       const perform = async () => {
         sourceWriteDispatched()
         const response = await api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(5000), body: JSON.stringify(body) })
@@ -157,8 +158,8 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
       // Keep write serialization without presenting a reminder as a reviewer.
       // Unconfirmed absence still needs aged recovery; never resend on timeout.
       const text = body.rich_text.map(part => 'text' in part ? part.text.content : '').join('')
-      return leases ? leases.mutate(parent.replaceAll('-', ''), perform, { kind: 'reminder', readback_can_settle: true, text },
-        async intent => (await content.notes(parent, AbortSignal.timeout(5000))).some(note => note.text === intent.text) ? 'applied' : 'different') : perform()
+      return leases ? leases.mutate(parent.replaceAll('-', ''), perform, { kind: 'reminder', readback_can_settle: true, marker, text },
+        intent => content.reservationReadback(parent, intent, AbortSignal.timeout(5000))) : perform()
     }
     try {
       let response = await post(mention)
