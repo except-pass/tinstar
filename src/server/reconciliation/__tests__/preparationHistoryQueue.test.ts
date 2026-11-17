@@ -92,3 +92,42 @@ it.each([false, true])('refreshes expired properties with fresh history for expl
   queue.warm(['retry'])
   expect(properties).toHaveBeenCalledTimes(1)
 })
+
+it.each(['body', 'comments'] as const)('retains positive %s records across alternating partial renewals without extending completeness', async first => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const start = Date.now()
+  let round = 0
+  const fetcher: typeof fetch = async input => {
+    const surface = new URL(String(input)).pathname === '/v1/comments' ? 'comments' : 'body'
+    if (round > 0 && surface !== (round === 1 ? first : first === 'body' ? 'comments' : 'body')) return new Response('', { status: 503 })
+    const text = round === 0 ? 'Unanswered request' : `Observed ${surface} answer/change`
+    return Response.json({ results: [{ id: surface, type: 'paragraph', paragraph: { rich_text: [{ plain_text: text }] }, rich_text: [{ plain_text: text }] }], has_more: false })
+  }
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+  const queue = new PreparationHistory(reader)
+  await queue.read('card')
+  const original = queue.evidenceHistory('card')!
+  round = 1; vi.setSystemTime(start + 16_000)
+  queue.warm(['card'], ['card'])
+  await queue.read('card')
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({
+    outcome: 'partial', commentsOutcome: first === 'comments' ? 'available' : 'partial',
+    blocks: [expect.objectContaining({ id: first, text: `Observed ${first} answer/change` })],
+  })
+  round = 2; vi.setSystemTime(start + 17_000)
+  await queue.read('card')
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({
+    outcome: 'partial', commentsOutcome: first === 'body' ? 'available' : 'partial',
+  })
+  const retained = queue.evidenceHistory('card')!
+  expect(retained.context.blocks).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'body', text: 'Observed body answer/change' }),
+    expect.objectContaining({ id: 'comments', text: 'Observed comments answer/change' }),
+  ]))
+  expect(retained.observed_at).toBe(original.observed_at)
+  expect(retained.expires_at).toBe(original.expires_at)
+  expect(queue.renewalUntil('card')).toBe(new Date(start + 210_000).toISOString())
+  vi.setSystemTime(start + 210_000)
+  expect(queue.renewalUntil('card')).toBeNull()
+  expect(queue.evidenceHistory('card')).toEqual(reader.cachedDecisionHistory('card'))
+})

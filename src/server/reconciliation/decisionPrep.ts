@@ -81,7 +81,7 @@ export class DecisionPreparation {
   private replenishAgain = false
   private automatic = false
   private lastPass?: RefillPass
-  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; coverage(): 'complete' | 'unknown'; diagnostics?(): { requests: number | null; source_failures: RefillPass['source_failures'] } },
+  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; renew?(): Promise<void>; coverage(): 'complete' | 'unknown'; diagnostics?(): { requests: number | null; source_failures: RefillPass['source_failures'] } },
     private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
     private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
 
@@ -283,6 +283,7 @@ export class DecisionPreparation {
       this.automatic = policy.values.automatic_replenishment
       await this.packets.leases.writeStorage(db => this.expire(db))
       pass.target = policy.values.target_ready
+      await this.source.renew?.()
       pass.coverage = this.source.coverage()
       // Warm exact evidence even when collection coverage is temporarily unknown.
       // No source read or network dispatch occurs inside the storage transaction.

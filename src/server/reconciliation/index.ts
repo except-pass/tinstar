@@ -22,7 +22,7 @@ import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { loadReconciliationConfig, type ReconciliationConfig, type FleetSource } from './config'
 import { fleetObservation } from './fleet'
-import { type WorkScope } from './notion'
+import { NotionCardReadError, type WorkScope } from './notion'
 import type { SceneCard } from './scene'
 import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
@@ -92,7 +92,7 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), renew: () => this.renewPreparedSources(), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
     this.notionApi = api ?? new NotionApi(fetcher)
@@ -113,7 +113,7 @@ export class ReconciliationSources {
       },
       write: (input, actor) => this.workflow.answerPrepared(input, actor),
       scheduleReconciliation: card => {
-        this.context.invalidate(card)
+        this.preparationHistory.invalidate(card)
         // Existing bridge/receipt closure proceeds independently of desk next.
         void this.workflow.reconcileDecisions(card).catch(() => {})
       },
@@ -130,15 +130,16 @@ export class ReconciliationSources {
         const card = await this.workReader.card(id, true, true)
         this.workReader.confirm(card)
         this.preparationProperties.set(id, { status: 'fresh', coverage: 'complete', observedAt, expiresAt })
-      } catch {
-        this.preparationProperties.set(id, { status: 'unknown', coverage: 'unknown', observedAt, expiresAt })
-        throw new Error('Canonical card properties could not be refreshed.')
+      } catch (error) {
+        // Keep the original observation and deadline during transient renewal.
+        // The queue bounds retention and reports the source failure separately.
+        throw new Error(error instanceof NotionCardReadError ? error.message : 'Canonical card properties could not be refreshed.')
       }
     }, (id, until) => {
       const properties = this.preparationProperties.get(id)
       return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
     })
-    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.preparationHistory.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -202,6 +203,15 @@ export class ReconciliationSources {
     const priority = await this.preparation.priorityCards()
     this.preparationHistory.warm(ids, priority)
     await Promise.all(ids.map(id => this.importCommentPackets(id)))
+  }
+
+  private async renewPreparedSources() {
+    const priority = await this.preparation.priorityCards()
+    if (!priority.length) return
+    // The existing five-second runner also renews published/in-flight sources
+    // with admission off, so a closed Desk does not stop source maintenance.
+    await this.snapshot()
+    this.preparationHistory.warm([], priority)
   }
 
   private preparationDiagnostics() {
@@ -270,7 +280,11 @@ export class ReconciliationSources {
       queueMicrotask(() => { this.preparationProjection = undefined })
     }
     const { snapshot, queue } = this.preparationProjection
-    return projectDecisionEvidence(snapshot, cardId, this.context.cachedDecisionHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue)
+    const renewalUntil = this.preparationHistory.renewalUntil(cardId)
+    const evidence = projectDecisionEvidence(snapshot, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue, renewalUntil)
+    const state = this.preparationHistory.state(cardId)
+    if (state.message && !renewalUntil) evidence.reasons.push(state.message)
+    return evidence
   }
 
   invalidateQueueDisplays() {

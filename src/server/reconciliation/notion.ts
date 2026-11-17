@@ -43,7 +43,7 @@ export function notionCard(value: unknown) {
   }
 }
 
-class NotionCardReadError extends Error {
+export class NotionCardReadError extends Error {
   constructor(readonly transient: boolean, status: number) { super(`Notion card read failed (HTTP ${status})`) }
 }
 

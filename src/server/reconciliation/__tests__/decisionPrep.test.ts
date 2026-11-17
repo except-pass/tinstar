@@ -284,7 +284,7 @@ it('does not dispatch an unchanged successful packet again just because its atte
   await turnOn(20, 4)
   await prep.replenish()
   expect(posts).toHaveLength(1)
-  expect((await prep.status()).refill_pass).toMatchObject({ outcome: 'no-admissible-work', rejections: [{ outcome: 'already-prepared', count: 1 }] })
+  expect((await prep.status()).refill_pass).toMatchObject({ outcome: 'no-admissible-work', rejections: [{ outcome: 'already-ready', count: 1 }] })
   await packets.validate(stored.packet_id, fixture.evidence, 'source-refresh')
   expect(await packets.read(stored.packet_id, fixture.evidence)).toMatchObject({ ready: true })
 })
@@ -416,7 +416,7 @@ it.each(['changed', 'added', 'removed', 'reordered'].flatMap(change => [false, t
   else await prep.replenish()
   if (change === 'reordered') {
     expect(posts).toHaveLength(1)
-    expect(await prep.prepareNow('Will', input)).toMatchObject({ outcome: 'already-prepared' })
+    expect(await prep.prepareNow('Will', input)).toMatchObject({ outcome: 'already-ready' })
   } else {
     expect(posts).toHaveLength(2)
     const second = (await prep.status()).jobs.find(job => job.id !== first.job_id)!

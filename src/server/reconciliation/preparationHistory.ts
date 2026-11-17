@@ -1,19 +1,27 @@
 import { decisionHistoryDeadlineMs, type CardContextReader } from './cardContext'
+import type { CachedDecisionHistory } from './decisionEvidence'
+
+// Three minutes beyond the last complete horizon bridges slow reads and the
+// 30s/60s retry backoff, without leaving Ready alive through a source outage.
+export const decisionRenewalGraceMs = 180_000
 
 /** One shared queue for display and admission. Two card reads at a time also
  * bound the body/comment requests waiting on the shared Notion rate limiter. */
 export class PreparationHistory {
   private pending = new Map<string, { promise: Promise<void>; resolve(): void }>()
   private failures = new Map<string, { attempts: number; retryAt: number; message: string }>()
+  private complete = new Map<string, CachedDecisionHistory>()
+  private priority = new Set<string>()
   private queue: string[] = []
   private active = 0
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
     private readProperties: (id: string) => Promise<void> = async () => {},
     private propertiesFresh: (id: string, until: number) => boolean = () => true) {}
 
-  warm(ids: string[], priority: string[] = []) {
-    const important = new Set(priority)
-    for (const id of new Set([...priority, ...ids])) {
+  warm(ids: string[], priority?: string[]) {
+    if (priority) this.priority = new Set(priority)
+    const important = this.priority
+    for (const id of new Set([...(priority ?? []), ...ids])) {
       const history = this.reader.cachedDecisionHistory(id)
       if (this.propertiesFresh(id, Date.now() + (important.has(id) ? 15_000 : 0)) && history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now() + (important.has(id) ? 15_000 : 0)) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > Date.now()) continue
@@ -28,7 +36,7 @@ export class PreparationHistory {
     // An explicit retry can bypass failure backoff for this card only.
     if (this.failures.has(id) && !this.pending.has(id)) {
       this.failures.delete(id)
-      this.reader.invalidate(id)
+      this.enqueue(id)
     }
     this.warm([id])
     const index = this.queue.indexOf(id)
@@ -36,12 +44,36 @@ export class PreparationHistory {
     await this.pending.get(id)?.promise
   }
 
+  invalidate(id: string) {
+    this.complete.delete(id)
+    this.reader.invalidate(id)
+  }
+
+  renewalUntil(id: string) {
+    const history = this.complete.get(id)
+    if (!history || !this.reader.cachedDecisionHistory(id) || !this.priority.has(id) && !this.pending.has(id) && !this.failures.has(id)) return null
+    const until = Date.parse(history.expires_at) + decisionRenewalGraceMs
+    return until > Date.now() ? new Date(until).toISOString() : null
+  }
+
+  /** A partial read cannot prove absence. Retain the last complete history,
+   * but merge positive new records so an observed answer/change still wins. */
+  evidenceHistory(id: string) {
+    const current = this.reader.cachedDecisionHistory(id), previous = this.complete.get(id)
+    if (!current || !previous || !this.renewalUntil(id) || current.context.outcome === 'available' && current.context.commentsOutcome === 'available') return current
+    const blocks = new Map(previous.context.blocks.map(block => [block.id, block]))
+    for (const block of current.context.blocks) blocks.set(block.id, block)
+    const retained = { ...previous, context: { ...previous.context, blocks: [...blocks.values()] } }
+    this.complete.set(id, retained)
+    return retained
+  }
+
   state(id: string) {
     const history = this.reader.cachedDecisionHistory(id), failure = this.failures.get(id)
     const fresh = history && Date.parse(history.expires_at) > Date.now()
     const available = !failure && fresh && history.context.outcome === 'available' && history.context.commentsOutcome === 'available'
     return { card_id: id, state: this.pending.has(id) ? 'loading' as const : available ? 'available' as const : 'unavailable' as const,
-      message: available ? null : failure?.message ?? null,
+      message: failure?.message ?? (this.pending.has(id) && this.complete.has(id) && !this.renewalUntil(id) ? 'Source renewal exceeded the last-good evidence deadline.' : null),
       retry_at: available || !failure ? null : new Date(failure.retryAt).toISOString(),
       observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }
   }
@@ -64,9 +96,11 @@ export class PreparationHistory {
         timer.unref?.()
       })])
       const history = this.reader.cachedDecisionHistory(id)
-      if (history?.context.commentsOutcome !== 'available') throw new Error('Decision comment history is incomplete.')
-      if (history.context.outcome !== 'available') throw new Error('Decision body history is incomplete.')
-      if (Date.parse(history.expires_at) <= Date.now()) throw new Error('Decision history expired during the source read.')
+      if (history?.context.commentsOutcome !== 'available') throw new Error(`Decision comment history is incomplete. ${history?.context.omissions ?? ''}`.trim())
+      if (history.context.outcome !== 'available') throw new Error(`Decision body history is incomplete. ${history.context.omissions ?? ''}`.trim())
+      // A paced complete read can outlive its ordinary horizon. Preserve its
+      // real start time; the bounded renewal window covers that latency too.
+      this.complete.set(id, history)
       await this.onRead(id)
       this.failures.delete(id)
     } catch (error) {
@@ -74,7 +108,10 @@ export class PreparationHistory {
       const attempts = (this.failures.get(id)?.attempts ?? 0) + 1
       this.failures.set(id, { attempts, retryAt: Date.now() + Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
         message: `${reason} A background retry is scheduled; Prepare now can retry this card.` })
-    } finally { clearTimeout(timer) }
+    } finally {
+      clearTimeout(timer)
+      this.evidenceHistory(id)
+    }
   }
 
   private drain() {
