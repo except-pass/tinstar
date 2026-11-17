@@ -728,8 +728,12 @@ export class WorkflowOperations {
       }) : []
       const recorded = intents.length > 0 || input.kind === 'answer_decision' && notes.some(note => workflowReceipt(note) && decisionRecordRows([note], 'Tin Star answer data: ').some(row => row.request_id === input.request_id))
       const eligibleRequests = input.kind === 'answer_decision' ? recorded ? decisionHistory(notes, publications) : decisionProposals(notes, publications) : []
-      if (input.kind === 'answer_decision' && decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id && row.proposal) && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This proposal is no longer current')
       if (input.kind === 'answer_decision' && !recorded) {
+        const projection = projectDecisionHistory(notes, publications)
+        if (projection.verification) throw new WorkflowError('decision-not-open', projection.verification)
+        const state = projection.requests.get(input.request_id)
+        if (state?.supersededBy) throw new WorkflowError('decision-not-open', `This request was superseded by ${state.supersededBy}.`)
+        if (state && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This request has no current workflow publication.')
         const published = eligibleRequests.find(row => row.id === input.request_id)
         const request = published?.source_request ?? input.source_request
         if (request) {

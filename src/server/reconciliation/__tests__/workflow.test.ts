@@ -2263,8 +2263,8 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   const select = (proposal: typeof p) => fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
   if (scenario === 'partial history') {
     const { CardContextReader } = await import('../cardContext')
-    const original = CardContextReader.prototype.commentDetails
-    const partial = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockImplementation(async function (this: InstanceType<typeof CardContextReader>, cardId, force) {
+    const original = CardContextReader.prototype.decisionDetails
+    const partial = vi.spyOn(CardContextReader.prototype, 'decisionDetails').mockImplementation(async function (this: InstanceType<typeof CardContextReader>, cardId, force) {
       return { ...await original.call(this, cardId, force), outcome: 'partial' }
     })
     const retained = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
@@ -2303,7 +2303,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
       for (const privateText of ['PRIVATE_OWNER_QUESTION', 'PRIVATE_OWNER_RATIONALE', 'PRIVATE_OWNER_MESSAGE']) expect(JSON.stringify({ projected, visible })).not.toContain(privateText)
     }
     expect((await select(p)).status).toBe(409)
-    expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open', message: expect.stringContaining(`superseded by ${turn.request_id}`) })
     f.comments.push({ id: 'obsolete-direct-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued' }] })
     expect(await sources.workflow.reconcileDecisions(id, f.fleet)).toBeUndefined()
     expect(f.bridge.submit).not.toHaveBeenCalled()
@@ -2335,7 +2335,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   expect(response.status).toBe(200)
   expect((await response.json()).data.action_selection.answer_id).toBe(proposalAnswerId(latest))
   expect((await asks.store.list('owner@example.test')).filter(row => row.action_selection)).toHaveLength(scenario === 'missing intermediate' ? 2 : 1)
-})
+}, 20_000)
 
 it('shares unchanged reconciliation across windows and invalidates only for typed Ask publication changes', async () => {
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')

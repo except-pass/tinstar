@@ -130,17 +130,16 @@ it('fences a source write while reading a property ask', async () => {
   expect(f.leases.status(propertyAsks[0][0])).toBeNull()
 })
 
-it.each(['loading', 'answered-comment', 'answered-body'])('uses the property census with %s history and retains known answers', async mode => {
+it.each(['loading', 'answered-comment', 'answered-body'])('uses the property census with %s history and requires complete answers', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'claim-property-census-')); roots.push(root)
   const ask = propertyAsk(), snapshot = fixtureSources()
   snapshot.fleet = []; snapshot.intentions.data!.cards = [ask]
-  const context: CardContextRead = { outcome: 'available', blocks: [
+  const context: CardContextRead = { outcome: 'available', commentsOutcome: 'available', blocks: [
     { id: 'request', type: 'paragraph', text: 'Requested from: Will\nQuestion: Choose the next step\nTin Star request: {"id":"decision","action":"Decision"}' },
     { id: 'answer', type: 'paragraph', text: 'Tin Star answer: "decision"' },
   ] }
   vi.spyOn(CardContextReader.prototype, 'details').mockImplementation(() => new Promise(() => {}))
   vi.spyOn(CardContextReader.prototype, 'cachedComments').mockReturnValue(mode === 'answered-comment' ? context : undefined)
-  vi.spyOn(CardContextReader.prototype, 'cachedClaimBlocks').mockReturnValue(mode === 'loading' ? [] : context.blocks)
   vi.spyOn(CardContextReader.prototype, 'cachedDecisionHistory').mockReturnValue(mode === 'answered-body' ? {
     context, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString(),
   } : undefined)
@@ -150,7 +149,7 @@ it.each(['loading', 'answered-comment', 'answered-body'])('uses the property cen
   expect(hasQueue(queue)).toBe(true)
   if (!hasQueue(queue)) throw new Error('Expected property census')
   const item = queue.needsWill![0]!
-  if (mode === 'loading') {
+  if (mode !== 'answered-body') {
     expect(item.proposalHistoryComplete).toBe(false)
     expect(item.readiness).not.toBe('ready-now')
     expect(claimCardReadiness(item, ask)).toMatchObject({ readiness: 'ready-now' })

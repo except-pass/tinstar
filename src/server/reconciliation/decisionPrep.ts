@@ -223,7 +223,7 @@ export class DecisionPreparation {
     if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
     let open: boolean | undefined
     try { open = await this.source.observeOpenRequest?.(job.card_id, job.request_id) }
-    catch { await this.mark(job.id, 'cancelled', 'Preparation stopped because complete decision history could not be read.'); return }
+    catch { await this.mark(job.id, 'blocked', 'Preparation needs verification of complete decision history.'); return }
     if (open === false || this.closed(this.evidence(job.card_id), job.request_id)) {
       await this.mark(job.id, 'cancelled', 'Preparation stopped because the source decision is no longer eligible.')
       return

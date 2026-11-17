@@ -25,9 +25,11 @@ export function needsWillIssues(card: WorkCard): string[] {
   if (typeof value(card, 'Waiting For') !== 'string' || !String(value(card, 'Waiting For')).startsWith('Will:') || card.properties['Waiting For']?.hasMore) issues.push('Waiting For must start Will:')
   return issues
 }
-export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown, publications?: Parameters<typeof projectDecisionHistory>[1]) {
+export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown, publications?: Parameters<typeof projectDecisionHistory>[1], complete = true) {
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(action => action.trim().toLowerCase())
-  return decisionRequests(notes, projectDecisionHistory(notes, publications).requests).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
+  const projection = projectDecisionHistory(notes, publications, complete)
+  if (projection.verification) return []
+  return decisionRequests(notes, projection.requests).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
 }
 export function oldestOpenRequestSince(requests: ReturnType<typeof decisionRequests>) {
   return requests.filter(request => !request.superseded && !request.answered).flatMap(request => request.since && Number.isFinite(Date.parse(request.since)) ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null

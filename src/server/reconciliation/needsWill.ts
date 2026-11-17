@@ -7,8 +7,8 @@ import type { CardContextRead } from './cardContext'
 import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
 import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
-import { currentWillRequests, deferredDecisionCard, oldestOpenRequestSince } from './claimPolicy'
-import { decisionRequests } from '../../shared/workflowRequests'
+import { deferredDecisionCard, oldestOpenRequestSince } from './claimPolicy'
+import { cardDecisionPublications, completeDecisionHistory, decisionRequests, projectDecisionHistory } from '../../shared/workflowRequests'
 
 export interface NeedsWillItem extends QueueItem {
   requestReadiness?: QueueItem['readiness']
@@ -30,6 +30,9 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
     const requests: Array<ReturnType<typeof decisionRequests>[number] & { cardId: string }> = []
     const publicationHistory: typeof requests = []
     const closedSources = new Set<string>()
+    const verification = new Set<string>()
+    let answeredAsk = false
+    let proposalHistoryComplete = true
     let activeCard = false
     for (const id of item.cardIds) {
       const card = cards.get(id)
@@ -38,8 +41,16 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const actionTags = item.sources.find(source => (source.kind === 'notion' || source.kind === 'jira') && source.request?.home === null && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id)
-      const recorded = currentWillRequests(context?.blocks ?? [], actionTags, publications)
-      const open = recorded.filter(request => !request.superseded && !request.answered)
+      const notes = context?.blocks ?? []
+      const scoped = cardDecisionPublications(notes, publications, id)
+      const projection = projectDecisionHistory(notes, scoped, completeDecisionHistory(context))
+      if (projection.verification) proposalHistoryComplete = false
+      if (projection.unmatchedOwnerDecision) verification.add(projection.unmatchedOwnerDecision)
+      const rows = decisionRequests(notes, projection.requests)
+      const recorded = rows.filter(request => request.askRequestKey ? request.askRequestKey === item.id :
+        request.requestedFrom?.trim().toLowerCase() === 'will' && actionTags.some(tag => tag.trim().toLowerCase() === request.action.trim().toLowerCase()))
+      const open = projection.verification ? [] : recorded.filter(request => !request.superseded && !request.answered)
+      answeredAsk ||= recorded.some(request => request.askRequestKey === item.id && !request.superseded && request.answered)
       requests.push(...open.map(request => ({ ...request, cardId: id })))
       publicationHistory.push(...recorded.filter(request => request.proposal).map(request => ({ ...request, cardId: id })))
       for (const request of recorded) if (request.answeredByOwner && request.sourceRequest) closedSources.add(requestAnchor(request.sourceRequest))
@@ -50,8 +61,8 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       if (outstandingTags.length || /\bWill\b/.test(wait) && !actionTags.length) real = true
     }
     if (item.cardIds.length && !activeCard && item.cardIds.every(id => cards.has(id))) return []
-    if (item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action && !closedSources.has(source.responseAnchor))) real = true
-    if (!real) return []
+    if (!answeredAsk && item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action && !closedSources.has(source.responseAnchor))) real = true
+    if (!real && !verification.size) return []
     const ids = new Set(queuePulls(item, inventory).map(pull => pull.id))
     const pulls = [...new Map((inventory?.pulls ?? []).flatMap(pull => {
       const identity = releasePull(pull.url)
@@ -63,16 +74,15 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       .map(request => ({ answer_id: proposalAnswerId(request.proposal!), value: request.proposal!, answered: request.answered }))
     const published = recordedPublications.flatMap(({ answer_id, value, answered }) => answered ? [] : [{ answer_id, value }])
     const current = currentDecisionProposal([...recordedPublications, ...publications.filter(entry => entry.value.request_key === item.id)])
-    const active = current && !recordedPublications.some(entry => entry.answer_id === current.answer_id && entry.answered) ? current : undefined
+    const active = !answeredAsk && current && !recordedPublications.some(entry => entry.answer_id === current.answer_id && entry.answered) ? current : undefined
     const proposal = active?.value
-    const proposalHistoryComplete = item.cardIds.every(id => contexts.get(id)?.outcome === 'available')
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = oldestOpenRequestSince(requests)
-    const verification = [...new Set(requests.flatMap(request => request.verification ?? []))]
+    for (const request of requests) if (request.verification) verification.add(request.verification)
     const reasons = [...verification]
     if (!proposalHistoryComplete) reasons.push('Publication history is incomplete; refresh before choosing')
     if (conflictingHead) reasons.push('PR inventory head differs from the readiness observation; refresh before acting')
-    return [{ ...item, requestReadiness: conflictingHead || verification.length ? 'needs-readiness-verification' as const : item.readiness,
+    return [{ ...item, requestReadiness: conflictingHead || verification.size ? 'needs-readiness-verification' as const : item.readiness,
       currentProposalAnswerId: active?.answer_id ?? null, proposalHistoryComplete,
       ...(reasons.length ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, ...reasons] } : {}),
       proposals: published, ...(proposal?.source.kind === 'firstmate-request' ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}),

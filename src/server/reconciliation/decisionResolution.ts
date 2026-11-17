@@ -102,16 +102,17 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
   confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions'] | (() => Promise<SourceSnapshot['intentions']>), mode: 'reconcile' | 'observe' = 'reconcile'): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
-  const { requests: states, unmatchedOwnerDecision } = projectDecisionHistory(notes, publications)
+  const { requests: states, unmatchedOwnerDecision, verification: historyVerification } = projectDecisionHistory(notes, publications)
+  if (historyVerification) return verify(historyVerification)
   const verification = [...states.values()].find(request => request.effective && request.verification && !request.answers.length)?.verification ?? unmatchedOwnerDecision
   const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success ||
     rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) ||
     rows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').some(answer => answer.request_id === row.id) ||
     (states.get(row.id)?.effective && states.get(row.id)?.ownerAnswer)))
-  const native = requests.flatMap(row => {
+  const native = [...requests, ...[...states.values()].filter(state => state.row.ask).map(state => state.row)].flatMap(row => {
     const state = states.get(row.id)
     const answer = state?.ownerAnswer?.text ?? state?.answers.filter(ownerDecisionOperation).map(note => decisionAnswerText(note)).find(Boolean)
-    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answered: true }] : []
+    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answered: true, ...(row.ask ? { source_anchor: row.proposal.request_key } : {}) }] : []
   })
   if (!bound.length) {
     if (verification) return verify(verification)

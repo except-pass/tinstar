@@ -633,7 +633,7 @@ it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow 
   }
 }, 60_000)
 
-it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s change even when the same renewal has incomplete body history', async kind => {
+it.each(['answer', 'card'] as const)('keeps the last complete answer history during partial renewal with a change to %s', async kind => {
   let failing = false, alternating = false, time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const f = await setup({ wrapFetch: transport => async (input, init) => {
@@ -660,13 +660,13 @@ it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s c
   expect(published.ready).toBe(true)
   failing = true; time += 16_000; vi.setSystemTime(time)
   const snapshot = await loadedSnapshot(f.sources)
-  expect(snapshot.ready).toEqual([])
+  expect(snapshot.ready).toHaveLength(kind === 'answer' ? 1 : 0)
   const evidence = f.sources.preparationEvidence(f.cardId)
-  expect(evidence.requests[0]!.answered).toBe(kind === 'answer')
-  expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain(kind === 'answer' ? 'This source request already has an answer' : 'Dependency changed')
+  expect(evidence.requests[0]!.answered).toBe(false)
+  if (kind === 'card') expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain('Dependency changed')
   alternating = true; time += 31_000; vi.setSystemTime(time)
-  expect((await loadedSnapshot(f.sources)).ready).toEqual([])
-  expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(kind === 'answer')
+  expect((await loadedSnapshot(f.sources)).ready).toHaveLength(kind === 'answer' ? 1 : 0)
+  expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(false)
   expect(f.posts).toHaveLength(1)
 }, 20_000)
 

@@ -1,7 +1,7 @@
 import { decisionPacketBindingSchema, decisionMeaning, type DecisionDependencyObservation, type DecisionEvidence } from '../../shared/decisionPacket'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { requestAnchor } from '../../shared/deskSource'
-import { decisionRequests, decisionRecordRows, projectDecisionHistory } from '../../shared/workflowRequests'
+import { completeDecisionHistory, decisionRequests, decisionRecordRows, projectDecisionHistory } from '../../shared/workflowRequests'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
@@ -25,15 +25,18 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const renewing = !!renewalUntil && Date.parse(renewalUntil) > now
   if (cardObservation && (cardObservation.status !== 'fresh' || cardObservation.coverage !== 'complete' || !cardObservation.expiresAt || Date.parse(cardObservation.expiresAt) <= now && !renewing)) reasons.push('Canonical card property evidence is unavailable or stale')
   if (card && deferred) reasons.push('Source card is deferred or closed')
-  const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
+  const completeHistory = completeDecisionHistory(history?.context)
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const notes = history?.context.blocks ?? []
-  const states = projectDecisionHistory(notes, publications).requests
+  const projection = projectDecisionHistory(notes, publications, freshHistory)
+  const states = projection.requests
   const rows = decisionRequests(notes, states)
+  if (projection.verification && freshHistory) reasons.push(projection.verification)
+  if (projection.unmatchedOwnerDecision) reasons.push(projection.unmatchedOwnerDecision)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
-  let currentRequests: string[] = []
-  try { currentRequests = decisionHistory(notes, publications).filter(row => states.get(row.id)?.effective).map(row => row.id) }
+  let recordedRequests: string[] = []
+  try { recordedRequests = decisionHistory(notes, publications).map(row => row.id) }
   catch { reasons.push('Decision publication history is contradictory or incomplete') }
   const queue = projectedQueue ?? buildQueue(snapshot, new Map(), now)
   const items = queue.items.filter(item => item.cardIds.includes(cardId))
@@ -45,7 +48,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     const state = states.get(row.id)
     if (row.verification && !row.answered) issues.push(row.verification)
     const cardNative = !row.hasSourceBinding
-    if (!currentRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
+    if (!state?.effective || !recordedRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
     if (row.proposal && publications === undefined) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
     if (!cardNative && !row.sourceRequest) issues.push('Request has no exact First Mate source binding')
     if (cardNative && (row.requestedFrom !== 'Will' || row.action !== 'Decision')) issues.push('Card-native preparation requires a Decision requested from Will')
@@ -96,7 +99,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     // window. Fleet, PR and release freshness protections stay independent.
     for (const dependency of dependencies) if (dependency.kind === 'card' || dependency.kind === 'answer' || cardNative && dependency.kind === 'request') dependency.renewal_until = renewalUntil
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
-    return { binding: binding.success ? binding.data : null, request_id: row.id, question: row.question, dependencies, reasons: issues, answered: row.answered }
+    return { binding: binding.success ? binding.data : null, request_id: row.id, question: row.question, dependencies, reasons: issues, answered: row.answered && (recordedRequests.includes(row.id) || !!row.askRequestKey) }
   })
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }

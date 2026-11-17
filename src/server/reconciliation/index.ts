@@ -43,7 +43,7 @@ import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
 import { needsWill } from './needsWill'
-import { decisionRequests, projectDecisionHistory } from '../../shared/workflowRequests'
+import { cardDecisionPublications, completeDecisionHistory, decisionRequests, projectDecisionHistory } from '../../shared/workflowRequests'
 import { decisionHistory, reconcileDecision, type DecisionResolution } from './decisionResolution'
 import { inventoryPullState, type PullsRead } from '../../shared/pulls'
 import type { PullReadiness } from './queuePulls'
@@ -98,8 +98,10 @@ export class ReconciliationSources {
         if (history.outcome !== 'available' || history.commentsOutcome !== 'available') throw new Error('Complete decision history is unavailable.')
         const notes = history.blocks
         const publications = await this.proposalSource.read(cardId, notes)
-        const request = projectDecisionHistory(notes, publications).requests.get(requestId)
-        return !!request && request.effective && !request.answers.length && !request.verification && decisionHistory(notes, publications).some(row => row.id === requestId)
+        const projection = projectDecisionHistory(notes, publications)
+        const request = projection.requests.get(requestId)
+        if (projection.verification || projection.unmatchedOwnerDecision || request?.verification) throw new Error('Decision history needs verification.')
+        return !!request && request.effective && !request.answers.length && decisionHistory(notes, publications).some(row => row.id === requestId)
       },
     }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
@@ -204,7 +206,7 @@ export class ReconciliationSources {
     const requestCount = !historiesComplete && activeItems.length ? activeItems.length
       : cards.reduce((sum, card) => {
         const notes = this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []
-        return sum + [...projectDecisionHistory(notes, publications).requests.values()].filter(request => request.effective && !request.answers.length).length
+        return sum + [...projectDecisionHistory(notes, cardDecisionPublications(notes, publications, card.id)).requests.values()].filter(request => request.effective && !request.answers.length).length
       }, 0)
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
@@ -341,7 +343,8 @@ export class ReconciliationSources {
     const queue = buildQueue(snapshot)
     queue.readOnly = false // The shared refresh can finalize an already-recorded answer.
     const contexts = new Map(queue.items.flatMap(item => item.cardIds).flatMap(id => {
-      const context = this.context.cachedComments(id)
+      const history = this.context.cachedDecisionHistory(id)
+      const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : undefined
       return context ? [[id, context] as const] : []
     }))
     const known = needsWill(queue, scene, contexts, null, new Map(), authorized, this.proposalSource.cachedAskPublications())
@@ -371,7 +374,9 @@ export class ReconciliationSources {
 
   private async cardDecisionContext(id: string) {
     const [context] = await Promise.all([this.context.details(id), this.askStore.loadProposals()])
-    return { ...context, decisionRequests: decisionRequests(context.blocks, projectDecisionHistory(context.blocks, this.proposalSource.cachedAskPublications()).requests) }
+    const projection = projectDecisionHistory(context.blocks, this.proposalSource.cachedPublications(id, context.blocks), completeDecisionHistory(context))
+    return { ...context, decisionVerification: projection.verification ?? projection.unmatchedOwnerDecision,
+      decisionRequests: decisionRequests(context.blocks, projection.requests).map(row => projection.verification ? { ...row, verification: projection.verification } : row) }
   }
 
   /** The full board can be incomplete without silencing the independent
@@ -571,18 +576,18 @@ export class ReconciliationSources {
     this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
       const history = this.context.cachedDecisionHistory(id)
-      const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
+      const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : undefined
       return context ? [[id, context] as const] : []
     }))
     const publications = this.proposalSource.cachedAskPublications()
     for (const id of ids) {
       const card = snapshot.intentions.data?.cards.find(card => card.id === id), context = contexts.get(id)
-      if (!card || context?.outcome !== 'available') continue
+      if (!card || !context || !completeDecisionHistory(context)) continue
       const summary = await reconcileDecision(card, context.blocks,
         snapshot.fleet, undefined, undefined, await this.proposalSource.read(id, context.blocks), snapshot.intentions, 'observe')
       if (!summary) continue
       for (const item of queue.items.filter(item => item.cardIds.includes(id))) {
-        const resolution = summary.requests?.find(result => item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary.requests ? summary : undefined)
+        const resolution = summary.requests?.find(result => item.id === result.source_anchor || item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary.requests ? summary : undefined)
         if (resolution) {
           item.decisionResolution = resolution
           if (resolution.state !== 'resolved') { item.oneTouch = false; item.readiness = 'needs-readiness-verification' }
@@ -593,12 +598,19 @@ export class ReconciliationSources {
     // needsWill exposes open requests for the Desk. Claims also need cached
     // answers so a still-published property ask cannot resurrect one.
     for (const item of queue.needsWill) for (const id of item.cardIds) {
-      const notes = contexts.get(id)?.blocks ?? this.context.cachedClaimBlocks(id)
-      item.requests.push(...decisionRequests(notes, projectDecisionHistory(notes, publications).requests).filter(request => request.answered)
+      const context = contexts.get(id)
+      if (!context || !completeDecisionHistory(context)) continue
+      const notes = context.blocks
+      item.requests.push(...decisionRequests(notes, projectDecisionHistory(notes, cardDecisionPublications(notes, publications, id)).requests).filter(request => request.answered)
         .map(request => ({ ...request, cardId: id })))
     }
-    const matching = new Set(queue.claimCards.filter(card => matchesClaimFilters(card, filters,
-      oldestOpenRequestSince(currentWillRequests(contexts.get(card.id)?.blocks ?? [], card.properties['Will action']?.value, publications)))).map(card => card.id))
+    const matching = new Set(queue.claimCards.filter(card => {
+      const context = contexts.get(card.id)
+      const notes = context?.blocks ?? []
+      const requests = currentWillRequests(notes, card.properties['Will action']?.value,
+        cardDecisionPublications(notes, publications, card.id), completeDecisionHistory(context))
+      return matchesClaimFilters(card, filters, oldestOpenRequestSince(requests))
+    }).map(card => card.id))
     queue.items = queue.items.filter(item => item.cardIds.some(id => matching.has(id)))
     queue.needsWill = queue.needsWill.filter(item => item.cardIds.some(id => matching.has(id)))
     queue.claimCards = queue.claimCards.filter(card => matching.has(card.id))
@@ -638,13 +650,13 @@ export class ReconciliationSources {
     // disclosed; it never becomes a fabricated request age or answer.
     const deliveries = (await this.workflow.decisionDelivery?.messages().catch(() => []) ?? []).filter(message => !requestKey || (message.sourceAnchor ?? message.requestId) === requestKey || queue.items.some(item => item.cardIds.includes(message.decisionResolution?.cardId ?? '')))
     const ids = [...new Set([...deliveries.flatMap(message => message.decisionResolution ? [message.decisionResolution.cardId] : []), ...queue.items.flatMap(item => item.cardIds)])]
-    const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['commentDetails']>>>()
+    const collectedContexts = new Map<string, Awaited<ReturnType<CardContextReader['decisionDetails']>>>()
     let contexts = collectedContexts
     const historyDeadline = mode === 'read' ? Date.now() + 10_000 : Infinity
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
         await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-          collectedContexts.set(id, await this.context.commentDetails(id, force))
+          collectedContexts.set(id, await this.context.decisionDetails(id, force))
         }))
       }
     }
@@ -667,7 +679,7 @@ export class ReconciliationSources {
         // a delivery writer or repair pass. Pending answers must not regain
         // ready-now status just because recovery moved off this request path.
         const resolution = mode === 'reconcile' ? await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
-          : card && contexts.get(id)?.outcome === 'available' ? await reconcileDecision(card,
+          : card && completeDecisionHistory(contexts.get(id)) ? await reconcileDecision(card,
             contexts.get(id)!.blocks,
             snapshot.fleet, this.workflow.decisionDelivery, undefined, await this.proposalSource.read(id, contexts.get(id)!.blocks), snapshot.intentions, 'observe') : undefined
         if (resolution) resolutions.set(id, resolution)
@@ -680,7 +692,7 @@ export class ReconciliationSources {
     }
     for (const item of queue.items) for (const id of item.cardIds) {
       const summary = resolutions.get(id)
-      const resolution = summary?.requests?.find(result => item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary?.requests ? summary : undefined)
+      const resolution = summary?.requests?.find(result => item.id === result.source_anchor || item.sources.some(source => source.responseAnchor === result.source_anchor || source.id === result.source_anchor)) ?? (!summary?.requests ? summary : undefined)
       if (resolution) { item.decisionResolution = resolution; if (resolution.state !== 'resolved') { item.oneTouch = false; item.readiness = 'needs-readiness-verification' } }
     }
     // Keep an in-flight answer visible even if its source closes before its
