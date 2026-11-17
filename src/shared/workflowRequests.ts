@@ -71,7 +71,7 @@ function ownerDecision(note: RequestNote) {
   return answer ? { id, answer } : null
 }
 
-export function effectiveDecisionPublications<T extends { proposal?: unknown; source_request?: unknown }>(rows: T[], publications: { value: DecisionProposal }[] = []) {
+function effectiveDecisionPublications<T extends { proposal?: unknown; source_request?: unknown }>(rows: T[], publications: { value: DecisionProposal }[] = []) {
   const groups = new Map<string, { row: T; value: DecisionProposal }[]>()
   const effective = new Set<T>()
   for (const row of rows) {
@@ -96,13 +96,16 @@ export function effectiveDecisionPublications<T extends { proposal?: unknown; so
 interface DecisionRequestState<T extends RequestNote> {
   publication: T
   row: ReturnType<typeof JSON.parse>
+  effective: boolean
   answers: T[]
   ownerAnswer?: { note: T; text: string }
   verification?: string
 }
 
-export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
+export function projectDecisionHistory<T extends RequestNote>(notes: T[], publications: { value: DecisionProposal }[] = []) {
+  const ask = publications.filter(entry => entry.value.source.kind === 'ask-reply')
   const current = new Map<string, DecisionRequestState<T>>()
+  let unmatchedOwnerDecision: string | undefined
   const structured = new Map<string, T[]>()
   const order = new Map(notes.map((note, index) => [note, index]))
   const ordered = [...notes].sort((a, b) => (noteTime(a) || 0) - (noteTime(b) || 0))
@@ -111,7 +114,7 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
   for (const note of ordered) {
     const [row] = decisionRecordRows([note], 'Tin Star request: ')
     if (row && typeof row.id === 'string' && typeof row.action === 'string' && !current.has(row.id)) {
-      current.set(row.id, { publication: note, row, answers: [] })
+      current.set(row.id, { publication: note, row, effective: false, answers: [] })
     }
     const [id] = decisionRecordRows([note], 'Tin Star answer: ')
     if (typeof id === 'string') {
@@ -128,31 +131,35 @@ export function decisionRequestStates<T extends RequestNote>(notes: T[]) {
     const decision = ownerDecision(note)
     if (!decision) continue
     const published = [...current.values()].filter(request => precedes(request.publication, note))
-    const effective = new Set(effectiveDecisionPublications(published.map(request => request.row)))
+    const effective = new Set(effectiveDecisionPublications(published.map(request => request.row), ask.filter(entry => Date.parse(entry.value.published_at) <= noteTime(note))))
     const open = published.filter(request => effective.has(request.row) && !request.answers.length)
     const matches = decision.id ? open.filter(request => request.row.id === decision.id) : open
-    if (matches.length > 1) {
-      for (const request of matches) request.verification = 'Owner decision matches multiple open requests. Verify its request ID.'
+    if (matches.length !== 1) {
+      const message = matches.length ? 'Owner decision matches multiple open requests. Verify its request ID.'
+        : 'Owner decision does not match an open request. Verify its request ID.'
+      if (!open.length && !published.some(request => request.answers.length && (!decision.id || request.row.id === decision.id))) unmatchedOwnerDecision = message
+      for (const request of open) request.verification = message
       continue
     }
-    const [request] = matches
-    if (!request) continue
+    const request = matches[0]!
+    unmatchedOwnerDecision = undefined
     request.answers.push(note)
     request.ownerAnswer = { note, text: decision.answer }
     request.verification = undefined
   }
+  const effective = new Set(effectiveDecisionPublications([...current.values()].map(request => request.row), ask))
   for (const request of current.values()) {
+    request.effective = effective.has(request.row)
     // Older structured receipts may have no provider time or may be returned
     // before a body publication. They still bind by their explicit request ID.
     for (const answer of structured.get(request.row.id) ?? []) {
       if (!request.answers.includes(answer) && !timeOrdered(request.publication, answer)) request.answers.push(answer)
     }
   }
-  return current
+  return { requests: current, unmatchedOwnerDecision }
 }
 
-export function decisionRequests(notes: RequestNote[]) {
-  const states = decisionRequestStates(notes)
+export function decisionRequests(notes: RequestNote[], states = projectDecisionHistory(notes).requests) {
   return notes.flatMap(note => decisionRecordRows([note], 'Tin Star request: ').flatMap(row => {
     try {
       if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
@@ -168,8 +175,7 @@ export function decisionRequests(notes: RequestNote[]) {
         ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
         requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
-        since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: state.answers.length > 0,
-        ...(state.ownerAnswer ? { answer: state.ownerAnswer.text } : {}),
+        since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, ...(!state.effective ? { superseded: true as const } : {}), answered: state.answers.length > 0,
         ...(state.ownerAnswer || state.answers.some(ownerDecisionOperation) ? { answeredByOwner: true } : {}),
         ...(state.verification ? { verification: state.verification } : {}) }]
     } catch { return [] }

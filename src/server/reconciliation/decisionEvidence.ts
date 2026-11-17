@@ -1,11 +1,11 @@
 import { decisionPacketBindingSchema, decisionMeaning, type DecisionDependencyObservation, type DecisionEvidence } from '../../shared/decisionPacket'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { requestAnchor } from '../../shared/deskSource'
-import { decisionRequests, decisionRecordRows, decisionRequestStates } from '../../shared/workflowRequests'
+import { decisionRequests, decisionRecordRows, projectDecisionHistory } from '../../shared/workflowRequests'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
-import { bindDecision, decisionProposals } from './decisionResolution'
+import { bindDecision, decisionHistory } from './decisionResolution'
 import { buildQueue } from './queue'
 import { deferredDecisionCard } from './claimPolicy'
 
@@ -14,7 +14,7 @@ export interface CachedDecisionHistory { context: CardContextRead; observed_at: 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
  * PR/release details are not asserted from a link: they need their own reads. */
-export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>, renewalUntil?: string | null): DecisionEvidence {
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>, renewalUntil?: string | null, publications?: import('./proposalSource').ProposalPublication[]): DecisionEvidence {
   const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
   const reasons: string[] = []
   // The active board query omits Done and Archived cards. A complete census
@@ -29,11 +29,11 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const notes = history?.context.blocks ?? []
-  const rows = decisionRequests(notes)
-  const states = decisionRequestStates(notes)
+  const states = projectDecisionHistory(notes, publications).requests
+  const rows = decisionRequests(notes, states)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []
-  try { currentRequests = decisionProposals(notes).map(row => row.id) }
+  try { currentRequests = decisionHistory(notes, publications).filter(row => states.get(row.id)?.effective).map(row => row.id) }
   catch { reasons.push('Decision publication history is contradictory or incomplete') }
   const queue = projectedQueue ?? buildQueue(snapshot, new Map(), now)
   const items = queue.items.filter(item => item.cardIds.includes(cardId))
@@ -42,10 +42,11 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     status: source.status, coverage: source.coverage, observed_at: source.observedAt, expires_at: source.expiresAt })
   const requests = rows.map(row => {
     const issues: string[] = []
+    const state = states.get(row.id)
     if (row.verification && !row.answered) issues.push(row.verification)
     const cardNative = !row.hasSourceBinding
     if (!currentRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
-    if (row.proposal) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
+    if (row.proposal && publications === undefined) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
     if (!cardNative && !row.sourceRequest) issues.push('Request has no exact First Mate source binding')
     if (cardNative && (row.requestedFrom !== 'Will' || row.action !== 'Decision')) issues.push('Card-native preparation requires a Decision requested from Will')
     if (!row.options?.length) issues.push('Source-supported option identities are unavailable')
@@ -76,7 +77,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
         }
         return [key, value]
       }))]) : null, cardObservation ?? observation),
-    { ...base('answer', row.id, decisionMeaning(row.answer !== undefined ? [row.answer] : decisionRecordRows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
+    { ...base('answer', row.id, decisionMeaning(state?.ownerAnswer ? [state.ownerAnswer.text] : decisionRecordRows(state?.answers ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
       status: freshHistory ? 'fresh' as const : 'unknown' as const, coverage: completeHistory ? 'complete' as const : 'unknown' as const,
       observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }]
     if (row.sourceRequest) {
@@ -98,13 +99,13 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     return { binding: binding.success ? binding.data : null, request_id: row.id, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}), observed_at: observation.observedAt,
-    omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
+    omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 
 /** Forced-submit projection can discount only this operation's own readback-
  * verified partial property effects. Other concurrent edits remain visible. */
 export function projectPreparedSubmitEvidence(snapshot: SourceSnapshot, cardId: string, blocks: CardContextRead['blocks'],
-  original?: Record<string, unknown>, desired?: Record<string, unknown>, now = Date.now()) {
+  original?: Record<string, unknown>, desired?: Record<string, unknown>, now = Date.now(), publications?: import('./proposalSource').ProposalPublication[]) {
   const copy = structuredClone(snapshot)
   const card = copy.intentions.data?.cards.find(card => card.id === cardId)
   if (card && original && desired) for (const [name, value] of Object.entries(original)) {
@@ -114,5 +115,5 @@ export function projectPreparedSubmitEvidence(snapshot: SourceSnapshot, cardId: 
     }
   }
   return projectDecisionEvidence(copy, cardId, { context: { outcome: 'available', commentsOutcome: 'available', blocks },
-    observed_at: new Date(now).toISOString(), expires_at: new Date(now + 30_000).toISOString() }, now)
+    observed_at: new Date(now).toISOString(), expires_at: new Date(now + 30_000).toISOString() }, now, undefined, undefined, undefined, publications)
 }

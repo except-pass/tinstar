@@ -1,5 +1,5 @@
 import { decisionProposalSchema } from '../../shared/decisionProposal'
-import { decisionRecordRows, decisionRequestStates, effectiveDecisionPublications, ownerDecisionOperation, workflowNoteHasMarker, type RequestNote } from '../../shared/workflowRequests'
+import { decisionRecordRows, projectDecisionHistory, ownerDecisionOperation, workflowNoteHasMarker, type RequestNote } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
 import type { StartWorkResult } from '../../shared/workflow'
@@ -84,7 +84,8 @@ export function decisionHistory(notes: RequestNote[], publications?: import('./p
   })
 }
 export function decisionProposals(notes: RequestNote[], publications?: import('./proposalSource').ProposalPublication[]) {
-  return effectiveDecisionPublications(decisionHistory(notes, publications), publications)
+  const states = projectDecisionHistory(notes, publications).requests
+  return decisionHistory(notes, publications).filter(row => states.get(row.id)?.effective)
 }
 export function decisionAnswer(note: { text: string }) {
   const data = rows([note], 'Tin Star answer data: ')[0]
@@ -101,21 +102,19 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
   confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions'] | (() => Promise<SourceSnapshot['intentions']>), mode: 'reconcile' | 'observe' = 'reconcile'): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
-  const states = decisionRequestStates(notes)
-  const current = effectiveDecisionPublications(requests, publications)
-  const ambiguous = current.map(row => states.get(row.id)).find(request => request?.verification && !request.answers.length)
-  const ownerAnsweredProposals = current.filter(row => states.get(row.id)?.ownerAnswer)
+  const { requests: states, unmatchedOwnerDecision } = projectDecisionHistory(notes, publications)
+  const verification = [...states.values()].find(request => request.effective && request.verification && !request.answers.length)?.verification ?? unmatchedOwnerDecision
   const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success ||
     rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) ||
     rows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').some(answer => answer.request_id === row.id) ||
-    ownerAnsweredProposals.some(proposal => proposal.id === row.id)))
+    (states.get(row.id)?.effective && states.get(row.id)?.ownerAnswer)))
   const native = requests.flatMap(row => {
     const state = states.get(row.id)
     const answer = state?.ownerAnswer?.text ?? state?.answers.filter(ownerDecisionOperation).map(note => decisionAnswerText(note)).find(Boolean)
-    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answer }] : []
+    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answered: true }] : []
   })
   if (!bound.length) {
-    if (ambiguous?.verification) return verify(ambiguous.verification)
+    if (verification) return verify(verification)
     if (native.length) return { ...native[0]!, requests: native }
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
@@ -181,9 +180,9 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
   for (const row of bound) {
     const state = states.get(row.id)
     if (!state?.answers.length) continue
-    results.push({ ...await reconcile(row), source_anchor: requestKey(row.source_request), request_id: row.id, ...(state.ownerAnswer ? { answer: state.ownerAnswer.text } : {}) })
+    results.push({ ...await reconcile(row), source_anchor: requestKey(row.source_request), request_id: row.id, answered: true })
   }
-  if (ambiguous?.verification) return { ...verify(ambiguous.verification), ...(results.length ? { requests: results } : {}) }
+  if (verification) return { ...verify(verification), ...(results.length ? { requests: results } : {}) }
   if (!results.length) return undefined
   const summary = results.find(result => result.state === 'verification-needed') ?? results.find(result => result.state === 'pending') ?? results[0]!
   return { ...summary, requests: results }

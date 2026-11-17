@@ -16,7 +16,7 @@ import { cardTitle } from './overviewModel'
 import { decodeRequestText, displayRequestText } from './requestText'
 import { isCoordinationRequest } from '../shared/requestText'
 import { SourceActions } from './QueuePanel'
-import { useWorkSave, WorkActions } from './WorkActions'
+import { useWorkSave, WorkActions, type CardDecisionRequests } from './WorkActions'
 import { WorkerNotes, ResponseRetry } from '../cockpit/shell/present'
 import { findLinkedWorker, homeName } from '../cockpit/overviewQuery'
 import { requestAnchor } from '../shared/deskSource'
@@ -285,7 +285,7 @@ function DecisionDetail({ entry, items, unavailable, onClose, query, position, t
 export function DecisionCardContext({ id, showLink = true, readOnly = false }: { id: string; showLink?: boolean; readOnly?: boolean }) {
   const { scene, refreshAfterMutation, send } = useDeskWorkspace()
   const card = scene?.cards.find(card => card.id === id)
-  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }> } | null>(null)
+  const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }>; decisionRequests?: CardDecisionRequests } | null>(null)
   useEffect(() => {
     const controller = new AbortController()
     void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
@@ -298,7 +298,7 @@ export function DecisionCardContext({ id, showLink = true, readOnly = false }: {
     {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}
     {context?.outcome === 'unavailable' && <p>Source details are unavailable. Use the source link.</p>}
     {!!context?.blocks?.length && <details className="decisions-evidence" open><summary>Question, choices and evidence</summary>{context.blocks.map(block => <p key={block.id}>{displayRequestText(block.text, 'Additional source details are available in Technical details.')}</p>)}</details>}
-    {card && !readOnly && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} onSaved={refreshAfterMutation} /></details></>}
+    {card && !readOnly && <><button type="button" className="decisions-context-link" onClick={() => send({ type: 'navigate-card', cardId: card.id })}>Open related work</button><details className="decisions-evidence"><summary>Answer decision</summary><WorkActions answerOnly card={card} sources={context?.blocks} requests={context?.decisionRequests} onSaved={refreshAfterMutation} /></details></>}
     {!readOnly && <details className="decisions-evidence"><summary>Technical details</summary><pre>{JSON.stringify(context, null, 2)}</pre></details>}
   </section>
 }

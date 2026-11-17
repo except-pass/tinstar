@@ -9,7 +9,7 @@ import { projectDecisionEvidence } from '../decisionEvidence'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { ReconciliationSources } from '../index'
 import { CardContextReader } from '../cardContext'
-import { decisionRequests } from '../../../shared/workflowRequests'
+import { decisionRequests, projectDecisionHistory } from '../../../shared/workflowRequests'
 import { reconcileDecision } from '../decisionResolution'
 
 const roots: string[] = []
@@ -377,8 +377,9 @@ it('matches the Influx card history, flags an unnamed answer when ambiguous, and
   }, {
     id: 'firstmate-check-in', type: 'comment', author: 'same-integration', createdAt: '2026-11-17T19:13:00Z', text: 'Firstmate check-in: spike pending.',
   }]
-  expect(decisionRequests(notes)).toMatchObject([{ id: f.packet.binding.request_id, answered: true, answer: words }])
-  expect(await reconcileDecision(card, notes, [])).toMatchObject({ state: 'resolved', answer: words })
+  expect(decisionRequests(notes)).toMatchObject([{ id: f.packet.binding.request_id, answered: true }])
+  expect(projectDecisionHistory(notes).requests.get(f.packet.binding.request_id)?.ownerAnswer?.text).toBe(words)
+  expect(await reconcileDecision(card, notes, [])).toMatchObject({ state: 'resolved', answered: true })
 
   const second = { ...request, id: 'separate-source', text: request.text.replace(f.packet.binding.request_id, 'independent-ask') }
   const ambiguous = [request, second, ...notes.slice(1)]
@@ -390,10 +391,10 @@ it('matches the Influx card history, flags an unnamed answer when ambiguous, and
   expect(projected.requests.every(row => !row.answered && row.reasons.some(reason => reason.includes('multiple open requests')))).toBe(true)
   expect(await reconcileDecision(card, ambiguous, [])).toMatchObject({ state: 'verification-needed', message: expect.stringContaining('multiple open requests') })
   const explicit = ambiguous.map(note => note.id === 'owner-answer' ? { ...note, text: `${note.text}\nRequest ID: independent-ask` } : note)
-  expect(decisionRequests(explicit)).toMatchObject([{ answered: false }, { id: 'independent-ask', answered: true, answer: words }])
+  expect(decisionRequests(explicit)).toMatchObject([{ answered: false }, { id: 'independent-ask', answered: true }])
 
   const revised = [...notes, { ...request, id: 'new-request', createdAt: '2026-11-17T19:14:00Z' }]
-  expect(decisionRequests(revised)).toMatchObject([{ id: f.packet.binding.request_id, sourceId: request.id, answered: true, answer: words }])
+  expect(decisionRequests(revised)).toMatchObject([{ id: f.packet.binding.request_id, sourceId: request.id, answered: true }])
   expect(await reconcileDecision(card, revised, [])).toMatchObject({ state: 'verification-needed' })
 })
 
@@ -418,6 +419,27 @@ it.each([undefined, 'prior-proposal', 'current-proposal'])('matches an owner dec
   const answered = target !== 'prior-proposal'
   expect(decisionRequests(notes)).toMatchObject([{ id: 'prior-proposal', answered: false }, { id: 'current-proposal', answered }])
   const resolution = await reconcileDecision(card, notes, snapshot.fleet)
-  if (answered) expect(resolution).toMatchObject({ request_id: 'current-proposal', answer: words })
-  else expect(resolution).toBeUndefined()
+  if (answered) expect(resolution).toMatchObject({ request_id: 'current-proposal', answered: true })
+  else expect(resolution).toMatchObject({ state: 'verification-needed' })
+
+  if (target === undefined) {
+    const [prior, , answer] = notes
+    const priorRow = JSON.parse(prior!.text.split(prefix)[1]!)
+    const ask = { answer_id: 'ask-answer', value: { ...priorRow.proposal, proposal_id: 'ask-reply', supersedes: 'prior-proposal',
+      published_at: new Date(now - 2000).toISOString(), source: { kind: 'ask-reply', id: 'ask-answer', revision: '1' } } }
+    const independent = { ...prior!, id: 'independent', text: prior!.text.split(prefix)[0] + prefix + JSON.stringify({
+      id: 'independent', action: 'Decision', options: row.options,
+    }) }
+    const history = [prior!, independent, answer!]
+    const states = projectDecisionHistory(history, [ask]).requests
+    expect(states.get('prior-proposal')).toMatchObject({ effective: false, answers: [] })
+    expect(states.get('independent')?.ownerAnswer?.text).toBe(words)
+    const publications = [ask, { answer_id: 'card-prior', value: priorRow.proposal, source_request: priorRow.source_request }]
+    expect(await reconcileDecision(card, history, snapshot.fleet, undefined, undefined, publications))
+      .toMatchObject({ request_id: 'independent', answered: true })
+    expect(await reconcileDecision(card, [prior!, answer!], snapshot.fleet, undefined, undefined, publications))
+      .toMatchObject({ state: 'verification-needed', message: expect.stringContaining('does not match an open request') })
+    const future = { value: { ...ask.value, published_at: new Date(now).toISOString() } }
+    expect(projectDecisionHistory(history, [future]).requests.get('independent')).toMatchObject({ answers: [], verification: expect.stringContaining('multiple open requests') })
+  }
 })

@@ -7,7 +7,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { decisionRequestStates, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { projectDecisionHistory, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -97,7 +97,8 @@ export class WorkflowOperations {
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
     }
     const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-    const conflict = unrelatedReceipt || !!decisionRequestStates(notes).get(input.request_id)?.ownerAnswer || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const publications = await this.proposals?.read(input.card_id, notes)
+    const conflict = unrelatedReceipt || !!projectDecisionHistory(notes, publications).requests.get(input.request_id)?.ownerAnswer || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
     const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
     let desired: Record<string, unknown> | undefined
     if (!conflict && !answers.length && own) {
@@ -337,11 +338,12 @@ export class WorkflowOperations {
     let card = await this.reader.card(cardId, true)
     if (card.source?.synthetic) return null
     let notes = await this.preparedHistory(cardId)
-    const recordedRequests = decisionHistory(notes, await this.proposals?.read(cardId, notes))
+    const publications = await this.proposals?.read(cardId, notes)
+    const recordedRequests = decisionHistory(notes, publications)
     if (repair) {
       // Recover a property/comment interruption from the same durable Notion
       // history, including after restart. Never replay a different user edit.
-      const states = decisionRequestStates(notes)
+      const states = projectDecisionHistory(notes, publications).requests
       for (const intent of decisionRecordRows(notes, 'Tin Star decision intent: ')) {
         const input = updateWorkSchema.safeParse(intent.input)
         if (!input.success || input.data.card_id !== cardId || input.data.kind !== 'answer_decision' || typeof intent.actor !== 'string') continue
@@ -616,7 +618,7 @@ export class WorkflowOperations {
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const publications = await this.proposals?.read(card.id, notes)
       const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
-      const states = decisionRequestStates(notes)
+      const states = projectDecisionHistory(notes, publications).requests
       const answered = new Set<string>(decisionRecordRows(notes, 'Tin Star answer: '))
       for (const [id, state] of states) if (state.answers.length) answered.add(id)
       const tags = card.properties['Will action']?.value

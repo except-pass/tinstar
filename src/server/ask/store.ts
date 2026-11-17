@@ -44,8 +44,15 @@ export class AskStore {
     this.writing = task.catch(() => undefined)
     return task
   }
+  loadProposals() {
+    return this.rows ? Promise.resolve() : this.load().then(() => {})
+  }
+  cachedProposalRecords() {
+    return structuredClone(this.rows?.filter(row => !row.synthetic_id && !row.voice_outage && !row.published_proposal && row.reply?.decision_proposal) ?? [])
+  }
   async proposalRecords() {
-    return structuredClone((await this.load()).filter(row => !row.synthetic_id && !row.voice_outage && !row.published_proposal && row.reply?.decision_proposal))
+    await this.loadProposals()
+    return this.cachedProposalRecords()
   }
   async list(owner: string, syntheticId?: string) {
     await this.writing

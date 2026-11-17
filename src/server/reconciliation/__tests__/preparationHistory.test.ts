@@ -517,7 +517,10 @@ it.each(['option-pick', 'influx-comment'] as const)('registers an owner %s and n
   expect(sources.preparationEvidence(cardId).requests[0]!.answered).toBe(true)
   expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0, needs_repreparation: 0 }, ready: [], pending: [] })
   const answered = sources.preparationEvidence(cardId).requests[0]!
-  expect(await sources.workflow.reconcileDecisions(cardId)).toMatchObject({ request_id: requestId, ...(kind === 'influx-comment' ? { answer: words } : {}) })
+  expect(await sources.workflow.reconcileDecisions(cardId)).toMatchObject({ request_id: requestId, answered: true })
+  const views = await sources.queue(undefined, undefined, false, 'read')
+  expect(views.items.some(item => item.decisionResolution?.answered)).toBe(true)
+  expect(JSON.stringify(views)).not.toContain(words)
   if (kind === 'option-pick') expect(decisionRecordRows(await sources.workflow.preparedHistory(cardId), 'Tin Star answer data: '))
     .toContainEqual(expect.objectContaining({ request_id: requestId, option_id: 'defer', answer: words }))
   checkInAt = new Date(time + 1000).toISOString(); time += 31_000; vi.setSystemTime(time)

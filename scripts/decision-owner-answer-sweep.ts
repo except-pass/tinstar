@@ -1,5 +1,7 @@
 import { parseArgs } from 'node:util'
-import { decisionRequestStates } from '../src/shared/workflowRequests'
+import { projectDecisionHistory } from '../src/shared/workflowRequests'
+import { AskStore } from '../src/server/ask/store'
+import { ProposalSource } from '../src/server/reconciliation/proposalSource'
 import { getConfigRoot } from '../src/server/configRoot'
 import { CardContextReader } from '../src/server/reconciliation/cardContext'
 import { loadReconciliationConfig } from '../src/server/reconciliation/config'
@@ -12,11 +14,15 @@ async function main() {
     console.log('Usage: npx tsx scripts/decision-owner-answer-sweep.ts [--config-home DIR]\nLists Notion requests whose owner decision closes an ask previously left open. Read-only.')
     return
   }
-  const config = loadReconciliationConfig(values['config-home'] ?? getConfigRoot())
+  const root = values['config-home'] ?? getConfigRoot()
+  const config = loadReconciliationConfig(root)
   if (!config.notion) throw new Error('Notion is not configured')
   const api = new NotionApi()
   const board = await new WorkReader(config.notion, api).query({ history: true }, true)
   const history = new CardContextReader(config.notion, api.backgroundFetch)
+  const asks = new AskStore(root)
+  await asks.loadProposals()
+  const publications = new ProposalSource(asks, async id => (await history.decisionDetails(id)).blocks).cachedAskPublications()
   const cards = (board.data?.cards ?? []).filter(card => !card.archived && !card.in_trash)
   const matches: { card_id: string; request_id: string; request_note_id: string; answer_comment_id: string }[] = []
   const incomplete: string[] = []
@@ -26,7 +32,7 @@ async function main() {
       incomplete.push(card.id)
       continue
     }
-    for (const [request_id, state] of decisionRequestStates(context.blocks)) {
+    for (const [request_id, state] of projectDecisionHistory(context.blocks, publications).requests) {
       if (!state.ownerAnswer || state.answers.some(note => note !== state.ownerAnswer?.note)) continue
       matches.push({ card_id: card.id, request_id, request_note_id: state.publication.id, answer_comment_id: state.ownerAnswer.note.id })
     }
