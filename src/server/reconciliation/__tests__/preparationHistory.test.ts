@@ -449,7 +449,7 @@ it('keeps one published packet Ready through fresh property/history cycles witho
   vi.useRealTimers()
 }, 60_000)
 
-it.each(['properties', 'comments', 'body'] as const)('retains Ready through transient %s renewal failures, then blocks past the bound with the source reason', async failure => {
+it.each(['properties', 'comments', 'body'] as const)('reports %s renewal failures and withdraws Ready when history is incomplete', async failure => {
   let unavailable = false
   let time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
@@ -466,7 +466,7 @@ it.each(['properties', 'comments', 'body'] as const)('retains Ready through tran
   expect(published).toMatchObject({ ready: true })
   unavailable = true; time += 16_000; vi.setSystemTime(time)
   const transient = await loadedSnapshot(sources)
-  expect(transient.ready).toEqual([expect.objectContaining({ id: published.packet_id })])
+  expect(transient.ready).toEqual(failure === 'properties' ? [expect.objectContaining({ id: published.packet_id })] : [])
   expect(transient.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.stringContaining('HTTP 503') }))
   for (const elapsed of [31_000, 61_000, 121_000]) {
     time += elapsed; vi.setSystemTime(time)
@@ -575,7 +575,7 @@ it.each(['automatic', 'prepare-now'])('blocks %s dispatch when the owner answers
   expect(posts).toEqual([])
 }, 20_000)
 
-it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow renewals and transient failures, with admission off and Desk closed', async () => {
+it('withdraws Ready during incomplete renewals over 1800 samples with admission off and Desk closed', async () => {
   const start = Date.now()
   let time = start, slow = false, commentReads = 0
   const waiting: Array<{ until: number; resolve(): void }> = []
@@ -614,15 +614,18 @@ it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow 
       const evidence = f.sources.preparationEvidence(f.cardId)
       const current = await f.sources.decisionPackets.read(published.packet_id, evidence)
       samples++
-      if (!current?.ready) gaps++
+      if (!current?.ready) {
+        gaps++
+        expect(evidence.reasons).toContain('Complete cached decision history is unavailable')
+      }
       const withoutRenewal = structuredClone(evidence)
       for (const row of withoutRenewal.requests) for (const dependency of row.dependencies) delete dependency.renewal_until
       if (!validateDecisionPacket(packet, withoutRenewal, time).valid) expiredSamples++
     }
-    expect({ samples, gaps }).toEqual({ samples: 1800, gaps: 0 })
+    expect(samples).toBe(1800)
+    expect(gaps).toBeGreaterThan(0)
     expect(commentReads).toBeGreaterThan(30)
     expect(expiredSamples).toBeGreaterThan(0)
-    expect((await f.sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
     expect(f.posts).toHaveLength(1)
     expect(await f.sources.decisionPackets.ids()).toEqual([published.packet_id])
     expect((await f.sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
@@ -660,12 +663,12 @@ it.each(['answer', 'card'] as const)('keeps the last complete answer history dur
   expect(published.ready).toBe(true)
   failing = true; time += 16_000; vi.setSystemTime(time)
   const snapshot = await loadedSnapshot(f.sources)
-  expect(snapshot.ready).toHaveLength(kind === 'answer' ? 1 : 0)
+  expect(snapshot.ready).toEqual([])
   const evidence = f.sources.preparationEvidence(f.cardId)
   expect(evidence.requests[0]!.answered).toBe(false)
   if (kind === 'card') expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain('Dependency changed')
   alternating = true; time += 31_000; vi.setSystemTime(time)
-  expect((await loadedSnapshot(f.sources)).ready).toHaveLength(kind === 'answer' ? 1 : 0)
+  expect((await loadedSnapshot(f.sources)).ready).toEqual([])
   expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(false)
   expect(f.posts).toHaveLength(1)
 }, 20_000)

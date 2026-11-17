@@ -68,7 +68,19 @@ function ownerDecision(note: RequestNote) {
   const requestLine = /^Request ID:[ \t]*([^\r\n]*?)[ \t]*\r?$/m.exec(payload)
   const id = requestLine?.[1]?.trim()
   const answer = (requestLine ? payload.replace(requestLine[0], '') : payload).trim()
-  return answer ? { id, answer } : null
+  return { id, answer }
+}
+
+export function canUseLegacyDecisionSource(note: RequestNote, closed: ReadonlySet<string>, closedOnly = false) {
+  if (!note.text.trim() || ownerDecision(note) || decisionRecordRows([note], 'Tin Star request: ').length ||
+    decisionRecordRows([note], 'Tin Star answer: ').length || decisionRecordRows([note], 'Tin Star decision intent: ').length ||
+    closed.has(note.id)) return false
+  const target = note.text.split(/\r?\n/).some(line => {
+    if (line.startsWith('Request ID:')) return closed.has(line.slice('Request ID:'.length).trim())
+    if (!line.startsWith('Tin Star decision: ')) return false
+    try { return closed.has(JSON.parse(line.slice('Tin Star decision: '.length))) } catch { return false }
+  })
+  return !target && !(closedOnly && note.type === 'comment')
 }
 
 type DecisionPublication = { value: DecisionProposal; answer_id?: string; anchor?: string | null }
@@ -81,7 +93,7 @@ export function cardDecisionPublications(notes: RequestNote[], publications: Dec
   return publications.filter(entry => entry.value.card_id === cardId || entry.anchor === cardId || keys.has(entry.value.request_key))
 }
 
-function decisionReplacements(rows: ReturnType<typeof JSON.parse>[]) {
+function decisionReplacements(rows: ReturnType<typeof JSON.parse>[], ask: DecisionPublication[] = []) {
   const groups = new Map<string, { id: string; value: DecisionProposal }[]>()
   for (const row of rows) {
     if (!row.proposal) continue
@@ -92,9 +104,9 @@ function decisionReplacements(rows: ReturnType<typeof JSON.parse>[]) {
   }
   const replacements = new Map<string, string>()
   for (const group of groups.values()) {
-    const current = currentDecisionProposal(group)
+    const current = currentDecisionProposal([...group, ...ask.filter(entry => entry.value.request_key === group[0]!.value.request_key).map(entry => ({ id: entry.value.proposal_id, value: entry.value }))])
     if (!current) throw new Error('Decision publication history is contradictory or incomplete')
-    for (const entry of group) if (entry.id !== current.id) replacements.set(entry.id, current.id)
+    for (const entry of group) if (!group.includes(current) || entry.id !== current.id) replacements.set(entry.id, current.value.source.kind === 'ask-reply' ? 'an Ask publication' : current.id)
   }
   return replacements
 }
@@ -110,11 +122,7 @@ interface DecisionRequestState<T extends RequestNote> {
 }
 
 export function projectDecisionHistory<T extends RequestNote>(notes: T[], publications: DecisionPublication[] = [], complete = true) {
-  const ask = [...new Map(publications.filter(entry => entry.value.source.kind === 'ask-reply').map(entry => [entry.answer_id ?? entry.value.source.id, entry.value])).entries()]
-  const askStates = ask.map(([id, proposal]) => ({
-    publication: { id, text: 'Requested from: Will', createdAt: proposal.published_at },
-    row: { id, action: 'Decision', proposal, ask: true }, effective: false, answers: [] as T[],
-  }))
+  const ask = publications.filter(entry => entry.value.source.kind === 'ask-reply')
   const current = new Map<string, DecisionRequestState<T>>()
   let unmatchedOwnerDecision: string | undefined
   const structured = new Map<string, T[]>()
@@ -159,10 +167,8 @@ export function projectDecisionHistory<T extends RequestNote>(notes: T[], public
     cardRows.set(publication.note, row)
   }
   if (!verification) try {
-    if (askStates.some(state => publicationsById.has(state.row.id))) throw new Error('Duplicate publication')
-    replacements = decisionReplacements([...cardRows.values(), ...askStates.map(state => state.row)])
+    replacements = decisionReplacements([...cardRows.values()], ask)
   } catch { verification = 'Decision publication history is contradictory or incomplete' }
-  for (const state of askStates) current.set(state.row.id, state)
   for (const note of ordered) {
     const row = cardRows.get(note)
     if (row && typeof row.id === 'string' && typeof row.action === 'string' && !current.has(row.id)) {
@@ -183,11 +189,12 @@ export function projectDecisionHistory<T extends RequestNote>(notes: T[], public
     }
     const decision = ownerDecision(note)
     if (!decision) continue
-    const published = [...current.values()].filter(request => precedes(request.publication, note))
-    if (ask.length && !Number.isFinite(noteTime(note))) {
-      unmatchedOwnerDecision = 'Owner decision time is unavailable. Verify the open requests.'
+    if (!decision.answer) { unmatchedOwnerDecision = 'Owner decision has no answer text. Verify the open requests.'; continue }
+    if (ask.length) {
+      unmatchedOwnerDecision = 'Owner decision needs verification against the card and Ask history.'
       continue
     }
+    const published = [...current.values()].filter(request => precedes(request.publication, note))
     let replaced: Map<string, string>
     try { replaced = decisionReplacements(published.map(request => request.row)) }
     catch { unmatchedOwnerDecision = 'Decision publication history is contradictory or incomplete'; continue }
@@ -229,7 +236,7 @@ export function decisionRequests(notes: RequestNote[], states = projectDecisionH
       // reinterpreted as an independent card-native decision.
       return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true, options: options.success ? options.data : undefined,
         ...(row.source_request != null || row.source_question != null || row.source_spawn_gen != null ? { hasSourceBinding: true } : {}),
-        ...(proposal.success && !row.ask ? { proposal: proposal.data } : {}), ...(row.ask ? { askRequestKey: proposal.data?.request_key } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
+        ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
         requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, ...(state.supersededBy ? { superseded: true as const } : {}), answered: state.answers.length > 0,

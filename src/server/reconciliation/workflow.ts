@@ -7,7 +7,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { projectDecisionHistory, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { canUseLegacyDecisionSource, projectDecisionHistory, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -639,8 +639,10 @@ export class WorkflowOperations {
           // Older Notion asks retain their actual paragraph/comment identity.
           // The caller explicitly judges which aggregate action tag is resolved;
           // absent that judgment, leave every legacy action tag untouched.
-          const source = notes.find(note => note.id === input.request_id) ?? (await this.content.sections(card.id)).find(block => block.id === input.request_id)
-          if (source && source.text.trim()) {
+          const source = notes.find(note => note.id === input.request_id)
+          const closed = new Set([...answered, ...[...states.values()].filter(state => state.answers.length).map(state => state.publication.id)])
+          const closedOnly = closed.size > 0 && ![...states.values()].some(state => state.effective && !state.answers.length)
+          if (source && canUseLegacyDecisionSource(source, closed, closedOnly)) {
             if (input.legacy_action && !tags.includes(input.legacy_action)) throw new WorkflowError('decision-conflict', 'The explicitly resolved legacy action tag is no longer present')
             request = { id: input.request_id, action: input.legacy_action ?? '', preserve_action: !input.legacy_action }
           }

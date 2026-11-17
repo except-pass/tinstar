@@ -22,7 +22,7 @@ async function main() {
   const history = new CardContextReader(config.notion, api.backgroundFetch)
   const asks = new AskStore(root)
   await asks.loadProposals()
-  const publications = new ProposalSource(asks, async id => (await history.decisionDetails(id)).blocks).cachedAskPublications()
+  const proposals = new ProposalSource(asks, async id => (await history.decisionDetails(id)).blocks)
   const cards = (board.data?.cards ?? []).filter(card => !card.archived && !card.in_trash)
   const matches: { card_id: string; request_id: string; request_note_id: string; answer_comment_id: string }[] = []
   const incomplete: string[] = []
@@ -32,7 +32,12 @@ async function main() {
       incomplete.push(card.id)
       continue
     }
-    for (const [request_id, state] of projectDecisionHistory(context.blocks, publications).requests) {
+    const projection = projectDecisionHistory(context.blocks, proposals.cachedPublications(card.id, context.blocks))
+    if (projection.verification || projection.unmatchedOwnerDecision || [...projection.requests.values()].some(state => state.verification)) {
+      incomplete.push(card.id)
+      continue
+    }
+    for (const [request_id, state] of projection.requests) {
       if (!state.ownerAnswer || state.answers.some(note => note !== state.ownerAnswer?.note)) continue
       matches.push({ card_id: card.id, request_id, request_note_id: state.publication.id, answer_comment_id: state.ownerAnswer.note.id })
     }

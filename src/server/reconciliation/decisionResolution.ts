@@ -109,10 +109,10 @@ export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fl
     rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) ||
     rows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').some(answer => answer.request_id === row.id) ||
     (states.get(row.id)?.effective && states.get(row.id)?.ownerAnswer)))
-  const native = [...requests, ...[...states.values()].filter(state => state.row.ask).map(state => state.row)].flatMap(row => {
+  const native = requests.flatMap(row => {
     const state = states.get(row.id)
     const answer = state?.ownerAnswer?.text ?? state?.answers.filter(ownerDecisionOperation).map(note => decisionAnswerText(note)).find(Boolean)
-    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answered: true, ...(row.ask ? { source_anchor: row.proposal.request_key } : {}) }] : []
+    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answered: true }] : []
   })
   if (!bound.length) {
     if (verification) return verify(verification)

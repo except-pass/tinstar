@@ -99,7 +99,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     // window. Fleet, PR and release freshness protections stay independent.
     for (const dependency of dependencies) if (dependency.kind === 'card' || dependency.kind === 'answer' || cardNative && dependency.kind === 'request') dependency.renewal_until = renewalUntil
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
-    return { binding: binding.success ? binding.data : null, request_id: row.id, question: row.question, dependencies, reasons: issues, answered: row.answered && (recordedRequests.includes(row.id) || !!row.askRequestKey) }
+    return { binding: binding.success ? binding.data : null, request_id: row.id, question: row.question, dependencies, reasons: issues, answered: row.answered && recordedRequests.includes(row.id) }
   })
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }

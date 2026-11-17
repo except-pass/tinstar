@@ -59,7 +59,8 @@ export class PreparationHistory {
   evidenceHistory(id: string) {
     const current = this.reader.cachedDecisionHistory(id)
     if (current?.context.outcome === 'available' && current.context.commentsOutcome === 'available') return current
-    return (this.renewalUntil(id) ? this.complete.get(id) : undefined) ?? current
+    const previous = this.renewalUntil(id) ? this.complete.get(id) : undefined
+    return current && previous ? { ...current, context: { ...current.context, blocks: previous.context.blocks } } : current
   }
 
   state(id: string) {
