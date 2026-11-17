@@ -156,7 +156,7 @@ export class DecisionPreparation {
   }
 
   private held(db: DatabaseSync, card: string) {
-    return this.packets.leases.activeInStorage(this.packets.leases.rowInStorage(db, card)) || this.packets.leases.reservedInStorage(db, card)
+    return this.packets.leases.activeInStorage(this.packets.leases.rowInStorage(db, card)) || this.packets.leases.reviewReservedInStorage(db, card)
   }
 
   private refusal(candidate: PrepCandidate): string | null {

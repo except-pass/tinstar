@@ -440,9 +440,11 @@ starting `Will:`, `Waiting For Type` `Actor`, and `Waiting For ID` `Will`.
 Legacy or malformed asks can remain visible for verification but are not claimable.
 Backlog approvals must be formed as a current Will wait before next-card admission.
 Eligibility is checked before claiming and again in the lease allocation
-transaction; a Tin Star source write to the candidate card during queue/history
+transaction; a Tin Star workflow source write to the candidate card during queue/history
 collection or the fresh exact-card read invalidates that card's snapshot, and a
-pending source write prevents allocation on that card. Other cards' writes and
+pending workflow source write prevents allocation on that card. See the
+[reservation contract](decision-desk-foundation.md#per-card-source-write-reservations-and-recovery)
+for reminder admission and write fencing. Other cards' writes and
 reservations do not block admission. An identical retry or held-token call retains its
 existing lease, even if readiness or strict fields have since changed. A refused
 new exact-card claim identifies failing fields and directs the owning mate to

@@ -136,7 +136,7 @@ export class DecisionPackets {
         // Its old deadline must not expire an unchanged, renewed dependency.
         valid_until: attestation?.valid ? current.valid_until : null }
       const pending = this.pendingAnswerInStorage(db, id)
-      return { ...stored, validation, ...decisionPacketReady(validation, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
+      return { ...stored, validation, ...decisionPacketReady(validation, (!!lease?.caller && lease.expires > this.now()) || this.leases.reviewReservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
   }
   pendingAnswerInStorage(db: DatabaseSync, id: string) {
     const event = db.prepare("SELECT detail FROM decision_packet_events WHERE packet_id = ? AND type = 'answer-attempt' ORDER BY sequence DESC LIMIT 1").get(id) as { detail: string } | undefined

@@ -11,6 +11,8 @@ import { ageObservation } from './observation'
 import type { SourceSnapshot } from './index'
 import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
+import { WorkReader } from './workReader'
+import { WorkflowContent, receiptMarker } from './workflowContent'
 import { mainHomeLabel, waitDependency, nudgeDue, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead, type ParentResolution } from '../../shared/waitingOnMain'
 
 export const MAIN_WAIT_OWNER = '84d29212-4a5b-49f1-91bf-92b7adeff516'
@@ -129,6 +131,7 @@ export function mainWaitNudge(items: MainWaitItem[], now = Date.now()) {
 
 /** Uses the existing paced Notion client/key; never routes a notice through main. */
 export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: NotionApi, leases?: CardLeases) {
+  const content = new WorkflowContent(new WorkReader(config, api))
   return async (item: MainWaitItem | MainWaitItem[], now: number): Promise<NonNullable<MainWaitItem['alert']>> => {
     if (!config) return 'failed'
     const headers = { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' }
@@ -141,16 +144,22 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
     const post = (withMention: boolean) => {
       const parent = mainWaitComment(item, withMention, now).parent.page_id
       const body = mainWaitComment(item, withMention, now)
+      // A unique immutable receipt lets immediate readback settle a lost POST
+      // response without waiting for the five-minute uncertain-write window.
+      const marker = receiptMarker('waiting-on-main', randomUUID())
+      body.rich_text.push({ type: 'text', text: { content: `\n${marker}` } })
       const perform = async () => {
         sourceWriteDispatched()
         const response = await api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(5000), body: JSON.stringify(body) })
-        if (response.status >= 500) { await response.body?.cancel(); throw new Error('Notification save unconfirmed') }
+        await response.body?.cancel()
+        if (response.status >= 500 || response.status === 408) throw new Error('Notification save unconfirmed')
         return response
       }
-      // This direct notifier also shares the canonical card fence. Ambiguous
-      // delivery must not expire into a race with a new reviewer write.
+      // Keep write serialization without presenting a reminder as a reviewer.
+      // Unconfirmed absence still needs aged recovery; never resend on timeout.
       const text = body.rich_text.map(part => 'text' in part ? part.text.content : '').join('')
-      return leases ? leases.mutate(parent.replaceAll('-', ''), perform, { kind: 'note', text }) : perform()
+      return leases ? leases.mutate(parent.replaceAll('-', ''), perform, { kind: 'reminder', readback_can_settle: true, marker, text },
+        intent => content.reservationReadback(parent, intent, AbortSignal.timeout(5000))) : perform()
     }
     try {
       let response = await post(mention)

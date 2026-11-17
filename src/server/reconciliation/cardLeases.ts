@@ -23,7 +23,8 @@ export class CardLeaseError extends Error {
   readonly code = 'card-held'
   constructor(readonly lease: CardLease | null, message?: string) { super(message ?? (lease ? `held by ${lease.holder} until ${lease.expires_at}` : 'Claim lost; re-read and claim the card again')) }
 }
-export interface SourceWriteIntent { readback_can_settle?: boolean; kind: 'properties' | 'append' | 'section' | 'note'; [key: string]: unknown }
+export interface SourceWriteIntent { readback_can_settle?: boolean; marker?: string; kind: 'properties' | 'append' | 'section' | 'note' | 'reminder'; [key: string]: unknown }
+const writeEvent = (intent: SourceWriteIntent | null | undefined, event: string) => `${intent?.kind === 'reminder' ? 'reminder' : 'write'}-${event}`
 export class SourceWritePending extends CardLeaseError {
   constructor() { super(null, 'Source write unresolved; inspect and reconcile the reserved operation before retrying') }
 }
@@ -145,6 +146,12 @@ export class CardLeases {
   reservedInStorage(db: SqliteDatabase, card: string) {
     return !!db.prepare('SELECT 1 FROM source_write_reservations WHERE card = ?').get(card)
   }
+  /** Reminder comments do not change workflow meaning. Keep their write fence,
+   * but allow review/claim admission while delivery is pending. */
+  reviewReservedInStorage(db: SqliteDatabase, card: string) {
+    const pending = db.prepare('SELECT intent FROM source_write_reservations WHERE card = ?').get(card) as { intent: string | null } | undefined
+    return !!pending && (!pending.intent || JSON.parse(pending.intent).kind !== 'reminder')
+  }
   auditInStorage(db: SqliteDatabase, card: string, type: string, detail: unknown) {
     db.prepare('INSERT INTO lease_events(card,type,at,detail) VALUES(?,?,?,?)').run(card, type, this.now(), JSON.stringify(detail))
   }
@@ -154,7 +161,7 @@ export class CardLeases {
       const generation = await this.transaction(db => {
         const row = this.check(db, card), generation = row?.generation ?? this.rowInStorage(db, card)?.generation ?? 0
         db.prepare('INSERT INTO source_write_reservations VALUES(?,?,?,?,?,?)').run(card, operation, generation, intent ? JSON.stringify(intent) : null, this.now(), sourceOperationAccess.getStore() ?? null)
-        this.auditInStorage(db, card, 'write-reserved', { operation, generation })
+        this.auditInStorage(db, card, writeEvent(intent, 'reserved'), { operation, generation })
         return row?.generation
       })
       const dispatch = { dispatched: false }
@@ -178,7 +185,7 @@ export class CardLeases {
           const removed = db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, operation)
           if (!removed.changes) return
           if (completed && generation !== undefined) db.prepare('UPDATE leases SET expires = ? WHERE card = ? AND generation = ?').run(this.now() + leaseDuration, card, generation)
-          this.auditInStorage(db, card, completed ? 'write-completed' : 'write-rejected', { operation })
+          this.auditInStorage(db, card, writeEvent(intent, completed ? 'completed' : 'rejected'), { operation })
         })
       }
     }
@@ -210,7 +217,7 @@ export class CardLeases {
     if (!pending || !intent?.readback_can_settle || await probe(intent) !== 'applied') return
     await this.transaction(db => {
       const removed = db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, pending.operation)
-      if (removed.changes) this.auditInStorage(db, card, 'write-marker-recovered', { operation: pending.operation, generation: pending.generation })
+      if (removed.changes) this.auditInStorage(db, card, writeEvent(intent, 'marker-recovered'), { operation: pending.operation, generation: pending.generation })
     })
   }
   async reconcileWrite(card: string, operation: string, actor: string, reason: string, probe: (intent: SourceWriteIntent | null) => Promise<'applied' | 'different' | 'unknown'>) {
@@ -220,16 +227,18 @@ export class CardLeases {
     if (runningWrites.has(JSON.stringify([this.path, card]))) throw new SourceWritePending()
     const pending = this.pendingWrites().find(row => row.card === card && row.operation === operation)
     if (!pending) return { outcome: 'already-reconciled' }
-    const state = await probe(pending.intent ? JSON.parse(pending.intent) : null)
+    const intent = pending.intent ? JSON.parse(pending.intent) : null
+    const state = await probe(intent)
     if (state === 'unknown') return { outcome: 'source-unavailable', message: 'Complete source readback required; reservation retained' }
     return this.transaction(db => {
       const removed = db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ? AND generation = ?').run(card, operation, pending.generation)
-      if (removed.changes) this.auditInStorage(db, card, 'write-reconciled', { operation, generation: pending.generation, actor, reason, source_state: state })
+      if (removed.changes) this.auditInStorage(db, card, writeEvent(intent, 'reconciled'), { operation, generation: pending.generation, actor, reason, source_state: state })
       return { outcome: 'reconciled', source_state: state }
     })
   }
   capability(caller: string, operation: string) { return this.token(caller, operation) }
   private sourceRevisionInStorage(db: SqliteDatabase, card?: string) {
+    // Reminder delivery cannot invalidate a workflow snapshot used for claims.
     return (db.prepare(`SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE type LIKE 'write-%'${card ? ' AND card = ?' : ''}`).get(...(card ? [card] : [])) as { revision: number }).revision
   }
   sourceRevision() { return this.readStorage(db => this.sourceRevisionInStorage(db)) }
@@ -239,7 +248,7 @@ export class CardLeases {
     return createHmac('sha256', this.secret).update(JSON.stringify([caller, operation])).digest('base64url')
   }
   async claim(cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false, admission?: ClaimAdmission) {
-    if (cards.length === 1) await runningWrites.get(JSON.stringify([this.path, cards[0]]))?.catch(() => {})
+    if (cards.length === 1 && this.readStorage(db => this.reviewReservedInStorage(db, cards[0]!))) await runningWrites.get(JSON.stringify([this.path, cards[0]]))?.catch(() => {})
     return this.transaction(db => this.claimInStorage(db, cards, caller, holder, operation, token, exact, admission))
   }
   claimInStorage(db: SqliteDatabase, cards: string[], caller: string, holder: string, operation: string, token?: string, exact = false, admission?: ClaimAdmission) {
@@ -261,13 +270,13 @@ export class CardLeases {
       return { outcome: 'held', lease: publicLease(row), lease_token: token }
     }
     for (const card of cards) {
-      if (this.reservedInStorage(db, card)) { if (exact) throw new SourceWritePending(); continue }
+      if (this.reviewReservedInStorage(db, card)) { if (exact) throw new SourceWritePending(); continue }
       const old = this.rowInStorage(db, card)
       if (this.activeInStorage(old)) { if (exact) throw new CardLeaseError(publicLease(old)); continue }
       // Recheck admission under the same writer lock as allocation. Receipts
       // and held-token retries above deliberately preserve their original lease.
       // A write to this card crossing queue/history or exact-card reads invalidates its snapshot;
-      // in-flight writes are fenced by reservedInStorage above.
+      // in-flight workflow writes are fenced by reviewReservedInStorage above.
       if (admission && (this.sourceRevisionInStorage(db, card) > admission.sourceRevision || !admission.eligible(card))) continue
       const leaseToken = this.token(caller, operation)
       const row: LeaseRow = { card, generation: (old?.generation ?? 0) + 1, caller, holder: `${holder} · chat ${leaseHash(leaseToken).slice(0, 6)}`, token_hash: leaseHash(leaseToken), expires: this.now() + leaseDuration }

@@ -7,6 +7,7 @@ import { ReconciliationSources } from '../index'
 import { WorkflowContent } from '../workflowContent'
 import { WorkReader } from '../workReader'
 import { NotionApi } from '../notionApi'
+import { mainWaitNotifier, MAIN_WAIT_OWNER } from '../waitingOnMain'
 
 const roots: string[] = []
 afterEach(() => { vi.useRealTimers(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -84,4 +85,55 @@ it('never reconciles a still-running write even when its reservation is old', as
     expect(f.fetcher).not.toHaveBeenCalled()
   } finally { finish(); await write }
   expect(f.leases.pendingWrites()).toEqual([])
+})
+
+it.each(['applied', 'mentioned', 'absent', 'unavailable', 'truncated', 'pending-readback'] as const)('finishes a reminder on its deadline with %s readback and keeps owner admission open', async state => {
+  vi.useFakeTimers()
+  // AbortSignal.timeout uses a native timer; use the same timeout contract on
+  // the fake clock so this exercises the actual five-second notifier deadline.
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  const f = fixture()
+  let began!: () => void, completeReadback = false
+  const landed = state === 'applied' || state === 'mentioned'
+  const started = new Promise<void>(resolve => { began = resolve })
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    if (String(input).includes('/users/')) return Response.json(state === 'mentioned' ? { id: MAIN_WAIT_OWNER, type: 'person' } : {})
+    if (init?.method === 'POST') {
+      if (landed) f.comments.push({ id: 'reminder', rich_text: JSON.parse(String(init.body)).rich_text.map((part: { type: string; text?: { content: string } }) =>
+        ({ ...part, plain_text: part.type === 'mention' ? '@Will' : part.text?.content ?? '' })) })
+      began()
+      return new Promise<Response>((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }))
+    }
+    if (state === 'unavailable' && !completeReadback) throw new Error('Source unavailable')
+    if (state === 'pending-readback' && !completeReadback) return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }))
+    return Response.json({ results: f.comments, has_more: state === 'truncated' && !completeReadback })
+  })
+  try {
+    const notify = mainWaitNotifier(config.notion, new NotionApi(fetcher, 0), f.leases)
+    const revision = f.leases.sourceRevision()
+    const writing = notify({ id: 'owner-wait', source: 'board', kind: 'card', key: card, label: 'Choose', text: 'Will: choose',
+      audience: 'owner', since: null, ageBasis: 'at least', url: null, fresh: true }, Date.now())
+    await started
+    await vi.advanceTimersByTimeAsync(state === 'pending-readback' ? 10_000 : 5000)
+    expect(await writing).toBe('unconfirmed')
+    expect(f.leases.pendingWrites()).toHaveLength(landed ? 0 : 1)
+    expect(f.leases.sourceRevision()).toBe(revision)
+    if (!landed) {
+      const restarted = new CardLeases(f.root)
+      expect(await restarted.claim([card], 'owner', 'Browser', 'during-recovery', undefined, true,
+        { sourceRevision: revision, eligible: () => true })).toMatchObject({ outcome: 'claimed' })
+      await vi.advanceTimersByTimeAsync(sourceWriteRecoveryAge)
+      completeReadback = true
+      const reader = new WorkReader(config.notion, new NotionApi(fetcher, 0)), content = new WorkflowContent(reader)
+      await restarted.recoverStaleWrites((id, intent) => content.reservationReadback(id, intent))
+      expect(restarted.pendingWrites()).toEqual([])
+      expect(restarted.sourceRevision()).toBe(revision)
+    }
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+    expect(timeout).toHaveBeenCalledWith(5000)
+  } finally { timeout.mockRestore() }
 })

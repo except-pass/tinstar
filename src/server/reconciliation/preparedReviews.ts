@@ -153,12 +153,12 @@ export class PreparedReviews {
     const row = this.leases.rowInStorage(db, binding.card)
     const current = this.leases.activeInStorage(row) && row.caller === session.caller && row.generation === binding.generation && row.token_hash === binding.token_hash
     if (leaseToken && (!current || leaseHash(leaseToken) !== binding.token_hash)) throw new CardLeaseError(null)
-    if (!current) { if (this.leases.reservedInStorage(db, binding.card)) throw new SourceWritePending(); return null }
+    if (!current) { if (this.leases.reviewReservedInStorage(db, binding.card)) throw new SourceWritePending(); return null }
     const token = this.leases.capability(session.caller, binding.claim_operation)
     const stored = this.packets.readInStorage(db, binding.packet_id, this.evidence(binding.card))
     // Ready normally excludes leases; held validation instead ignores only this
-    // context's canonical lease, never source freshness or a pending source write.
-    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || this.leases.reservedInStorage(db, binding.card)
+    // context's canonical lease, never source freshness or a pending workflow write.
+    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || this.leases.reviewReservedInStorage(db, binding.card)
     return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token, packet: stored ? {
       ...workReadback(stored), packet: {
         ...workReadback(stored.packet), recommended_option_id: stored.packet.recommended_option_id,
@@ -227,7 +227,7 @@ export class PreparedReviews {
       if (card === excludeCard) continue
       const lease = this.leases.rowInStorage(db, card)
       if (this.leases.activeInStorage(lease)) { if (input.card_id) throw new CardLeaseError(publicLease(lease)); continue }
-      if (this.leases.reservedInStorage(db, card)) continue
+      if (this.leases.reviewReservedInStorage(db, card)) continue
       const rows = db.prepare('SELECT id FROM decision_packets WHERE json_extract(body,\'$.binding.card_id\') = ? ORDER BY source_key,version DESC').all(card) as Array<{ id: string }>
       for (const row of rows) {
         // Recheck both current source meaning and the latest durable invalidation
