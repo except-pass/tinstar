@@ -160,6 +160,25 @@ describe('Waiting For in the native Overview', () => {
     const rows = within(screen.getByRole('region', { name: 'Work reference issues' }))
     expect(rows.getAllByText(/is completed, archived or deleted/)).toHaveLength(2)
   })
+  it('shows appended typed entries and Work diagnostics in their filters', () => {
+    const blockerId = fixtureId(5)
+    const wait = { dependency: 'Review evidence', unblocks_when: 'Evidence is posted', follow_up_by: 'Will' }
+    set(5, { Status: 'Done' })
+    set(1, { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will',
+      waitLine({ ...wait, type: 'Event', id: 'Scheduled review' }),
+      waitLine({ ...wait, type: 'Work', id: blockerId }),
+    ].join('\n') })
+    mount(); select()
+    const filters = within(screen.getByRole('group', { name: 'Waiting For Type' }))
+    fireEvent.click(filters.getByRole('button', { name: 'Event' }))
+    expect(group('Scheduled review, 1 card')).toBeTruthy()
+    fireEvent.click(filters.getByRole('button', { name: 'Work' }))
+    expect(screen.queryByRole('region', { name: 'Work dependencies' })).toBeNull()
+    const rows = within(screen.getByRole('region', { name: 'Work reference issues' }))
+    expect(rows.getByText(/is completed, archived or deleted/)).toBeTruthy()
+    expect(screen.queryByText('No Waiting For cards in this group')).toBeNull()
+  })
   it('shows precise missing-field information in Inspector and source failures without a false zero', () => {
     set(1, { 'Waiting For ID': '' })
     localStorage.setItem(preferencesKey, JSON.stringify({ donutFilter: { cards: ['Waiting For'], workers: [] } }))

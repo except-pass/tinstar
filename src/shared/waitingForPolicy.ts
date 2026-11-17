@@ -112,7 +112,7 @@ const descriptionFields = {
 const labels: Record<string, keyof WaitDescription> = {
   dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by',
 }
-interface WaitEntry { text: string; fields: Partial<WaitFields>; implicitIdentity?: boolean }
+interface WaitEntry { text: string; fields: Partial<WaitFields>; implicitIdentity?: boolean; freeForm?: boolean }
 
 /** Read the authored text and the generated entries without changing what an exact resolution matches. */
 export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
@@ -134,7 +134,7 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
     const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up by):[ \t]*(.*)$/i.exec(line.trim())
     if (inline || !labeled) {
       finish()
-      if (line.trim()) entries.push({ text: line, fields: inline ?? { dependency: line } })
+      if (line.trim()) entries.push(inline ? { text: line, fields: inline } : { text: line, fields: { dependency: line }, freeForm: true })
       continue
     }
     const field = labels[labeled[1]!.toLowerCase()]!

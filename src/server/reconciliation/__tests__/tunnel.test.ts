@@ -167,6 +167,11 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(update.properties!.kind).toEqual({ type: 'string', enum: kinds })
   expect(update.oneOf).toHaveLength(kinds.length)
   expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
+  const waitBranch = (update.oneOf as Array<{ properties: Record<string, unknown> }>).find(branch =>
+    (branch.properties.kind as { const: string }).const === 'wait')!
+  const rootFields = ['card_id', 'operation_id', 'type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in']
+  const { kind: _kind, ...rootProperties } = update.properties!
+  expect(rootProperties).toEqual(Object.fromEntries(rootFields.map(name => [name, waitBranch.properties[name]])))
   const validate = ajv.compile(update)
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)

@@ -1,5 +1,5 @@
 import { cardSourceUrl } from '../shared/workIdentity'
-import { canonicalWorkId, closedWorkBlocker, waitingForIssues, waitingForTypes, waitingForWorkIds, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
+import { canonicalWorkId, closedWorkBlocker, waitingForIssues, waitingForTypes, waitingForWorkIds, waitEntries, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
 import type { SceneCard } from '../server/reconciliation/scene'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
@@ -72,15 +72,19 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
         ? [{ type: 'Work' as const, canonical, id: canonical === primaryWorkId ? primaryId : canonical, blocker }]
         : []
     })
-    const primaryGroup = !unclassifiedCard && (primaryType === 'Actor' || primaryType === 'Event')
-      ? [{ type: primaryType, id: primaryId, canonical: normalize(primaryType === 'Event' ? githubTarget(primaryId)?.url ?? primaryId : primaryId) } as const]
-      : []
-    if (!unclassifiedCard && !primaryGroup.length && !dependencies.length && cardIssues.some(issue => issue.category === 'reference')) {
-      referenceIssues.push(card)
-    }
-    for (const dependency of [...primaryGroup, ...dependencies]) {
+    const actorEventGroups = [state, ...waitEntries(state.waitingFor, state).map(entry => entry.fields)].flatMap(fields => {
+      const type = fields.type?.trim(), id = fields.id?.trim()
+      return id && (type === 'Actor' || type === 'Event')
+        ? [{ type, id, canonical: normalize(type === 'Event' ? githubTarget(id)?.url ?? id : id) } as const]
+        : []
+    })
+    if (cardIssues.some(issue => issue.category === 'reference')) referenceIssues.push(card)
+    const cardGroups = new Set<string>()
+    for (const dependency of [...actorEventGroups, ...dependencies]) {
       const { type, id, canonical } = dependency
       const key = JSON.stringify([type, canonical])
+      if (cardGroups.has(key)) continue
+      cardGroups.add(key)
       let group = groups.get(key)
       if (!group) {
         const blocker = 'blocker' in dependency ? dependency.blocker : undefined

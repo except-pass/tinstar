@@ -32,7 +32,10 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
   }
   const categories = projection.categories.filter(category => type === 'All' || category.type === type || category.groups.some(group => group.cards.some(card => flashed(card.id))))
   const shown = categories.reduce((sum, category) => sum + category.groups.reduce((sum, group) => sum + group.cards.length, 0), 0)
-  const referenceIssues = projection.referenceIssues.filter(card => type === 'All' || type === 'Work' || flashed(card.id))
+  const groupedIds = new Set(categories.flatMap(category => category.groups.flatMap(group => group.cards.map(card => card.id))))
+  const referenceIssues = projection.referenceIssues.filter(card =>
+    (type === 'All' || type === 'Work' || flashed(card.id)) && !groupedIds.has(card.id) &&
+    !projection.unclassified.includes(card))
   const details = [...projection.issues.values()].filter(issues => issues.some(issue => issue.category === 'description')).length
   return <section className="ov-waiting-work" aria-label="Waiting For work">
     <header ref={heading} className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>

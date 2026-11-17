@@ -497,7 +497,12 @@ export class WorkflowOperations {
       id: String(desired['Waiting For ID'] ?? card.properties['Waiting For ID']?.value ?? ''),
     })
     let editedWaits: ReturnType<typeof waitEntries> | undefined
-    const currentWaits = () => editedWaits ?? waitEntries(originalWaitText, waitIdentity())
+    const currentWaits = () => {
+      const identity = waitIdentity()
+      return editedWaits ?? waitEntries(originalWaitText, identity).map(entry => entry.freeForm
+        ? { ...entry, implicitIdentity: true, fields: { ...entry.fields, ...identity } }
+        : entry)
+    }
     const wait = async (value: { type: 'Actor' | 'Event' | 'Work'; id: string; dependency: string; unblocks_when: string; follow_up_by: string; next_check_in: string }, replace?: string) => {
       if (String(card.properties.Status?.value ?? '') === 'Waiting for Prod Release') throw new WorkflowError('release-lifecycle', 'Waiting for Prod Release stays on the release lifecycle. This operation does not convert it to generic Waiting For. Nothing was written.')
       const issue = independentWaitIssue(value)
@@ -619,7 +624,7 @@ export class WorkflowOperations {
       const mate = responsibleMate(card, notes)
       if (!mate) throw new WorkflowError('mate-unknown', 'No responsible mate is declared in First Mate tasks or Last touched by. Firstmate must repair the route; the claim is retained.')
       transition(mate.owner, 'Waiting For')
-      const remaining = currentWaits().filter(({ text, fields }) => !(text.startsWith('Will:') || fields.type === 'Actor' && fields.id === 'Will'))
+      const remaining = currentWaits().filter(({ text, fields, freeForm }) => !(text.startsWith('Will:') || !freeForm && fields.type === 'Actor' && fields.id === 'Will'))
       const returned = { type: 'Actor', id: mate.id, dependency: `Review the owner's not-for-me return: ${input.reason}`, unblocks_when: 'The responsible mate corrects the request or supplies the missing work', follow_up_by: mate.owner }
       editedWaits = [{ text: waitLine(returned), fields: returned }, ...remaining]
       set('Waiting For Type', 'Actor'); set('Waiting For ID', mate.id)

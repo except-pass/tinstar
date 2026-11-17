@@ -2806,9 +2806,11 @@ describe('Waiting For status semantics', () => {
   })
 
   it.each([
-    ['Person', 'Actor', 'Alice', 'Bob'],
-    ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32)],
-  ] as const)('repairs legacy %s only with the original blocker', async (legacy, type, originalId, changedId) => {
+    ['Person', 'Actor', 'Alice', 'Bob', 'inline'],
+    ['Person', 'Actor', 'Alice', 'Bob', 'free-form'],
+    ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'multiline'],
+    ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'free-form'],
+  ] as const)('repairs legacy %s as %s from %s without changing the blocker (%s, %s)', async (legacy, type, originalId, changedId, format) => {
     const f = readyFixture()
     const savedId = originalId.replaceAll('-', '')
     if (type === 'Work') {
@@ -2819,7 +2821,7 @@ describe('Waiting For status semantics', () => {
       }
     }
     const wait = actor({ type, id: savedId })
-    const current = legacy === 'Person'
+    const current = format === 'free-form' ? wait.dependency : format === 'inline'
       ? waitLine({ ...wait, type: legacy, id: originalId })
       : `Dependency: ${wait.dependency}\nUnblocks when: ${wait.unblocks_when}\nFollow-up by: ${wait.follow_up_by}`
     f.raw.properties.Status.status.name = 'Waiting For'

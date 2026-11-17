@@ -103,7 +103,7 @@ describe('Waiting For projection', () => {
     const result = waitingForGroups([primary, appended], [], references)
     expect(result.count).toBe(2)
     expect(flat(result).map(group => group.type)).toEqual(['Actor'])
-    expect(result.referenceIssues).toEqual([primary])
+    expect(result.referenceIssues).toEqual([primary, appended])
     for (const waiting of [primary, appended]) {
       expect(result.issues.get(waiting.id)).toContainEqual(expect.objectContaining({
         code: state === 'unknown' ? 'work-unverified' : 'work-not-blocking',
