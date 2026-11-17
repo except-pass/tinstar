@@ -335,7 +335,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     : <section className={`ov-inspector${flashRelated(view, selection) ? ' flashed' : ''}`} data-semantic-id={semanticId(selection)} tabIndex={-1} aria-label="Inspector">{content}</section>
 }
 export function Overview({ workers, initialCardId }: { initialCardId?: string; workers: Worker[] }) {
-  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch, refresh, refreshing, lastSuccessfulSyncAt } = useDeskWorkspace()
+  const { scene, error, now, queue, queueError, state, send, connection, bridgeError, overviewSearch, refresh, refreshing, lastSuccessfulSyncAt, setWaitingForReferences } = useDeskWorkspace()
   const navigatedCard = useRef<string | null>(null)
   useEffect(() => {
     if (!initialCardId || !scene?.cards.some(card => card.id === initialCardId) || navigatedCard.current === initialCardId) return
@@ -360,6 +360,11 @@ export function Overview({ workers, initialCardId }: { initialCardId?: string; w
   const outsideWaitingFor = scene?.cards.some(card => (focusedContext?.has(`card:${card.id}`) || flashContext?.has(`card:${card.id}`) || state.searchReveal?.kind === 'card' && state.searchReveal.id === card.id) && cardStatus(card) !== 'Waiting For')
   const waitingScope = waitingForActive(state)
   const waiting = waitingScope && !outsideWaitingFor
+  useEffect(() => {
+    if (!waiting) return
+    setWaitingForReferences(true)
+    return () => setWaitingForReferences(false)
+  }, [waiting, setWaitingForReferences])
   const [waitingType, setWaitingType] = useState<'All' | WaitingForType>('All')
   const [waitingOpen, setWaitingOpen] = useState<ReadonlySet<string> | null>(readWaitingForExpansion)
   const waitingReveal = useRef('')

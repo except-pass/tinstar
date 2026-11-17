@@ -2693,6 +2693,32 @@ describe('Waiting For status semantics', () => {
     expect(f.requests.every(row => row.method === 'GET' || row.url.endsWith('/query'))).toBe(true)
   })
 
+  it('limits scene Work reference resolution to explicit Waiting For requests', async () => {
+    const f = readyFixture()
+    const blockerId = 'd'.repeat(32)
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: 'Work' }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: blockerId }]
+    const sources = f.sources()
+    const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    seedOriginAllowlist(port)
+    const url = `http://127.0.0.1:${port}/api/reconciliation/scene`
+    const exactReads = () => f.requests.filter(row => row.method === 'GET' && row.url.endsWith('/pages/' + blockerId))
+    for (const query of ['', '?history=1', '?refresh=1', '?wait_references=cached']) {
+      const response = await fetch(url + query)
+      expect(response.status).toBe(200)
+      await response.json()
+    }
+    expect(exactReads()).toHaveLength(0)
+    const response = await fetch(url + '?refresh=1&wait_references=1')
+    expect(response.status).toBe(200)
+    expect((await response.json()).data.waitingForWork).toEqual([])
+    expect(exactReads()).toHaveLength(1)
+  })
+
   it('preserves a multiline primary wait when adding another wait and resolves it by exact text', async () => {
     const f = readyFixture()
     const text = 'Dependency: Existing tariff approval\nUnblocks when: Approval is posted\nFollow-up by: Consumer'
@@ -2846,6 +2872,35 @@ describe('Waiting For status semantics', () => {
     expect(parseWaitLine(String(card.properties['Waiting For']?.value))).toEqual({
       type, id: savedId, dependency: wait.dependency, unblocks_when: wait.unblocks_when, follow_up_by: wait.follow_up_by,
     })
+  })
+
+  it.each([
+    ['Person', 'Actor', 'Alice', 'free-form'],
+    ['Card', 'Work', 'd'.repeat(32), 'multiline'],
+    ['Event', 'Event', 'Scheduled review', 'inline'],
+  ] as const)('fills a missing ID for %s as %s (%s, %s)', async (recordedType, type, targetId, format) => {
+    const f = readyFixture()
+    if (type === 'Work') {
+      const target = structuredClone(f.raw)
+      target.id = targetId
+      f.pages.set(targetId, target)
+    }
+    const replacement = actor({ type, id: targetId })
+    const current = format === 'free-form' ? replacement.dependency : format === 'inline'
+      ? waitLine({ ...replacement, type: recordedType, id: '' })
+      : `Dependency: ${replacement.dependency}\nUnblocks when: ${replacement.unblocks_when}`
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: recordedType }
+    f.raw.properties['Waiting For ID'].rich_text = []
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: current }]
+    const card = await f.reader.card(id, true)
+    const expected = Object.fromEntries(['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].map(name => [name, card.properties[name]?.value ?? null]))
+    expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits: [{ current, replacement }] }), 'Consumer'))
+      .toMatchObject({ outcome: 'saved' })
+    const saved = await f.reader.card(id, true)
+    expect(saved.properties['Waiting For Type']?.value).toBe(type)
+    expect(saved.properties['Waiting For ID']?.value).toBe(targetId)
+    expect(saved.properties['Waiting For']?.value).toBe(waitLine(replacement))
   })
 
   it('refuses to give another authored wait the identity of the repaired entry', async () => {

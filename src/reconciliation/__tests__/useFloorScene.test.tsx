@@ -34,7 +34,27 @@ describe('one floor refresh owner', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
     expect(result.current.scene).toEqual(next)
     expect(result.current.lastSuccessfulSyncAt).toBe(next.coverage.intentions.observedAt)
-    expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene?wait_references=1', '/api/reconciliation/scene'])
+    expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene', '/api/reconciliation/scene'])
+  })
+  it('opts in to Work references only while the Waiting For view is active', async () => {
+    vi.mocked(apiFetch).mockImplementation(async () => response(fixtureScene({ now: Date.now() })))
+    const { result, rerender } = renderHook(({ waitingFor }) => useFloorScene(true, false, waitingFor), { initialProps: { waitingFor: false } })
+    await flush()
+    rerender({ waitingFor: true })
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    await act(async () => { await result.current.refresh() })
+    rerender({ waitingFor: false })
+    await flush()
+    await act(async () => { await result.current.refresh() })
+    expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual([
+      '/api/reconciliation/scene',
+      '/api/reconciliation/scene?wait_references=1',
+      '/api/reconciliation/scene?wait_references=cached',
+      '/api/reconciliation/scene?refresh=1&wait_references=1',
+      '/api/reconciliation/scene',
+      '/api/reconciliation/scene?refresh=1',
+    ])
   })
   it('coalesces repeated manual requests and exposes busy state until the same read completes', async () => {
     const pending = deferred()
@@ -182,5 +202,5 @@ it('requests history only after an explicit history scope and returns to operati
   await flush()
   rerender({ history: true }); await flush()
   rerender({ history: false }); await flush()
-  expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene?wait_references=1', '/api/reconciliation/scene?wait_references=1&history=1', '/api/reconciliation/scene?wait_references=1'])
+  expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene', '/api/reconciliation/scene?history=1', '/api/reconciliation/scene'])
 })

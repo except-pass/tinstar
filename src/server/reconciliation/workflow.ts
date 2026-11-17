@@ -523,8 +523,8 @@ export class WorkflowOperations {
         const recordedId = entry.fields.id?.trim()
         const workId = recordedId && (recordedType === 'Work' || recordedType === 'Card' || (!recordedType && value.type === 'Work'))
           ? canonicalWorkId(recordedId) : null
-        const requiredType = recordedType === 'Person' && recordedId ? 'Actor'
-          : recordedType === 'Card' && workId ? 'Work' : recordedType
+        const requiredType = recordedType === 'Person' ? 'Actor'
+          : recordedType === 'Card' && (!recordedId || workId) ? 'Work' : recordedType
         const requiredId = workId ?? recordedId
         if ((requiredType && value.type !== requiredType) || (requiredId && id !== requiredId)) {
           const identity = [requiredType && `Type ${JSON.stringify(requiredType)}`, requiredId && `ID ${JSON.stringify(requiredId)}`].filter(Boolean).join(' and ')

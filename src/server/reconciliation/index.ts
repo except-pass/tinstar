@@ -730,7 +730,8 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   const query = new URL(req.url!, 'http://localhost').searchParams
   const refresh = query.get('refresh') === '1'
   if (path === '/api/reconciliation/scene') {
-    const waitReferences = refresh || query.get('wait_references') === '1' ? 'exact' : 'cached'
+    const requestedReferences = query.get('wait_references')
+    const waitReferences = requestedReferences === '1' ? 'exact' : requestedReferences === 'cached' ? 'cached' : undefined
     return ok(res, await sources.scene(refresh, { history: query.get('history') === '1' }, waitReferences), { headers })
   }
   return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, refresh) : await sources.snapshot(), { headers })
