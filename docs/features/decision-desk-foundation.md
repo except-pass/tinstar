@@ -374,7 +374,7 @@ Results are explicit:
 | Outcome | Recovery/meaning |
 |---|---|
 | `not-saved` | Selection and lease retained. Correct the source problem, retry the same ID; never advance. |
-| `save-unconfirmed` | Same-ID receipt reconciliation only. Immutable note markers can settle automatically; ambiguous mutable properties use the existing audited source-write recovery API above. |
+| `save-unconfirmed` | Same-ID receipt reconciliation only; see [per-card source-write reservations and recovery](#per-card-source-write-reservations-and-recovery) for settling ambiguous writes. |
 | `source-unavailable` | Current source coverage/history cannot verify the answer; selection/lease retained, no write. Refresh evidence before deciding. |
 | `packet-invalidated` | Choice retained for reference; no write. Refresh/re-prepare and reclaim a valid packet. |
 | `lease-lost` | Reclaim/revalidate before any write. An old capability never falls through to unleased access. |
