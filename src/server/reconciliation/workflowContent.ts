@@ -21,7 +21,7 @@ export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'c
 export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
-export interface WorkflowNote { id: string; text: string; author?: string; authorName?: string; createdAt?: string }
+export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
 export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`
 export const decisionMarker = (id: string) => `${workflowMarkers.decision} ${JSON.stringify(id)}`
 export const sectionMarker = (name: string) => `${workflowMarkers.section} ${name}`
@@ -139,8 +139,7 @@ export class WorkflowContent {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`comments?${query}`, 'GET', undefined, signal)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
-      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id,
-        ...(typeof item.created_by?.name === 'string' ? { authorName: item.created_by.name } : {}), createdAt: item.created_time })
+      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
       if (!body.has_more) return result
       if (!body.next_cursor || body.next_cursor === cursor) break
       cursor = body.next_cursor

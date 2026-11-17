@@ -350,26 +350,13 @@ export class DecisionPreparation {
       WHERE json_extract(body,'$.binding.card_id') = ? AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`)
       .all(cardId) as Array<{ id: string }>).map(row => row.id))
     for (const id of ids) {
-      const validation = await this.packets.validate(id, evidence, 'decision-desk', true)
+      const validation = await this.packets.validate(id, evidence, 'decision-desk')
       if (validation.valid) await this.packets.leases.writeStorage(db => {
         db.prepare(`UPDATE decision_prep_jobs SET state = 'published', published_at = coalesce(published_at, ?),
           reason = CASE WHEN published_at IS NULL THEN 'Published packet validated against refreshed source evidence.' ELSE reason END
           WHERE scope = ? AND packet_id = ? AND state != 'superseded'`).run(new Date(this.now()).toISOString(), this.scope, id)
       })
     }
-  }
-
-  hasReadyPacket(cardId: string) {
-    return this.packets.leases.readStorage(db => {
-      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_prep_jobs'").get()) return false
-      if (db.prepare("SELECT 1 FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND state IN ('admitted', 'dispatched')").get(this.scope, cardId)) return false
-      const rows = db.prepare(`SELECT id FROM decision_packets p
-        WHERE json_extract(body,'$.binding.card_id') = ?
-        AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`).all(cardId) as Array<{ id: string }>
-      if (!rows.length) return false
-      const evidence = this.evidence(cardId)
-      return rows.some(({ id }) => this.packets.readInStorage(db, id, evidence)?.ready)
-    })
   }
 
   /** Bounded priority set: in-flight exact jobs, then current reviewable packets. */
@@ -450,7 +437,7 @@ export class DecisionPreparation {
     // A restart or a later source refresh renews evidence even when publication
     // was idempotent. Validation failures never become a permanent Ready bit.
     for (const { id, comment } of imported) {
-      await this.packets.validate(id, evidence, commentPacketActor, true)
+      await this.packets.validate(id, evidence, commentPacketActor)
       if (!comment.job_id) continue
       await this.packets.leases.writeStorage(db => {
         const current = this.packets.readInStorage(db, id, evidence)

@@ -21,15 +21,14 @@ export interface CardContextRead {
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private decisionCache = new Map<string, { pending: boolean; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory; body?: CardContextRead }>()
+  private decisionCache = new Map<string, { pending: boolean; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory }>()
   private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher?: NotionFetch }>()
   private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher: NotionFetch }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: NotionFetch = fetch, private jira?: JiraAdapter) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
-  invalidateProse(id: string) { this.cache.delete(id); this.commentCache.delete(id) }
-  invalidate(id: string) { this.invalidateProse(id); this.decisionCache.delete(id) }
+  invalidate(id: string) { this.cache.delete(id); this.commentCache.delete(id); this.decisionCache.delete(id) }
   /** Display cached evidence without making a property-only view wait on prose. */
   cachedComments(id: string): CardContextRead | undefined {
     const cached = this.commentCache.get(id)
@@ -68,26 +67,20 @@ export class CardContextReader {
    * legacy records from top-level paragraphs. Contract chunks (code), embeds,
    * and nested specification content are not workflow publication surfaces.
    * Keep this cache separate: complete decision history is not complete prose. */
-  decisionDetails(id: string, force = false, reuseBody = false): Promise<CardContextRead> {
+  decisionDetails(id: string, force = false): Promise<CardContextRead> {
     const cached = this.decisionCache.get(id)
     if (cached && (cached.pending || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
-    if (!cached && this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
+    if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
     const comments = this.readComments(id, signal)
-    const body = reuseBody && cached?.body?.outcome === 'available' ? Promise.resolve(cached.body)
-      : this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
-        omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
-    const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => {
-      const context: CardContextRead = {
-        ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
-        outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
-        omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
-      }
-      entry.body = body
-      entry.resolved = { context, observed_at: new Date(observed).toISOString(), expires_at: new Date(observed + 30_000).toISOString() }
-      return context
-    })
-    const entry = { pending: true, value, resolved: cached?.resolved, body: cached?.body }
+    const body = this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
+      omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
+    const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
+      ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
+      outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
+      omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
+    }))
+    const entry = { pending: true, value, resolved: cached?.resolved }
     this.decisionCache.set(id, entry)
     // Positive comment evidence remains useful to claims even if the body
     // fails. Preserve the hotfix's independent-cache behavior and freshness.
@@ -97,11 +90,12 @@ export class CardContextReader {
       if (current?.pending || current && current.resolvedUntil > until) return
       this.commentCache.set(id, { until, pending: false, resolvedUntil: until, value: Promise.resolve(result), resolved: result })
     }).catch(() => {})
-    void value.catch(() => {}).finally(() => { entry.pending = false })
+    void value.then(context => { entry.resolved = { context, observed_at: new Date(observed).toISOString(), expires_at: new Date(observed + 30_000).toISOString() } })
+      .catch(() => {}).finally(() => { entry.pending = false })
     return value
   }
   details(id: string, force = false, fetcher = this.fetcher): Promise<CardContextRead> {
-    if (force) this.invalidateProse(id)
+    if (force) this.invalidate(id)
     return Promise.all([this.get(id, undefined, fetcher), this.commentDetails(id, force, fetcher)]).then(([body, comments]): CardContextRead => ({
       ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
       outcome: body.outcome === 'unavailable' ? 'unavailable' : body.outcome === 'partial' || comments.outcome !== 'available' ? 'partial' : 'available',

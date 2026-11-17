@@ -5,7 +5,7 @@ import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
-import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
+import { cardSourceUrl } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence, preparedDecisionRequests } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
@@ -79,7 +79,7 @@ export class ReconciliationSources {
   private preparationHistory
   private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
   private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
-  private commentImports = new Map<string, { revision: string; pending: Promise<void> }>()
+  private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
   private sourceWriteRecoveryPass?: Promise<void>
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
@@ -91,7 +91,7 @@ export class ReconciliationSources {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
-    this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id, true), () => this.decisionQueue())
+    this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
     this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), renew: () => this.renewPreparedSources(), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
@@ -108,19 +108,12 @@ export class ReconciliationSources {
       evidence: async (stored, original, desired) => {
         // Forced exact history and source observation on every submit, without
         // queue()/get_work reconciliation or research in the critical path.
-        const id = stored.packet.binding.card_id
-        const [snapshot, blocks, card] = await Promise.all([this.snapshot(true, {}, false), this.workflow.preparedHistory(id), this.workReader.card(id, true)])
-        const data = snapshot.intentions.data
-        if (data) snapshot.intentions = { ...snapshot.intentions, data: { ...data, cards: data.cards.map(row => row.id === id ? card : row) } }
-        const evidence = projectPreparedSubmitEvidence(snapshot, id, blocks, original, desired)
-        if (evidence.requests.some(request => request.binding?.request_id === stored.packet.binding.request_id && request.answered)) {
-          this.preparationHistory.invalidate(id, false)
-        }
-        return evidence
+        const [snapshot, blocks] = await Promise.all([this.snapshot(true, {}, false), this.workflow.preparedHistory(stored.packet.binding.card_id)])
+        return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks, original, desired)
       },
       write: (input, actor) => this.workflow.answerPrepared(input, actor),
       scheduleReconciliation: card => {
-        this.preparationHistory.invalidate(card, false)
+        this.preparationHistory.invalidate(card)
         // Existing bridge/receipt closure proceeds independently of desk next.
         void this.workflow.reconcileDecisions(card).catch(() => {})
       },
@@ -145,12 +138,8 @@ export class ReconciliationSources {
     }, (id, until) => {
       const properties = this.preparationProperties.get(id)
       return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
-    }, id => this.preparationBoardVersion(id), id => this.preparation.hasReadyPacket(id))
-    this.workflow.onRecordedChange = (id, bodyChanged) => {
-      this.preparationProjection = undefined
-      this.preparationHistory.invalidate(id, bodyChanged)
-      this.invalidateQueueDisplays()
-    }
+    })
+    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.preparationHistory.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -187,15 +176,6 @@ export class ReconciliationSources {
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
   }
 
-  private preparationBoardVersion(id: string) {
-    if (isJiraCard(id)) return undefined
-    const observation = this.workReader.notionDeclarations()
-    const card = observation?.data?.cards.find(row => row.id === id)
-    if (!card || !observation) return null
-    const { status, coverage, observedAt, expiresAt } = observation
-    return { version: card.last_edited_time, status, coverage, observedAt, expiresAt }
-  }
-
   /** Cached queue used by prepared review and preparation admission. No source writes. */
   private decisionQueue() {
     const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
@@ -205,11 +185,11 @@ export class ReconciliationSources {
     // Absence is certified only when all active card histories are cached and
     // fresh as well; otherwise the empty response discloses unknown demand.
     const historiesComplete = cards.every(card => {
-      const history = this.preparationHistory.evidenceHistory(card.id)
+      const history = this.context.cachedDecisionHistory(card.id)
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
     const requestCount = !historiesComplete && queue.items.length ? queue.items.length
-      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.preparationHistory.evidenceHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
+      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
     const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
@@ -247,23 +227,12 @@ export class ReconciliationSources {
 
   private importCommentPackets(cardId: string): Promise<void> {
     const history = this.context.cachedDecisionHistory(cardId)
-    if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' ||
-      this.preparationHistory.versionChanged(cardId)) return Promise.resolve()
-    const expires = this.preparationHistory.evidenceHistory(cardId)?.expires_at
-    if (!expires || Date.parse(expires) <= Date.now() && !this.preparationHistory.renewalUntil(cardId)) return Promise.resolve()
-    const evidence = this.preparationEvidence(cardId)
-    // A real change in dependencies can make a cached publication eligible,
-    // even when no new Notion history reads are needed.
-    const revision = decisionMeaning([history.observed_at, this.preparationBoardVersion(cardId)?.version, evidence.reasons,
-      evidence.requests.map(({ binding, dependencies, reasons, answered }) => [binding, reasons, answered,
-        dependencies.map(({ kind, key, revision, status, coverage }) => [kind, key, revision, status, coverage])])])
+    if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' || Date.parse(history.expires_at) <= Date.now()) return Promise.resolve()
+    const observation = decisionMeaning([history.observed_at, history.expires_at, this.preparationEvidence(cardId)])
     const previous = this.commentImports.get(cardId)
-    if (previous?.revision === revision) return previous.pending
-    const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => {
-      if (this.commentImports.get(cardId)?.pending === pending) this.commentImports.delete(cardId)
-      throw error
-    })
-    this.commentImports.set(cardId, { revision, pending })
+    if (previous?.observation === observation) return previous.pending
+    const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => { this.commentImports.delete(cardId); throw error })
+    this.commentImports.set(cardId, { observation, pending })
     return pending
   }
 
@@ -302,7 +271,7 @@ export class ReconciliationSources {
 
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
    * refreshes sources, reconciles receipts, or changes source work. */
-  preparationEvidence(cardId: string, retainBoard = false) {
+  preparationEvidence(cardId: string) {
     // A display/admission batch projects many cards from the same known sources.
     // Share only that synchronous queue build, never history or validation TTLs.
     if (!this.preparationProjection) {
@@ -311,19 +280,8 @@ export class ReconciliationSources {
       queueMicrotask(() => { this.preparationProjection = undefined })
     }
     const { snapshot, queue } = this.preparationProjection
-    const board = this.preparationBoardVersion(cardId)
-    const boardCurrent = board === undefined || board?.status === 'fresh' && board.coverage === 'complete'
-    const renewalUntil = retainBoard || boardCurrent ? this.preparationHistory.renewalUntil(cardId) : null
-    const versionChanged = this.preparationHistory.versionChanged(cardId)
-    const properties = board && renewalUntil && board.observedAt && !versionChanged && (boardCurrent || retainBoard && board.status === 'stale')
-      ? { ...board, status: 'fresh' as const, coverage: 'complete' as const } : board ?? this.preparationProperties.get(cardId)
-    // Keep last-good packet evidence during the bounded board recovery window.
-    // The public census and forced submit continue to use their real coverage.
-    const retainingBoard = retainBoard && !this.config.jira && board?.status === 'stale' && properties?.status === 'fresh' && renewalUntil
-    const source = retainingBoard ? { ...snapshot, intentions: { ...snapshot.intentions, status: 'fresh' as const, coverage: 'complete' as const, expiresAt: renewalUntil } } : snapshot
-    const evidence = projectDecisionEvidence(source, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), properties, retainingBoard ? undefined : queue, renewalUntil)
-    if (!boardCurrent && !retainingBoard && !evidence.reasons.includes('Canonical card property evidence is unavailable or stale')) evidence.reasons.push('Canonical card property evidence is unavailable or stale')
-    if (versionChanged) evidence.reasons.push('Card version changed; complete decision history must be refreshed')
+    const renewalUntil = this.preparationHistory.renewalUntil(cardId)
+    const evidence = projectDecisionEvidence(snapshot, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue, renewalUntil)
     const state = this.preparationHistory.state(cardId)
     if (state.message && !renewalUntil) evidence.reasons.push(state.message)
     return evidence
@@ -475,7 +433,7 @@ export class ReconciliationSources {
     try {
       let [card, fleet] = await Promise.all([this.workReader.card(args.card_id, args.refresh), this.fleetSnapshot(args.refresh)])
       if (args.refresh) {
-        this.context.invalidateProse(args.card_id)
+        this.context.invalidate(args.card_id)
         try {
           await this.onWorkRefresh?.([card])
           await this.workflow.reconcileDecisions(card.id, fleet)
@@ -506,13 +464,13 @@ export class ReconciliationSources {
   }
   async startWork(input: StartWorkInput, actor: string) {
     const result = await this.workflow.start(input, actor)
-    if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
+    if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
     return { ...workReadback(result), lease: this.leases.status(input.card_id) }
   }
 
   async updateWork(input: UpdateWorkInput, actor: string) {
     const result = await this.workflow.update(input, actor)
-    if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
+    if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
     const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
     return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
@@ -521,7 +479,7 @@ export class ReconciliationSources {
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     const result = await this.workflow.submitHandoff(input, actor)
-    if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.preparationHistory.invalidate(result.record.card_id)
+    if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.context.invalidate(result.record.card_id)
     return workReadback(result)
   }
   async firstmateWork(force = false) {
@@ -587,7 +545,7 @@ export class ReconciliationSources {
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
-      const history = this.preparationHistory.evidenceHistory(id)
+      const history = this.context.cachedDecisionHistory(id)
       const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
       return context ? [[id, context] as const] : []
     }))

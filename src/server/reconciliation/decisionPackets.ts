@@ -37,7 +37,6 @@ export class DecisionPackets {
           PRIMARY KEY(kind,dependency_key));
         CREATE TABLE IF NOT EXISTS decision_packet_events (
           sequence INTEGER PRIMARY KEY, packet_id TEXT, type TEXT NOT NULL, actor TEXT NOT NULL, at TEXT NOT NULL, detail TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS decision_packet_events_latest ON decision_packet_events(packet_id,sequence);
         CREATE TABLE IF NOT EXISTS decision_packet_validations (
           sequence INTEGER PRIMARY KEY, packet_id TEXT NOT NULL, valid INTEGER NOT NULL, valid_until TEXT, reasons TEXT NOT NULL,
           coverage TEXT NOT NULL);
@@ -50,7 +49,7 @@ export class DecisionPackets {
   private event(db: DatabaseSync, packetId: string | null, type: string, actor: string, detail: unknown) {
     return Number(db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?) RETURNING sequence').get(packetId, type, actor, new Date(this.now()).toISOString(), JSON.stringify(detail))!.sequence)
   }
-  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string, onlyChanged = false) {
+  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string) {
     const validation = validateDecisionPacket(packet, evidence, this.now())
     // A cache read predating a known semantic change cannot resurrect the old
     // packet. Expired evidence may be re-observed with unchanged meaning.
@@ -61,10 +60,7 @@ export class DecisionPackets {
       if (known && !known.revision && (!current?.observed_at || Date.parse(current.observed_at) <= Date.parse(known.invalidated_at))) validation.reasons.push(`Dependency needs re-observation after invalidation: ${dependencyIdentity(dependency)}`)
     }
     if (validation.reasons.length) { validation.valid = false; validation.valid_until = null }
-    const previous = onlyChanged ? this.latestValidation(db, id) : null
-    if (previous && previous.valid === validation.valid &&
-      decisionMeaning(previous.reasons) === decisionMeaning(validation.reasons)) return validation
-    const sequence = this.event(db, id, 'validation', actor, validation)
+    const sequence = this.event(db, id, 'validation', actor, { valid: validation.valid, reasons: validation.reasons, valid_until: validation.valid_until })
     const coverage = evidence.requests.flatMap(request => request.dependencies).map(({ kind, key, status, coverage, observed_at, expires_at, renewal_until }) => ({ kind, key, status, coverage, observed_at, expires_at, renewal_until }))
     db.prepare('INSERT INTO decision_packet_validations VALUES(?,?,?,?,?,?)').run(sequence, id, Number(validation.valid), validation.valid_until, JSON.stringify(validation.reasons), JSON.stringify(coverage))
     return validation
@@ -93,20 +89,20 @@ export class DecisionPackets {
     const validation = this.attest(db, id, packet, evidence, actor)
     return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: null, packet, validation, replayed: false }
   }
-  async validate(id: string, evidence: DecisionEvidence, actor: string, onlyChanged = false) {
+  async validate(id: string, evidence: DecisionEvidence, actor: string) {
     z.string().trim().min(1).max(200).parse(actor)
     await this.initialize()
     return this.leases.writeStorage(db => {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) throw new DecisionDeskConflict('Packet is unavailable')
-      return this.attest(db, id, unpack(row).packet, evidence, actor, onlyChanged)
+      return this.attest(db, id, unpack(row).packet, evidence, actor)
     })
   }
   private latestValidation(db: DatabaseSync, id: string): DecisionPacketValidation | null {
     const event = db.prepare("SELECT type,detail FROM decision_packet_events WHERE packet_id = ? AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1").get(id) as { type: string; detail: string } | undefined
     if (!event) return null
     const detail = JSON.parse(event.detail)
-    return event.type === 'validation' ? { valid: detail.valid, reasons: detail.reasons, valid_until: detail.valid_until } : { valid: false, reasons: [detail.reason], valid_until: null }
+    return event.type === 'validation' ? detail : { valid: false, reasons: [detail.reason], valid_until: null }
   }
   /** A changed dependency only invalidates packets that actually relied on its
    * old meaning. Timestamps/collector ordering are not change triggers. */

@@ -55,13 +55,13 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     ...properties, Name: { id: 'Name', type: 'title', title: [{ plain_text: `${titles[index % titles.length]} · ${index + 1}` }] },
     'First Mate tasks': { id: 'First Mate tasks', type: 'rich_text', rich_text: [] },
   } })
-  const reads: Array<{ path: string; method: string; cardId: string | null }> = []
+  const reads: Array<{ path: string; method: string }> = []
   let commentsAvailable = true
   let requestText = historyText
   const fixtureFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input)), method = init?.method ?? 'GET'
     options.onRead?.()
-    reads.push({ path: url.pathname, method, cardId: url.searchParams.get('block_id') })
+    reads.push({ path: url.pathname, method })
     await options.beforeRead?.(url)
     if (url.origin !== 'https://api.notion.com') throw new Error('Fixture transport only supports synthetic Notion reads')
     if (url.pathname === `/v1/data_sources/${dataSourceId}` && method === 'GET') return Response.json({ object: 'data_source', properties: schema })
@@ -124,10 +124,6 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     publishedNotes,
     denyComments: () => { commentsAvailable = false },
     allowComments: () => { commentsAvailable = true },
-    renameCard: (name: string) => {
-      raw.properties.Name = { type: 'title', title: [{ plain_text: name }] }
-      raw.last_edited_time = new Date().toISOString()
-    },
     removeOptions: () => { requestText = historyText.replace(/,"options":\[.*\]/, '') },
     removeBinding: () => { requestText = historyText.replace(/"source_request":\{[^}]+\},/, '') },
     removeRequest: () => { requestText = 'A status update without a recorded decision request.' },
