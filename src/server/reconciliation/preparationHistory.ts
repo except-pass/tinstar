@@ -7,7 +7,7 @@ export class PreparationHistory {
   private failures = new Map<string, { attempts: number; retryAt: number; message: string }>()
   private queue: string[] = []
   private active = 0
-  constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}) {}
+  constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {}) {}
 
   warm(ids: string[]) {
     for (const id of ids) {
@@ -62,6 +62,7 @@ export class PreparationHistory {
       if (history?.context.commentsOutcome !== 'available') throw new Error('Decision comment history is incomplete.')
       if (history.context.outcome !== 'available') throw new Error('Decision body history is incomplete.')
       if (Date.parse(history.expires_at) <= Date.now()) throw new Error('Decision history expired during the source read.')
+      await this.onRead(id)
       this.failures.delete(id)
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'History source read failed.'

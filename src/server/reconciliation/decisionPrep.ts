@@ -1,10 +1,12 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
+import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
+import type { CardContextRead } from './cardContext'
 
 const exec = promisify(execFile)
 const attemptMs = 10 * 60 * 1000
@@ -269,6 +271,40 @@ export class DecisionPreparation {
     await this.dispatch(admitted.job)
     const job = await this.packets.leases.readStorage(db => db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ?').get(admitted.job!.id) as unknown as Row)
     return { outcome: job.state, explanation: job.reason, job_id: job.id, state: job.state }
+  }
+
+  /** Import advisory packets already delivered on the card, including expired
+   * webhook attempts. Publication still uses the normal schema and evidence
+   * validator; this does not answer, claim, dispatch, or change the source. */
+  async importComments(cardId: string, blocks: CardContextRead['blocks']) {
+    const evidence = this.evidence(cardId)
+    if (evidence.reasons.length) return
+    const comments = newestCommentPackets(blocks, evidence)
+    if (!comments.length) return
+    await this.initialize()
+    await this.packets.leases.writeStorage(db => {
+      for (const comment of comments) {
+        const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
+        const previous = db.prepare('SELECT id FROM decision_packets WHERE publication_key = ?').get(JSON.stringify([commentPacketActor, operation])) as { id: string } | undefined
+        // A comment is imported once. Re-reading history may re-attest the same
+        // revision, but must never bind an old comment to a changed request.
+        if (previous) continue
+        const stored = this.packets.publishInStorage(db, comment.packet, evidence, commentPacketActor, operation)
+        db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: comment.packet.binding.request_id, source_revision: comment.packet.binding.source_revision, comment_id: comment.comment_id, job_id: comment.job_id }))
+        if (comment.job_id) {
+          const current = this.packets.readInStorage(db, stored.id, evidence)
+          db.prepare('UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?')
+            .run(current?.ready ? 'published' : 'blocked', current?.ready ? 'Packet imported from card comment and ready for review.' : current?.reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), stored.id, comment.job_id, this.scope, cardId, comment.packet.binding.request_id, comment.packet.binding.source_revision)
+        }
+      }
+    })
+    // Fresh, complete history can renew evidence for an unchanged comment, but
+    // cannot extend the immutable packet's review freshness or change its body.
+    for (const comment of comments) {
+      const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
+      const previous = this.packets.leases.readStorage(db => db.prepare('SELECT id FROM decision_packets WHERE publication_key = ?').get(JSON.stringify([commentPacketActor, operation]))) as { id: string } | undefined
+      if (previous) await this.packets.validate(previous.id, evidence, commentPacketActor)
+    }
   }
 
   /** Store a bot packet for one open job. Ready is the existing validation result, never a status or lease change. */

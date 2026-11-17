@@ -468,6 +468,37 @@ Ready only when that validation passes. The tool does not answer, claim a lease,
 or change card status. A mismatched card, request, or revision is rejected
 before anything is stored.
 
+The Desk also imports the bot's fallback card comments headed
+`Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
+one current, unanswered request on that same card. Complete, fresh history is
+required. Labelled sections are mapped into a normal packet and run through the
+same schema and evidence validation; absent question/options use the request.
+Missing substantive fields block readiness with the field name. Lettered
+recommendations resolve to the filed source options; they never create options.
+
+Comment imports are marked `card comment (default authorization)`. Their
+**AFTER YOU APPROVE** explanation is explicit:
+
+> Default for comment-imported packets: your answer is recorded on the card and routed to the owning mate (Owner Firstmate, Status Queued); nothing else changes until they act.
+
+That route applies to every answer. Per-option next actions from the bot remain
+advisory prose, not executable authorization. Importing does not claim a card,
+answer it, change its status, or dispatch another job. The comment ID and card
+identify a single durable import, with the job ID recorded when supplied. A
+matching expired job may complete through this fallback. A newer comment
+supersedes the request's older packet. Re-reading a comment can renew source
+evidence, but never rebinds it to a changed request revision or extends its
+one-hour review freshness; a new comment supplies a replacement packet.
+
+The isolated sample proof is reproducible after `npm run build:all`:
+
+```bash
+node --import tsx scripts/decision-desk-comment-preview.ts /absolute/task-proof-dir
+```
+
+It serves the unchanged Desk on an OS-assigned loopback port using stub Notion
+history and a fresh config root. It opens no MCP listener or live source.
+
 A validation-blocked attempt can publish a correction within its ten-minute
 window. Admitting a retry cancels older blocked attempts for the same source
 revision; they can no longer publish over the retry's packet. Publication and
