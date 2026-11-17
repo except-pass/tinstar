@@ -41,7 +41,7 @@ Tin Star writes; it does not delete the issue. No generic comment is a decision.
 | Source/database | Explicit site + project 10638. Queries include only `tinstar-synthetic` issues. Enhanced search has a five-property limit; a bounded exact issue read supplies the complete metadata for each result. |
 | Card identity | `jira:fortresspower-jira.atlassian.net:10638:<immutable issue ID>`; mutable issue key is display/navigation only. Notion UUIDs remain unchanged. |
 | Name | Native Summary. Task remains native Task `10582`; no Decision/Wait types. |
-| Status | Native status and discovered native transition. The approved spelling mappings are **To Do = Todo**, **In Review = In review**. Other names remain distinct. Missing destinations fail explicitly. |
+| Status | Native status and discovered native transition. The approved mappings are **To Do = Todo**, **In Review = In review**, and **Review (`10078`) = Ready for Review**. Other names remain distinct. Missing destinations fail explicitly. Ready for Review transitions only to status id 10078, so a different status named Review cannot receive it. This mapping does not add a Jira status. |
 | Brief, acceptance, ordinary page prose | Managed paragraphs in native ADF Description; unrelated ADF nodes survive edits. This is not the full approved contract. |
 | Due Date / Start Date | Native `duedate` / `customfield_10015`. Jira fields accept date-only; timestamp writes report an incompatibility rather than truncating. Next check-in retains a full timestamp separately. |
 | Owner | Coordinator metadata, preserving Firstmate/other existing select values. A coordinator is not a Jira account; Assignee is not fabricated or used as worker proof. |
@@ -86,12 +86,13 @@ create guarded deployment evidence or bypass existing review requirements.
 
 The owner configured native Queued (`10984`) and Waiting For (`10985`). Fresh
 Task workflow/transition reads on 2026-11-11 confirm the proof can use Queued,
-Waiting For, In Progress and Done, plus To Do = Todo and In Review = In review.
-Ready for Review, Backlog and Archived remain absent. Operations needing them
-return an explicit incompatibility; the first proof does not need them. Native
-Review is **not** a stand-in for Ready for Review. Further configuration requires
-the supported TSSPIKE UI and separate confirmation; no bulk workflow/status API
-or global field operation is allowed.
+Waiting For, In Progress and Done, plus the spelling aliases in the
+[field mapping](#field-mapping).
+Backlog and Archived remain absent. Operations needing them return an explicit
+incompatibility. Ready for Review uses the existing status defined in the field
+mapping. Further
+configuration requires the supported TSSPIKE UI and separate confirmation; no
+bulk workflow/status API or global field operation is allowed.
 
 ## Reproducible proof
 

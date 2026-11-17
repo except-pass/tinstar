@@ -13,7 +13,7 @@ import { WorkflowOperations } from '../workflow'
 import { WorkflowContent, receiptMarker, sectionText } from '../workflowContent'
 import { ImplementationContracts, implementationContract, digest } from '../implementationContract'
 import { ReconciliationMcp } from '../mcp'
-import { jiraPropertyKey, JIRA_SYNTHETIC_LABEL, jiraText } from '../jira'
+import { jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
 import { jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
 import { workerLinkRecord } from '../workerLinks'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
@@ -37,7 +37,11 @@ async function fixture() {
   const controls = { read429AfterWrite: -1, read429Count: 1, failReads: false, uncertainCreate: false, failEdit: false, failTransition: false, lostEdit: false, lostNote: false, failNote: false, lostAttachment: false, partialAttachment: false, omitField: '', missingStatus: '', truncatedSearch: false, foreign: false, unlabelled: false }
   let tick = 0, attachmentId = 1000, mutated = false, postWriteReads = 0
   const updated = () => new Date(Date.now() + tick++).toISOString()
-  const statuses = ['To Do', 'In Progress', 'In Review', 'Done', 'Queued', 'Waiting For', 'Ready for Review', 'Backlog', 'Archived']
+  const statuses = [
+    { id: '1', name: 'To Do' }, { id: '2', name: 'In Progress' }, { id: '3', name: 'In Review' }, { id: '4', name: 'Done' },
+    { id: '5', name: 'Queued' }, { id: '6', name: 'Waiting For' }, { id: '10078', name: 'Review' }, { id: '8', name: 'Backlog' }, { id: '9', name: 'Archived' },
+  ]
+  const visibleStatuses = () => statuses.filter(status => status.name !== controls.missingStatus)
   const make = (issueId: string, fields: Record<string, any> = {}, properties: Record<string, any> = {}) => ({ id: issueId, key: `TSSPIKE-${issues.size + 1}`,
     fields: { project: { id: '10638', key: 'TSSPIKE' }, issuetype: { id: '10582', name: 'Task' }, status: { id: '10005', name: 'To Do' },
       updated: updated(), labels: [JIRA_SYNTHETIC_LABEL], summary: 'Synthetic card', description: jiraText('Original Jira description'), attachment: [], ...fields }, properties })
@@ -49,7 +53,7 @@ async function fixture() {
     const body = init?.body instanceof FormData ? init.body : init?.body ? JSON.parse(String(init.body)) : undefined
     requests.push({ path, method, body })
     if (controls.failReads && method === 'GET') throw new Error('private-token-must-not-leak')
-    if (path === 'project/10638/statuses') return json([{ id: '10582', statuses: statuses.filter(name => name !== controls.missingStatus).map((name, index) => ({ id: String(index + 1), name })) }])
+    if (path === 'project/10638/statuses') return json([{ id: '10582', statuses: visibleStatuses() }])
     if (path === 'project/10638') return json({ id: '10638', key: 'TSSPIKE', style: 'next-gen' })
     if (path === 'search/jql') return json({ issues: [...issues.values()], isLast: !controls.truncatedSearch, ...(controls.truncatedSearch ? { nextPageToken: 'next' } : {}) })
     if (path === 'issue' && method === 'POST') {
@@ -80,10 +84,12 @@ async function fixture() {
       if (controls.lostEdit) { controls.lostEdit = false; throw new Error('lost update response') }
       return json({}, 204)
     }
-    if (part === 'transitions' && method === 'GET') return json({ transitions: statuses.filter(name => name !== controls.missingStatus).map((name, index) => ({ id: String(index + 1), to: { id: String(index + 1), name } })) })
+    if (part === 'transitions' && method === 'GET') return json({ transitions: visibleStatuses().map((status, index) => ({ id: String(index + 1), to: { id: status.id, name: status.name } })) })
     if (part === 'transitions' && method === 'POST') {
       if (controls.failTransition) return json({}, 403)
-      raw.fields.status = { id: body.transition.id, name: statuses[Number(body.transition.id) - 1] }; raw.fields.updated = updated(); mutated = true
+      const chosen = visibleStatuses()[Number(body.transition.id) - 1]
+      if (!chosen) return json({}, 400)
+      raw.fields.status = { id: chosen.id, name: chosen.name }; raw.fields.updated = updated(); mutated = true
       return json({}, 204)
     }
     if (part === 'comment' && method === 'GET') return json({ startAt: Number(parsed.searchParams.get('startAt')), total: notes.get(issueId)!.length, comments: notes.get(issueId) })
@@ -114,7 +120,7 @@ async function fixture() {
   const sources = new ReconciliationSources({ fleet: [], jira, warnings: [] }, fetcher, api, root)
   const worker = { kind: 'firstmate' as const, fm_home: home.source.home, task_id: task.identity.task_id!, first_observed_spawn_gen: task.identity.spawn_gen! }
   const { kind: _kind, ...link } = worker
-  return { root, fetcher, reader, workflow, sources, seed, controls, notes, attachments, requests, worker, link, home, task }
+  return { root, fetcher, reader, workflow, sources, seed, controls, notes, attachments, requests, worker, link, home, task, statuses }
 }
 const create: CreateWorkInput = { provider: 'jira', name: 'Synthetic Jira adapter workflow proof', owner: 'Firstmate', area: 'Engineering', operation_id: 'synthetic-create', status: 'Queued', content: { brief: 'Synthetic implementation brief', acceptance_criteria: 'All reads agree' } }
 
@@ -164,16 +170,43 @@ it('creates, edits, queues, starts with exact synthetic provenance, retains two 
   expect(f.requests.filter(request => request.method !== 'GET').every(request => request.path === 'search/jql' || request.path === 'issue' || /^issue\/\d+(?:\/(?:comment|transitions|attachments))?$/.test(request.path))).toBe(true)
 })
 
-it('uses only the two explicitly approved spelling aliases', async () => {
+it('maps the approved Jira status spellings and leaves every other name unchanged', async () => {
   const f = await fixture()
   expect((await f.reader.card(id)).properties.Status!.value).toBe('Todo')
-  f.seed.fields.status.name = 'In Review'
+  f.seed.fields.status = { id: '3', name: 'In Review' }
   expect((await f.reader.card(id, true)).properties.Status!.value).toBe('In review')
-  f.seed.fields.status.name = 'Ready for Review'
+  f.seed.fields.status = { id: '10078', name: 'Review' }
   expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Ready for Review')
+  f.seed.fields.status = { id: '10079', name: 'Review' }
+  expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Review')
+  f.seed.fields.status = { id: '8', name: 'Backlog' }
+  expect((await f.reader.card(id, true)).properties.Status!.value).toBe('Backlog')
   f.controls.missingStatus = 'Queued'
   expect(await f.workflow.update({ card_id: id, kind: 'assign', operation_id: 'missing-queued', owner: 'Firstmate', status: 'Queued' }, 'Fixture')).toMatchObject({ outcome: 'not-saved', code: 'jira-incompatible' })
   expect(f.requests.every(request => request.method === 'GET')).toBe(true)
+})
+
+it('writes Ready for Review only to Jira Review 10078 and reads that status back', async () => {
+  const f = await fixture()
+  const transitions = () => f.requests.filter(request => request.method === 'POST' && request.path.endsWith('/transitions'))
+  const written = await f.reader.jira!.patch(id, { Status: { status: { name: 'Ready for Review' } } })
+  expect(written.properties.Status!.value).toBe('Ready for Review')
+  expect(f.seed.fields.status).toEqual({ id: '10078', name: 'Review' })
+  expect(transitions()).toHaveLength(1)
+  await f.reader.jira!.patch(id, { Status: { status: { name: 'Ready for Review' } } })
+  expect(transitions()).toHaveLength(1)
+  f.seed.fields.status = { id: '10079', name: 'Review' }
+  const corrected = await f.reader.jira!.patch(id, { Status: { status: { name: 'Ready for Review' } } })
+  expect(corrected.properties.Status!.value).toBe('Ready for Review')
+  expect(f.seed.fields.status).toEqual({ id: '10078', name: 'Review' })
+  expect(transitions()).toHaveLength(2)
+  await f.reader.jira!.patch(id, { Status: { status: { name: 'In review' } } })
+  expect(f.seed.fields.status).toEqual({ id: '3', name: 'In Review' })
+  f.seed.fields.status = { id: '1', name: 'To Do' }
+  f.statuses.find(status => status.name === 'Review')!.id = '10079'
+  await expect(f.reader.jira!.patch(id, { Status: { status: { name: 'Ready for Review' } } })).rejects.toBeInstanceOf(JiraMappingError)
+  expect(f.seed.fields.status).toEqual({ id: '1', name: 'To Do' })
+  expect(transitions()).toHaveLength(3)
 })
 
 it('reports confirmed partial fields and keeps ambiguous writes unknown', async () => {
