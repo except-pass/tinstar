@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { bindingMeaning, decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
+import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
 import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
 import type { CardContextRead } from './cardContext'
@@ -178,14 +178,23 @@ export class DecisionPreparation {
       ORDER BY created_at DESC, attempt DESC, id DESC LIMIT 1`).get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as Row | undefined
     if (prior && ['admitted', 'dispatched'].includes(prior.state)) return { outcome: 'already-preparing',
       explanation: 'This decision revision is already being prepared.', job_id: prior.id, state: prior.state }
-    const stored = db.prepare(`SELECT p.id FROM decision_packets p
+    const stored = db.prepare(`SELECT p.body FROM decision_packets p
       WHERE json_extract(body,'$.binding.card_id') = ? AND json_extract(body,'$.binding.request_id') = ?
       AND json_extract(body,'$.binding.source_revision') = ?
       AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
       AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1)
-      AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type = 'research-requested') LIMIT 1`)
-      .get(candidate.card_id, candidate.request_id, candidate.source_revision)
-    if (stored) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
+      AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type = 'research-requested')`)
+      .all(candidate.card_id, candidate.request_id, candidate.source_revision) as Array<{ body: string }>
+    const sources = this.evidence(candidate.card_id).requests.filter(request => request.binding?.request_id === candidate.request_id)
+    const source = sources.length === 1 ? sources[0] : undefined
+    const unchanged = stored.some(row => {
+      const packet = decisionPacketSchema.parse(JSON.parse(row.body))
+      if (!source?.binding || bindingMeaning(source.binding) !== bindingMeaning(packet.binding) || source.question !== packet.question) return false
+      const current = new Map(source.dependencies.map(dependency => [dependencyIdentity(dependency), dependency.revision]))
+      return current.size === packet.dependencies.length && packet.dependencies.every(dependency =>
+        !!dependency.revision && current.get(dependencyIdentity(dependency)) === dependency.revision)
+    })
+    if (unchanged) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
     const policy = this.packets.policyInStorage(db, this.scope)
     const inflight = this.inflight(db)
     if (inflight >= policy.values.max_preparers) return { outcome: 'at-capacity', explanation: 'All preparer slots are in use. Wait for a job to finish or raise the maximum parallel preparers.' }

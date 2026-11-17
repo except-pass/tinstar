@@ -393,3 +393,37 @@ it('rejects replaced attempt publications without superseding a successful retry
   expect(await packets.read(published.packet_id, fixture.evidence)).toMatchObject({ ready: true })
   expect((await prep.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'superseded' })
 })
+
+
+it.each(['changed', 'added', 'removed', 'reordered'].flatMap(change => [false, true].map(manual => ({ change, manual }))))('compares $change semantic dependencies before retrying research: manual=$manual', async ({ change, manual }) => {
+  const { prep, fixture, packets, rows, posts, turnOn } = await harness()
+  rows.splice(1)
+  const input = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Dependency retry proof' }
+  const first = await prep.prepareNow('Will', input)
+  await prep.publish({ job_id: first.job_id, operation_id: 'dependency-original', packet: fixture.packet })
+  const dependencies = fixture.evidence.requests[0]!.dependencies
+  if (change === 'changed') dependencies.find(dependency => dependency.kind === 'card')!.revision = 'materially-changed-card'
+  if (change === 'added') dependencies.push({ ...dependencies[0]!, key: 'new-material-dependency' })
+  if (change === 'removed') dependencies.pop()
+  if (change === 'reordered') dependencies.reverse()
+  now += 61_000
+  for (const dependency of dependencies) {
+    dependency.observed_at = new Date(now).toISOString()
+    dependency.expires_at = new Date(now + 30_000).toISOString()
+  }
+  await turnOn(20, 4)
+  if (manual) await prep.prepareNow('Will', input)
+  else await prep.replenish()
+  if (change === 'reordered') {
+    expect(posts).toHaveLength(1)
+    expect(await prep.prepareNow('Will', input)).toMatchObject({ outcome: 'already-prepared' })
+  } else {
+    expect(posts).toHaveLength(2)
+    const second = (await prep.status()).jobs.find(job => job.id !== first.job_id)!
+    expect(await prep.prepareNow('Will', input)).toMatchObject({ outcome: 'already-preparing', job_id: second.id })
+    expect((await prep.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'superseded' })
+    const packet = { ...fixture.packet, dependencies: dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! })) }
+    expect(await prep.publish({ job_id: second.id, operation_id: 'dependency-replacement', packet })).toMatchObject({ ready: true })
+  }
+  expect((await packets.readPolicy('board')).values.max_preparers).toBe(4)
+})
