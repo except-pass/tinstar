@@ -107,7 +107,7 @@ export class NotionApi {
         if (background && this.intervalMs > 0) this.dispatch()
         else if (background) queueMicrotask(() => this.dispatch())
       } }
-      const queueTimer = setTimeout(() =>
+      const queueTimer = callerSignal ? undefined : setTimeout(() =>
         cancel(new NotionQueueTimeoutError()), queueDeadlineMs)
       if (callerSignal?.aborted) { abort(); return }
       callerSignal?.addEventListener('abort', abort, { once: true })

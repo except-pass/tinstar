@@ -137,3 +137,22 @@ it.each(['fetch', 'backgroundFetch'] as const)('expires queued %s reads without 
   expect(fetcher).toHaveBeenCalledTimes(2)
   expect(fetcher.mock.calls[1]![0]).toBe('https://api.notion.com/v1/pages/current')
 })
+
+
+it.each([35_000, 121_000])('honors a 120-second Desk deadline through %i ms of shared backoff', async backoff => {
+  vi.useFakeTimers()
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': String(backoff / 1_000) } }))
+    .mockResolvedValue(new Response('{}'))
+  const api = new NotionApi(fetcher)
+  await api.fetch('https://api.notion.com/v1/pages/other')
+  const caller = new AbortController()
+  const reason = new DOMException('Desk deadline elapsed', 'TimeoutError')
+  const deadline = setTimeout(() => caller.abort(reason), 120_000)
+  const renewal = api.backgroundFetch('https://api.notion.com/v1/pages/ready', { signal: caller.signal }, 5_000)
+  const result = backoff < 120_000 ? expect(renewal).resolves.toMatchObject({ ok: true }) : expect(renewal).rejects.toBe(reason)
+  await vi.advanceTimersByTimeAsync(backoff)
+  await result
+  expect(fetcher).toHaveBeenCalledTimes(backoff < 120_000 ? 2 : 1)
+  clearTimeout(deadline)
+})

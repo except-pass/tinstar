@@ -62,8 +62,9 @@ export class JiraAdapter {
   }
   private async response(path: string, init: RequestInit = {}) {
     if ((init.method ?? 'GET') !== 'GET') sourceWriteDispatched()
+    const deadline = AbortSignal.timeout(20_000)
     const response = await this.fetcher(`${this.config.url}/rest/api/3/${path}`, { ...init,
-      redirect: 'error', signal: init.signal ?? AbortSignal.timeout(20_000), headers: { Accept: 'application/json',
+      redirect: 'error', signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline, headers: { Accept: 'application/json',
         Authorization: `Basic ${Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64')}`,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
     if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }
