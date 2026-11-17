@@ -131,17 +131,18 @@ it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s car
   } finally { await client.close() }
 }, 20_000)
 
-it('keeps one preparation across owner prose and First Mate check-ins', async () => {
-  let added = false
+it('keeps preparation across Tin Star housekeeping, then invalidates a substantive comment without recording an answer', async () => {
+  let added = false, changed = false
   const f = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
     if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
     const body = await response.json()
     body.results.push(
-      { id: 'owner-prose', created_time: new Date().toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
-      { id: 'owner-edit', created_time: new Date().toISOString(), rich_text: [{ plain_text: `Operation: edit\n${receiptMarker('owner-chatgpt', 'owner-edit')}` }] },
-      { id: 'check-in', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'First Mate check-in: still waiting.' }] },
+      { id: 'check-in', rich_text: [{ plain_text: `Check-in request: appointment\nDate: ${new Date().toISOString()}\nBy: Firstmate\nProgress: Still collecting the prepared evidence.\nEvidence: Verified the local log.\nBlocker/owner: none\nNext action: Read the current source.\nNext check-in: ${new Date().toISOString()}\nAppointment: provisional\n${receiptMarker('Firstmate', 'check-in')}` }] },
+      { id: 'reminder', rich_text: [{ plain_text: `Waiting on you for 4h: existing decision.\n${receiptMarker('waiting-on-main', 'reminder')}` }] },
+      { id: 'packet-note', rich_text: [{ plain_text: 'Prepared packet (Tinstar Decision Prep)\nBackground: Advisory preview only.' }] },
     )
+    if (changed) body.results.push({ id: 'owner-prose', created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'The preview would now write production data. Defer it.' }] })
     return Response.json(body)
   } })
   const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
@@ -158,6 +159,18 @@ it('keeps one preparation across owner prose and First Mate check-ins', async ()
   expect(after.binding?.source_revision).toBe(before.binding?.source_revision)
   expect((await prepare()).outcome).toBe('already-ready')
   expect(f.posts).toHaveLength(1)
+  changed = true
+  await f.sources.updateContext(f.cardId)
+  expect((await loadedSnapshot(f.sources)).ready).toEqual([])
+  const current = f.sources.preparationEvidence(f.cardId).requests[0]!
+  expect(current.answered).toBe(false)
+  expect(current.binding?.source_revision).not.toBe(before.binding?.source_revision)
+  const existingPackets = await f.sources.decisionPackets.ids()
+  await f.sources.preparation.importComments(f.cardId, [{ id: 'late-packet', type: 'comment',
+    text: `Prepared packet (Tinstar Decision Prep)\nDecision: ${f.requestId} · Prep job ${first.job_id}\nBackground: Previous assumptions.` }])
+  expect(await f.sources.decisionPackets.ids()).toEqual(existingPackets)
+  expect(await prepare()).toMatchObject({ outcome: 'dispatched' })
+  expect(f.posts).toHaveLength(2)
 }, 20_000)
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {

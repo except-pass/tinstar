@@ -416,7 +416,9 @@ export class DecisionPreparation {
     if (!comments.length) return
     await this.initialize()
     const imported = await this.packets.leases.writeStorage(db => comments.flatMap(comment => {
-      if (comment.job_id && db.prepare("SELECT 1 FROM decision_prep_jobs WHERE id = ? AND state = 'superseded'").get(comment.job_id)) return []
+      const job = comment.job_id ? db.prepare('SELECT card_id, request_id, source_revision, state FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(comment.job_id, this.scope) as Row | undefined : undefined
+      const binding = comment.packet.binding
+      if (job && (job.state === 'superseded' || job.card_id !== binding.card_id || job.request_id !== binding.request_id || job.source_revision !== binding.source_revision)) return []
       const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
       const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
       let packet = comment.packet, publication = operation

@@ -5,6 +5,8 @@ export const commentPacketSource = 'card comment (default authorization)'
 export const commentPacketAuthorization = 'Default for comment-imported packets: your answer is recorded on the card and routed to the owning mate (Owner Firstmate, Status Queued); nothing else changes until they act.'
 export const commentPacketActor = `Tinstar Decision Prep · ${commentPacketSource}`
 type Comment = CardContextRead['blocks'][number]
+export const isPreparedPacketComment = (comment: Comment) => comment.type === 'comment'
+  && /^\s*Prepared packet\s*\(Tinstar Decision Prep\)\s*(?:\r?\n|$)/i.test(comment.text)
 
 const aliases: Record<string, string> = {
   background: 'background', context: 'background', question: 'question', decision: 'decision',
@@ -52,7 +54,7 @@ function recommendation(text: string, optionsText: string | undefined, request: 
 }
 
 export function mapCommentPacket(comment: Comment, evidence: DecisionEvidence): { packet: DecisionPacket; job_id: string | null; comment_id: string } | null {
-  if (comment.type !== 'comment' || !/^\s*Prepared packet\s*\(Tinstar Decision Prep\)\s*(?:\r?\n|$)/i.test(comment.text)) return null
+  if (!isPreparedPacketComment(comment)) return null
   const fields = sections(comment.text)
   const requestId = fields.decision?.split(/[·\n]/)[0]?.trim()
   const matches = evidence.requests.filter(request => request.binding?.request_id === requestId && !request.answered)

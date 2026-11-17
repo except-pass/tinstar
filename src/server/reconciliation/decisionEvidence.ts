@@ -1,15 +1,33 @@
+import { createHash } from 'node:crypto'
 import { decisionPacketBindingSchema, decisionMeaning, type DecisionDependencyObservation, type DecisionEvidence } from '../../shared/decisionPacket'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { requestAnchor } from '../../shared/deskSource'
-import { decisionRequests, decisionRecordRows } from '../../shared/workflowRequests'
+import { decisionRequests, decisionRecordRows, workflowReceipt } from '../../shared/workflowRequests'
+import { workflowMarkers } from '../../shared/workflowMarkers'
+import { redactSourceText } from '../../shared/searchDocuments'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
 import { bindDecision, decisionProposals } from './decisionResolution'
 import { buildQueue } from './queue'
 import { deferredDecisionCard } from './claimPolicy'
+import { isPreparedPacketComment } from './commentPacket'
+import { checkInReport } from './checkInWatchdog'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
+
+function sourceComment(note: CardContextRead['blocks'][number]) {
+  if (note.type !== 'comment' || !note.text.trim() || isPreparedPacketComment(note)
+    || note.text.startsWith(workflowMarkers.decisionIntent)
+    || decisionRecordRows([note], 'Tin Star request: ').length || decisionRecordRows([note], 'Tin Star answer: ').length) return false
+  const receipt = workflowReceipt(note)
+  if (receipt && (receipt.startsWith(`${workflowMarkers.operation} ["waiting-on-main",`)
+    || note.text.split(/\r?\n/).every(line => !line.trim() || /^(Date|By|Operation|Tin Star operation): /.test(line)))) return false
+  const request = /^Check-in request: ([^\r\n]+)\r?\n/.exec(note.text)?.[1]
+  const report = request ? note.text : `Check-in request: unrequested-checkpoint\n${note.text}`
+  return !checkInReport(report, request ?? 'unrequested-checkpoint')
+    || report.split(/\r?\n/).some(line => line.trim() && !/^(Check-in request|Date|By|Progress|Evidence|Blocker\/owner|Next action|Next check-in|Appointment|Tin Star operation): /.test(line))
+}
 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
@@ -26,6 +44,10 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const notes = history?.context.blocks ?? []
+  // Bind substantive discussion once per card, without persisting its prose
+  // or invalidating on connector ordering, timestamps, or prep-bot output.
+  const commentText = notes.filter(sourceComment).map(note => redactSourceText(note.text).replace(/\r\n?/g, '\n').trim()).sort()
+  const discussionRevision = commentText.length ? createHash('sha256').update(decisionMeaning(commentText)).digest('hex') : null
   const rows = decisionRequests(notes)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []
@@ -57,7 +79,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     }
     const proposal = row.proposal ? { ...row.proposal, published_at: undefined } : null
     const revision = decisionMeaning([item ? decisionRequestRevision(item) : null, row.id, row.sourceId, row.question, row.options?.slice().sort((a, b) => a.id.localeCompare(b.id)), proposal,
-      ...(cardNative ? [row.action, row.preserveAction, row.requestedFrom] : [])])
+      ...(cardNative ? [row.action, row.preserveAction, row.requestedFrom] : []), ...(discussionRevision ? [discussionRevision] : [])])
     const binding = decisionPacketBindingSchema.safeParse({ card_id: cardId, request_key: cardNative ? anchor : item?.id, source_request: cardNative ? null : row.sourceRequest,
       request_id: row.id, source_id: row.sourceId, source_question: cardNative ? row.question : row.sourceQuestion, source_spawn_gen: cardNative ? null : row.sourceSpawnGen,
       source_revision: revision, options: row.options })
