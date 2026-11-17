@@ -189,7 +189,7 @@ const comparableWaitId = (type: string, id: string) => type === 'Work' ? canonic
 
 export function workIdShape(cardId: string, workId: string): WaitIssue | null {
   const canonical = canonicalWorkId(workId)
-  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Use the exact Notion or Jira card ID for a Work dependency. Use Actor with the named identity if a person, team or service is the blocker.' }
+  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Use the exact Notion or Jira card ID for a Work dependency. Use Actor with the named identity for a person, team or service, or Event with a stable reference for an external condition.' }
   if (canonical === canonicalWorkId(cardId)) return { code: 'work-self', field: 'id', message: 'Choose the exact ID of the other card that blocks this work.' }
   return null
 }

@@ -36,23 +36,6 @@ const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decisio
   source: input.source_request || source ? requestKey(input.source_request ?? source!) : null,
 })
 
-function repairIdentity(fields: { type?: string; id?: string }) {
-  const type = fields.type?.trim() ?? '', id = fields.id?.trim() ?? ''
-  if (!id) return null
-  switch (type) {
-    case 'Person': return { type: 'Actor', id }
-    case 'Card': {
-      const workId = canonicalWorkId(id)
-      return workId ? { type: 'Work', id: workId } : { type, id }
-    }
-    case 'Work': {
-      const workId = canonicalWorkId(id)
-      return workId ? { type, id: workId } : { type: 'Actor', id }
-    }
-    default: return { type, id }
-  }
-}
-
 const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, card.properties, card.archived, card.in_trash])
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
@@ -537,19 +520,11 @@ export class WorkflowOperations {
         const matches = entries.filter(entry => entry.text === replace)
         const entry = matches.length === 1 ? matches[0] : undefined
         if (!entry || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
-          throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one incomplete or legacy wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
-        }
-        const required = repairIdentity(entry.fields)
-        if (required && (value.type !== required.type || id !== required.id)) {
-          throw new WorkflowError('wait-repair-identity', `Repair must preserve the recorded blocker using Type ${JSON.stringify(required.type)} and ID ${JSON.stringify(required.id)}. Nothing was written.`)
-        }
-        const typed = typedWaitEntry(entry)
-        if (typed && typed.type === required?.type) {
-          throw new WorkflowError('wait-repair-conflict', 'The exact entry already has a complete typed wait. Nothing was written.')
+          throw new WorkflowError('wait-conflict', 'The replacement must match exactly one current wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
         }
         editedWaits = entries.map(item => item === entry ? added : item)
         set('Waiting For Type', value.type); set('Waiting For ID', id)
-        note += `\nRepaired legacy wait: ${JSON.stringify(replace)}`
+        note += `\nReplaced wait: ${JSON.stringify(replace)}`
       } else {
         editedWaits = entries.some(entry => entry.text === line) ? entries : [...entries, added]
       }
@@ -584,7 +559,7 @@ export class WorkflowOperations {
         if (card.properties['Waiting For Type']) set('Waiting For Type', null)
         if (card.properties['Waiting For ID']) set('Waiting For ID', '')
       }
-      if (still.length > 0 && !successor) throw new WorkflowError('wait-repair-required', 'A remaining legacy wait has no typed identity. Repair it with a typed wait before resolving this blocker. Nothing was written.')
+      if (still.length > 0 && !successor) throw new WorkflowError('wait-repair-required', 'A remaining legacy wait has no typed identity. Replace it through an explicit typed wait update before resolving this blocker. Nothing was written.')
       if (still.length === 0) clearBlocker()
       else if (successor) { set('Waiting For Type', successor.type); set('Waiting For ID', successor.id) }
       if (still.length > 0 && requestedStatus !== 'Waiting For') { set('Status', 'Waiting For'); heldWait = true; note += '\nStatus retained: Waiting For. Another independent wait remains.' }
@@ -620,12 +595,8 @@ export class WorkflowOperations {
       resolveWait(input.resolve_wait, requested)
       if (input.note) note += `\nHandoff: ${input.note}`
     } else if (input.kind === 'wait') {
-      if (input.repair_waits) {
-        if (card.properties.Status?.value !== 'Waiting For' || ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].some(name => !input.expected || !(name in input.expected) || !this.matches(card, name, input.expected[name]))) throw new WorkflowError('wait-repair-precondition', 'Legacy wait repair requires exact expected Status, Waiting For, Waiting For Type and Waiting For ID from the current card. Nothing was written.')
-        for (const repair of input.repair_waits) await wait(repair.replacement, repair.current)
-      }
       transition(String(card.properties.Owner?.value ?? ''), 'Waiting For')
-      await wait(input)
+      await wait(input, input.replace_wait)
       if (input.note) note += `\n${input.note}`
     } else if (input.kind === 'checkpoint') {
       const cp = input.checkpoint, next = this.validateCheckpoint(card, cp.next_check_in)
@@ -722,7 +693,7 @@ export class WorkflowOperations {
       const implicit = waitEntries(text, primary).find(entry => entry.implicitIdentity)
       if (implicit && (primary.type || primary.id) && !editedWaits.some(entry => entry.implicitIdentity &&
         entry.text === implicit.text && entry.fields.type === primary.type && entry.fields.id === primary.id)) {
-        throw new WorkflowError('wait-repair-identity', 'A retained Waiting For description would inherit a different blocker. Repair that exact entry with its own Type and ID first. Nothing was written.')
+        throw new WorkflowError('wait-repair-identity', 'A retained Waiting For description would inherit a different blocker. Replace that exact entry with its own Type and ID first. Nothing was written.')
       }
       set('Waiting For', text)
     }

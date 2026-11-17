@@ -139,7 +139,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(tools).toHaveLength(33)
   const approvedTools = JSON.parse(await readFile(new URL('../../../../scripts/deploy/approved-tools.json', import.meta.url), 'utf8'))
   expect(tools.map(tool => tool.name).sort()).toEqual(approvedTools)
-  // About 65 KiB with structured waits and exact legacy-wait repair inputs.
+  // About 65 KiB with structured waits and exact replacement inputs.
   // Catch accidental catalog expansion without an exact byte snapshot.
   expect(Buffer.byteLength(text)).toBeLessThan(72 * 1024)
   const ajv = new Ajv2020({ strict: false })
@@ -169,7 +169,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
   const waitBranch = (update.oneOf as Array<{ properties: Record<string, unknown> }>).find(branch =>
     (branch.properties.kind as { const: string }).const === 'wait')!
-  const rootFields = ['card_id', 'operation_id', 'type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in']
+  const rootFields = ['card_id', 'operation_id', 'type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in', 'replace_wait']
   const { kind: _kind, ...rootProperties } = update.properties!
   expect(rootProperties).toEqual(Object.fromEntries(rootFields.map(name => [name, waitBranch.properties[name]])))
   const validate = ajv.compile(update)
@@ -177,6 +177,8 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
   const wait = { ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' }
   expect(validate(wait)).toBe(true)
+  expect(validate({ ...wait, replace_wait: 'Current wait entry' })).toBe(true)
+  expect(validate({ ...wait, replace_wait: '' })).toBe(false)
   for (const field of ['type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in'] as const) {
     expect(update.properties).toHaveProperty(field)
 
