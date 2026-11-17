@@ -180,7 +180,7 @@ export class WorkflowContent {
     const readback = await this.sections(id)
     if (readback.filter(block => block.text === desired).length !== 1) throw new Error('Section readback differs')
   }
-  note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker), { kind: 'note', readback_can_settle: true, marker, text: `${text}\n${marker}` }) }
+  note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker), { kind: 'note', readback_can_settle: true, marker, text: `${text}\n${marker}` }, intent => this.reservationReadback(id, intent)) }
   private async performNote(id: string, text: string, marker: string) {
     const before = await this.notes(id)
     if (before.some(note => workflowNoteHasMarker(note, marker))) return

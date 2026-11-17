@@ -277,12 +277,22 @@ restart and lease expiry. A new holder or operation cannot race the old write.
 A definitive provider rejection or a pre-write validation failure releases it.
 The original source operation can still inspect its existing recovery records.
 An immutable unique note/contract marker that fully reads back can reconcile its
-same-operation reservation automatically; mutable properties cannot, because a
-matching value might predate an older in-flight PATCH. Existing handoff partial
+same-operation reservation automatically. Interrupted note writes also attempt
+this readback in their final cleanup; a landed note completes its reservation
+even when its response was lost. Mutable properties require the settlement
+window below or owner reconciliation, because a matching value might predate an
+older in-flight PATCH. Existing handoff partial
 append/history recovery remains authoritative and never blindly repeats a POST.
 
-For other unresolved writes, the authenticated owner has an explicit supported
-recovery route, with no timer-based unlock or record editing:
+At server startup and every minute, recovery revisits reservations at least five
+minutes old, beyond the providers' 20-second request deadlines. It skips locally
+running writes and uses the same complete source readback and audited
+reconciliation as the owner route. `applied` and `different` clear the exact
+reservation; `different` may include partial effects. Unknown or incomplete
+readback retains it for the next pass. Recovery never resends a write, and an
+unresolved reservation affects only its own card's claims and writes.
+
+The authenticated owner also has an explicit supported recovery route:
 
 1. GET `/api/reconciliation/decision-desk/source-writes` through the same owner
    authorization, `X-Tinstar-UI: 1` handshake and origin checks as the desk APIs.

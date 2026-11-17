@@ -167,7 +167,7 @@ it('reserves one card without holding the database writer; ambiguous writes surv
   expect(restarted.readStorage(db => db.prepare("SELECT * FROM lease_events WHERE type = 'write-reconciled'").all())).toHaveLength(1)
 })
 
-it('keeps a crashed process reservation fenced beyond expiry until source marker reconciliation', async () => {
+it('recovers a crashed process reservation through aged source marker reconciliation', async () => {
   const { root, fixtures, leases, clock } = await setup(1)
   const module = pathToFileURL(resolve('src/server/reconciliation/cardLeases.ts')).href
   const { spawn } = await import('node:child_process'), { once } = await import('node:events')
@@ -189,7 +189,9 @@ it('keeps a crashed process reservation fenced beyond expiry until source marker
     const pending = leases.pendingWrites()[0]!
     expect(await leases.claim([pending.card], 'other', 'Other', 'crashed-generation')).toMatchObject({ outcome: 'no-unclaimed-card' })
     await expect(leases.mutate(pending.card, async () => {})).rejects.toThrow('Source write unresolved')
-    expect(await leases.reconcileWrite(pending.card, pending.operation, 'owner', 'Original process terminated; complete source marker history inspected and transport settled', async intent => intent?.marker === 'crash-fixture-marker' ? 'different' : 'unknown')).toMatchObject({ outcome: 'reconciled', source_state: 'different' })
+    await leases.recoverStaleWrites(async (card, intent) => card === pending.card && intent?.marker === 'crash-fixture-marker' ? 'different' : 'unknown')
+    expect(leases.pendingWrites()).toHaveLength(0)
+    expect(leases.events()).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'write-reconciled' })]))
     expect(await leases.claim([pending.card], 'other', 'Other', 'recovered-generation')).toMatchObject({ outcome: 'claimed' })
   } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }
 })

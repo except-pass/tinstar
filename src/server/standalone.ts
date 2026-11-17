@@ -81,6 +81,10 @@ export function startServer(opts: ServerOptions) {
   process.on('exit', () => { try { rmSync(`${lockPath}.mark`, { recursive: true, force: true }) } catch { /* gone */ } })
 
   const reconciliation = new ReconciliationSources()
+  const recoverSourceWrites = () => { void reconciliation.recoverSourceWrites().catch(() => log.warn('workflow', 'Source write recovery unavailable; reservations retained for the next pass')) }
+  const sourceWriteRecoveryTimer = setInterval(recoverSourceWrites, 60_000)
+  sourceWriteRecoveryTimer.unref()
+  recoverSourceWrites()
   const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi, reconciliation.leases))
   reconciliation.waitingOnMain = snapshot => mainWaits.refresh(snapshot)
   let mainWaitSweep: Promise<unknown> | undefined
@@ -148,6 +152,7 @@ export function startServer(opts: ServerOptions) {
     getDefaultUserEmail: () => process.env.TINSTAR_USER_EMAIL ?? '',
   })
   const shutdown = async () => {
+    clearInterval(sourceWriteRecoveryTimer)
     clearInterval(mainWaitTimer)
     quota.stop()
     telemetry.stopPolling()
