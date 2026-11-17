@@ -138,6 +138,23 @@ it('lets a newer comment supersede the old packet and renews evidence without re
   expect(changed.pending[0]!.reasons).toContain('Source request, revision or exact options changed')
 })
 
+it('admits a jobless fallback only when it is newer than the substantive discussion', async () => {
+  const packet = sampleCommentPacket.replace(/ · Prep job [a-f0-9-]+/i, '')
+  const { sources, cardId, setComments } = await setup({ packet })
+  setComments([
+    { id: 'sample-packet-comment', text: packet, created_time: '2026-11-16T23:40:00Z' },
+    { id: 'owner-correction', text: 'The preview now writes production data.', created_time: '2026-11-17T00:00:00Z' },
+  ])
+  expect((await loaded(sources)).ready).toEqual([])
+  setComments([
+    { id: 'fresh-packet', text: packet, created_time: '2026-11-17T00:10:00Z' },
+    { id: 'owner-correction', text: 'The preview now writes production data.', created_time: '2026-11-17T00:00:00Z' },
+  ])
+  sources.workflow.onRecordedChange?.(cardId)
+  await sources.snapshot(true)
+  expect((await loaded(sources)).ready).toHaveLength(1)
+})
+
 it('shows a missing packet field as Blocked on the Desk', async () => {
   const { sources } = await setup({ packet: sampleCommentPacket.replace(/^Risk:.*\n/m, '') })
   const snapshot = await loaded(sources)

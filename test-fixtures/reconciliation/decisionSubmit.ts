@@ -90,10 +90,11 @@ export function decisionSubmitFixture(count = 3, now = Date.now()) {
       () => { if (controls.queueUnavailable) throw new Error('Isolated next unavailable'); return { card_ids: fixtures.map(f => f.cardId), coverage: 'complete', requests: fixtures.length } }, clock)
     const source = {
       observe: (input: Parameters<WorkflowOperations['observePreparedAnswer']>[0], actor: string) => workflows.get(input.card_id)!.observePreparedAnswer(input, actor),
-      evidence: async (stored: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>) => {
+      evidence: async (stored: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>, ownIntentId?: string) => {
         const f = fixtures.find(f => f.cardId === stored.packet.binding.card_id)!
         const current = snapshot(); current.fleet = f.snapshot.fleet
-        const evidence = projectPreparedSubmitEvidence(current, f.cardId, await workflows.get(f.cardId)!.preparedHistory(f.cardId), original, desired, clock())
+        const history = await workflows.get(f.cardId)!.preparedHistory(f.cardId)
+        const evidence = projectPreparedSubmitEvidence(current, f.cardId, history.filter(note => note.id !== ownIntentId), original, desired, clock())
         if (controls.evidenceChanged) evidence.requests[0]!.binding!.source_revision = 'changed'
         return evidence
       },

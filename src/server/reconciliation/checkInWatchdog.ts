@@ -367,6 +367,9 @@ export class CheckInWatchdog {
       }
     })
   }
+  async requestIds(cardId: string) {
+    return new Set((await this.rows()).filter(row => row.cardId === cardId).map(row => row.request.requestId))
+  }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }
   ingest(input: BridgeUpdate) {
     const update = bridgeUpdateSchema.parse(input)

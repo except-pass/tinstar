@@ -13,21 +13,24 @@ import { bindDecision, decisionProposals } from './decisionResolution'
 import { buildQueue } from './queue'
 import { deferredDecisionCard } from './claimPolicy'
 import { isPreparedPacketComment } from './commentPacket'
-import { checkInReport } from './checkInWatchdog'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
 
-function sourceComment(note: CardContextRead['blocks'][number]) {
-  if (note.type !== 'comment' || !note.text.trim() || isPreparedPacketComment(note)
-    || note.text.startsWith(workflowMarkers.decisionIntent)
-    || decisionRecordRows([note], 'Tin Star request: ').length || decisionRecordRows([note], 'Tin Star answer: ').length) return false
-  const receipt = workflowReceipt(note)
-  if (receipt && (receipt.startsWith(`${workflowMarkers.operation} ["waiting-on-main",`)
-    || note.text.split(/\r?\n/).every(line => !line.trim() || /^(Date|By|Operation|Tin Star operation): /.test(line)))) return false
-  const request = /^Check-in request: ([^\r\n]+)\r?\n/.exec(note.text)?.[1]
-  const report = request ? note.text : `Check-in request: unrequested-checkpoint\n${note.text}`
-  return !checkInReport(report, request ?? 'unrequested-checkpoint')
-    || report.split(/\r?\n/).some(line => line.trim() && !/^(Check-in request|Date|By|Progress|Evidence|Blocker\/owner|Next action|Next check-in|Appointment|Tin Star operation): /.test(line))
+export function sourceComment(note: CardContextRead['blocks'][number]) {
+  return note.type === 'comment' && !note.watchdogReply && !isPreparedPacketComment(note)
+    && !workflowReceipt(note)?.startsWith(`${workflowMarkers.operation} ["waiting-on-main",`)
+}
+
+function discussionText(note: CardContextRead['blocks'][number]) {
+  const text = redactSourceText(note.text).replace(/\r\n?/g, '\n').trim()
+  const request = decisionRecordRows([{ text }], 'Tin Star request: ')[0]
+  if (!Array.isArray(request?.options)) return text
+  const sorted = [...request.options].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b)))
+  return text.replace(/^Tin Star request: .*$/m, `Tin Star request: ${decisionMeaning({ ...request, options: sorted })}`)
+}
+
+export function openDecisionCount(requests: Array<{ id: string }>, answered: Set<string>) {
+  return new Set(requests.filter(request => !answered.has(request.id)).map(request => request.id)).size
 }
 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
@@ -47,8 +50,8 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const notes = history?.context.blocks ?? []
   // Bind substantive discussion once per card, without persisting its prose
   // or invalidating on connector ordering, timestamps, or prep-bot output.
-  const commentText = notes.filter(sourceComment).map(note => redactSourceText(note.text).replace(/\r\n?/g, '\n').trim()).sort()
-  const discussionRevision = commentText.length ? createHash('sha256').update(decisionMeaning(commentText)).digest('hex') : null
+  const commentText = notes.filter(sourceComment).map(discussionText).sort()
+  const discussionRevision = commentText.length ? createHash('sha256').update(decisionMeaning({ comments: commentText })).digest('hex') : null
   const rows = decisionRequests(notes)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []
@@ -115,15 +118,15 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
-  // Only an unambiguous Will wait belongs to this owner decision. Preserve
-  // the exact source line so the workflow writer can compare it at submit.
   const waits = String(card?.properties['Waiting For']?.value ?? '').split('\n').filter(line => {
     const wait = parseWaitLine(line)
     return wait?.type === 'Actor' && wait.id === 'Will'
       || !wait && line.startsWith('Will:') && card?.properties['Waiting For ID']?.value === 'Will'
   })
+  const openCount = openDecisionCount(currentRequests.map(id => ({ id })), new Set(rows.filter(row => row.answered).map(row => row.id)))
+  const sharedWait = openCount > 1 && (!!String(card?.properties['Waiting For']?.value ?? '').trim() || card?.properties.Status?.value === 'Waiting For')
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),
-    ...(waits.length === 1 ? { owner_wait: waits[0] } : {}), observed_at: observation.observedAt,
+    ...(openCount === 1 && waits.length === 1 ? { owner_wait: waits[0] } : {}), ...(sharedWait ? { shared_wait: true } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 

@@ -19,8 +19,8 @@ export const preparedSubmitInput = z.object({
 export const preparedRecoveryInput = z.object({ review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), original_lease_token: z.string().min(1).max(256).optional() }).strict()
 type Input = z.infer<typeof preparedSubmitInput>
 export interface PreparedAnswerSource {
-  observe(input: Answer, actor: string): Promise<{ state: 'absent' | 'pending' | 'confirmed' | 'conflict'; original?: Record<string, unknown>; desired?: Record<string, unknown> }>
-  evidence(packet: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>): Promise<DecisionEvidence>
+  observe(input: Answer, actor: string): Promise<{ state: 'absent' | 'pending' | 'confirmed' | 'conflict'; original?: Record<string, unknown>; desired?: Record<string, unknown>; ownIntentId?: string }>
+  evidence(packet: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>, ownIntentId?: string): Promise<DecisionEvidence>
   write(input: Answer, actor: string): Promise<StartWorkResult>
   scheduleReconciliation?(card: string): void
 }
@@ -163,7 +163,7 @@ export class PreparedSubmissions {
           (input.confirmation?.option_id !== input.option_id || input.confirmation.scope !== confirmation.scope)) {
           return this.response(attempt, 'confirmation-required', 'Confirm the selected option and its explicit authorization scope before saving.', { confirmation: workReadback(confirmation) })
         }
-        const evidence = await this.source.evidence(stored, observation.original, observation.desired)
+        const evidence = await this.source.evidence(stored, observation.original, observation.desired, observation.ownIntentId)
         const current = await this.reviews.packets.read(stored.id, evidence)
         if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now()) {
           const request = evidence.requests.find(request => request.binding?.request_id === input.request_id)

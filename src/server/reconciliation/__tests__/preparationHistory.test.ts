@@ -133,18 +133,20 @@ it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s car
 
 it('keeps preparation across Tin Star housekeeping, then invalidates a substantive comment without recording an answer', async () => {
   let added = false, changed = false
+  const checkInId = 'appointment'
   const f = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
     if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
     const body = await response.json()
     body.results.push(
-      { id: 'check-in', rich_text: [{ plain_text: `Check-in request: appointment\nDate: ${new Date().toISOString()}\nBy: Firstmate\nProgress: Still collecting the prepared evidence.\nEvidence: Verified the local log.\nBlocker/owner: none\nNext action: Read the current source.\nNext check-in: ${new Date().toISOString()}\nAppointment: provisional\n${receiptMarker('Firstmate', 'check-in')}` }] },
+      { id: 'check-in', rich_text: [{ plain_text: `Check-in request: ${checkInId}\nDate: ${new Date().toISOString()}\nBy: Firstmate\nProgress: Still collecting the prepared evidence.\nEvidence: Verified the local log.\nBlocker/owner: none\nNext action: Read the current source.\nNext check-in: ${new Date().toISOString()}\nAppointment: provisional\n${receiptMarker('Firstmate', 'check-in')}` }] },
       { id: 'reminder', rich_text: [{ plain_text: `Waiting on you for 4h: existing decision.\n${receiptMarker('waiting-on-main', 'reminder')}` }] },
       { id: 'packet-note', rich_text: [{ plain_text: 'Prepared packet (Tinstar Decision Prep)\nBackground: Advisory preview only.' }] },
     )
-    if (changed) body.results.push({ id: 'owner-prose', created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'The preview would now write production data. Defer it.' }] })
+    if (changed) body.results.push({ id: 'owner-prose', created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Date: 2026-11-17T23:00:00Z\nBy: Firstmate\nProgress: Checked the new preview.\nEvidence: The preview would now write production data. Defer it.\nBlocker/owner: none\nNext action: Recheck production isolation.\nNext check-in: 2026-11-18T23:00:00Z\nAppointment: provisional' }] })
     return Response.json(body)
   } })
+  f.sources.checkInRequestIds = async id => new Set(id === f.cardId ? [checkInId] : [])
   const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
   const first = await prepare()
   const packet = preparedDecisionFixture().packet, before = f.sources.preparationEvidence(f.cardId).requests[0]!
@@ -171,6 +173,29 @@ it('keeps preparation across Tin Star housekeeping, then invalidates a substanti
   expect(await f.sources.decisionPackets.ids()).toEqual(existingPackets)
   expect(await prepare()).toMatchObject({ outcome: 'dispatched' })
   expect(f.posts).toHaveLength(2)
+}, 20_000)
+
+it('saves a prepared answer while preserving the wait for another open request', async () => {
+  const { sources, cardId, requestId } = await setup({ independentRequest: true })
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
+  const packet = preparedDecisionFixture().packet
+  const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'shared-wait-packet', packet })).toMatchObject({ ready: true })
+  const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'shared-wait-claim', card_id: cardId })
+  expect(claim).toMatchObject({ outcome: 'claimed', shared_wait: true })
+  expect(claim.resolve_wait).toBeUndefined()
+  const saved = await sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', {
+    operation_id: 'shared-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id,
+    packet_version: claim.packet!.version, request_id: requestId, option_id: packet.recommended_option_id,
+    next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
+  })
+  expect(saved.outcome).toMatch(/^recorded/)
+  const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
+  expect(card.properties.Status?.value).toBe('Waiting For')
+  expect(card.properties['Waiting For']?.value).toBe('Will: Choose the bounded preview route?')
+  expect((await sources.workflow.preparedHistory(cardId)).some(note => note.text.includes('Existing wait retained for independent requests.'))).toBe(true)
 }, 20_000)
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {

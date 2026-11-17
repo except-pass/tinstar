@@ -201,6 +201,10 @@ it('projects only the exact Will wait from the card, preserving independent wait
   const property = { id: 'wait', type: 'rich_text', hasMore: false, value: [event, will].join('\n') }
   card.properties['Waiting For'] = property
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBe(will)
+  f.history.context.blocks.push({ ...f.history.context.blocks[0]!, id: 'second-source', text: f.history.context.blocks[0]!.text.replace(JSON.stringify(f.packet.binding.request_id), '"second-request"') })
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)).toMatchObject({ shared_wait: true })
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBeUndefined()
+  f.history.context.blocks.pop()
   property.value += '\n' + will.replace('Choose scope', 'Choose timing')
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBeUndefined()
 })
@@ -346,10 +350,8 @@ it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name']
   f.history.context.blocks.push(owner)
   const after = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
   expect(after.requests[0]!.answered).toBe(false)
-  if (kind.startsWith('comment')) {
-    expect(after.requests[0]!.binding?.source_revision).not.toBe(before.requests[0]!.binding?.source_revision)
-    expect(validateDecisionPacket(f.packet, after, now).valid).toBe(false)
-  } else expect(after.requests).toEqual(before.requests)
+  expect(after.requests[0]!.binding?.source_revision).not.toBe(before.requests[0]!.binding?.source_revision)
+  expect(validateDecisionPacket(f.packet, after, now).valid).toBe(false)
 })
 
 it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-edited-only'] as const)('does not guess an owner answer from %s evidence', kind => {

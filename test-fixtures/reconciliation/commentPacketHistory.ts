@@ -22,7 +22,7 @@ export async function commentPacketHistoryFixture(root: string, options: { answe
       const response = await fixtureFetch(input, init)
       if (url.pathname !== '/v1/comments' || (init?.method ?? 'GET') !== 'GET') return response
       const request = { id: sampleCommentRequest, action: 'Decision', preserve_action: false, options: sampleCommentOptions }
-      const texts = [{ id: 'card-native-request', text: `Operation: request_decision\nRequested from: Will\nQuestion: ${sampleCommentQuestion}${revision ? ` (revision ${revision})` : ''}\nTin Star request: ${JSON.stringify(request)}` },
+      const texts = [{ id: 'card-native-request', created_time: '2026-11-16T23:00:00Z', text: `Operation: request_decision\nRequested from: Will\nQuestion: ${sampleCommentQuestion}${revision ? ` (revision ${revision})` : ''}\nTin Star request: ${JSON.stringify(request)}` },
         ...comments, ...(options.answered ? [{ id: 'answer-comment', text: `Operation: answer_decision\nAnswer: Defer\nTin Star answer data: ${JSON.stringify({ request_id: sampleCommentRequest, answer: 'Defer', next: { owner: 'Firstmate', status: 'Queued' } })}\nTin Star answer: ${sampleCommentRequest}` }] : [])]
       return Response.json({ results: texts.map(({ text, ...rest }) => ({ ...rest, rich_text: [{ plain_text: text }] })), has_more: false })
     },

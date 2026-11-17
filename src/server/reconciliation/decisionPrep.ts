@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
 import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
+import { sourceComment } from './decisionEvidence'
 import type { CardContextRead } from './cardContext'
 import { deferredDecisionStatus } from './claimPolicy'
 
@@ -414,10 +415,15 @@ export class DecisionPreparation {
     if (evidence.reasons.length) return
     const comments = newestCommentPackets(blocks, evidence)
     if (!comments.length) return
+    const latestDiscussion = blocks.filter(sourceComment).reduce((latest, note) => {
+      const timestamp = Date.parse(note.last_edited_time ?? note.created_time ?? note.createdAt ?? '')
+      return Math.max(latest, Number.isFinite(timestamp) ? timestamp : Infinity)
+    }, -Infinity)
     await this.initialize()
     const imported = await this.packets.leases.writeStorage(db => comments.flatMap(comment => {
       const job = comment.job_id ? db.prepare('SELECT card_id, request_id, source_revision, state FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(comment.job_id, this.scope) as Row | undefined : undefined
       const binding = comment.packet.binding
+      if (!job && latestDiscussion !== -Infinity && !(comment.createdAt > latestDiscussion)) return []
       if (job && (job.state === 'superseded' || job.card_id !== binding.card_id || job.request_id !== binding.request_id || job.source_revision !== binding.source_revision)) return []
       const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
       const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
