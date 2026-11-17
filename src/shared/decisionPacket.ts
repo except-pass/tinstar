@@ -100,13 +100,12 @@ export function validateDecisionPacket(packet: DecisionPacket, evidence: Decisio
   return { valid: unique.length === 0, reasons: unique, valid_until: unique.length || !Number.isFinite(validUntil) ? null : new Date(validUntil).toISOString() }
 }
 
-/** Lease/expiry are evaluated at read time; a previous validation is not a
- * permanent Ready bit and preparing/held packets never count as available. */
-export function decisionPacketReady(validation: DecisionPacketValidation | null, expiresAt: string, leased: boolean, now: number) {
+/** Current source evidence and leases determine readiness. Packet age does not
+ * expire unchanged research; an old validation alone cannot authorize review. */
+export function decisionPacketReady(validation: DecisionPacketValidation | null, leased: boolean, now: number) {
   const reasons = [...(validation?.reasons ?? ['Packet has not been validated'])]
   if (!validation?.valid && !reasons.length) reasons.push('Packet validation failed')
   if (!validation?.valid_until || Date.parse(validation.valid_until) <= now || !Number.isFinite(Date.parse(validation.valid_until))) reasons.push('Evidence validation expired or unavailable')
-  if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= now) reasons.push('Packet review freshness expired')
   if (leased) reasons.push('Canonical card is leased to a reviewer')
   return { ready: reasons.length === 0, reasons: [...new Set(reasons)] }
 }

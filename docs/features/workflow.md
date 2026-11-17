@@ -576,7 +576,7 @@ This binds and reconciles the old approval without creating another Will request
 or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` when
 those asks were already removed; never clear an unrelated remaining action.
 
-Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` or continue supplying a free-text `answer`; proposals without options retain their existing behavior.
+Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` together with the owner's verbatim free-text `answer`, including qualifications; only membership of the option ID is validated, with no label-equality requirement. Proposals without options retain their existing behavior.
 
 ### Decisions workbench proposals
 
@@ -840,3 +840,13 @@ recovery reason is saved in its existing receipt before retry. A definite 4xx
 rejection can retry after a fresh read. Newer unrelated property edits are
 preserved; the source must be reconciled explicitly rather than replaying the
 original transition over them.
+
+
+Source failures in `update_work` identify the stage (canonical card, comments,
+publication history, planning, properties or receipt) and the actual redacted
+exception/HTTP cause, also recorded with a server-side stack. A failed read is
+separate from a rejected or unconfirmed write. Transient Notion GET failures can
+retry within the existing twenty-second request budget; POST/PATCH operations
+are never retried automatically. This lets a transient comment-read outage
+recover before a mutation, while persistent permissions/pagination/data failures
+stay explicit and cannot be mistaken for empty history.

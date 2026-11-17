@@ -87,7 +87,7 @@ function Review({ desk, onSource, sourceOpen, onNextAvailable }: { desk: Decisio
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
   const pendingWrite = held.code === 'source-write-pending'
   const expired = !held.lease || Date.parse(held.lease.expires_at) <= now || held.code === 'claim-lost' || held.code === 'card-held' || held.outcome === 'lease-lost' || desk.result?.outcome === 'lease-lost'
-  const stale = held.outcome === 'packet-invalidated' || desk.result?.outcome === 'packet-invalidated' || !stored.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= now || Date.parse(stored.expires_at) <= now
+  const stale = held.outcome === 'packet-invalidated' || desk.result?.outcome === 'packet-invalidated' || !stored.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= now
   const parts = desk.parts.length ? desk.parts : [stored]
   const blockedResult = ['packet-invalidated', 'source-unavailable', 'lease-lost', 'answer-conflict', 'blocked-recovery'].includes(desk.result?.outcome ?? '')
   const retry = parts.some(part => !!desk.attempts[requestKey(part)])

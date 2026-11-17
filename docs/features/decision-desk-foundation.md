@@ -48,7 +48,7 @@ card, source paragraph/comment ID, source tuple, question/generation/revision,
 source-supported option IDs/labels, recommendation, background/rationale,
 confidence/uncertainty/material unknowns, risk/likelihood/blast radius, reversibility/rollback/residual
 exposure, consequences/affected parties/prerequisites, authorization/next owner
-and status/gates, references, dependencies and review freshness policy. P1 does
+and status/gates, references, dependencies and the legacy review freshness hint. P1 does
 not normalize sources, invent alternatives or add a multipart grouping schema.
 Risk/confidence prose is preparer advice, not an independent verification or
 authorization. See [P4 publication](#p4--preparation-jobs) for the bot's
@@ -65,10 +65,9 @@ membership, complete fresh unexpired material evidence, and an unanswered source
 Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
-successful unexpired persisted validation, the latest packet version, unexpired
-packet freshness and **no active canonical review lease or source-write reservation**.
+successful unexpired persisted validation, the latest packet version and **no active canonical review lease or source-write reservation**.
 [P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery) defines
-additional answer/research exclusions. It evaluates lease and expiry at read time; there is no permanent Ready flag. Reading without current
+additional answer/research exclusions. It evaluates leases and evidence expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
 leases are presented as Ready.
 
@@ -378,7 +377,7 @@ Results are explicit:
 A confirmed historical submit replay never releases a newer holder. Selections
 before any write can be superseded with a new operation; saving/unconfirmed
 attempts require their original operation. Pending source intent is excluded
-from Ready even after ordinary review expiry. No timer silently erases uncertain
+from Ready independently of packet age. No timer silently erases uncertain
 source effects. Closing or idle expiry never changes Notion owner/status.
 
 POST `/api/reconciliation/decision-desk/submission-state` with the real
@@ -459,9 +458,10 @@ below the saved target depth and source coverage to be complete. Both automatic
 admission and Prepare now require in-flight jobs below the preparer cap, fresh
 eligible source evidence, an unanswered request, no review lease or source-write
 reservation, a card outside Todo, and no job in flight or Ready packet for that
-source revision. Prepare now bypasses the target depth. Prior preparation attempts do not prevent
-later automatic replenishment; Prepare now remains available for explicit
-preparation. There is no token limit or spend record.
+source revision. Prepare now bypasses the target depth. Each exact request/revision
+gets at most one job, permanently, including failed, blocked, completed and expired
+attempts. Automatic passes and Prepare now return that existing job instead of
+dispatching it again. A new job requires a new source request revision. There is no token limit or spend record.
 
 `publish_prepared_packet` stores the packet through the P1 store. The packet is
 Ready only when that validation passes. The tool does not answer, claim a lease,
@@ -491,8 +491,9 @@ identify a single durable import, with the job ID recorded when supplied. A
 matching expired job may complete through this fallback. A newer comment
 supersedes the request's older packet. Re-reading a comment can renew source
 evidence automatically after restart or source recovery, but never rebinds it
-to a changed request revision or extends its
-one-hour review freshness; a new comment supplies a replacement packet. Existing
+to a changed request revision. Unchanged packet research has no age expiry:
+`expires_at` is null on the wire, and `review_within_ms` is retained only as a
+legacy input hint. Fresh source evidence is still required at review/submit. Existing
 imports blocked by the former prose-question or undo-mapping defects receive
 one audited corrected version, retaining their original binding/dependencies.
 A correction cannot supersede newer preparation.
@@ -506,15 +507,16 @@ node --import tsx scripts/decision-desk-comment-preview.ts /absolute/task-proof-
 It serves the unchanged Desk on an OS-assigned loopback port using stub Notion
 history and a fresh config root. It opens no MCP listener or live source.
 
-A validation-blocked attempt can publish a correction within its ten-minute
-window. Admitting a retry cancels older blocked attempts for the same source
-revision; they can no longer publish over the retry's packet. Publication and
+A validation-blocked or expired attempt can publish a correction using its
+original job ID; it never needs another dispatch. Legacy cancelled jobs remain
+closed so they cannot supersede their replacement. Publication and
 job completion share one transaction, and a later webhook response preserves
 the completed publication state.
 
 Prepare now posts one audited job for one decision while replenishment is off,
 using the eligibility rules above. Open attempts, including validation-blocked
-attempts, expire after ten minutes from dispatch (or admission if not dispatched).
+attempts, are reported failed after ten minutes from dispatch (or admission if
+not dispatched); a late valid publication can still complete that original job.
 Automatic replenishment checks at startup and every five seconds. Each pass
 records its current coverage, known/unknown demand, exact candidates, rejection
 reasons/counts, Ready/in-flight depth, free slots and dispatch failures. Source
@@ -527,9 +529,9 @@ properties and complete body/comment history are re-read when less than fifteen
 seconds of history evidence remain. Two readers remain the concurrency bound;
 a slow or failed source can still expire and block review. Revalidation uses the
 same stored packet and semantic dependencies, with the original thirty-second
-source horizon measured from read start. It does not extend packet review expiry,
-and automatic preparation does not recompute an unchanged previously validated
-packet merely to renew source evidence. Changed sources still invalidate it.
+source horizon measured from read start. Packet age itself is not an expiry
+condition, and preparation never recomputes an unchanged revision merely to renew
+source evidence. Changed sources still invalidate it.
 
 Preparation jobs retain the first successful `published_at` and `published` outcome
 across later leases, evidence expiry and restarts. Their current `readiness` and
@@ -588,6 +590,23 @@ option ordering do not. First Mate-bound requests retain live source and worker
 generation validation. Both kinds dispatch the same webhook job and save owner
 selections through the existing `answer_decision` operation. Answered requests
 are excluded from the pending list.
+
+For prepared decisions, a later `owner-chatgpt` workflow receipt or an
+`owner-chatgpt`-authored comment on the card suppresses every request whose own
+source creation timestamp precedes it. This deliberately includes unrelated owner
+edits/assignments/parks: it is a broad structural answer rule, with no guessing
+from prose. Receipt identity comes from the terminal `Tin Star operation` tuple;
+plain comment identity comes from source author metadata. Unknown ordering blocks
+verification rather than asserting an answer. Canonical `Tin Star answer` records
+continue to count as answers.
+
+A newly published request with the same ID, a strictly later source timestamp and
+changed question/options/binding is a new revision and can be prepared again.
+Ambiguous duplicates and missing revision timestamps remain subject to existing
+binding protections; cosmetic option ordering alone is not a new revision. The
+old packet cannot become Ready for the revised request. Future workflow receipts
+also include `Tin Star changed properties` with the actual before/after values,
+so the broad owner rule can later be narrowed without inferring old edits.
 
 Decision history reads all pages of page comments and top-level paragraphs
 (the legacy workflow record surface). Specification code, embeds, and nested

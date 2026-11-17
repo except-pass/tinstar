@@ -97,10 +97,24 @@ export class WorkflowContent {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
     if (method !== 'GET') sourceWriteDispatched()
-    const response = await this.reader.api.fetch(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(20_000),
-      headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
-    if (!response.ok) { await response.body?.cancel(); throw new NotionWriteError(response.status, method) }
+    const signal = AbortSignal.timeout(20_000)
+    let response: Response
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await this.reader.api.fetch(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal,
+          headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+        if (response.ok) break
+        await response.body?.cancel()
+        throw new NotionWriteError(response.status, method)
+      } catch (error) {
+        // Source reads can recover from transient Notion failures before any
+        // mutation. Never retry a write whose provider outcome may be unknown.
+        const transient = error instanceof TypeError || error instanceof NotionWriteError && (error.status === 408 || error.status === 429 || error.status >= 500)
+        if (method !== 'GET' || !transient || signal.aborted || attempt >= 2) throw error
+      }
+      await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
+    }
     const stream = response.body?.getReader()
     if (!stream) throw new Error('Notion response missing')
     const chunks: Uint8Array[] = []; let bytes = 0

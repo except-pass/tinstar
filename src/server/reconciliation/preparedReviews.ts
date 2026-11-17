@@ -105,7 +105,7 @@ export class PreparedReviews {
         const stored = this.packets.readInStorage(db, row.id)!
         return this.packets.readInStorage(db, row.id, evidenceByCard.get(stored.packet.binding.card_id) ?? this.evidence(stored.packet.binding.card_id))!
       }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id) && !recorded(stored.packet.binding))
-      const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now || Date.parse(packet.expires_at) <= now
+      const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now
       const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
       const ready = current.filter(stored => stored.ready)
       const pending = queue.card_ids.flatMap(card => {
@@ -158,7 +158,7 @@ export class PreparedReviews {
     const stored = this.packets.readInStorage(db, binding.packet_id, this.evidence(binding.card))
     // Ready normally excludes leases; held validation instead ignores only this
     // context's canonical lease, never source freshness or a pending source write.
-    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || Date.parse(stored.expires_at) <= this.now() || this.leases.reservedInStorage(db, binding.card)
+    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || this.leases.reservedInStorage(db, binding.card)
     return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token, packet: stored ? {
       ...workReadback(stored), packet: {
         ...workReadback(stored.packet), recommended_option_id: stored.packet.recommended_option_id,

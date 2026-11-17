@@ -1,4 +1,5 @@
 import { releasePull } from '../../shared/pullIdentity'
+import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
 import { responsibleMate, strictlyNeedsWill } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
@@ -686,6 +687,12 @@ export class WorkflowOperations {
       for (const name of Object.keys(sections)) sectionOriginal[name] = blocks.find(block => block.text.split('\n')[0] === sectionMarker(name))?.text ?? ''
     }
     const original = { ...input.expected, ...Object.fromEntries([...reads].map(name => [name, card.properties[name]?.value ?? null])) }
+    const changes = Object.fromEntries(Object.entries(desired).filter(([name, value]) => !this.matches(card, name, value))
+      .map(([name, after]) => [name, { before: card.properties[name]?.value ?? null, after }]))
+    const receiptData = `Tin Star changed properties: ${JSON.stringify(changes)}`
+    const lines = note.split('\n'), operationLine = lines.findIndex(line => line === `Operation: ${input.kind}`)
+    lines.splice(operationLine >= 0 ? operationLine + 1 : lines.findIndex(line => line === `By: ${actor}`) + 1, 0, receiptData)
+    note = lines.join('\n')
     return { desired, properties, original, sections, sectionOriginal, note, heldWait }
   }
   private matches(card: WorkCard, name: string, value: unknown) {
@@ -701,6 +708,7 @@ export class WorkflowOperations {
   private async performUpdate(input: UpdateWorkInput, actor: string, prepared = false): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined, heldWait = false
+    let stage = 'read canonical card'
     let requested: Record<string, unknown> = {}
     const repair = this.noteRepairs.get(key)
     const saved: string[] = [...(repair?.result.saved_fields ?? [])]
@@ -708,7 +716,10 @@ export class WorkflowOperations {
     try {
       card = await this.reader.card(input.card_id, true)
       if (card.source?.synthetic && 'source_request' in input && input.source_request) throw new WorkflowError('synthetic-source', 'Synthetic Jira decisions cannot deliver to live First Mate requests')
-      const before = card, notes = await this.content.notes(card.id)
+      const before = card
+      stage = 'read card comments'
+      const notes = await this.content.notes(card.id)
+      stage = 'read decision publications'
       const publications = input.kind === 'answer_decision' ? await this.proposals?.read(card.id, notes) : undefined
       const intents = input.kind === 'answer_decision' ? decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
         const parsed = updateWorkSchema.safeParse(row.input)
@@ -732,8 +743,8 @@ export class WorkflowOperations {
         const proposals = eligibleRequests.filter(row => row.id === input.request_id)
         const options = proposals.length === 1 ? decisionOptionsSchema.safeParse(proposals[0].options) : null
         const option = options?.success ? options.data.find(option => option.id === input.option_id) : undefined
-        // Prevent a stale or forged button from answering a different published choice.
-        if (!option || option.label !== input.answer) throw new WorkflowError('decision-option-conflict', 'The selected option and exact answer must match this published proposal; refresh its choices')
+        // The identity must be current; the owner's words can qualify the choice.
+        if (!option) throw new WorkflowError('decision-option-conflict', 'The selected option must exist in this published proposal; refresh its choices')
       }
       if (input.kind === 'answer_decision') {
         const first = intents[0]
@@ -782,11 +793,13 @@ export class WorkflowOperations {
           name in pending.original ? { ...property, value: pending.original[name] } : property])) } : card
         // Rebuild policy from validated input; a human-editable note never
         // supplies a raw PATCH plan or bypasses tracked-worker requirements.
+        stage = `plan ${input.kind}`
         const plan = await this.updatePlan(planningCard, input, actor, notes)
         heldWait = plan.heldWait
         if (card.source?.provider === 'jira') this.reader.jira?.validateProperties(plan.properties)
         this.reader.leases?.assertWritable(card.id)
         requested = plan.desired
+        stage = 'read card before applying changes'
         const current = await this.reader.card(card.id, true)
         for (const [name, value] of Object.entries(plan.original)) {
           if (name !== 'Last touched by' && !this.matches(current, name, value) && !(pending && this.matches(current, name, plan.desired[name]))) throw new WorkflowError('conflict', `${name} changed during this operation; unrelated work was preserved. Refresh and re-issue with a new operation_id.`, true)
@@ -807,6 +820,7 @@ export class WorkflowOperations {
             }
             return Object.keys(missing).every(name => this.matches(latest, name, plan.desired[name]))
           } : undefined
+          stage = 'write card properties'
           const patched = await this.content.patchProperties(card.id, missing, recheck)
           card = card.source?.provider === 'jira' ? patched as WorkCard : await this.reader.card(card.id, true)
         }
@@ -825,6 +839,7 @@ export class WorkflowOperations {
         notePending = plan.note
       }
       attempted = true
+      stage = 'write workflow receipt'
       await this.content.note(card.id, notePending, marker)
       saved.push('note')
       this.noteRepairs.delete(key)
@@ -846,11 +861,14 @@ export class WorkflowOperations {
       if (error instanceof ManagedSectionConflict || error instanceof JiraConflictError) return { ...result(saved.length ? 'partially-saved' : 'not-saved', 'conflict', `${error.message}. Review current state and re-issue with a new operation_id.`), requires_new_operation_id: true }
       if (error instanceof JiraMappingError) return result('not-saved', 'jira-incompatible', error.message)
       if (error instanceof JiraWriteError && error.method !== 'GET' && error.status < 500 && !error.partial && !saved.length) return result('not-saved', 'jira-rejected', `Jira rejected the request (HTTP ${error.status})`)
-      if (error instanceof NotionWriteError && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
+      if (error instanceof NotionWriteError && error.method !== 'GET' && error.status < 500 && !saved.length) return result('not-saved', 'notion-rejected', `Notion rejected the write (HTTP ${error.status}); no fields confirmed saved`)
+      const cause = workReadback(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 1000)
+      if (!(error instanceof WorkflowError)) console.error('[workflow] update failed', workReadback({ card_id: input.card_id, operation_id: input.operation_id, kind: input.kind, stage,
+        cause, stack: error instanceof Error ? error.stack?.slice(0, 6000) : undefined }))
       const partial = error instanceof WorkflowError ? { ...result(saved.length ? 'partially-saved' : 'not-saved', error.code, error.message), ...(error.requiresNewOperationId ? { requires_new_operation_id: true } : {}) }
         : result(attempted || saved.length ? 'partially-saved' : 'not-saved', attempted || saved.length ? 'save-unconfirmed' : 'source-unavailable',
-          notePending ? 'Listed steps saved; note unconfirmed. This process can repair only the note if the card stays unchanged. Otherwise review and re-issue with a new operation_id.'
-            : saved.length ? 'Listed steps previously saved; current source read failed. No further write submitted.' : attempted ? 'Write unconfirmed; only listed steps are confirmed saved. Read current state to reconcile this uncertain write; no automatic replay.' : 'Current source read failed; nothing submitted')
+          notePending ? `Listed steps saved; note unconfirmed during ${stage} (${cause}). This process can repair only the note if the card stays unchanged. Otherwise review and re-issue with a new operation_id.`
+            : saved.length ? `Listed steps previously saved; ${stage} failed (${cause}). No further write submitted.` : attempted ? `Write unconfirmed during ${stage} (${cause}); only listed steps are confirmed saved. Read current state to reconcile this uncertain write; no automatic replay.` : `Current source read failed during ${stage} (${cause}); nothing submitted`)
       if (notePending && card && !saved.includes('note')) this.noteRepairs.set(key, { signature: JSON.stringify(input), version: cardVersion(card), note: notePending, result: partial })
       return partial
     }

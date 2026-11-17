@@ -413,3 +413,34 @@ it.each(['properties', 'comments'] as const)('blocks a previously Ready packet w
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
   expect(posts).toHaveLength(1)
 }, 20_000)
+
+it.each(['receipt', 'comment'] as const)('registers a later owner %s from real history reads and never re-offers or re-prepares the request', async kind => {
+  let time = Date.now(), ownerAt: string | undefined
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
+  const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    if (ownerAt && new URL(String(input)).pathname === '/v1/comments') {
+      const body = await response.json()
+      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: { id: 'provider-user-id', ...(kind === 'comment' ? { name: 'owner-chatgpt' } : {}) },
+        rich_text: [{ plain_text: kind === 'receipt' ? 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-edit"]' : 'A response with no decision protocol or keyword.' }] })
+      return Response.json(body)
+    }
+    return response
+  } })
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Answer suppression proof' })
+  const packet = preparedDecisionFixture().packet, request = sources.preparationEvidence(cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'owner-suppression-packet', packet })).toMatchObject({ ready: true })
+  ownerAt = new Date(time + 1000).toISOString(); time += 16_000; vi.setSystemTime(time)
+  const snapshot = await loadedSnapshot(sources)
+  expect(sources.preparationEvidence(cardId).requests[0]!.answered).toBe(true)
+  expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0 }, ready: [], pending: [] })
+  await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
+  await sources.preparation.replenish()
+  expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Do not repeat this answer' })).toMatchObject({ outcome: 'ineligible' })
+  const session = await sources.preparedReviews.create('fixture-owner', { operation_id: 'answered-review-session', label: 'Answered source proof' })
+  expect(await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'do-not-reoffer', review_session_token: session.review_session_token })).toMatchObject({ outcome: 'no-decision-requests' })
+  expect(posts).toHaveLength(1)
+  expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', readiness: { ready: false } })
+}, 20_000)

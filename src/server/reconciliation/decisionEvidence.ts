@@ -1,7 +1,7 @@
 import { decisionPacketBindingSchema, decisionMeaning, type DecisionDependencyObservation, type DecisionEvidence } from '../../shared/decisionPacket'
 import { decisionRequestRevision } from '../../shared/decisionProposal'
 import { requestAnchor } from '../../shared/deskSource'
-import { decisionRequests, decisionRecordRows } from '../../shared/workflowRequests'
+import { decisionRequests, decisionRecordRows, workflowReceipt } from '../../shared/workflowRequests'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
@@ -10,10 +10,55 @@ import { buildQueue } from './queue'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
 
+const noteTime = (note: CardContextRead['blocks'][number]) => Date.parse(note.createdAt ?? note.created_time ?? '')
+const ownerAnswerNote = (note: CardContextRead['blocks'][number]) => {
+  const receipt = workflowReceipt(note)
+  const ownerReceipt = receipt && JSON.parse(receipt.slice('Tin Star operation: '.length))[0] === 'owner-chatgpt'
+  return !!ownerReceipt || note.type === 'comment' && (note.author === 'owner-chatgpt' || note.authorName === 'owner-chatgpt')
+}
+
+/** A newly published, meaningfully different request with a strictly later
+ * source timestamp is a new revision of the same ID. Ambiguous duplicates stay
+ * visible to the existing binding validator instead of silently picking one. */
+function preparationRequestHistory(notes: CardContextRead['blocks']) {
+  const publications = notes.flatMap(note => decisionRecordRows([note], 'Tin Star request: ').flatMap(row =>
+    decisionRecordRows([note], 'Tin Star answer data: ').some(answer => answer.binding) ? [] : [{ note, row }]))
+  const superseded = new Set<string>(), revisedAt = new Map<string, number>()
+  for (const id of new Set(publications.map(entry => entry.row.id))) {
+    const versions = publications.filter(entry => entry.row.id === id).sort((a, b) => noteTime(b.note) - noteTime(a.note))
+    if (versions.length < 2 || versions.some(entry => !Number.isFinite(noteTime(entry.note)))) continue
+    const latest = versions[0]!
+    const meaning = (entry: typeof latest) => decisionMeaning([entry.row.id, entry.row.action, entry.row.preserve_action,
+      Array.isArray(entry.row.options) ? entry.row.options.slice().sort((a: { id?: string } | null, b: { id?: string } | null) => String(a?.id).localeCompare(String(b?.id))) : entry.row.options, entry.row.source_request, entry.row.source_question, entry.row.source_spawn_gen,
+      entry.row.proposal ? { ...entry.row.proposal, published_at: undefined } : null, entry.note.text.split('\n').filter(line => line.startsWith('Question: ') || line.startsWith('Requested from: '))])
+    if (versions.slice(1).some(entry => noteTime(entry.note) >= noteTime(latest.note) || meaning(entry) === meaning(latest))) continue
+    for (const entry of versions.slice(1)) superseded.add(entry.note.id)
+    revisedAt.set(id, noteTime(latest.note))
+  }
+  return notes.filter(note => !superseded.has(note.id) && !decisionRecordRows([note], 'Tin Star answer: ').some(id =>
+    Number.isFinite(noteTime(note)) && revisedAt.has(id) && noteTime(note) <= revisedAt.get(id)!))
+}
+
+function preparedRequestRows(notes: CardContextRead['blocks']) {
+  return decisionRequests(notes).map(row => {
+    const sourceNote = notes.find(note => note.id === row.sourceId)
+    const requestedAt = sourceNote ? noteTime(sourceNote) : NaN
+    const ownerNotes = notes.filter(note => note.id !== row.sourceId && ownerAnswerNote(note))
+    return { ...row, answered: row.answered || ownerNotes.some(note => Number.isFinite(requestedAt) && noteTime(note) > requestedAt),
+      ownerTimingUnknown: ownerNotes.length > 0 && (!Number.isFinite(requestedAt) || ownerNotes.some(note => !Number.isFinite(noteTime(note)))) }
+  })
+}
+
+/** Request counts share the exact owner-answer projection without building the
+ * whole queue for each card on the display path. */
+export function preparedDecisionRequests(notes: CardContextRead['blocks']) {
+  return preparedRequestRows(preparationRequestHistory(notes))
+}
+
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
  * PR/release details are not asserted from a link: they need their own reads. */
-export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>): DecisionEvidence {
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>): DecisionEvidence {
   const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
   const reasons: string[] = []
   if (!card) reasons.push('Canonical card is not in the observed configured board')
@@ -22,18 +67,20 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
-  const rows = decisionRequests(history?.context.blocks ?? [])
+  const notes = preparationRequestHistory(history?.context.blocks ?? [])
+  const rows = preparedRequestRows(notes)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []
-  try { currentRequests = decisionProposals((history?.context.blocks ?? []).map(({ id, text }) => ({ id, text }))).map(row => row.id) }
+  try { currentRequests = decisionProposals(notes.map(({ id, text }) => ({ id, text }))).map(row => row.id) }
   catch { reasons.push('Decision publication history is contradictory or incomplete') }
-  const queue = buildQueue(snapshot, new Map(), now)
+  const queue = projectedQueue ?? buildQueue(snapshot, new Map(), now)
   const items = queue.items.filter(item => item.cardIds.includes(cardId))
   const observation = snapshot.intentions
   const base = (kind: DecisionDependencyObservation['kind'], key: string, revision: string | null, source: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'> = observation): DecisionDependencyObservation => ({ kind, key, revision,
     status: source.status, coverage: source.coverage, observed_at: source.observedAt, expires_at: source.expiresAt })
   const requests = rows.map(row => {
     const issues: string[] = []
+    if (row.ownerTimingUnknown) issues.push('Owner answer timing cannot be verified from source timestamps')
     const cardNative = !row.hasSourceBinding
     if (!currentRequests.includes(row.id)) issues.push('Source proposal is superseded or its binding history is invalid')
     if (row.proposal) issues.push('Complete cross-channel proposal publication coverage is not available in this cached-history projection')
@@ -67,7 +114,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
         }
         return [key, value]
       }))]) : null, cardObservation ?? observation),
-    { ...base('answer', row.id, decisionMeaning(decisionRecordRows(history?.context.blocks ?? [], 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
+    { ...base('answer', row.id, decisionMeaning(decisionRecordRows(notes, 'Tin Star answer data: ').filter(answer => answer.request_id === row.id))),
       status: freshHistory ? 'fresh' as const : 'unknown' as const, coverage: completeHistory ? 'complete' as const : 'unknown' as const,
       observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }]
     if (row.sourceRequest) {

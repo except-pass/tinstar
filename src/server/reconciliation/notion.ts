@@ -44,7 +44,7 @@ export function notionCard(value: unknown) {
 }
 
 class NotionCardReadError extends Error {
-  constructor(readonly transient: boolean) { super('Notion card read failed') }
+  constructor(readonly transient: boolean, status: number) { super(`Notion card read failed (HTTP ${status})`) }
 }
 
 /** Exact uncached page read, sharing the source parser. Used immediately before
@@ -68,7 +68,7 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
     headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } })
   if (!response.ok) {
     await response.body?.cancel()
-    throw new NotionCardReadError(response.status === 408 || response.status === 429 || response.status >= 500 && response.status < 600)
+    throw new NotionCardReadError(response.status === 408 || response.status === 429 || response.status >= 500 && response.status < 600, response.status)
   }
   if (!response.body) throw new Error('Notion card read failed')
   const reader = response.body.getReader(), chunks: Uint8Array[] = []

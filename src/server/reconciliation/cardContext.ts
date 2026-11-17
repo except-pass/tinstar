@@ -11,7 +11,7 @@ export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
-  blocks: Array<{ id: string; type: string; text: string; author?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
+  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
   omissions?: string
 }
@@ -154,6 +154,7 @@ export class CardContextReader {
           const comment = record(item)
           if (!Array.isArray(comment.rich_text)) continue
           context.blocks.push({ id: String(comment.id), type: 'comment',
+            authorName: typeof record(comment.created_by).name === 'string' ? String(record(comment.created_by).name) : null,
             author: typeof record(comment.created_by).id === 'string' ? String(record(comment.created_by).id) : null,
             createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,
             created_time: typeof comment.created_time === 'string' ? comment.created_time : undefined,

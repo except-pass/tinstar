@@ -94,7 +94,8 @@ export class DecisionPreparation {
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, dispatched_at TEXT, packet_id TEXT);
       CREATE UNIQUE INDEX IF NOT EXISTS decision_prep_active
         ON decision_prep_jobs(scope, card_id, request_id, source_revision)
-        WHERE state IN ('admitted', 'dispatched');`)
+        WHERE state IN ('admitted', 'dispatched');
+      CREATE INDEX IF NOT EXISTS decision_prep_revision ON decision_prep_jobs(scope, card_id, request_id, source_revision);`)
       const columns = db.prepare('PRAGMA table_info(decision_prep_jobs)').all() as Array<{ name: string }>
       if (!columns.some(column => column.name === 'published_at')) db.exec('ALTER TABLE decision_prep_jobs ADD COLUMN published_at TEXT')
       // Recover successful legacy jobs even if later evidence/lease changes made
@@ -151,7 +152,7 @@ export class DecisionPreparation {
   private expire(db: DatabaseSync) {
     const cutoff = new Date(this.now() - attemptMs).toISOString()
     db.prepare("UPDATE decision_prep_jobs SET state = 'failed', reason = ?, updated_at = ? WHERE scope = ? AND state IN ('admitted','dispatched','blocked') AND published_at IS NULL AND coalesce(dispatched_at, created_at) < ?")
-      .run('Preparer did not publish before the attempt expired.', new Date(this.now()).toISOString(), this.scope, cutoff)
+      .run('Preparer did not publish a valid packet before the attempt expired. A late publication can still complete this job.', new Date(this.now()).toISOString(), this.scope, cutoff)
   }
 
   private held(db: DatabaseSync, card: string) {
@@ -174,33 +175,27 @@ export class DecisionPreparation {
     if (blocked) return { outcome: 'ineligible', explanation: blocked }
     if (this.held(db, candidate.card_id)) return { outcome: 'ineligible', explanation: 'A reviewer holds this card. Preparation does not claim or replace that lease.' }
     if (this.readyRevision(db, candidate)) return { outcome: 'already-ready', explanation: 'This decision revision is already ready for review.' }
-    if (mode === 'automatic') {
-      const stored = db.prepare(`SELECT p.id FROM decision_packets p
-        WHERE json_extract(body,'$.binding.card_id') = ? AND json_extract(body,'$.binding.request_id') = ?
-        AND json_extract(body,'$.binding.source_revision') = ? AND expires_at > ?
-        AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
-        AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1)
-        AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed')) LIMIT 1`)
-        .get(candidate.card_id, candidate.request_id, candidate.source_revision, new Date(this.now()).toISOString()) as { id: string } | undefined
-      const evidence = this.evidence(candidate.card_id)
-      const current = stored && this.packets.readInStorage(db, stored.id, evidence)
-      const source = current && evidence.requests.find(request => request.binding && bindingMeaning(request.binding) === bindingMeaning(current.packet.binding))
-      const unchanged = current && source && source.dependencies.length === current.packet.dependencies.length
-        && current.packet.dependencies.every(dependency => source.dependencies.some(actual => actual.kind === dependency.kind && actual.key === dependency.key && actual.revision === dependency.revision))
-      if (unchanged) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
-    }
-    const active = db.prepare("SELECT * FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state IN ('admitted','dispatched')").get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as Row | undefined
-    if (active) return { outcome: 'already-preparing', explanation: 'This decision revision is already being prepared.', job_id: active.id, state: active.state, job: active }
+    const prior = db.prepare(`SELECT * FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?
+      ORDER BY created_at DESC, attempt DESC, id DESC LIMIT 1`).get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as Row | undefined
+    if (prior) return { outcome: ['admitted', 'dispatched'].includes(prior.state) ? 'already-preparing' : 'already-attempted',
+      explanation: ['admitted', 'dispatched'].includes(prior.state) ? 'This decision revision is already being prepared.'
+        : `This exact source revision already has a ${prior.state} job. ${prior.reason} Correct or publish its packet using the existing job ID; a new job requires a new source revision.`,
+      job_id: prior.id, state: prior.state }
+    // Imported/direct packets need evidence renewal too, never another research job.
+    const stored = db.prepare(`SELECT p.id FROM decision_packets p
+      WHERE json_extract(body,'$.binding.card_id') = ? AND json_extract(body,'$.binding.request_id') = ?
+      AND json_extract(body,'$.binding.source_revision') = ?
+      AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
+      AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) LIMIT 1`)
+      .get(candidate.card_id, candidate.request_id, candidate.source_revision)
+    if (stored) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
     const policy = this.packets.policyInStorage(db, this.scope)
     const inflight = this.inflight(db)
     if (inflight >= policy.values.max_preparers) return { outcome: 'at-capacity', explanation: 'All preparer slots are in use. Wait for a job to finish or raise the maximum parallel preparers.' }
     if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
     const id = randomUUID(), at = new Date(this.now()).toISOString()
-    const prior = Number((db.prepare('SELECT count(*) AS n FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?').get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as { n: number }).n)
-    db.prepare("UPDATE decision_prep_jobs SET state = 'cancelled', reason = ?, updated_at = ? WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state = 'blocked'")
-      .run('Superseded by a new preparation attempt.', at, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision)
     const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
-      state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: prior + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
+      state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
     db.prepare('INSERT INTO decision_prep_jobs (id,scope,card_id,request_id,source_revision,card_url,state,reason,actor,mode,operation_id,attempt,created_at,updated_at,dispatched_at,packet_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, candidate.card_url, 'admitted', job.reason, actor, mode, `prep-${id}`, job.attempt, at, at, null, null)
     db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(null, mode === 'prepare-now' ? 'prepare-now' : 'prep-admit', actor, at, JSON.stringify({ job_id: id, card_id: candidate.card_id, request_id: candidate.request_id, reason }))
     return { outcome: 'admitted', explanation: job.reason, job_id: id, state: 'admitted', job }
@@ -334,6 +329,14 @@ export class DecisionPreparation {
   async revalidate(cardId: string) {
     await this.initialize()
     const evidence = this.evidence(cardId)
+    const answered = evidence.requests.filter(request => request.answered && request.binding)
+    if (answered.length) await this.packets.leases.writeStorage(db => {
+      for (const request of answered) {
+        db.prepare(`UPDATE decision_prep_jobs SET state = 'cancelled', reason = 'Source request answered; preparation suppressed.', updated_at = ?
+          WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND published_at IS NULL AND state IN ('admitted','dispatched','blocked')`)
+          .run(new Date(this.now()).toISOString(), this.scope, cardId, request.binding!.request_id, request.binding!.source_revision)
+      }
+    })
     const ids = this.packets.leases.readStorage(db => (db.prepare(`SELECT id FROM decision_packets p
       WHERE json_extract(body,'$.binding.card_id') = ? AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`)
       .all(cardId) as Array<{ id: string }>).map(row => row.id))
@@ -354,10 +357,14 @@ export class DecisionPreparation {
       const policy = this.packets.policyInStorage(db, this.scope)
       const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state)).map(job => job.card_id)
       const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
-        WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key) AND expires_at > ?
+        WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
         AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
-        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all(new Date(this.now()).toISOString()) as Array<{ card: string }>
-      return [...new Set([...jobs, ...packets.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers)
+        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
+      const reviewable = packets.map(row => row.card).filter(card => {
+        const evidence = this.evidence(card)
+        return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
+      })
+      return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
     })
   }
 
@@ -444,9 +451,9 @@ export class DecisionPreparation {
         const current = this.packets.readInStorage(db, job.packet_id, evidence)
         return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
       }
-      const started = Date.parse(job.dispatched_at ?? job.created_at)
-      if (Number.isFinite(started) && started + attemptMs < this.now()) throw new DecisionDeskConflict('This preparation attempt expired before publication')
-      if (!['admitted', 'dispatched', 'blocked'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
+      // A late callback can complete its original job, including an expired or
+      // rejected dispatch. Permanent revision deduplication never needs a new job.
+      if (!['admitted', 'dispatched', 'blocked', 'failed'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
       const stored = this.packets.publishInStorage(db, parsed.packet, evidence, preparerName, parsed.operation_id)
       const current = this.packets.readInStorage(db, stored.id, evidence)
       const ready = !!current?.ready

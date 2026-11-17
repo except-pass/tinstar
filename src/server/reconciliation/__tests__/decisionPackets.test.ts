@@ -306,3 +306,56 @@ it.each(['body-partial', 'comments-partial', 'comments-unknown', 'expired', 'unk
   expect(evidence.requests[0]!.dependencies.find(row => row.kind === 'answer')!.status).toBe('unknown')
   expect(validateDecisionPacket(fixture.packet, evidence, now).valid).toBe(false)
 })
+
+it('keeps unchanged research Ready beyond its former review deadline only with newly read source evidence', async () => {
+  let clock = now
+  const { packet, evidence } = preparedDecisionFixture(clock), { packets } = await store(() => clock)
+  const first = await packets.publish(packet, evidence, 'fixture-preparer', 'age-independent')
+  clock += 2 * 3600_000
+  expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
+  for (const dependency of evidence.requests[0]!.dependencies) {
+    dependency.observed_at = new Date(clock).toISOString(); dependency.expires_at = new Date(clock + 30_000).toISOString()
+  }
+  await packets.validate(first.id, evidence, 'fresh-revision-check')
+  expect(await packets.read(first.id, evidence)).toMatchObject({ ready: true, expires_at: null, published_at: first.published_at })
+  expect(await packets.ids()).toEqual([first.id])
+  evidence.requests[0]!.dependencies.find(dependency => dependency.kind === 'card')!.revision = 'changed-card-inputs'
+  expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
+})
+
+it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('suppresses preparation after a later structural owner %s without guessing wording', kind => {
+  const f = cardNativeFixture(), request = f.history.context.blocks[0]!
+  request.createdAt = new Date(now - 20_000).toISOString()
+  const owner = { id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
+    text: kind.startsWith('comment') ? 'No decision keywords are necessary for this owner response.' : `Operation: ${kind}\nTin Star operation: ["owner-chatgpt","owner-response"]`,
+    ...(kind === 'comment' ? { author: 'owner-chatgpt' } : kind === 'comment-name' ? { author: 'notion-owner-id', authorName: 'owner-chatgpt' } : {}) }
+  f.history.context.blocks.push(owner)
+  const evidence = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
+  expect(evidence.requests[0]).toMatchObject({ answered: true, reasons: [] })
+  expect(validateDecisionPacket(f.packet, evidence, now)).toMatchObject({ valid: false, reasons: expect.arrayContaining(['This source request already has an answer']) })
+})
+
+it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-edited-only'] as const)('does not guess an owner answer from %s evidence', kind => {
+  const f = cardNativeFixture(), request = f.history.context.blocks[0]!
+  request.createdAt = new Date(now - 20_000).toISOString()
+  f.history.context.blocks.push({ id: 'other-comment', type: 'comment', author: kind === 'other-author' ? 'firstmate' : kind === 'unreceipted-wording' ? undefined : 'owner-chatgpt',
+    createdAt: new Date(now - (kind === 'same-time' ? 20_000 : kind === 'earlier' || kind === 'last-edited-only' ? 30_000 : 10_000)).toISOString(),
+    last_edited_time: new Date(now).toISOString(), text: 'I approve. By: owner-chatgpt. Tin Star operation: ["owner-chatgpt","quoted"]' })
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(false)
+})
+
+it('allows the same request ID only after a newer meaningful request publication, keeping its old packet invalid', () => {
+  const f = cardNativeFixture(), request = f.history.context.blocks[0]!
+  request.createdAt = new Date(now - 20_000).toISOString()
+  f.history.context.blocks.push({ id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
+    text: 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-response"]' })
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(true)
+  f.history.context.blocks.push({ ...request, id: 'new-request-revision', createdAt: new Date(now - 5_000).toISOString(),
+    text: request.text.replace(f.packet.question, 'Authorize the revised preview scope?') })
+  const revised = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
+  expect(revised.requests).toHaveLength(1)
+  expect(revised.requests[0]).toMatchObject({ answered: false, reasons: [], question: 'Authorize the revised preview scope?' })
+  expect(revised.requests[0]!.binding!.request_id).toBe(f.packet.binding.request_id)
+  expect(revised.requests[0]!.binding!.source_revision).not.toBe(f.packet.binding.source_revision)
+  expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
+})

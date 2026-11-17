@@ -6,7 +6,7 @@ import { DecisionPackets } from './decisionPackets'
 import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
+import { projectDecisionEvidence, projectPreparedSubmitEvidence, preparedDecisionRequests } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -77,6 +77,7 @@ export class ReconciliationSources {
   readonly notionApi
   private context
   private preparationHistory
+  private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
   private preparationPriority = new Set<string>()
   private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
   private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
@@ -127,7 +128,7 @@ export class ReconciliationSources {
       if (!this.preparationPriority.has(id)) return
       const observedAt = new Date().toISOString(), expiresAt = new Date(Date.now() + 30_000).toISOString()
       try {
-        const card = await this.workReader.card(id, true)
+        const card = await this.workReader.card(id, true, true)
         this.workReader.confirm(card)
         this.preparationProperties.set(id, { status: 'fresh', coverage: 'complete', observedAt, expiresAt })
       } catch {
@@ -135,7 +136,7 @@ export class ReconciliationSources {
         throw new Error('Canonical card properties could not be refreshed.')
       }
     })
-    this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -184,7 +185,8 @@ export class ReconciliationSources {
       const history = this.context.cachedDecisionHistory(card.id)
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
-    const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
+    const requestCount = !historiesComplete && queue.items.length ? queue.items.length
+      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
     const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
@@ -259,7 +261,15 @@ export class ReconciliationSources {
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
    * refreshes sources, reconciles receipts, or changes source work. */
   preparationEvidence(cardId: string) {
-    return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now(), this.preparationProperties.get(cardId))
+    // A display/admission batch projects many cards from the same known sources.
+    // Share only that synchronous queue build, never history or validation TTLs.
+    if (!this.preparationProjection) {
+      const snapshot = this.knownSnapshot()
+      this.preparationProjection = { snapshot, queue: buildQueue(snapshot) }
+      queueMicrotask(() => { this.preparationProjection = undefined })
+    }
+    const { snapshot, queue } = this.preparationProjection
+    return projectDecisionEvidence(snapshot, cardId, this.context.cachedDecisionHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue)
   }
 
   invalidateQueueDisplays() {

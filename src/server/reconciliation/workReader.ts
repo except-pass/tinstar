@@ -54,10 +54,10 @@ export class WorkReader {
       observedAt: null, attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Broader declaration coverage is unavailable',
     }
   }
-  card(id: string, force = false) {
+  card(id: string, force = false, background = false) {
     const cached = this.cards.get(id)
     if (!force && cached && cached.until > Date.now()) { this.api.diagnostics.cacheHits++; return cached.value }
-    const read = isJiraCard(id) ? this.jira ? this.jira.read(id) : Promise.reject(new Error('Jira is not configured')) : readNotionCard(this.config, id, this.api.fetch)
+    const read = isJiraCard(id) ? this.jira ? this.jira.read(id) : Promise.reject(new Error('Jira is not configured')) : readNotionCard(this.config, id, background ? this.api.backgroundFetch : this.api.fetch)
     const value: Promise<WorkCard> = read.then(card => {
       if (this.known.size >= 200) this.known.delete(this.known.keys().next().value!)
       this.known.set(id, { card, observedAt: new Date().toISOString() }); return card
