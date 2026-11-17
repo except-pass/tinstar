@@ -291,8 +291,8 @@ it('refreshes just an explicitly requested expired card after a sweep outlives t
     const before = reads.length
     expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Fresh exact card after long sweep' })).toMatchObject({ outcome: 'dispatched' })
     const freshReads = reads.slice(before)
-    expect(freshReads).toHaveLength(14)
-    expect(freshReads.every(read => read.path === `/v1/blocks/${cardId}/children` || read.path === '/v1/comments')).toBe(true)
+    expect(freshReads).toHaveLength(15)
+    expect(freshReads.every(read => read.path === `/v1/pages/${cardId}` || read.path === `/v1/blocks/${cardId}/children` || read.path === '/v1/comments')).toBe(true)
   } finally { clock.mockRestore() }
 }, 20_000)
 
@@ -371,6 +371,7 @@ it('keeps one published packet Ready through fresh property/history cycles witho
   const published = await sources.preparation.publish({ job_id: job.job_id, operation_id: 'refresh-cycle-packet', packet })
   expect(published.ready).toBe(true)
   await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
+  const initialPropertyReads = reads.filter(read => read.path === `/v1/pages/${cardId}`).length
   for (let cycle = 0; cycle < 5; cycle++) {
     time += 16_000
     vi.setSystemTime(time)
@@ -379,7 +380,7 @@ it('keeps one published packet Ready through fresh property/history cycles witho
     expect((await sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id, card_id: cardId })])
     expect(posts).toHaveLength(1)
   }
-  expect(reads.filter(read => read.path === `/v1/pages/${cardId}`)).toHaveLength(5)
+  expect(reads.filter(read => read.path === `/v1/pages/${cardId}`)).toHaveLength(initialPropertyReads + 5)
   expect(await sources.decisionPackets.ids()).toEqual([published.packet_id])
   changed = true; time += 16_000
   vi.setSystemTime(time)
@@ -387,7 +388,8 @@ it('keeps one published packet Ready through fresh property/history cycles witho
   await loadedSnapshot(sources)
   expect((await sources.preparedReviews.snapshot()).ready).toEqual([])
   expect((await sources.decisionPackets.read(published.packet_id, sources.preparationEvidence(cardId)))!.reasons.join(' ')).toContain('Dependency changed')
-  expect((await sources.preparation.status()).jobs.find(row => row.id === job.job_id)).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
+  expect((await sources.preparation.status()).jobs.find(row => row.id === job.job_id)).toMatchObject({ state: 'superseded', published_at: expect.any(String), readiness: { ready: false } })
+  expect(posts).toHaveLength(2)
   vi.useRealTimers()
 }, 60_000)
 

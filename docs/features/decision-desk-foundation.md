@@ -89,13 +89,13 @@ queued background reads and reusing an in-flight read. Snapshots expose per-card
 history loading/available/unavailable states; while the page is visible, the Desk
 refreshes its snapshot every two seconds, including through history retry
 deadlines and pending configuration lookup with automatic replenishment off.
-Reads settle after a 20-second deadline;
+History deadlines and coverage are defined in [loading history](#publishing-a-source-request-and-loading-history);
 failures include a reason and retry time, with backoff from 30 seconds to five
 minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
 for snapshots. Generic MCP claim reads and admission follow the
 [session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
 Expired history leaves coverage unknown. These reads retain
-the existing per-card bounds and 30-second cache, including cached failures.
+the 30-second evidence horizon, including cached failures.
 Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches
 must be resolved, complete and unexpired for readiness; the earlier cache expiry
@@ -460,8 +460,11 @@ eligible source evidence, an unanswered request, no review lease or source-write
 reservation, a card outside Todo, and no job in flight or Ready packet for that
 source revision. Prepare now bypasses the target depth. Each exact request/revision
 has at most one active job. Failed or rejected attempts and explicitly withdrawn
-packets can be prepared again. Successful unchanged research is revalidated
-without dispatching it again. There is no token limit or spend record.
+packets can be prepared again, as can packets whose material dependency revisions
+have changed even when the request revision is unchanged. Successful research
+whose semantic dependencies still match is revalidated without dispatching it
+again; freshness expiry alone does not permit recomputation. There is no token
+limit or spend record.
 
 `publish_prepared_packet` stores the packet through the P1 store. The packet is
 Ready only when that validation passes. The tool does not answer, claim a lease,
@@ -508,15 +511,17 @@ It serves the unchanged Desk on an OS-assigned loopback port using stub Notion
 history and a fresh config root. It opens no MCP listener or live source.
 
 A validation-blocked or expired attempt can publish a correction using its
-original job ID; it never needs another dispatch. Legacy cancelled jobs remain
-closed so they cannot supersede their replacement. Publication and
+original job ID while it has no replacement. Admitting a replacement permanently
+marks older attempts for that exact request/revision `superseded`; direct and
+comment publication reject them, and revalidation and restart recovery preserve
+their retirement. Publication and
 job completion share one transaction, and a later webhook response preserves
 the completed publication state.
 
 Prepare now posts one audited job for one decision while replenishment is off,
 using the eligibility rules above. Open attempts, including validation-blocked
 attempts, are reported failed after ten minutes from dispatch (or admission if
-not dispatched); a late valid publication can still complete that original job.
+not dispatched); a late valid publication can still complete an unreplaced job.
 Automatic replenishment checks at startup and every five seconds. Each pass
 records its current coverage, known/unknown demand, exact candidates, rejection
 reasons/counts, Ready/in-flight depth, free slots and dispatch failures. Source
@@ -525,8 +530,10 @@ The runner explanation includes the most recent pass, including exhausted source
 
 Current packet cards and in-flight jobs take priority over queued board history
 reads, bounded by the saved target plus maximum preparers. Their canonical card
-properties and complete body/comment history are re-read when less than fifteen
-seconds of history evidence remain. Two readers remain the concurrency bound;
+properties and complete body/comment history are re-read when either has less
+than fifteen seconds of evidence remaining. Other queued cards refresh expired
+properties as well as history, including explicit retries outside the priority
+set. Two readers remain the concurrency bound;
 a slow or failed source can still expire and block review. Revalidation uses the
 same stored packet and semantic dependencies, with the original thirty-second
 source horizon measured from read start. Packet age itself is not an expiry
@@ -534,7 +541,8 @@ condition, and preparation never recomputes an unchanged revision merely to rene
 source evidence. Changed sources still invalidate it.
 
 Preparation jobs retain the first successful `published_at` and `published` outcome
-across later leases, evidence expiry and restarts. Their current `readiness` and
+across later leases, evidence expiry and restarts, unless the attempt is retired
+as `superseded` by a replacement. Their current `readiness` and
 blocked reasons are projected separately. Only attempts without a successful
 publication can expire as failed. Legacy publication timestamps are recovered
 from retained successful validation events. Saved target/parallelism values are
