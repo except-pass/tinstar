@@ -1,7 +1,60 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { NotionApi } from '../notionApi'
+import { CardLeases } from '../cardLeases'
+import { WorkReader } from '../workReader'
+import { WorkflowContent } from '../workflowContent'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+it('starts a foreground read ahead of 50 queued background reads', async () => {
+  vi.useFakeTimers()
+  const url = 'https://api.notion.com/v1/pages/card'
+  const starts: Array<{ input: string; at: number }> = []
+  const api = new NotionApi(async input => {
+    starts.push({ input: String(input), at: Date.now() })
+    if (input === url) await new Promise(resolve => setTimeout(resolve, 200))
+    return new Response('{}')
+  })
+  const priming = api.backgroundFetch('https://api.notion.com/v1/comments')
+  const background = Array.from({ length: 50 }, () => api.backgroundFetch('https://api.notion.com/v1/blocks/card/children'))
+  const requestedAt = Date.now()
+  const foreground = api.fetch(url, undefined, 5_000)
+  await vi.advanceTimersByTimeAsync(550)
+  expect((await foreground).ok).toBe(true)
+  expect(Date.now() - requestedAt).toBeLessThan(1_000)
+  expect(starts[1]).toEqual({ input: url, at: requestedAt + 350 })
+  await vi.runAllTimersAsync()
+  await Promise.all([priming, ...background])
+  expect(starts).toHaveLength(52)
+})
+
+it('starts the HTTP timeout at send after shared backoff', async () => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('HTTP deadline exceeded', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '6' } }))
+    .mockImplementation((_input, init) => new Promise((_resolve, reject) =>
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })))
+  const api = new NotionApi(fetcher)
+  await api.backgroundFetch('https://api.notion.com/v1/comments')
+  const foreground = api.fetch('https://api.notion.com/v1/pages/card', undefined, 5_000)
+  const rejected = expect(foreground).rejects.toMatchObject({ name: 'TimeoutError' })
+  await vi.advanceTimersByTimeAsync(5_999)
+  expect(timeout).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(timeout).toHaveBeenCalledOnce()
+  expect(timeout).toHaveBeenCalledWith(5_000)
+  await vi.advanceTimersByTimeAsync(5_000)
+  await rejected
+  expect(api.diagnostics.requests).toEqual({ 'GET comments': 1, 'GET pages': 1 })
+})
 
 it.each(['foreground', 'background'] as const)('rechecks backoff for a sleeping %s request after a delayed history 429', async mode => {
   vi.useFakeTimers()
@@ -58,7 +111,7 @@ it('backs off all queued traffic for Retry-After on a history 429', async () => 
   expect(api.diagnostics.rateLimits).toBe(1)
 })
 
-it('expires queued reads promptly without letting later requests bypass the active request or pacing', async () => {
+it.each(['fetch', 'backgroundFetch'] as const)('expires queued %s reads without bypassing the active request or pacing', async lane => {
   vi.useFakeTimers()
   let release!: (response: Response) => void
   const fetcher = vi.fn<typeof fetch>()
@@ -66,8 +119,9 @@ it('expires queued reads promptly without letting later requests bypass the acti
     .mockResolvedValue(new Response('{}'))
   const api = new NotionApi(fetcher, 350)
   const active = api.fetch('https://api.notion.com/v1/comments')
+  const expired = expect(api[lane]('https://api.notion.com/v1/pages/expired')).rejects.toThrow('Notion queue deadline exceeded')
   const controller = new AbortController()
-  const cancelled = api.fetch('https://api.notion.com/v1/pages/cancelled', { signal: controller.signal })
+  const cancelled = api[lane]('https://api.notion.com/v1/pages/cancelled', { signal: controller.signal })
   let failure: unknown
   void cancelled.catch(error => { failure = error })
   await vi.advanceTimersByTimeAsync(5000)
@@ -75,6 +129,8 @@ it('expires queued reads promptly without letting later requests bypass the acti
   controller.abort(timeout)
   await vi.advanceTimersByTimeAsync(0)
   expect(failure).toBe(timeout)
+  await vi.advanceTimersByTimeAsync(25_000)
+  await expired
   const next = api.fetch('https://api.notion.com/v1/pages/current')
   await vi.advanceTimersByTimeAsync(1000)
   expect(fetcher).toHaveBeenCalledTimes(1)
@@ -86,4 +142,92 @@ it('expires queued reads promptly without letting later requests bypass the acti
   await next
   expect(fetcher).toHaveBeenCalledTimes(2)
   expect(fetcher.mock.calls[1]![0]).toBe('https://api.notion.com/v1/pages/current')
+})
+
+
+it.each([35_000, 121_000])('honors a 120-second Desk deadline through %i ms of shared backoff', async backoff => {
+  vi.useFakeTimers()
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': String(backoff / 1_000) } }))
+    .mockResolvedValue(new Response('{}'))
+  const api = new NotionApi(fetcher)
+  await api.fetch('https://api.notion.com/v1/pages/other')
+  const caller = new AbortController()
+  const reason = new DOMException('Desk deadline elapsed', 'TimeoutError')
+  const deadline = setTimeout(() => caller.abort(reason), 120_000)
+  const renewal = api.backgroundFetch('https://api.notion.com/v1/pages/ready', { signal: caller.signal }, 5_000)
+  const result = backoff < 120_000 ? expect(renewal).resolves.toMatchObject({ ok: true }) : expect(renewal).rejects.toBe(reason)
+  await vi.advanceTimersByTimeAsync(backoff)
+  await result
+  expect(fetcher).toHaveBeenCalledTimes(backoff < 120_000 ? 2 : 1)
+  clearTimeout(deadline)
+})
+
+
+it('starts an exact read while interactive prose is still in flight', async () => {
+  vi.useFakeTimers()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const api = new NotionApi(async input => {
+    if (String(input).includes('/blocks')) await gate
+    return new Response('{}')
+  })
+  const prose = api.parallelFetch('https://api.notion.com/v1/blocks/card/children')
+  const exact = api.fetch('https://api.notion.com/v1/pages/card', undefined, 5_000)
+  await vi.advanceTimersByTimeAsync(350)
+  expect((await exact).ok).toBe(true)
+  release()
+  await prose
+})
+
+
+it('releases unsent write reservations and retains transport failures after send', async () => {
+  vi.useFakeTimers()
+  const root = await mkdtemp(join(tmpdir(), 'notion-dispatch-'))
+  try {
+    const leases = new CardLeases(root)
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': '35' } }))
+      .mockRejectedValue(new TypeError('Transport failed after send'))
+    const api = new NotionApi(fetcher)
+    const content = new WorkflowContent(new WorkReader({ token: 'fixture', dataSourceId: 'a'.repeat(32) }, api))
+    await api.fetch('https://api.notion.com/v1/pages/other')
+    const write = () => leases.mutate('card', () => content.request('comments', 'POST', {}), { kind: 'note' })
+    const unsent = expect(write()).rejects.toThrow('Notion queue deadline exceeded')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await unsent
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(leases.pendingWrites()).toEqual([])
+    const sent = expect(write()).rejects.toThrow('Transport failed after send')
+    await vi.advanceTimersByTimeAsync(5_000)
+    await sent
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(leases.pendingWrites()).toHaveLength(1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('starts the workflow budget at send and shares it across queued retries', async () => {
+  vi.useFakeTimers()
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('HTTP deadline exceeded', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': '6' } }))
+    .mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 19_000))
+      return new Response(null, { status: 429, headers: { 'Retry-After': '3' } })
+    })
+    .mockResolvedValue(Response.json({}))
+  const api = new NotionApi(fetcher)
+  const content = new WorkflowContent(new WorkReader({ token: 'fixture', dataSourceId: 'a'.repeat(32) }, api))
+  await api.fetch('https://api.notion.com/v1/pages/other')
+  const result = expect(content.request('comments')).rejects.toThrow('HTTP deadline exceeded')
+  await vi.advanceTimersByTimeAsync(26_000)
+  await result
+  await vi.advanceTimersByTimeAsync(3_000)
+  expect(fetcher).toHaveBeenCalledTimes(2)
 })

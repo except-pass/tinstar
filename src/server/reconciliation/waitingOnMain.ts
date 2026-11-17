@@ -1,4 +1,4 @@
-import { sourceWriteDispatched, type CardLeases } from './cardLeases'
+import type { CardLeases } from './cardLeases'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -149,7 +149,6 @@ export function mainWaitNotifier(config: ReconciliationConfig['notion'], api: No
       const marker = receiptMarker('waiting-on-main', randomUUID())
       body.rich_text.push({ type: 'text', text: { content: `\n${marker}` } })
       const perform = async () => {
-        sourceWriteDispatched()
         const response = await api.fetch('https://api.notion.com/v1/comments', { method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(5000), body: JSON.stringify(body) })
         await response.body?.cancel()
         if (response.status >= 500 || response.status === 408) throw new Error('Notification save unconfirmed')

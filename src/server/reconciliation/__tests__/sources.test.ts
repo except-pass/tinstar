@@ -43,6 +43,21 @@ describe('source freshness', () => {
     expect(JSON.stringify(stale)).not.toContain('secret')
   })
 
+  it('supersedes passive reads for foreground demand without publishing the old completion', async () => {
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const cache = new CachedObservation(async background => {
+      if (background) await gate
+      return { data: background ? 'passive' : 'foreground', observedAt: timestamp, coverage: 'complete' }
+    }, 20_000, 60_000, 'Unavailable', () => Date.parse(timestamp))
+    const passive = cache.get(false, true)
+    await Promise.resolve()
+    expect(await cache.get(true)).toMatchObject({ data: 'foreground', status: 'fresh' })
+    finish()
+    expect(await passive).toMatchObject({ data: 'foreground' })
+    expect(cache.peek()?.data).toBe('foreground')
+  })
+
   it('keeps initial failure unknown and expired successful reads stale', async () => {
     const failure = new CachedObservation(async () => { throw new Error('no access') }, 20, 60, 'Unavailable')
     expect(await failure.get()).toMatchObject({ status: 'unknown', data: null, coverage: 'unknown' })

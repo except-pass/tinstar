@@ -85,7 +85,7 @@ export function startServer(opts: ServerOptions) {
   const sourceWriteRecoveryTimer = setInterval(recoverSourceWrites, 60_000)
   sourceWriteRecoveryTimer.unref()
   recoverSourceWrites()
-  const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi, reconciliation.leases))
+  const mainWaits = new WaitingOnMain(() => reconciliation.snapshot(false, {}, true), mainWaitNotifier(reconciliation.mainWaitNotionConfig(), reconciliation.notionApi, reconciliation.leases))
   reconciliation.waitingOnMain = snapshot => mainWaits.refresh(snapshot)
   let mainWaitSweep: Promise<unknown> | undefined
   const sweepMainWaits = () => { mainWaitSweep ??= mainWaits.sweep().finally(() => { mainWaitSweep = undefined }) }

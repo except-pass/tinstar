@@ -207,3 +207,33 @@ it.each(['http', 'transport', 'cursor'] as const)('retains legacy answer paragra
   expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'legacy-answer' }))
   expect(reader.cachedDecisionHistory('card')?.context.outcome).toBe('partial')
 })
+
+
+it('recovers body and comment cache entries from overlapping successful reads', async () => {
+  let finish!: () => void
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, async input => {
+    await gate
+    const id = String(input).includes('/comments') ? 'comment' : 'prose'
+    return Response.json({ results: [{ id, type: 'paragraph', paragraph: { rich_text: [] }, rich_text: [] }], has_more: false })
+  })
+  const pending = reader.details('card')
+  const foreground = reader.details('card', false, async () => new Response(null, { status: 503 }))
+  finish()
+  await pending
+  expect(await foreground).toMatchObject({ outcome: 'available', blocks: [{ id: 'prose' }, { id: 'comment' }] })
+  expect(await reader.details('card')).toMatchObject({ outcome: 'available', commentsOutcome: 'available' })
+})
+
+it('retains a parsed answer when the next comment page is cancelled', async () => {
+  const attempt = new AbortController()
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, async (input, init) => {
+    const url = new URL(input)
+    if (url.pathname.includes('/blocks')) return Response.json({ results: [], has_more: false })
+    if (url.searchParams.has('start_cursor')) { attempt.abort(); init?.signal?.throwIfAborted() }
+    return Response.json({ results: [{ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "decision"' }] }], has_more: true, next_cursor: 'next' })
+  })
+  await reader.decisionDetails('card', true, attempt.signal)
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({ outcome: 'partial', commentsOutcome: 'partial', blocks: [{ id: 'answer' }] })
+  expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'answer' }))
+})

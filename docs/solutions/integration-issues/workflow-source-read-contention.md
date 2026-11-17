@@ -25,13 +25,12 @@ Ordinary checkpoint, edit and complete do not require a board census. Notes
 and managed sections have their own exact content reads; the generic failure
 message does not identify which read failed.
 
-The exact page read creates a five-second timeout **before** entering
-`NotionApi`'s shared serial queue. Background source queries, reconciliation,
-watchdog traffic and interactive calls share this queue, including pacing and
-429 Retry-After delays. The timeout can therefore expire before any page GET
-is submitted. Originally the queue waited for its predecessor even after the
-signal expired, and the page reader made only one attempt. A transient HTTP
-error or network failure also immediately failed the operation.
+At the time of the incident, the exact page read started its five-second
+timeout before entering `NotionApi`'s shared serial queue. Background source
+queries, reconciliation, watchdog traffic and interactive calls shared this
+queue, including pacing and 429 Retry-After delays. The timeout could expire
+before the page GET was submitted. The original page reader made only one
+attempt, so a transient HTTP error or network failure also failed the operation.
 
 This explains how an independent successful read can coexist with a failed
 write: they have separate queue positions/deadlines, writes require several

@@ -13,7 +13,7 @@ import { WorkflowOperations } from '../workflow'
 import { WorkflowContent, receiptMarker, sectionText } from '../workflowContent'
 import { ImplementationContracts, implementationContract, digest } from '../implementationContract'
 import { ReconciliationMcp } from '../mcp'
-import { jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
+import { JiraAdapter, jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
 import { jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
 import { workerLinkRecord } from '../workerLinks'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
@@ -30,6 +30,28 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
   resetOriginAllowlistForTests()
 })
+it.each([5_000, 120_000])('bounds Jira reads with a caller deadline of %i ms', async callerMs => {
+  vi.useFakeTimers()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(ms), ms)
+    return controller.signal
+  })
+  try {
+    const caller = AbortSignal.timeout(callerMs)
+    const adapter = new JiraAdapter(jira, (_input, init) => new Promise((_resolve, reject) => {
+      const signal = init!.signal!
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    }))
+    const result = expect(adapter.read(id, caller)).rejects.toBe(Math.min(callerMs, 20_000))
+    await vi.advanceTimersByTimeAsync(Math.min(callerMs, 20_000))
+    await result
+  } finally {
+    timeout.mockRestore()
+    vi.useRealTimers()
+  }
+})
+
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'jira-workflow-')); roots.push(root)
   const issues = new Map<string, any>(), notes = new Map<string, any[]>(), attachments = new Map<string, any>()
