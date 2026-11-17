@@ -8,6 +8,9 @@ import { createRequire as createSqliteRequire } from 'node:module'
 import { getConfigRoot } from '../configRoot'
 
 export const leaseDuration = 60 * 60 * 1000
+// Provider requests have 20-second deadlines. Allow five minutes for an
+// interrupted request to settle before using complete readback to release it.
+export const sourceWriteRecoveryAge = 5 * 60 * 1000
 export const leaseHash = (value: string) => createHash('sha256').update(value).digest('hex')
 /** Same authenticated boundary as session_probe; client metadata grants no authority. */
 export const leaseCaller = (actor: string, headers: IncomingHttpHeaders) => leaseHash(JSON.stringify([actor, headers.authorization, headers['x-tinstar-caller-authorization']]))
@@ -35,8 +38,8 @@ export const leaseFailure = (error: CardLeaseError, operation_id = '') => ({ out
 export const publicLease = (row: LeaseRow): CardLease => ({ card_id: row.card, generation: row.generation, holder: row.holder!, expires_at: new Date(row.expires).toISOString() })
 
 /** Short SQLite transactions fence each card before provider I/O. Unresolved
- * writes never expire into a new generation; recovery requires source readback
- * and an audited declaration that the earlier provider request has settled. */
+ * writes require source readback, through aged recovery or owner reconciliation;
+ * age alone never clears a reservation. */
 export class CardLeases {
   onChange?: () => void
   private path: string
@@ -145,7 +148,7 @@ export class CardLeases {
   auditInStorage(db: SqliteDatabase, card: string, type: string, detail: unknown) {
     db.prepare('INSERT INTO lease_events(card,type,at,detail) VALUES(?,?,?,?)').run(card, type, this.now(), JSON.stringify(detail))
   }
-  async mutate<T>(card: string, perform: () => Promise<T>, intent?: SourceWriteIntent) {
+  async mutate<T>(card: string, perform: () => Promise<T>, intent?: SourceWriteIntent, probe?: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) {
     const key = JSON.stringify([this.path, card]), operation = randomUUID()
     const run = async () => {
       const generation = await this.transaction(db => {
@@ -155,28 +158,34 @@ export class CardLeases {
         return row?.generation
       })
       const dispatch = { dispatched: false }
+      let completed = false, rejected = false
       try {
         const result = await sourceWriteAccess.run(dispatch, perform)
-        await this.transaction(db => {
-          db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, operation)
-          if (generation !== undefined) db.prepare('UPDATE leases SET expires = ? WHERE card = ? AND generation = ?').run(this.now() + leaseDuration, card, generation)
-          this.auditInStorage(db, card, 'write-completed', { operation })
-        })
+        completed = true
         return result
       } catch (error) {
-        // A rejected request is settled even if earlier requests succeeded. Network errors,
-        // timeout and failed readback retain their fence, including after restart.
         const rejection = error as { status?: number; method?: string }
-        const definite = rejection.status !== undefined && rejection.status >= 400 && rejection.status < 500 && rejection.method !== 'GET'
-        if (!intent || !dispatch.dispatched || definite) await this.transaction(db => {
-          db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, operation)
-          this.auditInStorage(db, card, 'write-rejected', { operation })
-        })
+        const definite = rejection.status !== undefined && rejection.status >= 400 && rejection.status < 500 && rejection.status !== 408 && rejection.method !== 'GET'
+        rejected = !intent || !dispatch.dispatched || definite
         throw error
+      } finally {
+        // Immutable note/receipt readback can establish success after a lost
+        // response. Absence is not safe yet: aged recovery will read it again.
+        if (!completed && !rejected && intent?.readback_can_settle && probe) {
+          completed = await probe(intent).catch(() => 'unknown') === 'applied'
+        }
+        if (completed || rejected) await this.transaction(db => {
+          const removed = db.prepare('DELETE FROM source_write_reservations WHERE card = ? AND operation = ?').run(card, operation)
+          if (!removed.changes) return
+          if (completed && generation !== undefined) db.prepare('UPDATE leases SET expires = ? WHERE card = ? AND generation = ?').run(this.now() + leaseDuration, card, generation)
+          this.auditInStorage(db, card, completed ? 'write-completed' : 'write-rejected', { operation })
+        })
       }
     }
     const promise = run()
-    runningWrites.set(key, promise)
+    // A competing attempt will reject at the durable fence. It must not
+    // replace (then erase) the callback that recovery still needs to await.
+    if (!runningWrites.has(key)) runningWrites.set(key, promise)
     try { return await promise } finally { if (runningWrites.get(key) === promise) runningWrites.delete(key) }
   }
   events(after = 0, limit = 100) {
@@ -184,6 +193,13 @@ export class CardLeases {
   }
   pendingWrites() {
     return this.readStorage(db => db.prepare('SELECT * FROM source_write_reservations ORDER BY started,card').all() as Array<{ card: string; operation: string; generation: number; intent: string | null; started: number; source_operation: string | null }>)
+  }
+  async recoverStaleWrites(probe: (card: string, intent: SourceWriteIntent | null) => Promise<'applied' | 'different' | 'unknown'>) {
+    for (const pending of this.pendingWrites()) {
+      if (pending.started > this.now() - sourceWriteRecoveryAge || runningWrites.has(JSON.stringify([this.path, pending.card]))) continue
+      await this.reconcileWrite(pending.card, pending.operation, 'source-write-recovery',
+        'Provider deadline and five-minute settlement window elapsed; complete source readback', intent => probe(pending.card, intent))
+    }
   }
   async recoverAppliedWrite(card: string, probe: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) {
     if (runningWrites.has(JSON.stringify([this.path, card]))) return
@@ -198,8 +214,8 @@ export class CardLeases {
     })
   }
   async reconcileWrite(card: string, operation: string, actor: string, reason: string, probe: (intent: SourceWriteIntent | null) => Promise<'applied' | 'different' | 'unknown'>) {
-    // The owner must establish quiescence; age or process disappearance alone
-    // cannot prove that a timed-out remote PATCH stopped running.
+    // Manual callers establish quiescence; automatic recovery waits beyond the
+    // provider deadline. Both paths still require complete source readback.
     if (!actor.trim() || !reason.trim()) throw new Error('Recovery actor and settled-request evidence required')
     if (runningWrites.has(JSON.stringify([this.path, card]))) throw new SourceWritePending()
     const pending = this.pendingWrites().find(row => row.card === card && row.operation === operation)
@@ -213,8 +229,8 @@ export class CardLeases {
     })
   }
   capability(caller: string, operation: string) { return this.token(caller, operation) }
-  private sourceRevisionInStorage(db: SqliteDatabase) {
-    return (db.prepare("SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE type LIKE 'write-%'").get() as { revision: number }).revision
+  private sourceRevisionInStorage(db: SqliteDatabase, card?: string) {
+    return (db.prepare(`SELECT coalesce(max(sequence), 0) AS revision FROM lease_events WHERE type LIKE 'write-%'${card ? ' AND card = ?' : ''}`).get(...(card ? [card] : [])) as { revision: number }).revision
   }
   sourceRevision() { return this.readStorage(db => this.sourceRevisionInStorage(db)) }
   private token(caller: string, operation: string) {
@@ -250,10 +266,9 @@ export class CardLeases {
       if (this.activeInStorage(old)) { if (exact) throw new CardLeaseError(publicLease(old)); continue }
       // Recheck admission under the same writer lock as allocation. Receipts
       // and held-token retries above deliberately preserve their original lease.
-      // A source write crossing queue/history or exact-card reads invalidates that snapshot;
+      // A write to this card crossing queue/history or exact-card reads invalidates its snapshot;
       // in-flight writes are fenced by reservedInStorage above.
-      if (admission && (db.prepare('SELECT 1 FROM source_write_reservations LIMIT 1').get() ||
-        this.sourceRevisionInStorage(db) !== admission.sourceRevision || !admission.eligible(card))) continue
+      if (admission && (this.sourceRevisionInStorage(db, card) > admission.sourceRevision || !admission.eligible(card))) continue
       const leaseToken = this.token(caller, operation)
       const row: LeaseRow = { card, generation: (old?.generation ?? 0) + 1, caller, holder: `${holder} · chat ${leaseHash(leaseToken).slice(0, 6)}`, token_hash: leaseHash(leaseToken), expires: this.now() + leaseDuration }
       db.prepare('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)').run(row.card, row.generation, row.caller, row.holder, row.token_hash, row.expires)

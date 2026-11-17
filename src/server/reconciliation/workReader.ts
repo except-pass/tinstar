@@ -24,7 +24,7 @@ export class WorkReader {
   private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
   private cards = new Map<string, { until: number; value: Promise<WorkCard> }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
-  mutate<T>(id: string, perform: () => Promise<T>, intent?: SourceWriteIntent) { return this.leases ? this.leases.mutate(id, perform, intent) : perform() }
+  mutate<T>(id: string, perform: () => Promise<T>, intent?: SourceWriteIntent, probe?: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) { return this.leases ? this.leases.mutate(id, perform, intent, probe) : perform() }
   lastKnown(id: string) { return this.known.get(id) }
   readonly jira?: JiraAdapter
   constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira']) { if (jira) this.jira = new JiraAdapter(jira, api.fetch) }

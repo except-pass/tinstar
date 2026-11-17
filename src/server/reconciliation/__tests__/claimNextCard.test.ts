@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import { ReconciliationMcp, type PresentationReaders } from '../mcp'
-import { CardLeases, leaseDuration } from '../cardLeases'
+import { CardLeases, leaseDuration, sourceWriteDispatched } from '../cardLeases'
 import { currentWillRequests, oldestOpenRequestSince } from '../claimPolicy'
 import { releasePull } from '../../../shared/releases'
 import { waitLine } from '../../../shared/waitingForPolicy'
@@ -300,19 +300,39 @@ it.each(['conditional', 'future', 'no-request'])('claims a property ask independ
   expect(f.leases.status('a'.repeat(32))).not.toBeNull()
 })
 
-it.each(['candidate', 'sibling'])('fences a %s source write during request-history collection', async mode => {
+it('fences a candidate source write during request-history collection', async () => {
   const f = await fixture([card('a'.repeat(32), { 'Next action': '' })])
   f.queue.needsWill![0]!.requests = [{ id: 'decision', cardId: 'a'.repeat(32), action: 'Decision', preserveAction: true, options: undefined,
     requestedFrom: 'Will', question: 'Approve the exception?', since: new Date().toISOString(), sourceId: 'request-note', answered: false }]
   f.workViews.mockImplementationOnce(async () => {
     const stale = structuredClone(f.queue)
-    await f.leases.mutate(mode === 'candidate' ? 'a'.repeat(32) : 'b'.repeat(32), async () => {
+    await f.leases.mutate('a'.repeat(32), async () => {
       f.queue.needsWill![0]!.requests[0]!.answered = true
     })
     return stale
   })
-  expect(await f.call('claim_next_card', claim(mode))).toMatchObject({ outcome: 'no-unclaimed-card' })
+  expect(await f.call('claim_next_card', claim('candidate'))).toMatchObject({ outcome: 'no-unclaimed-card' })
   expect(f.leases.status('a'.repeat(32))).toBeNull()
+})
+
+it.each(['claim_card', 'claim_next_card'])('keeps an unrelated unresolved write out of %s admission', async tool => {
+  const target = card(), sibling = card('b'.repeat(32))
+  const f = await fixture([target, sibling])
+  await expect(f.leases.mutate(sibling.id, async () => {
+    sourceWriteDispatched(); throw new Error('Lost reminder response')
+  }, { kind: 'note', text: 'Reminder' })).rejects.toThrow('Lost reminder response')
+  expect(f.leases.pendingWrites()).toHaveLength(1)
+  // A different-card write may also cross the exact-card read without
+  // invalidating this card's source evidence.
+  const read = f.currentCard.getMockImplementation()!
+  f.currentCard.mockImplementationOnce(async id => {
+    const current = await read(id)
+    await f.leases.mutate('c'.repeat(32), async () => undefined)
+    return current
+  })
+  expect(await f.call(tool, { ...claim('unrelated-write'), ...(tool === 'claim_card' ? { card_id: target.id } : {}) }))
+    .toMatchObject({ outcome: 'claimed', lease: { card_id: target.id } })
+  await expect(f.leases.mutate('d'.repeat(32), async () => 'saved')).resolves.toBe('saved')
 })
 
 it.each(['Decision', 'Do', 'Elevated command'])('filters exact Will action %s before reading another card', async action => {

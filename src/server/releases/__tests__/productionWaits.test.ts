@@ -119,7 +119,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, {
 async function reservedFixture() {
   const f = fixture(), root = await mkdtemp(join(tmpdir(), 'production-wait-reservations-')); roots.push(root)
   const sourceId = 'd'.repeat(32), comments: Array<{ id: string; rich_text: unknown }> = []
-  let loseNote = true, losePatch = false, patches = 0
+  let loseNote = true, loseAuditReadback = false, losePatch = false, patches = 0
   const page = () => ({ object: 'page', id: f.card.id, parent: { data_source_id: sourceId }, last_edited_time: new Date().toISOString(),
     properties: Object.fromEntries(Object.entries(f.card.properties).map(([name, prop]) => [name, { type: prop.type,
       [prop.type!]: ['select', 'status'].includes(prop.type!) ? prop.value ? { name: prop.value } : null : ['rich_text', 'title'].includes(prop.type!) ? [{ text: { content: String(prop.value ?? '') } }] : prop.value }])) })
@@ -127,10 +127,15 @@ async function reservedFixture() {
     const path = new URL(String(url)).pathname, method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : null
     if (path === '/v1/comments' && method === 'POST') {
       comments.push({ id: `comment-${comments.length}`, rich_text: body.rich_text })
-      if (loseNote) { loseNote = false; throw new Error('Applied audit, lost response') }
+      if (loseNote) { loseNote = false; loseAuditReadback = true; throw new Error('Applied audit, lost response') }
       return Response.json(comments.at(-1))
     }
-    if (path === '/v1/comments') return Response.json({ results: comments, has_more: false })
+    if (path === '/v1/comments') {
+      // Keep the audit uncertain until restart; successful immediate readback
+      // now settles the reservation in the write's finally block.
+      if (loseAuditReadback) { loseAuditReadback = false; throw new Error('Audit readback interrupted') }
+      return Response.json({ results: comments, has_more: false })
+    }
     if (path === `/v1/pages/${f.card.id}`) {
       if (method === 'PATCH') {
         patches++

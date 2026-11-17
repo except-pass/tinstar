@@ -80,6 +80,7 @@ export class ReconciliationSources {
   private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
   private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
   private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
+  private sourceWriteRecoveryPass?: Promise<void>
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
   private search = new SearchDocumentCollector((id, revision) => this.context.get(id, revision))
@@ -345,6 +346,12 @@ export class ReconciliationSources {
   sourceWriteRecovery() {
     const content = new WorkflowContent(this.workReader)
     return { list: () => this.leases.pendingWrites(), reconcile: (card: string, operation: string, actor: string, reason: string) => this.leases.reconcileWrite(card, operation, actor, reason, intent => content.reservationReadback(card, intent)) }
+  }
+
+  recoverSourceWrites() {
+    const content = new WorkflowContent(this.workReader)
+    return this.sourceWriteRecoveryPass ??= this.leases.recoverStaleWrites((card, intent) => content.reservationReadback(card, intent))
+      .finally(() => { this.sourceWriteRecoveryPass = undefined })
   }
 
   async currentCard(id: string) { return this.workReader.card(id, true) }
