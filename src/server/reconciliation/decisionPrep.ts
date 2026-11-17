@@ -7,6 +7,7 @@ import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type Decision
 import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
 import type { CardContextRead } from './cardContext'
+import { deferredDecisionStatus } from './claimPolicy'
 
 const exec = promisify(execFile)
 const attemptMs = 10 * 60 * 1000
@@ -162,7 +163,7 @@ export class DecisionPreparation {
   private refusal(candidate: PrepCandidate): string | null {
     if (candidate.answered) return 'This source request already has an answer.'
     if (candidate.leased) return 'A reviewer holds this card. Preparation does not claim or replace that lease.'
-    if (candidate.card_status === 'Todo') return 'Todo work is not prepared to fill the queue.'
+    if (deferredDecisionStatus(candidate.card_status)) return `Preparation is deferred while the source card is ${candidate.card_status}.`
     if (!candidate.request_id || !candidate.source_revision) return 'This decision has no exact source request to prepare.'
     if (candidate.reasons.length) return candidate.reasons[0]!
     return null
@@ -172,6 +173,8 @@ export class DecisionPreparation {
     this.expire(db)
     const blocked = this.refusal(candidate)
     if (blocked) return { outcome: 'ineligible', explanation: blocked }
+    const evidence = this.evidence(candidate.card_id)
+    if (this.closed(evidence, candidate.request_id)) return { outcome: 'ineligible', explanation: 'The source card is deferred, closed, or already answered.' }
     if (this.held(db, candidate.card_id)) return { outcome: 'ineligible', explanation: 'A reviewer holds this card. Preparation does not claim or replace that lease.' }
     if (this.readyRevision(db, candidate)) return { outcome: 'already-ready', explanation: 'This decision revision is already ready for review.' }
     const prior = db.prepare(`SELECT * FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?
@@ -185,7 +188,7 @@ export class DecisionPreparation {
       AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1)
       AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type = 'research-requested')`)
       .all(candidate.card_id, candidate.request_id, candidate.source_revision) as Array<{ body: string }>
-    const sources = this.evidence(candidate.card_id).requests.filter(request => request.binding?.request_id === candidate.request_id)
+    const sources = evidence.requests.filter(request => request.binding?.request_id === candidate.request_id)
     const source = sources.length === 1 ? sources[0] : undefined
     const unchanged = stored.some(row => {
       const packet = decisionPacketSchema.parse(JSON.parse(row.body))
@@ -218,6 +221,10 @@ export class DecisionPreparation {
   private async dispatch(job: Row) {
     const secret = this.secret
     if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
+    if (this.closed(this.evidence(job.card_id), job.request_id)) {
+      await this.mark(job.id, 'cancelled', 'Preparation stopped because the source card is deferred, closed, or answered.')
+      return
+    }
     const payload = { request_id: job.request_id, card_url: job.card_url, publish: { tool: 'publish_prepared_packet', job_id: job.id } }
     try {
       const response = await this.fetchImpl(secret.url, {
@@ -229,6 +236,10 @@ export class DecisionPreparation {
       if (!response.ok) { await this.mark(job.id, 'failed', `Preparer webhook rejected the job (HTTP ${response.status}).`); return }
       await this.mark(job.id, 'dispatched', 'Sent to the Tinstar Decision Prep bot.')
     } catch { await this.mark(job.id, 'failed', 'Preparer webhook could not be reached.') }
+  }
+
+  private closed(evidence: DecisionEvidence, requestId: string) {
+    return evidence.deferred || evidence.requests.some(request => request.answered && (request.request_id ?? request.binding?.request_id) === requestId)
   }
 
   async status(cachedOnly = false): Promise<PreparationReport> {
@@ -338,17 +349,21 @@ export class DecisionPreparation {
   async revalidate(cardId: string) {
     await this.initialize()
     const evidence = this.evidence(cardId)
-    const answered = evidence.requests.filter(request => request.answered && request.binding)
-    if (answered.length) await this.packets.leases.writeStorage(db => {
-      for (const request of answered) {
-        db.prepare(`UPDATE decision_prep_jobs SET state = 'cancelled', reason = 'Source request answered; preparation suppressed.', updated_at = ?
-          WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND published_at IS NULL AND state IN ('admitted','dispatched','blocked')`)
-          .run(new Date(this.now()).toISOString(), this.scope, cardId, request.binding!.request_id, request.binding!.source_revision)
-      }
+    const answered = new Set(evidence.requests.flatMap(request => {
+      const id = request.request_id ?? request.binding?.request_id
+      return request.answered && id ? [id] : []
+    }))
+    if (evidence.deferred || answered.size) await this.packets.leases.writeStorage(db => {
+      const cancel = db.prepare(`UPDATE decision_prep_jobs SET state = 'cancelled', reason = ?, updated_at = ?
+        WHERE scope = ? AND card_id = ? AND (? OR request_id = ?) AND published_at IS NULL AND state IN ('admitted','dispatched','blocked')`)
+      const at = new Date(this.now()).toISOString()
+      if (evidence.deferred) cancel.run('Preparation stopped because the source card is deferred or closed.', at, this.scope, cardId, 1, '')
+      else for (const id of answered) cancel.run('Source request answered; preparation suppressed.', at, this.scope, cardId, 0, id)
     })
-    const ids = this.packets.leases.readStorage(db => (db.prepare(`SELECT id FROM decision_packets p
+    if (evidence.deferred) return
+    const ids = this.packets.leases.readStorage(db => (db.prepare(`SELECT id, json_extract(body,'$.binding.request_id') AS request FROM decision_packets p
       WHERE json_extract(body,'$.binding.card_id') = ? AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`)
-      .all(cardId) as Array<{ id: string }>).map(row => row.id))
+      .all(cardId) as Array<{ id: string; request: string }>).filter(row => !answered.has(row.request)).map(row => row.id))
     for (const id of ids) {
       const validation = await this.packets.validate(id, evidence, 'decision-desk')
       if (validation.valid) await this.packets.leases.writeStorage(db => {
@@ -364,15 +379,12 @@ export class DecisionPreparation {
     await this.initialize()
     return this.packets.leases.readStorage(db => {
       const policy = this.packets.policyInStorage(db, this.scope)
-      const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state)).map(job => job.card_id)
-      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
+      const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state) && !this.closed(this.evidence(job.card_id), job.request_id)).map(job => job.card_id)
+      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card, json_extract(body,'$.binding.request_id') AS request FROM decision_packets p
         WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
         AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
-        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
-      const reviewable = packets.map(row => row.card).filter(card => {
-        const evidence = this.evidence(card)
-        return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
-      })
+        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string; request: string }>
+      const reviewable = packets.filter(({ card, request }) => !this.closed(this.evidence(card), request)).map(row => row.card)
       return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
     })
   }
@@ -462,6 +474,7 @@ export class DecisionPreparation {
         const current = this.packets.readInStorage(db, job.packet_id, evidence)
         return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
       }
+      if (this.closed(evidence, job.request_id)) throw new DecisionDeskConflict('This source card is deferred, closed, or already answered')
       if (!['admitted', 'dispatched', 'blocked', 'failed'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
       const stored = this.packets.publishInStorage(db, parsed.packet, evidence, preparerName, parsed.operation_id)
       const current = this.packets.readInStorage(db, stored.id, evidence)

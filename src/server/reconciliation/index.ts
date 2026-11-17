@@ -1,12 +1,12 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
-import { matchesClaimFilters, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
+import { deferredDecisionCard, matchesClaimFilters, currentWillRequests, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { projectDecisionEvidence, projectPreparedSubmitEvidence, preparedDecisionRequests } from './decisionEvidence'
+import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -180,7 +180,7 @@ export class ReconciliationSources {
   private decisionQueue() {
     const snapshot = this.knownSnapshot(), queue = buildQueue(snapshot)
     const complete = queue.coverage.intentions.status === 'fresh' && queue.coverage.intentions.coverage === 'complete' && queue.coverage.fleet.length > 0 && queue.coverage.fleet.every(home => home.status === 'fresh' && home.coverage === 'complete')
-    const cards = snapshot.intentions.data?.cards.filter(card => !card.archived && !card.in_trash && !['Done', 'Archived'].includes(String(card.properties.Status?.value))) ?? []
+    const cards = snapshot.intentions.data?.cards.filter(card => !deferredDecisionCard(card)) ?? []
     // Property coverage alone cannot prove there are no body/comment asks.
     // Absence is certified only when all active card histories are cached and
     // fresh as well; otherwise the empty response discloses unknown demand.
@@ -188,9 +188,11 @@ export class ReconciliationSources {
       const history = this.context.cachedDecisionHistory(card.id)
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
-    const requestCount = !historiesComplete && queue.items.length ? queue.items.length
-      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
-    const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
+    const activeIds = new Set(cards.map(card => card.id))
+    const activeItems = queue.items.filter(item => item.cardIds.some(id => activeIds.has(id)))
+    const card_ids = [...new Set(activeItems.flatMap(item => item.cardIds).filter(id => activeIds.has(id)))]
+    const requestCount = !historiesComplete && activeItems.length ? activeItems.length
+      : cards.reduce((sum, card) => sum + decisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
     coverage: complete ? 'complete' as const : 'unknown' as const, requests: complete && (requestCount > 0 || historiesComplete) ? requestCount : null }
@@ -218,7 +220,7 @@ export class ReconciliationSources {
     const queue = this.decisionQueue()
     return { requests: queue.requests, source_failures: queue.card_ids.flatMap(card_id => {
       const evidence = this.preparationEvidence(card_id)
-      const reasons = [...new Set([...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)])]
+      const reasons = [...new Set([...evidence.reasons, ...evidence.requests.flatMap(request => request.answered ? [] : request.reasons)])]
       const state = this.preparationHistory.state(card_id)
       if (state.message) reasons.push(state.message)
       return reasons.length ? [{ card_id, reasons }] : []
@@ -261,7 +263,7 @@ export class ReconciliationSources {
       const card = snapshot.intentions.data?.cards.find(item => item.id === cardId)
       const evidence = this.preparationEvidence(cardId)
       for (const request of evidence.requests) candidates.push({
-        rank: rank++, card_id: cardId, request_id: request.binding?.request_id ?? '', source_revision: request.binding?.source_revision ?? '',
+        rank: rank++, card_id: cardId, request_id: request.request_id ?? request.binding?.request_id ?? '', source_revision: request.binding?.source_revision ?? '',
         card_url: cardSourceUrl(cardId), card_status: card ? String(card.properties.Status?.value ?? '') : null,
         answered: request.answered, leased: held.has(cardId), reasons: [...evidence.reasons, ...request.reasons],
       })
@@ -282,6 +284,9 @@ export class ReconciliationSources {
     const { snapshot, queue } = this.preparationProjection
     const renewalUntil = this.preparationHistory.renewalUntil(cardId)
     const evidence = projectDecisionEvidence(snapshot, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue, renewalUntil)
+    const known = this.workReader.lastKnown(cardId)?.card
+    // An exact archived read removes the card from the active board census.
+    if (!snapshot.intentions.data?.cards.some(card => card.id === cardId) && known && deferredDecisionCard(known)) evidence.deferred = true
     const state = this.preparationHistory.state(cardId)
     if (state.message && !renewalUntil) evidence.reasons.push(state.message)
     return evidence
@@ -552,7 +557,7 @@ export class ReconciliationSources {
     for (const id of ids) {
       const card = snapshot.intentions.data?.cards.find(card => card.id === id), context = contexts.get(id)
       if (!card || context?.outcome !== 'available') continue
-      const summary = await reconcileDecision(card, context.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
+      const summary = await reconcileDecision(card, context.blocks,
         snapshot.fleet, undefined, undefined, undefined, snapshot.intentions, 'observe')
       if (!summary) continue
       for (const item of queue.items.filter(item => item.cardIds.includes(id))) {
@@ -641,7 +646,7 @@ export class ReconciliationSources {
         // ready-now status just because recovery moved off this request path.
         const resolution = mode === 'reconcile' ? await this.workflow.reconcileDecisions(id, snapshot.fleet, false, census)
           : card && contexts.get(id)?.outcome === 'available' ? await reconcileDecision(card,
-            contexts.get(id)!.blocks.map(block => ({ id: block.id, text: block.text, author: block.author ?? undefined })),
+            contexts.get(id)!.blocks,
             snapshot.fleet, this.workflow.decisionDelivery, undefined, undefined, snapshot.intentions, 'observe') : undefined
         if (resolution) resolutions.set(id, resolution)
         if (mode === 'reconcile' && resolution?.state === 'resolved') this.context.invalidate(id)

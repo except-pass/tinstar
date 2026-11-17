@@ -140,6 +140,7 @@ export interface DecisionResolutionStatus {
   delivery_id?: string
   source_anchor?: string
   request_id?: string
+  answer?: string
   requests?: DecisionResolutionStatus[]
 }
 export interface StartWorkResult {

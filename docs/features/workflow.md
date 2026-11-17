@@ -544,8 +544,27 @@ There is no independent poller or request store.
 Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads.
 A fresh board census is loaded only when an answered request without an explicit
 source card reference needs binding validation, and is shared within that pass;
-`get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
-answer can use the same published proposal and this format:
+`get_work({card_id, refresh: true})` reconciles one exact card.
+
+An `OWNER DECISION (Will, …):` card comment records the owner's answer in the
+card's own history. Add a `Request ID: <id>` line to target a specific request.
+An unnamed decision applies to the single open request. When multiple requests
+are open, the Desk asks for verification. An explicit option pick recorded by
+the owner connector also closes its request and preserves the owner's words.
+The answer stops preparation until a new `request_decision` is published for
+that ID. Check-ins, reminders and prepared packets leave the request unchanged.
+The prose form records a decision without specifying a workflow transition.
+
+Todo, Backlog, Archived and Done cards are excluded from preparation, review
+offers, claims and Waiting on you reminders. Returning an open request to an
+active card status restores eligibility with its existing Will action.
+
+Run `npx tsx scripts/decision-owner-answer-sweep.ts [--config-home DIR]` to
+list requests the prose or connector-pick form closes without a structured
+answer row. The read-only report prints card and comment IDs, a count, and any
+gaps in source coverage.
+
+A direct Notion answer can also include a workflow transition in this format:
 
 ```text
 Tin Star answer: "the-published-proposal-id"

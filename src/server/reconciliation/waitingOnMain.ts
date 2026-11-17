@@ -13,6 +13,7 @@ import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
 import { WorkReader } from './workReader'
 import { WorkflowContent, receiptMarker } from './workflowContent'
+import { deferredDecisionCard } from './claimPolicy'
 import { mainHomeLabel, waitDependency, nudgeDue, waitAgeLabel, waitAlertDue, type MainWaitItem, type MainWaitRead, type ParentResolution } from '../../shared/waitingOnMain'
 
 export const MAIN_WAIT_OWNER = '84d29212-4a5b-49f1-91bf-92b7adeff516'
@@ -52,7 +53,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
   const namesMate = (name: string) => /^(?:first mate|second mate|secondmate|mate)(?: \([^)]+\))?$/i.test(name.trim()) || mateNames.has(name.trim().toLowerCase())
   for (const card of board.data?.cards ?? []) {
     const value = (name: string) => String(card.properties[name]?.value ?? '')
-    if (card.archived || card.in_trash || ['done', 'archived'].includes(value('Status').toLowerCase())) continue
+    if (deferredDecisionCard(card)) continue
     const wait = value('Waiting For'), id = value('Waiting For ID')
     const textDependencies = wait.split('\n').map(entry => waitDependency(entry))
     const dependencies = id.trim() ? [waitDependency('', id)] : textDependencies

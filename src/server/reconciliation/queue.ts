@@ -165,6 +165,7 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const actions = prop(card, 'Will action')
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
   if (card.archived || card.in_trash || complete(word(card, 'Status')) || future(date(card, 'Start Date'), now)) return null
+  if (item.requests?.some(request => request.cardId === card.id && !request.answered && request.verification)) return null
   // Retain known answers even when the rest of the history is incomplete.
   // A property ask must not resurrect an already answered structured request;
   // an answer bound to another source does not close an independent request.

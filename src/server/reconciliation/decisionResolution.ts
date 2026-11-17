@@ -1,5 +1,5 @@
 import { currentDecisionProposal, decisionProposalSchema } from '../../shared/decisionProposal'
-import { decisionRecordRows, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRecordRows, decisionRequestStates, ownerDecisionOperation, workflowNoteHasMarker, type RequestNote } from '../../shared/workflowRequests'
 import { createHash } from 'node:crypto'
 import { requestAnchor, firstMateRequestSchema, type FirstMateRequest } from '../../shared/deskSource'
 import type { StartWorkResult } from '../../shared/workflow'
@@ -7,7 +7,6 @@ import { sourceRequests } from '../fleet/requests'
 import type { ListedMessage, OutboxMessage, SubmitResult } from '../fleet/inbox'
 import type { SourceSnapshot } from './index'
 import type { WorkCard } from './workReader'
-import type { WorkflowNote } from './workflowContent'
 import { ageObservation } from './observation'
 import { decisionCard } from './decisionCard'
 
@@ -59,12 +58,16 @@ export function bindDecision(fleet: SourceSnapshot['fleet'], request: FirstMateR
 }
 export { decisionRecordRows } from '../../shared/workflowRequests'
 const rows = decisionRecordRows
-export function decisionHistory(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+export function decisionHistory(notes: RequestNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+  const states = decisionRequestStates(notes)
   const entries = notes.flatMap(note => {
     const data = rows([note], 'Tin Star answer data: ')[0]
     return rows([note], 'Tin Star request: ').map(row => {
       if (data?.binding && row.id !== data.request_id) throw new DecisionSourceError('answer binding does not match its proposal identity')
       return { row, added: !!data?.binding }
+    }).filter(({ row, added }) => {
+      const state = states.get(row.id)
+      return !state?.reopened || state.publication === note || added && state.answers.includes(note)
     })
   })
   const history = [...new Set(entries.map(entry => entry.row.id))].flatMap(id => {
@@ -84,7 +87,7 @@ export function decisionHistory(notes: WorkflowNote[], publications?: import('./
     return !value.success || value.data.source.kind === 'firstmate-request' && value.data.source.id === request.data.id && (publications === undefined || publications.some(entry => entry.source_request && requestKey(entry.source_request) === requestKey(request.data) && JSON.stringify(entry.value) === JSON.stringify(value.data)))
   })
 }
-export function decisionProposals(notes: WorkflowNote[], publications?: import('./proposalSource').ProposalPublication[]) {
+export function decisionProposals(notes: RequestNote[], publications?: import('./proposalSource').ProposalPublication[]) {
   const history = decisionHistory(notes, publications)
   const bound = new Map<string, typeof history>()
   for (const row of history.filter(row => row.source_request)) {
@@ -102,7 +105,7 @@ export function decisionProposals(notes: WorkflowNote[], publications?: import('
   })
   return history.filter(row => !decisionProposalSchema.safeParse(row.proposal).success || current.includes(row))
 }
-export function decisionAnswer(note: WorkflowNote) {
+export function decisionAnswer(note: { text: string }) {
   const data = rows([note], 'Tin Star answer data: ')[0]
   if (data && typeof data.answer === 'string') return { answer: data.answer as string, owner: data.next?.owner as string | undefined, status: data.next?.status as string | undefined, wait: data.resolve_wait as string | undefined }
   const start = note.text.indexOf('\nAnswer: ')
@@ -110,20 +113,34 @@ export function decisionAnswer(note: WorkflowNote) {
   if (start < 0 || !footer || footer.index <= start) return null
   return { answer: note.text.slice(start + '\nAnswer: '.length, footer.index).trim(), owner: footer[1], status: footer[2], wait: footer[3] }
 }
-export const decisionAnswerText = (note: WorkflowNote) => decisionAnswer(note)?.answer ?? null
+export const decisionAnswerText = (note: { text: string }) => decisionAnswer(note)?.answer ?? null
 /** Existing Notion history is the durable binding/answer record. The fleet
  * outbox owns delivery, including retries; this adds no queue or writer. */
-export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
+export async function reconcileDecision(card: WorkCard, notes: RequestNote[], fleet: SourceSnapshot['fleet'], delivery?: DecisionDelivery,
   confirm?: (text: string, marker: string) => Promise<void>, publications?: import('./proposalSource').ProposalPublication[], intentions?: SourceSnapshot['intentions'] | (() => Promise<SourceSnapshot['intentions']>), mode: 'reconcile' | 'observe' = 'reconcile'): Promise<DecisionResolution | undefined> {
   let requests: ReturnType<typeof decisionHistory>
   try { requests = decisionHistory(notes, publications) } catch (error) { return verify((error as Error).message) }
-  const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success || rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) || rows(notes, 'Tin Star answer data: ').some(answer => answer.request_id === row.id)))
+  const states = decisionRequestStates(notes)
+  const ambiguous = [...states.values()].find(request => request.verification && !request.answers.length)
+  const ownerAnsweredProposals = decisionProposals(notes, publications).filter(row => states.get(row.id)?.ownerAnswer)
+  const bound = requests.filter(row => row && 'source_request' in row && (!decisionProposalSchema.safeParse(row.proposal).success ||
+    rows(notes, 'Tin Star decision intent: ').some(intent => intent.input?.request_id === row.id) ||
+    rows(states.get(row.id)?.answers ?? [], 'Tin Star answer data: ').some(answer => answer.request_id === row.id) ||
+    ownerAnsweredProposals.some(proposal => proposal.id === row.id)))
+  const native = requests.flatMap(row => {
+    const state = states.get(row.id)
+    const answer = state?.ownerAnswer?.text ?? state?.answers.filter(ownerDecisionOperation).map(note => decisionAnswerText(note)).find(Boolean)
+    return !row.source_request && answer ? [{ state: 'resolved' as const, message: 'Decision recorded on the card', request_id: row.id, answer }] : []
+  })
   if (!bound.length) {
+    if (ambiguous?.verification) return verify(ambiguous.verification)
+    if (native.length) return { ...native[0]!, requests: native }
     const linkedSource = fleet.some(home => [...(home.observation.data?.backlog ?? []), ...(home.observation.data?.tasks ?? [])].some(record =>
       record.cardReferences.some(ref => ref.pageId === card.id && ref.basis === 'explicit')))
-    return linkedSource && rows(notes, 'Tin Star answer: ').length && !rows(notes, 'Tin Star request: ').some(row => row.source_request) ? verify('answered proposal has no explicit First Mate request binding') : undefined
+    if (linkedSource && rows(notes, 'Tin Star answer: ').length && !rows(notes, 'Tin Star request: ').some(row => row.source_request)) return verify('answered proposal has no explicit First Mate request binding')
+    return undefined
   }
-  const results: DecisionResolution[] = []
+  const results: DecisionResolution[] = [...native]
   for (const row of bound) {
     const parsed = firstMateRequestSchema.safeParse(row.source_request)
     if (!parsed.success || typeof row.id !== 'string' || typeof row.source_question !== 'string' || !(row.source_spawn_gen === null || typeof row.source_spawn_gen === 'string')) return verify('published source binding is incomplete')
@@ -131,16 +148,16 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
   // Validate every binding before sending any answer from this card.
   const reconcile = async (row: typeof bound[number]): Promise<DecisionResolution> => {
     const request = firstMateRequestSchema.parse(row.source_request)
-    const answers = notes.filter(note => rows([note], 'Tin Star answer: ').includes(row.id))
-    if (!answers.length) throw new Error('No answer')
-    const texts = [...new Set(answers.map(decisionAnswerText))]
+    const state = states.get(row.id)!
+    const texts = [...new Set(state.answers.map(note => state.ownerAnswer?.note === note ? state.ownerAnswer.text : decisionAnswerText(note)))]
     if (texts.length !== 1 || !texts[0]) return verify('answer is missing or contradictory')
     const answer = texts[0]
     // One immutable answer per published proposal. Semantic identity survives
     // refresh, process restarts and a different caller's operation_id.
-    const digest = createHash('sha256').update(JSON.stringify([requestKey(request), card.id, row.id])).digest('hex').slice(0, 32)
+    const identity = state.reopened ? [row.id, state.publication.id] : [row.id]
+    const digest = createHash('sha256').update(JSON.stringify([requestKey(request), card.id, ...identity])).digest('hex').slice(0, 32)
     const deliveryId = `tinstar-${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20)}`
-    const marker = `Tin Star reconciled: ${JSON.stringify([requestKey(request), row.id, answer])}`
+    const marker = `Tin Star reconciled: ${JSON.stringify([requestKey(request), ...identity, answer])}`
     try {
       const context = sourceContext(fleet, request)
       let census = typeof intentions === 'function' ? undefined : intentions
@@ -181,9 +198,11 @@ export async function reconcileDecision(card: WorkCard, notes: WorkflowNote[], f
     }
   }
   for (const row of bound) {
-    if (!notes.some(note => rows([note], 'Tin Star answer: ').includes(row.id))) continue
-    results.push({ ...await reconcile(row), source_anchor: requestKey(row.source_request), request_id: row.id })
+    const state = states.get(row.id)
+    if (!state?.answers.length) continue
+    results.push({ ...await reconcile(row), source_anchor: requestKey(row.source_request), request_id: row.id, ...(state.ownerAnswer ? { answer: state.ownerAnswer.text } : {}) })
   }
+  if (ambiguous?.verification) return { ...verify(ambiguous.verification), ...(results.length ? { requests: results } : {}) }
   if (!results.length) return undefined
   const summary = results.find(result => result.state === 'verification-needed') ?? results.find(result => result.state === 'pending') ?? results[0]!
   return { ...summary, requests: results }

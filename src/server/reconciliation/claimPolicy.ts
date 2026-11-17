@@ -13,6 +13,8 @@ export const claimFilters = {
 export const claimFilterSchema = z.object(claimFilters)
 export type ClaimFilters = z.infer<typeof claimFilterSchema>
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
+export const deferredDecisionStatus = (status: unknown) => ['todo', 'backlog', 'archived', 'done'].includes(String(status).trim().toLowerCase())
+export const deferredDecisionCard = (card: WorkCard) => card.archived || card.in_trash || deferredDecisionStatus(value(card, 'Status'))
 export function needsWillIssues(card: WorkCard): string[] {
   const issues: string[] = []
   for (const [field, expected] of [['Owner', 'Will'], ['Status', 'Waiting For'], ['Waiting For Type', 'Actor'], ['Waiting For ID', 'Will']] as const) {
@@ -30,7 +32,7 @@ export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0
 export function oldestOpenRequestSince(requests: ReturnType<typeof decisionRequests>) {
   return requests.filter(request => !request.answered).flatMap(request => request.since && Number.isFinite(Date.parse(request.since)) ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
 }
-export const strictlyNeedsWill = (card: WorkCard) => !card.archived && !card.in_trash && needsWillIssues(card).length === 0
+export const strictlyNeedsWill = (card: WorkCard) => !deferredDecisionCard(card) && needsWillIssues(card).length === 0
 export function matchesClaimFilters(card: WorkCard, filters: ClaimFilters, requestSince: string | null = null, now = Date.now()) {
   const matches = (name: string, expected?: string) => expected === undefined || (Array.isArray(value(card, name)) ? (value(card, name) as unknown[]).includes(expected) : value(card, name) === expected)
   const since = requestSince ? Date.parse(requestSince) : NaN
@@ -49,7 +51,7 @@ export function responsibleMate(card: WorkCard, notes: Array<{ text: string }> =
   return null
 }
 export function malformedWillAsk(card: WorkCard) {
-  if (card.archived || card.in_trash || ['Done', 'Archived'].includes(String(value(card, 'Status')))) return null
+  if (deferredDecisionCard(card)) return null
   const actions = value(card, 'Will action')
   const claimsWill = String(value(card, 'Owner') ?? '').trim().toLowerCase() === 'will' || value(card, 'Waiting For ID') === 'Will' || (Array.isArray(actions) ? actions : [actions]).some(action => typeof action === 'string' && !!action.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(action.trim()))
   const issues = needsWillIssues(card)

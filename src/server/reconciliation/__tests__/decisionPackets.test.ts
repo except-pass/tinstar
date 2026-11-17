@@ -9,6 +9,8 @@ import { projectDecisionEvidence } from '../decisionEvidence'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { ReconciliationSources } from '../index'
 import { CardContextReader } from '../cardContext'
+import { decisionRequests } from '../../../shared/workflowRequests'
+import { reconcileDecision } from '../decisionResolution'
 
 const roots: string[] = []
 const now = Date.parse('2026-11-15T18:00:00Z')
@@ -323,7 +325,7 @@ it('keeps unchanged research Ready beyond its former review deadline only with n
   expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
 })
 
-it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('suppresses preparation after a later structural owner %s without guessing wording', kind => {
+it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('keeps the request open after owner %s without a decision or explicit choice', kind => {
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   const owner = { id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
@@ -331,8 +333,8 @@ it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name']
     ...(kind === 'comment' ? { author: 'owner-chatgpt' } : kind === 'comment-name' ? { author: 'notion-owner-id', authorName: 'owner-chatgpt' } : {}) }
   f.history.context.blocks.push(owner)
   const evidence = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
-  expect(evidence.requests[0]).toMatchObject({ answered: true, reasons: [] })
-  expect(validateDecisionPacket(f.packet, evidence, now)).toMatchObject({ valid: false, reasons: expect.arrayContaining(['This source request already has an answer']) })
+  expect(evidence.requests[0]).toMatchObject({ answered: false, reasons: [] })
+  expect(evidence.requests[0]!.dependencies).toMatchObject(f.evidence.requests[0]!.dependencies)
 })
 
 it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-edited-only'] as const)('does not guess an owner answer from %s evidence', kind => {
@@ -344,16 +346,53 @@ it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-ed
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(false)
 })
 
-it('rejects duplicate request IDs even with a newer meaningful publication', () => {
+it('rejects duplicate legacy request IDs even if the wording changes after an answer', () => {
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   f.history.context.blocks.push({ id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
-    text: 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-response"]' })
+    text: 'OWNER DECISION (Will): Defer this request.' })
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(true)
   f.history.context.blocks.push({ ...request, id: 'new-request-revision', createdAt: new Date(now - 5_000).toISOString(),
-    text: request.text.replace(f.packet.question, 'Authorize the revised preview scope?') })
+    text: request.text.replace('Operation: request_decision\n', '').replace(f.packet.question, 'Authorize the revised preview scope?') })
   const revised = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
   expect(revised.reasons).toContain('Decision publication history is contradictory or incomplete')
   expect(revised.requests.every(request => request.reasons.length > 0)).toBe(true)
   expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
+})
+
+it('matches the Influx card history, flags an unnamed answer when ambiguous, and reopens only on a new request', async () => {
+  const f = cardNativeFixture(), asOf = Date.parse('2026-11-17T19:14:00Z')
+  const card = f.snapshot.intentions.data!.cards.find(card => card.id === f.cardId)!
+  card.id = '41a50ce6d422817cb434d2fa5de171cb'
+  const request: typeof f.history.context.blocks[number] = { ...f.history.context.blocks[0]!, id: 'influx-lifecycle-request',
+    createdAt: '2026-11-17T03:30:00Z' }
+  const words = 'B, not now. Do not re-request this decision until the spike reports.'
+  const notes = [request, {
+    id: 'influx-v8', type: 'comment', author: 'same-integration', createdAt: '2026-11-17T03:45:00Z', text: 'Prepared decision packet v8: A now or B defer.',
+  }, {
+    id: 'owner-answer', type: 'comment', author: 'same-integration', createdAt: '2026-11-17T03:59:00Z',
+    text: `OWNER DECISION (Will, 2026-11-16 10:59 PM ET, via Tinstar Decision Prep): ${words}`,
+  }, {
+    id: 'influx-v9', type: 'comment', author: 'same-integration', createdAt: '2026-11-17T04:00:00Z', text: 'Prepared decision packet v9.',
+  }, {
+    id: 'firstmate-check-in', type: 'comment', author: 'same-integration', createdAt: '2026-11-17T19:13:00Z', text: 'Firstmate check-in: spike pending.',
+  }]
+  expect(decisionRequests(notes)).toMatchObject([{ id: f.packet.binding.request_id, answered: true, answer: words }])
+  expect(await reconcileDecision(card, notes, [])).toMatchObject({ state: 'resolved', answer: words })
+
+  const second = { ...request, id: 'separate-source', text: request.text.replace(f.packet.binding.request_id, 'independent-ask') }
+  const ambiguous = [request, second, ...notes.slice(1)]
+  f.history.context.blocks = ambiguous
+  f.history.observed_at = new Date(asOf - 1000).toISOString()
+  f.history.expires_at = new Date(asOf + 1000).toISOString()
+  const projected = projectDecisionEvidence(f.snapshot, card.id, f.history, asOf)
+  expect(projected.requests).toHaveLength(2)
+  expect(projected.requests.every(row => !row.answered && row.reasons.some(reason => reason.includes('multiple open requests')))).toBe(true)
+  expect(await reconcileDecision(card, ambiguous, [])).toMatchObject({ state: 'verification-needed', message: expect.stringContaining('multiple open requests') })
+  const explicit = ambiguous.map(note => note.id === 'owner-answer' ? { ...note, text: `${note.text}\nRequest ID: independent-ask` } : note)
+  expect(decisionRequests(explicit)).toMatchObject([{ answered: false }, { id: 'independent-ask', answered: true, answer: words }])
+
+  const revised = [...notes, { ...request, id: 'new-request', createdAt: '2026-11-17T19:14:00Z' }]
+  expect(decisionRequests(revised)).toMatchObject([{ id: f.packet.binding.request_id, sourceId: 'new-request', answered: false }])
+  expect(await reconcileDecision(card, revised, [])).toBeUndefined()
 })

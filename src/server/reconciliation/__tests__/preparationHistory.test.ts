@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os'
 import { CardContextReader } from '../cardContext'
 import { ReconciliationMcp } from '../mcp'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
 import { validateDecisionPacket } from '../../../shared/decisionPacket'
+import { mainWaitCandidates } from '../waitingOnMain'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -55,6 +57,58 @@ it('loads cold body and comment history for Prepare now without other readers, w
   expect(reads.filter(read => !read.path.endsWith('/query')).every(read => read.method === 'GET')).toBe(true)
   expect(reconcile).not.toHaveBeenCalled()
   expect(sources.leases.status(cardId)).toBeNull()
+}, 20_000)
+
+it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s cards and restores them when active', async deferred => {
+  let status = 'Waiting For'
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    const path = new URL(String(input)).pathname
+    if (!path.endsWith('/query') && !path.includes('/v1/pages/')) return response
+    const body = await response.json()
+    for (const page of body.results ?? [body]) {
+      page.properties.Status.status.name = status
+      page.last_edited_time = new Date(Date.now() - 5 * 3600_000).toISOString()
+    }
+    return Response.json(body)
+  } })
+  const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare only active work' })
+  const first = await prepare()
+  expect(first.outcome).toBe('dispatched')
+  const packet = preparedDecisionFixture().packet, request = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await f.sources.preparation.publish({ job_id: first.job_id, operation_id: 'ready-before-defer', packet })).toMatchObject({ ready: true })
+
+  const client = new Client({ name: 'deferred-claim-test', version: '1' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await new ReconciliationMcp(f.sources, f.root).createServer('Fixture owner').connect(serverTransport)
+  await client.connect(clientTransport)
+  const claimNext = async (operation_id: string) => {
+    const result = await client.callTool({ name: 'claim_next_card', arguments: { operation_id } }) as { content: Array<{ text: string }> }
+    return JSON.parse(result.content[0]!.text)
+  }
+  try {
+    status = deferred
+    const paused = await f.sources.snapshot(true)
+    expect(mainWaitCandidates(paused).items).not.toContainEqual(expect.objectContaining({ key: f.cardId }))
+    expect(await prepare()).toMatchObject({ outcome: 'ineligible' })
+    await f.sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
+    await f.sources.preparation.replenish()
+    expect(f.posts).toHaveLength(1)
+    expect(await f.sources.preparation.priorityCards()).not.toContain(f.cardId)
+    expect(await loadedSnapshot(f.sources)).toMatchObject({ ready: [], pending: [], counts: { requests: 0, to_prepare: 0 } })
+    expect(await f.sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'deferred-desk-claim', card_id: f.cardId })).toMatchObject({ outcome: 'no-decision-requests' })
+    expect((await f.sources.claimQueue()).needsWill).toEqual([])
+    expect(await claimNext('deferred')).toMatchObject({ outcome: 'no-unclaimed-card' })
+
+    status = 'Waiting For'
+    const active = await f.sources.snapshot(true)
+    expect(mainWaitCandidates(active).items).toContainEqual(expect.objectContaining({ key: f.cardId, audience: 'owner' }))
+    expect((await loadedSnapshot(f.sources)).ready).toEqual([expect.objectContaining({ card_id: f.cardId })])
+    expect(await claimNext('active-again')).toMatchObject({ outcome: 'claimed', lease: { card_id: f.cardId } })
+    expect(f.posts).toHaveLength(1)
+  } finally { await client.close() }
 }, 20_000)
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {
@@ -429,15 +483,21 @@ it.each(['properties', 'comments', 'body'] as const)('retains Ready through tran
   expect(posts).toHaveLength(1)
 }, 20_000)
 
-it.each(['receipt', 'comment'] as const)('registers a later owner %s from real history reads and never re-offers or re-prepares the request', async kind => {
-  let time = Date.now(), ownerAt: string | undefined
+it.each(['option-pick', 'influx-comment'] as const)('registers an owner %s and never re-offers or re-prepares the request after a check-in', async kind => {
+  let time = Date.now(), ownerAt: string | undefined, checkInAt: string | undefined
+  const words = 'B, not now. Do not re-request this decision until the spike reports.'
+  const integration = { id: 'shared-notion-integration' }
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
-  const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
+  const { sources, cardId, requestId, posts, sourceRequest } = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
-    if (ownerAt && new URL(String(input)).pathname === '/v1/comments') {
+    if (ownerAt && (init?.method ?? 'GET') === 'GET' && new URL(String(input)).pathname === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: { id: 'provider-user-id', ...(kind === 'comment' ? { name: 'owner-chatgpt' } : {}) },
-        rich_text: [{ plain_text: kind === 'receipt' ? 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-edit"]' : 'A response with no decision protocol or keyword.' }] })
+      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: integration,
+        rich_text: [{ plain_text: kind === 'option-pick'
+          ? `Operation: answer_decision\nRequest ID: preview-question\nOption ID: defer\nAnswer: ${words}\nTin Star operation: ["owner-chatgpt","owner-answer"]`
+          : `OWNER DECISION (Will, 2026-11-16 10:59 PM ET, via Tinstar Decision Prep): ${words}` }] })
+      if (checkInAt) body.results.push({ id: 'later-firstmate-check-in', created_time: checkInAt, created_by: integration,
+        rich_text: [{ plain_text: 'Firstmate check-in: spike pending. Quoting the packet for reference.' }] })
       return Response.json(body)
     }
     return response
@@ -450,7 +510,13 @@ it.each(['receipt', 'comment'] as const)('registers a later owner %s from real h
   ownerAt = new Date(time + 1000).toISOString(); time += 16_000; vi.setSystemTime(time)
   const snapshot = await loadedSnapshot(sources)
   expect(sources.preparationEvidence(cardId).requests[0]!.answered).toBe(true)
-  expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0 }, ready: [], pending: [] })
+  expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0, needs_repreparation: 0 }, ready: [], pending: [] })
+  const answered = sources.preparationEvidence(cardId).requests[0]!
+  expect(await sources.workflow.reconcileDecisions(cardId)).toMatchObject({ answer: words, request_id: requestId })
+  checkInAt = new Date(time + 1000).toISOString(); time += 31_000; vi.setSystemTime(time)
+  expect(await loadedSnapshot(sources)).toMatchObject({ ready: [], pending: [] })
+  expect(sources.preparationEvidence(cardId).requests[0]!.binding).toEqual(answered.binding)
+  expect(sources.preparationEvidence(cardId).requests[0]!.dependencies.map(dep => dep.revision)).toEqual(answered.dependencies.map(dep => dep.revision))
   await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
   await sources.preparation.replenish()
   expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Do not repeat this answer' })).toMatchObject({ outcome: 'ineligible' })
@@ -458,6 +524,15 @@ it.each(['receipt', 'comment'] as const)('registers a later owner %s from real h
   expect(await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'do-not-reoffer', review_session_token: session.review_session_token })).toMatchObject({ outcome: 'no-decision-requests' })
   expect(posts).toHaveLength(1)
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', readiness: { ready: false } })
+  if (kind === 'influx-comment') {
+    expect(await sources.workflow.update({ card_id: cardId, kind: 'request_decision', operation_id: 'new-request-after-spike',
+      request_id: requestId, question: 'The spike reported. Reconsider the preview?', requested_from: 'Will', action: 'Decision',
+      source_request: sourceRequest, options: packet.binding.options }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    await loadedSnapshot(sources)
+    expect(sources.preparationEvidence(cardId).requests).toMatchObject([{ answered: false, binding: { request_id: requestId, source_id: expect.stringMatching(/^published-comment-/) } }])
+    await sources.preparation.replenish()
+    expect(posts).toHaveLength(2)
+  }
 }, 20_000)
 
 it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow renewals and transient failures, with admission off and Desk closed', async () => {
@@ -532,7 +607,7 @@ it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s c
     }
     if (failing && kind === 'answer' && path === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Defer this request.' }] })
+      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { id: 'shared-notion-integration' }, rich_text: [{ plain_text: 'OWNER DECISION (Will): Defer this request.' }] })
       return Response.json(body)
     }
     return response
