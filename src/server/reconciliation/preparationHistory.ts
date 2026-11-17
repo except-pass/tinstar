@@ -7,15 +7,20 @@ export class PreparationHistory {
   private failures = new Map<string, { attempts: number; retryAt: number; message: string }>()
   private queue: string[] = []
   private active = 0
-  constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {}) {}
+  constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
+    private readProperties: (id: string) => Promise<void> = async () => {},
+    private propertiesFresh: (id: string, until: number) => boolean = () => true) {}
 
-  warm(ids: string[]) {
-    for (const id of ids) {
+  warm(ids: string[], priority: string[] = []) {
+    const important = new Set(priority)
+    for (const id of new Set([...priority, ...ids])) {
       const history = this.reader.cachedDecisionHistory(id)
-      if (history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()) continue
+      if (this.propertiesFresh(id, Date.now() + (important.has(id) ? 15_000 : 0)) && history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now() + (important.has(id) ? 15_000 : 0)) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > Date.now()) continue
       this.enqueue(id)
     }
+    // Existing queued board reads yield to exact sources, without adding readers.
+    this.queue.sort((a, b) => Number(important.has(b)) - Number(important.has(a)))
     this.drain()
   }
 
@@ -34,7 +39,7 @@ export class PreparationHistory {
   state(id: string) {
     const history = this.reader.cachedDecisionHistory(id), failure = this.failures.get(id)
     const fresh = history && Date.parse(history.expires_at) > Date.now()
-    const available = fresh && history.context.outcome === 'available' && history.context.commentsOutcome === 'available'
+    const available = !failure && fresh && history.context.outcome === 'available' && history.context.commentsOutcome === 'available'
     return { card_id: id, state: this.pending.has(id) ? 'loading' as const : available ? 'available' as const : 'unavailable' as const,
       message: available ? null : failure?.message ?? null,
       retry_at: available || !failure ? null : new Date(failure.retryAt).toISOString(),
@@ -54,7 +59,7 @@ export class PreparationHistory {
     try {
       // The publication reader paginates independently of bounded card prose.
       // Also settle display state if a connector fails to settle on abort.
-      await Promise.race([this.reader.decisionDetails(id), new Promise<never>((_, reject) => {
+      await Promise.race([Promise.all([this.readProperties(id), this.reader.decisionDetails(id, true)]), new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), decisionHistoryDeadlineMs)
         timer.unref?.()
       })])

@@ -7,10 +7,10 @@ import { requestAnchor } from '../../shared/deskSource'
 import { CardLeases } from './cardLeases'
 
 export class DecisionDeskConflict extends Error {}
-export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string; packet: DecisionPacket }
+export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string | null; packet: DecisionPacket }
 export interface StoredDecisionPolicy { scope: string; version: number; values: typeof defaultDecisionPolicy | z.infer<typeof decisionPolicyUpdateSchema>['values']; updated_by: string | null; updated_at: string | null }
 type PacketRow = { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string; body: string }
-const unpack = (row: PacketRow): StoredDecisionPacket => ({ id: row.id, version: row.version, content_hash: row.content_hash, prepared_by: row.prepared_by, published_at: row.published_at, expires_at: row.expires_at, packet: decisionPacketSchema.parse(JSON.parse(row.body)) })
+const unpack = (row: PacketRow): StoredDecisionPacket => ({ id: row.id, version: row.version, content_hash: row.content_hash, prepared_by: row.prepared_by, published_at: row.published_at, expires_at: null, packet: decisionPacketSchema.parse(JSON.parse(row.body)) })
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const packetContentHash = (packet: DecisionPacket) => hash(decisionMeaning({ ...packet, binding: JSON.parse(bindingMeaning(packet.binding)),
   references: [...packet.references].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b))),
@@ -80,12 +80,14 @@ export class DecisionPackets {
     }
     const sourceKey = JSON.stringify([packet.binding.card_id, packet.binding.source_request ? requestAnchor(packet.binding.source_request) : packet.binding.request_key, packet.binding.request_id])
     const version = Number((db.prepare('SELECT coalesce(max(version),0)+1 AS version FROM decision_packets WHERE source_key = ?').get(sourceKey) as { version: number }).version)
+    // Keep the legacy SQLite deadline column readable by older binaries. It is
+    // no longer an eligibility gate; the wire reports no packet expiry.
     const id = randomUUID(), publishedAt = new Date(this.now()).toISOString(), expiresAt = new Date(this.now() + packet.review_within_ms).toISOString()
     db.prepare('INSERT INTO decision_packets VALUES(?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey)
     for (const dependency of packet.dependencies) db.prepare('INSERT INTO decision_packet_dependencies VALUES(?,?,?,?)').run(id, dependency.kind, dependency.key, dependency.revision)
     this.event(db, id, 'publication', actor, { version, content_hash: contentHash, source_revision: packet.binding.source_revision })
     const validation = this.attest(db, id, packet, evidence, actor)
-    return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: expiresAt, packet, validation, replayed: false }
+    return { id, version, content_hash: contentHash, prepared_by: actor, published_at: publishedAt, expires_at: null, packet, validation, replayed: false }
   }
   async validate(id: string, evidence: DecisionEvidence, actor: string) {
     z.string().trim().min(1).max(200).parse(actor)
@@ -132,7 +134,7 @@ export class DecisionPackets {
         reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
         valid_until: attestation?.valid_until && current.valid_until ? new Date(Math.min(Date.parse(attestation.valid_until), Date.parse(current.valid_until))).toISOString() : null }
       const pending = this.pendingAnswerInStorage(db, id)
-      return { ...stored, validation, ...decisionPacketReady(validation, stored.expires_at, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
+      return { ...stored, validation, ...decisionPacketReady(validation, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
   }
   pendingAnswerInStorage(db: DatabaseSync, id: string) {
     const event = db.prepare("SELECT detail FROM decision_packet_events WHERE packet_id = ? AND type = 'answer-attempt' ORDER BY sequence DESC LIMIT 1").get(id) as { detail: string } | undefined

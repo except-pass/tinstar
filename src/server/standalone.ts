@@ -108,7 +108,7 @@ export function startServer(opts: ServerOptions) {
   const pulls = new PullsApi(reconciliation, releases.store)
   const decisionBoard = reconciliation.mainWaitNotionConfig()?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
   const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req), reconciliation.preparedReviews, reconciliation.sourceWriteRecovery(), reconciliation.preparedSubmissions, reconciliation.preparation)
-  const prepTimer = setInterval(() => { void reconciliation.preparation.replenish() }, 30_000)
+  const prepTimer = setInterval(() => { void reconciliation.preparation.replenish() }, 5_000)
   prepTimer.unref()
   void reconciliation.preparation.replenish()
   reconciliation.authorizePulls = req => pulls.authorized(req)

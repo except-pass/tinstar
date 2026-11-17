@@ -23,6 +23,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
+import { decisionRecordRows } from '../../../shared/workflowRequests'
 import { waitLine, parseWaitLine } from '../../../shared/waitingForPolicy'
 import { externalWorkers, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
 import { CreationReceipts } from '../workflowReceipts'
@@ -59,7 +60,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const comments: any[] = [{ id: 'comment-1', created_by: { id: 'author-1' }, created_time: '2026-11-10T00:00:00Z', rich_text: [{ plain_text: prose.comment }] }]
   const blocks: any[] = [{ id: 'body-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: prose.body }] } }]
   const pages = new Map<string, any>([[id, raw]])
-  let queryPageSize = 100
+  let queryPageSize = 100, commentPageSize = 100
   let historyMode: 'normal' | 'partial' | 'unavailable' | 'pending' = 'normal'
   let resumeHistory: (() => void) | undefined
   let onRead: (() => void) | undefined
@@ -115,7 +116,9 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
     if (path === '/v1/comments') {
       if (historyMode === 'pending') await new Promise<void>(resolve => { resumeHistory = resolve })
       if (historyMode === 'unavailable') return json({}, 503)
-      return json({ has_more: historyMode === 'partial', results: comments.filter(comment => !comment.pageId || comment.pageId === new URL(String(url)).searchParams.get('block_id')) })
+      const query = new URL(String(url)).searchParams, offset = Number(query.get('start_cursor') ?? 0)
+      const matching = comments.filter(comment => !comment.pageId || comment.pageId === query.get('block_id')), end = offset + commentPageSize
+      return json({ has_more: historyMode === 'partial' || end < matching.length, results: matching.slice(offset, end), ...(end < matching.length ? { next_cursor: String(end) } : {}) })
     }
     if (path.includes('/blocks/') && path.endsWith('/children')) {
       const blockPage = path.split('/')[3]!
@@ -152,7 +155,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
     sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
-    controls: { history: (mode: typeof historyMode) => { historyMode = mode }, resumeHistory: () => { historyMode = 'normal'; resumeHistory?.() }, append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
+    controls: { commentPageSize: (size: number) => { commentPageSize = size }, history: (mode: typeof historyMode) => { historyMode = mode }, resumeHistory: () => { historyMode = 'normal'; resumeHistory?.() }, append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 const handoffInput = (overrides: Partial<SubmitHandoffInput> = {}): SubmitHandoffInput => ({
@@ -1958,7 +1961,7 @@ it('persists typed proposal choices and validates exact option identity before a
   const f = decisionFixture(), options = [{ id: 'r1', label: 'R1' }, { id: 'r3', label: 'R3' }]
   expect(await f.workflow.update({ ...f.request, options } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
   const notes = f.comments.length
-  for (const choice of [{ option_id: 'missing', answer: 'R3' }, { option_id: 'r1', answer: 'R3' }]) {
+  for (const choice of [{ option_id: 'missing', answer: 'R3' }]) {
     expect(await f.workflow.update({ ...f.answer, ...choice } as UpdateWorkInput, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-option-conflict' })
   }
   expect(f.comments).toHaveLength(notes)
@@ -3246,4 +3249,65 @@ describe('explicit worker close-out and release waits', () => {
     expect(f.comments.at(-1)!.rich_text.map((row: any) => row.text?.content ?? '').join('')).toContain(input.evidence)
     expect(await f.workflow.update({ card_id: id, operation_id: 'ordinary-wait-still-refused', kind: 'wait', type: 'Event', id: 'release', dependency: 'Release change', unblocks_when: 'Production release finishes', follow_up_by: 'Owner', next_check_in: new Date(Date.now() + 3600000).toISOString() }, 'Firstmate')).toMatchObject({ code: 'release-lifecycle' })
   })
+})
+
+it('answers the two paginated native CI request shapes with a valid option plus verbatim wording and without an option', async () => {
+  const f = fixture(), cardId = '41a50ce6d42281998e2ee26fa2364c54'
+  const wait = { type: 'Actor' as const, id: 'Will', dependency: 'Run the separately approved farm controller session command', unblocks_when: 'Controller session completed', follow_up_by: 'Firstmate', next_check_in: new Date(Date.now() + 3600_000).toISOString() }
+  const page = structuredClone(f.raw)
+  Object.assign(page, { id: cardId, url: `https://www.notion.so/${cardId}` })
+  Object.assign(page.properties, { Owner: { type: 'select', select: { name: 'Will' } }, Status: { type: 'status', status: { name: 'Waiting For' } },
+    Area: { type: 'select', select: { name: '🏢 Fortress' } }, 'Last touched by': { type: 'select', select: { name: 'Tin Star MCP' } },
+    'Will action': { type: 'multi_select', multi_select: [{ name: 'Do' }] },
+    'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: waitLine(wait) }] }, 'Waiting For Type': { type: 'select', select: { name: 'Actor' } },
+    'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'Will' }] }, 'Next check-in': { type: 'date', date: { start: wait.next_check_in } } })
+  f.pages.set(cardId, page)
+  for (let index = 0; index < 21; index++) f.comments.push({ id: `older-context-${index}`, pageId: cardId, rich_text: [{ plain_text: `Retained card history ${index}` }] })
+  const requests = [
+    { id: 'fleet-ci-deploy-plan-20261116', options: [{ id: 'A', label: 'A (recommended): all 3 steps, test checks then test deploys then production; up to ~$26/week saved' }, { id: 'B', label: 'B: test-environment work only, production stays on GitHub; ~$20/week saved' }, { id: 'C', label: 'C: not now, keep everything on GitHub; $0 saved' }] },
+    { id: 'fleet-ci-route-tags-20261116', options: [{ id: 'A', label: 'A (recommended): any tag or branch of that repository' }, { id: 'B', label: 'B: release tags only (not other branches)' }, { id: 'C', label: 'C: only specific named tags (each new pattern needs a new change)' }] },
+  ]
+  for (const request of requests) f.comments.push({ id: `native-${request.id}`, pageId: cardId, created_time: '2026-11-16T22:18:16.249Z', rich_text: [{ plain_text:
+    `Operation: request_decision\nRequested from: Will\nQuestion: ${request.id}\nTin Star request: ${JSON.stringify({ ...request, action: 'Decision', preserve_action: true })}` }] })
+  f.controls.commentPageSize(7)
+  const original = f.fetcher.getMockImplementation()!, errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  let failures = 2
+  f.fetcher.mockImplementation(async (url, init) => {
+    if (new URL(String(url)).pathname === '/v1/comments' && (init?.method ?? 'GET') === 'GET' && failures-- > 0) {
+      expect(f.requests.some(request => request.method === 'PATCH' || request.method === 'POST' && request.url.endsWith('/comments'))).toBe(false)
+      return json({}, 503)
+    }
+    return original(url, init)
+  })
+  const words = ['  A — full staged rollout, including production.\nKeep the mandatory independent hosted fallback and prevent duplicate deploys.  ', 'Allow all repository tags and branches; preserve the audience and fork exclusions.']
+  for (const [index, request] of requests.entries()) {
+    const result = await f.workflow.update({ kind: 'answer_decision', card_id: cardId, operation_id: `owner-native-${index}`, request_id: request.id,
+      answer: words[index]!, ...(index === 0 ? { option_id: 'A' } : {}), next: { owner: 'Firstmate', status: 'Waiting For', wait } }, 'owner-chatgpt')
+    expect(result).toMatchObject({ outcome: 'saved', saved_fields: expect.arrayContaining(['note']) })
+  }
+  const texts = f.comments.map(note => plainText(note.rich_text))
+  const recorded = decisionRecordRows(texts.map(text => ({ text })), 'Tin Star answer data: ')
+  expect(recorded.map(row => [row.request_id, row.answer, row.option_id])).toEqual([[requests[0]!.id, words[0], 'A'], [requests[1]!.id, words[1], undefined]])
+  expect((await f.reader.card(cardId, true)).properties['Will action']!.value).toEqual(['Do'])
+  expect((await f.reader.card(cardId)).properties['Waiting For']!.value).toBe(waitLine(wait))
+  expect(errors).not.toHaveBeenCalled()
+})
+
+it('assigns the typed-wait telemetry card shape after a transient comment read failure and reports persistent read causes', async () => {
+  const f = fixture(), cardId = '41b50ce6d4228144ba8dec16bb356180'
+  const page = structuredClone(f.raw), previous = 'obsf mate: start the DEV spike with a linked worker (routed 03:30Z)'
+  Object.assign(page, { id: cardId, url: `https://www.notion.so/${cardId}` })
+  Object.assign(page.properties, { Status: { type: 'status', status: { name: 'In Progress' } }, 'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: previous }] },
+    'Waiting For Type': { type: 'select', select: { name: 'Work' } }, 'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'obsf' }] },
+    'Last touched by': { type: 'select', select: { name: 'Firstmate' } } })
+  delete page.properties['Will action']
+  f.pages.set(cardId, page)
+  const original = f.fetcher.getMockImplementation()!, logs = vi.spyOn(console, 'error').mockImplementation(() => {})
+  let status = 503, failures = 1
+  f.fetcher.mockImplementation((url, init) => new URL(String(url)).pathname === '/v1/comments' && (init?.method ?? 'GET') === 'GET' && failures-- > 0 ? Promise.resolve(json({}, status)) : original(url, init))
+  expect(await f.workflow.update({ kind: 'assign', card_id: cardId, operation_id: 'assign-observed-shape', owner: 'Firstmate', status: 'Queued', resolve_wait: previous }, 'owner-chatgpt')).toMatchObject({ outcome: 'saved' })
+  expect((await f.reader.card(cardId, true)).properties).toMatchObject({ Status: { value: 'Queued' }, 'Waiting For': { value: '' }, 'Waiting For ID': { value: '' } })
+  status = 403; failures = 99
+  expect(await f.workflow.update({ kind: 'assign', card_id: cardId, operation_id: 'persistent-source-failure', owner: 'Firstmate', status: 'Queued' }, 'owner-chatgpt')).toMatchObject({ outcome: 'not-saved', code: 'source-unavailable', message: expect.stringContaining('read card comments (Error: Notion HTTP 403)') })
+  expect(logs).toHaveBeenCalledWith('[workflow] update failed', expect.objectContaining({ card_id: cardId, stage: 'read card comments', cause: 'Error: Notion HTTP 403', stack: expect.any(String) }))
 })

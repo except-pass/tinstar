@@ -153,7 +153,7 @@ it('imports identical comment/request IDs independently on six cards', async () 
   expect(await sources.decisionPackets.ids()).toHaveLength(6)
 })
 
-it('completes an expired matching job from its card comment without redispatch', async () => {
+it.each([false, true])('accepts expired comment publication only without replacement: replaced=%s', async replaced => {
   const root = await mkdtemp(join(tmpdir(), 'comment-expired-job-')); roots.push(root)
   let now = Date.now()
   const { evidence, request } = mapperFixture()
@@ -166,12 +166,55 @@ it('completes an expired matching job from its card comment without redispatch',
   for (const dependency of request.dependencies) { dependency.observed_at = new Date(now).toISOString(); dependency.expires_at = new Date(now + 60_000).toISOString() }
   await prep.replenish() // Expire the attempt; automatic replenishment is off.
   expect((await prep.status()).jobs[0]!.state).toBe('failed')
+  if (replaced) {
+    await prep.prepareNow('fixture-owner', { card_id: evidence.card_id, request_id: request.binding!.request_id, reason: 'Replace expired attempt' })
+    const text = sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', job.job_id!)
+    await prep.importComments(evidence.card_id, [{ id: 'replaced-job-comment', type: 'comment', text }])
+    expect(await packets.ids()).toEqual([])
+    expect((await prep.status()).jobs.find(row => row.id === job.job_id)).toMatchObject({ state: 'superseded' })
+    return
+  }
   const text = sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', job.job_id!)
   await prep.importComments(evidence.card_id, [{ id: 'expired-job-comment', type: 'comment', text }])
   expect((await prep.status()).jobs[0]).toMatchObject({ id: job.job_id, state: 'published', packet_id: expect.any(String) })
   expect(await packets.read((await packets.ids())[0]!, evidence)).toMatchObject({ ready: true })
   expect(posts).toHaveLength(1)
   expect(packets.leases.status(evidence.card_id)).toBeNull()
+  const publishedAt = (await prep.status()).jobs[0]!.published_at
+  await packets.leases.claim([evidence.card_id], 'reviewer', 'Reviewer', 'import-review')
+  await prep.importComments(evidence.card_id, [{ id: 'expired-job-comment', type: 'comment', text }])
+  expect((await prep.status()).jobs[0]).toMatchObject({ state: 'published', published_at: publishedAt, readiness: { ready: false } })
+  now += 11 * 60_000
+  await prep.replenish()
+  expect((await prep.status()).jobs[0]).toMatchObject({ state: 'published', published_at: publishedAt, readiness: { ready: false } })
+})
+
+it('keeps withdrawn replacements retired through revalidation and restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'comment-withdrawn-job-')); roots.push(root)
+  const { evidence, request } = mapperFixture()
+  const packets = new DecisionPackets(new CardLeases(root))
+  const source = { candidates: () => [{ card_id: evidence.card_id, request_id: request.binding!.request_id, source_revision: request.binding!.source_revision, card_url: `https://www.notion.so/${evidence.card_id}`, card_status: 'Waiting For', answered: false, leased: false, reasons: [], rank: 0 }], coverage: () => 'complete' as const }
+  const make = () => new DecisionPreparation(packets, 'board', source, () => evidence, async () => JSON.stringify({ url: 'https://prep.example/job', key: 'fixture-key' }), Date.now, async () => new Response(null, { status: 202 }))
+  const prep = make()
+  const input = { card_id: evidence.card_id, request_id: request.binding!.request_id, reason: 'Replace withdrawn research' }
+  const first = await prep.prepareNow('fixture-owner', input)
+  const text = sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', first.job_id!)
+  await prep.importComments(evidence.card_id, [{ id: 'first-result', type: 'comment', text }])
+  const firstPacket = (await packets.read((await packets.ids())[0]!, evidence))!
+  expect(firstPacket.ready).toBe(true)
+  await packets.leases.writeStorage(db => db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(firstPacket.id, 'research-requested', 'fixture-owner', new Date().toISOString(), '{}'))
+  const second = await prep.prepareNow('fixture-owner', input)
+  expect(second.outcome).toBe('dispatched')
+  await prep.revalidate(evidence.card_id)
+  const restarted = make()
+  expect((await restarted.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'superseded', published_at: expect.any(String) })
+  const result = await restarted.publish({ job_id: second.job_id, operation_id: 'replacement-result', packet: firstPacket.packet })
+  expect(result.ready).toBe(true)
+  await restarted.importComments(evidence.card_id, [{ id: 'late-old-result', type: 'comment', text: text.replace(/^Risk:.*$/m, 'Risk: Unknown') }])
+  await expect(restarted.publish({ job_id: first.job_id, operation_id: 'late-old-direct', packet: firstPacket.packet })).rejects.toThrow('replaced')
+  expect(await packets.read(result.packet_id, evidence)).toMatchObject({ ready: true })
+  expect(await packets.ids()).toHaveLength(2)
+  expect((await restarted.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'superseded' })
 })
 
 it('preserves explicit difficult reversibility rather than treating negation as reversible', () => {

@@ -161,7 +161,7 @@ export class PreparedSubmissions {
         }
         const evidence = await this.source.evidence(stored, observation.original, observation.desired)
         const current = await this.reviews.packets.read(stored.id, evidence)
-        if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now() || Date.parse(current.expires_at) <= this.now()) {
+        if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now()) {
           const request = evidence.requests.find(request => request.binding?.request_id === input.request_id)
           const unavailable = evidence.reasons.some(reason => /unavailable|incomplete|unknown|partial/i.test(reason)) || !request?.binding || request.dependencies.some(dependency => dependency.status !== 'fresh' || dependency.coverage !== 'complete')
           const outcome = unavailable ? 'source-unavailable' : 'packet-invalidated'

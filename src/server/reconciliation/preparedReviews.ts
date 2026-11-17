@@ -105,7 +105,7 @@ export class PreparedReviews {
         const stored = this.packets.readInStorage(db, row.id)!
         return this.packets.readInStorage(db, row.id, evidenceByCard.get(stored.packet.binding.card_id) ?? this.evidence(stored.packet.binding.card_id))!
       }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id) && !recorded(stored.packet.binding))
-      const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now || Date.parse(packet.expires_at) <= now
+      const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now
       const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
       const ready = current.filter(stored => stored.ready)
       const pending = queue.card_ids.flatMap(card => {
@@ -122,7 +122,7 @@ export class PreparedReviews {
         if (row.state !== 'Queued' || held.has(row.card_id)) continue
         const job = prep.jobs.find(job => job.card_id === row.card_id && job.request_id === row.request_id && job.source_revision === row.source_revision)
         if (!job || !['admitted', 'dispatched', 'failed', 'blocked'].includes(job.state)) continue
-        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : 'Failed'
+        row.state = job.state === 'admitted' || job.state === 'dispatched' ? 'Working' : job.state === 'blocked' ? 'Blocked' : 'Failed'
         if (job.reason) row.reasons = [...new Set([...row.reasons, job.reason])]
       }
       const verified = queue.coverage === 'complete' && !sourceFailures.length
@@ -132,7 +132,7 @@ export class PreparedReviews {
           needs_repreparation: verified ? current.filter(packet => !this.packets.pendingAnswerInStorage(db, packet.id) && needsResearch(packet)).length : null,
           to_prepare: verified && queue.requests !== null ? pending.filter(row => row.state === 'Queued').length : null,
           requests: verified ? queue.requests : null },
-        runner: { configured: prep.configured, preparer: prep.preparer, explanation: prep.explanation },
+        runner: { configured: prep.configured, preparer: prep.preparer, explanation: prep.explanation, refill_pass: prep.refill_pass, jobs: prep.jobs },
         ready: ready.map(packet => ({ id: packet.id, card_id: packet.packet.binding.card_id, request_id: packet.packet.binding.request_id, title: packet.packet.title, risk: packet.packet.risk.rating })),
         recorded_requests: db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
           ? (db.prepare('SELECT card,request_id,confirmed FROM decision_desk_confirmed_answers WHERE scope = ? ORDER BY confirmed DESC LIMIT 100').all(this.scope) as Array<{ card: string; request_id: string; confirmed: number }>).map(row => ({ card_id: row.card, request_id: row.request_id, confirmed_at: new Date(row.confirmed).toISOString() })) : [],
@@ -158,7 +158,7 @@ export class PreparedReviews {
     const stored = this.packets.readInStorage(db, binding.packet_id, this.evidence(binding.card))
     // Ready normally excludes leases; held validation instead ignores only this
     // context's canonical lease, never source freshness or a pending source write.
-    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || Date.parse(stored.expires_at) <= this.now() || this.leases.reservedInStorage(db, binding.card)
+    const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || this.leases.reservedInStorage(db, binding.card)
     return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token, packet: stored ? {
       ...workReadback(stored), packet: {
         ...workReadback(stored.packet), recommended_option_id: stored.packet.recommended_option_id,

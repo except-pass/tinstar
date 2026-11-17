@@ -811,3 +811,11 @@ it('allows a quiet explicit one-shot retry after conflict, then claims the next 
   expect(claims).toHaveLength(3)
   expect(claims[2]).not.toHaveProperty('card_id')
 })
+
+it('allows an unchanged packet past its legacy review deadline while source validation is current', async () => {
+  packet.expires_at = new Date(Date.now() - 3600_000).toISOString()
+  await ready()
+  fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
+  expect(screen.getByRole('button', { name: 'Submit decision & next →' })).toBeEnabled()
+  expect(screen.queryByText('Packet invalidated')).toBeNull()
+})

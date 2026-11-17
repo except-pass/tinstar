@@ -6,7 +6,7 @@ import { DecisionPackets } from './decisionPackets'
 import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
+import { projectDecisionEvidence, projectPreparedSubmitEvidence, preparedDecisionRequests } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -77,6 +77,8 @@ export class ReconciliationSources {
   readonly notionApi
   private context
   private preparationHistory
+  private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
+  private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
   private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
   private reconciler = new SceneReconciler()
   private queuePulls = new QueuePullReader()
@@ -89,7 +91,7 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
     this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
-    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage }, id => this.preparationEvidence(id), preparationSecret)
+    this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
     this.notionApi = api ?? new NotionApi(fetcher)
@@ -118,8 +120,24 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
-    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), id => this.importCommentPackets(id))
-    this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), async id => {
+      await this.importCommentPackets(id)
+      await this.preparation.revalidate(id)
+    }, async id => {
+      const observedAt = new Date().toISOString(), expiresAt = new Date(Date.now() + 30_000).toISOString()
+      try {
+        const card = await this.workReader.card(id, true, true)
+        this.workReader.confirm(card)
+        this.preparationProperties.set(id, { status: 'fresh', coverage: 'complete', observedAt, expiresAt })
+      } catch {
+        this.preparationProperties.set(id, { status: 'unknown', coverage: 'unknown', observedAt, expiresAt })
+        throw new Error('Canonical card properties could not be refreshed.')
+      }
+    }, (id, until) => {
+      const properties = this.preparationProperties.get(id)
+      return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
+    })
+    this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -168,7 +186,8 @@ export class ReconciliationSources {
       const history = this.context.cachedDecisionHistory(card.id)
       return history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now()
     })
-    const requestCount = queue.items.length || cards.reduce((sum, card) => sum + this.preparationEvidence(card.id).requests.filter(request => !request.answered).length, 0)
+    const requestCount = !historiesComplete && queue.items.length ? queue.items.length
+      : cards.reduce((sum, card) => sum + preparedDecisionRequests(this.context.cachedDecisionHistory(card.id)?.context.blocks ?? []).filter(request => !request.answered).length, 0)
     const card_ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
     return { card_ids, history: card_ids.map(id => ({ ...this.preparationHistory.state(id),
       title: String(cards.find(card => card.id === id)?.properties.Name?.value ?? 'Decision card') })),
@@ -179,8 +198,20 @@ export class ReconciliationSources {
    * board-wide history. Original history freshness remains authoritative. */
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
-    this.preparationHistory.warm(ids)
+    const priority = await this.preparation.priorityCards()
+    this.preparationHistory.warm(ids, priority)
     await Promise.all(ids.map(id => this.importCommentPackets(id)))
+  }
+
+  private preparationDiagnostics() {
+    const queue = this.decisionQueue()
+    return { requests: queue.requests, source_failures: queue.card_ids.flatMap(card_id => {
+      const evidence = this.preparationEvidence(card_id)
+      const reasons = [...new Set([...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)])]
+      const state = this.preparationHistory.state(card_id)
+      if (state.message) reasons.push(state.message)
+      return reasons.length ? [{ card_id, reasons }] : []
+    }) }
   }
 
   private importCommentPackets(cardId: string): Promise<void> {
@@ -201,7 +232,10 @@ export class ReconciliationSources {
       await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
       await this.preparationHistory.read(cardId)
-    } else await this.warmPreparationHistory()
+    } else {
+      await this.snapshot()
+      await this.warmPreparationHistory()
+    }
     return this.prepCandidates(cardId)
   }
 
@@ -227,7 +261,15 @@ export class ReconciliationSources {
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
    * refreshes sources, reconciles receipts, or changes source work. */
   preparationEvidence(cardId: string) {
-    return projectDecisionEvidence(this.knownSnapshot(), cardId, this.context.cachedDecisionHistory(cardId), Date.now())
+    // A display/admission batch projects many cards from the same known sources.
+    // Share only that synchronous queue build, never history or validation TTLs.
+    if (!this.preparationProjection) {
+      const snapshot = this.knownSnapshot()
+      this.preparationProjection = { snapshot, queue: buildQueue(snapshot) }
+      queueMicrotask(() => { this.preparationProjection = undefined })
+    }
+    const { snapshot, queue } = this.preparationProjection
+    return projectDecisionEvidence(snapshot, cardId, this.context.cachedDecisionHistory(cardId), Date.now(), this.preparationProperties.get(cardId), queue)
   }
 
   invalidateQueueDisplays() {
