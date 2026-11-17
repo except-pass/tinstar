@@ -924,7 +924,7 @@ describe('remaining shared workflow operations', () => {
     expect(card.properties['Waiting For']!.value).toContain('Unblocks when: Owner confirms tariff')
     expect(card.properties['Waiting For Type']!.value).toBe('Actor')
     expect(card.properties['Waiting For ID']!.value).toBe('Duke Energy')
-    expect(card.properties['Next check-in']!.value).toMatchObject({ start: tariff.next_check_in })
+    expect(card.properties['Next check-in']!.value).toMatchObject({ start: new Date(Math.floor(Date.parse(tariff.next_check_in) / 60_000) * 60_000).toISOString() })
     expect(f.raw.properties['Will action']).toEqual(before['Will action'])
     expect(await f.workflow.update(input('wait', { operation_id: 'invalid-wait', dependency: 'Unknown' }), 'Consumer')).toMatchObject({ code: 'invalid-input' })
   })
@@ -2645,10 +2645,67 @@ it('shares durable leases across real MCP chats, workflow writers and owner UI r
 
 describe('Waiting For status semantics', () => {
   const readyFixture = () => { const f = fixture(); f.raw.properties['Waiting For'].rich_text = []; return f }
-  const checkIn = () => new Date(Date.now() + 7 * 86400000).toISOString()
+  const checkIn = () => new Date(Math.floor(Date.now() / 60_000) * 60_000 + 7 * 86400000).toISOString()
   const patches = (f: ReturnType<typeof fixture>) => f.requests.filter(row => row.method === 'PATCH').length
   const op = (kind: string, extra: Record<string, unknown> = {}) => ({ card_id: id, operation_id: `sem-${kind}-${JSON.stringify(extra).length}`, kind, ...extra }) as UpdateWorkInput
   const actor = (extra: Record<string, unknown> = {}) => ({ type: 'Actor' as const, id: 'Will', dependency: 'Owner acceptance of the tariff', unblocks_when: 'Will sends the acceptance', follow_up_by: 'Consumer', next_check_in: checkIn(), ...extra })
+
+  it('reads multiline source fields and resolves the exact Work card outside the search scope', async () => {
+    const f = readyFixture()
+    const blockerId = '41b50ce6d422814c8edbd29f321f94e8'
+    const blocker = structuredClone(f.raw)
+    blocker.id = blockerId
+    blocker.properties.Status.status.name = 'Queued'
+    blocker.properties.Name.title = [{ plain_text: 'Gateway merge' }]
+    f.pages.set(blockerId, blocker)
+    const text = 'Dependency: Gateway merge\nUnblocks when: The rollout is verified\nFollow-up by: Firstmate'
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: 'Work' }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: blockerId }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+    const readCount = () => f.requests.filter(row => row.method === 'GET' && row.url.endsWith('/pages/' + blockerId)).length
+    const sources = f.sources()
+    const reference = { id: blockerId, title: 'Gateway merge', state: 'resolved', url: 'https://www.notion.so/' + blockerId }
+    const waitOnly = await sources.scene(true, { statuses: ['Waiting For'] }, 'cached')
+    expect(waitOnly.waitingForWork).toEqual([])
+    expect(readCount()).toBe(0)
+    const read = await sources.getWork({ card_id: id, details: false })
+    expect(read).toMatchObject({ waiting_for_exception: null, waiting_for_issues: [], waiting_for_work: [reference] })
+    expect(readCount()).toBe(1)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000)
+    try {
+      const poll = await sources.scene(false, { statuses: ['Waiting For'] }, 'cached')
+      expect(poll.waitingForWork).toMatchObject([{ id: blockerId, title: 'Gateway merge' }])
+      expect(readCount()).toBe(1)
+    } finally { clock.mockRestore() }
+    const search = await sources.searchWork({ statuses: ['Waiting For'], limit: 1, refresh: true })
+    expect(search.records).toMatchObject([{ card: { id }, waiting_for_exception: null, waiting_for_work: [reference] }])
+    expect(readCount()).toBe(2)
+    const loaded = await sources.scene(true, {}, 'exact')
+    expect(loaded.waitingForWork).toMatchObject([{ id: blockerId, title: 'Gateway merge' }])
+    expect(readCount()).toBe(2)
+    f.pages.delete(blockerId)
+    const unknown = await sources.searchWork({ statuses: ['Waiting For'], refresh: true })
+    expect(unknown.records).toMatchObject([{
+      waiting_for_exception: { category: 'reference', code: 'work-unverified', field: 'Waiting For ID' },
+      waiting_for_work: [{ id: blockerId, state: 'unknown' }],
+    }])
+    expect(f.requests.every(row => row.method === 'GET' || row.url.endsWith('/query'))).toBe(true)
+  })
+
+  it('preserves a multiline primary wait when adding another wait and resolves it by exact text', async () => {
+    const f = readyFixture()
+    const text = 'Dependency: Existing tariff approval\nUnblocks when: Approval is posted\nFollow-up by: Consumer'
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+    const next = actor({ type: 'Event', id: 'Firmware publication', unblocks_when: 'Firmware is published' })
+    expect(await f.workflow.update(op('wait', next), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe([text, waitLine(next)].join('\n'))
+    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: text }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(waitLine(next))
+  })
 
   it('repairs expired appointments and refuses legacy blocker loss or unresolved exits', async () => {
     const f = readyFixture(), first = actor()
@@ -2662,6 +2719,22 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-repair-required' })
     expect(await f.workflow.update(op('park', { status: 'Backlog', disposition: 'Deferred' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
     expect(await f.workflow.update(op('complete', { disposition: 'Completed', evidence: 'Receipt' }), 'Consumer')).toMatchObject({ outcome: 'not-saved', code: 'wait-unresolved' })
+  })
+
+  it('confirms a Notion wait with a sub-minute input against minute-precision source readback', async () => {
+    const f = readyFixture()
+    const original = f.fetcher.getMockImplementation()!
+    f.fetcher.mockImplementation((url, init) => {
+      if (init?.method !== 'PATCH') return original(url, init)
+      const body = JSON.parse(String(init.body))
+      const date = body.properties?.['Next check-in']?.date
+      if (date?.start) date.start = date.start.replace(/:\d\d\.\d+Z$/, ':00.000Z')
+      return original(url, { ...init, body: JSON.stringify(body) })
+    })
+    const appointment = checkIn()
+    const input = actor({ next_check_in: new Date(Date.parse(appointment) + 42_500).toISOString() })
+    expect(await f.workflow.update(op('wait', input), 'Consumer')).toMatchObject({ outcome: 'saved', saved_fields: expect.arrayContaining(['Next check-in']) })
+    expect((await f.reader.card(id, true)).properties['Next check-in']!.value).toMatchObject({ start: appointment })
   })
 
   it.each(['First Mate', 'Release engineering'])('accepts publication outcomes from %s', async name => {
@@ -2810,7 +2883,6 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('wait', { ...actor(), id: id, type: 'Work', operation_id: 'self' }), 'Consumer')).toMatchObject({ code: 'work-self' })
     expect(await f.workflow.update(op('wait', { ...actor(), next_check_in: '2020-01-01', operation_id: 'past' }), 'Consumer')).toMatchObject({ code: 'invalid-check-in' })
     expect(await f.workflow.update(op('wait', { ...actor(), unblocks_when: undefined, operation_id: 'no-unblock' }), 'Consumer')).toMatchObject({ code: 'invalid-input' })
-    vi.spyOn(f.reader, 'query').mockResolvedValue({ status: 'stale', coverage: 'unknown', data: null, observedAt: null, attemptedAt: new Date().toISOString(), expiresAt: null, error: 'stale' } as Awaited<ReturnType<typeof f.reader.query>>)
     const unknown = await f.workflow.update(op('wait', { type: 'Work', id: 'e'.repeat(32), dependency: 'Firmware publication must finish first', unblocks_when: 'That card is no longer unfinished', follow_up_by: 'Consumer', next_check_in: checkIn(), operation_id: 'unknown-source' }), 'Consumer')
     expect(unknown).toMatchObject({ code: 'work-unverified', saved_fields: [] })
     expect(unknown.message).not.toMatch(/dead|stranded|does not exist/)
@@ -3260,7 +3332,7 @@ it('answers the two paginated native CI request shapes with a valid option plus 
     Area: { type: 'select', select: { name: '🏢 Fortress' } }, 'Last touched by': { type: 'select', select: { name: 'Tin Star MCP' } },
     'Will action': { type: 'multi_select', multi_select: [{ name: 'Do' }] },
     'Waiting For': { type: 'rich_text', rich_text: [{ plain_text: waitLine(wait) }] }, 'Waiting For Type': { type: 'select', select: { name: 'Actor' } },
-    'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'Will' }] }, 'Next check-in': { type: 'date', date: { start: wait.next_check_in } } })
+    'Waiting For ID': { type: 'rich_text', rich_text: [{ plain_text: 'Will' }] }, 'Next check-in': { type: 'date', date: { start: new Date(Math.floor(Date.parse(wait.next_check_in) / 60_000) * 60_000).toISOString() } } })
   f.pages.set(cardId, page)
   for (let index = 0; index < 21; index++) f.comments.push({ id: `older-context-${index}`, pageId: cardId, rich_text: [{ plain_text: `Retained card history ${index}` }] })
   const requests = [

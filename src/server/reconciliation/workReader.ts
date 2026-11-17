@@ -2,6 +2,7 @@ import type { CardLeases, SourceWriteIntent } from './cardLeases'
 import type { ReconciliationConfig } from './config'
 import { notionObservation, readNotionCard, type WorkScope } from './notion'
 import { NotionApi } from './notionApi'
+import { canonicalWorkId, waitingForWorkIds, workBlocker, type WaitState, type WorkBlocker } from '../../shared/waitingForPolicy'
 import { checkInTime } from '../../shared/checkIn'
 import { isJiraCard } from '../../shared/workIdentity'
 import { JiraAdapter } from './jira'
@@ -68,6 +69,27 @@ export class WorkReader {
     if (this.cards.size >= 200) this.cards.delete(this.cards.keys().next().value!)
     this.cards.set(id, { until: Date.now() + 60_000, value, background })
     return value
+  }
+  async waitingForWork(waits: readonly WaitState[], loaded: readonly WorkCard[] = [], { refresh = false, cachedOnly = false } = {}) {
+    const ids = new Set(waits.flatMap(waitingForWorkIds))
+    const references = new Map<string, WorkBlocker>()
+    for (const card of loaded) {
+      const id = canonicalWorkId(card.id)
+      if (id && ids.delete(id)) references.set(id, workBlocker(card))
+    }
+    // Resolve each distinct missing target once through the foreground queue.
+    // Cap request latency on large or slow boards; unread targets stay unknown.
+    if (!ids.size) return references
+    const deadline = cachedOnly ? undefined : AbortSignal.timeout(10_000)
+    await Promise.all([...ids].map(async id => {
+      // Ordinary UI polls carry forward exact evidence already read. An
+      // explicit refresh rechecks it, and a failed check evicts it from cards.
+      const read = cachedOnly ? this.cards.get(id)?.value : this.card(id, refresh, false, deadline)
+      if (!read) return
+      try { references.set(id, workBlocker(await read)) }
+      catch { /* failure or limited source access leaves this target unknown */ }
+    }))
+    return references
   }
   confirm(card: WorkCard) {
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })

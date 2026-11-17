@@ -18,23 +18,33 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
     if (!searchKey) { onToggle(key); return }
     setSearchClosed(previous => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next })
   }
-  const row = (card: SceneCard) => <button type="button" key={card.id} className={`ov-item ov-card ov-waiting-card${selected === card.id ? ' selected' : ''}${revealed.has(`card:${card.id}`) ? ' related' : ''}${flashed(card.id) ? ' flashed' : ''}`}
-    data-semantic-id={`card:${card.id}`} data-entity-id={card.id} title={cardTitle(card)} aria-label={cardTitle(card)}
-    onClick={() => onSelect(card.id)} onMouseEnter={() => onHover(card)} onMouseLeave={() => onHover(null)} onFocus={() => onHover(card)} onBlur={() => onHover(null)}>
-    <span>{cardTitle(card)}</span>
-  </button>
+  const row = (card: SceneCard) => {
+    const issues = projection.issues.get(card.id)
+    return <div key={card.id}>
+      <button type="button" className={`ov-item ov-card ov-waiting-card${selected === card.id ? ' selected' : ''}${revealed.has(`card:${card.id}`) ? ' related' : ''}${flashed(card.id) ? ' flashed' : ''}`}
+      data-semantic-id={`card:${card.id}`} data-entity-id={card.id} title={cardTitle(card)} aria-label={cardTitle(card)} aria-describedby={issues ? `wait-issues-${card.id}` : undefined}
+      onClick={() => onSelect(card.id)} onMouseEnter={() => onHover(card)} onMouseLeave={() => onHover(null)} onFocus={() => onHover(card)} onBlur={() => onHover(null)}>
+      <span>{cardTitle(card)}</span>
+      </button>
+      {issues && <ul className="ov-waiting-issues" id={`wait-issues-${card.id}`}>{issues.map(issue => <li key={issue.reason}><strong>{issue.field}</strong> · {issue.reason}</li>)}</ul>}
+    </div>
+  }
   const categories = projection.categories.filter(category => type === 'All' || category.type === type || category.groups.some(group => group.cards.some(card => flashed(card.id))))
   const shown = categories.reduce((sum, category) => sum + category.groups.reduce((sum, group) => sum + group.cards.length, 0), 0)
+  const details = [...projection.issues.values()].filter(issues => issues.some(issue => issue.category === 'description')).length
+  const references = [...projection.issues.values()].filter(issues => issues.some(issue => issue.category === 'reference')).length
   return <section className="ov-waiting-work" aria-label="Waiting For work">
     <header ref={heading} className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>
     {(failed || partial) && <p className="ov-waiting-notice" role="status">{failed ? 'Could not refresh Waiting For. Showing the last known cards.' : `Partial results · ${projection.count} shown`}{observedAt && <time dateTime={observedAt}> · Last known {new Date(observedAt).toLocaleString()}</time>}</p>}
+    <p className="ov-waiting-notice">Needs wait details · {details}{references > 0 && ` | Work references to review · ${references}`}</p>
     {categories.map(category => category.groups.length > 0 && <section key={category.type} className="ov-waiting-category" aria-label={`${category.type} dependencies`}>
-      <h3><span>{category.type}</span><span>{category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>
+      <h3><span>{category.type === 'Work' ? 'Work blockers' : category.type}</span><span>{category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>
       {category.groups.map(group => {
         const expanded = (searchKey ? !searchClosed.has(group.key) : open.has(group.key)) || group.cards.some(card => flashed(card.id))
         const destination = group.target
+        const needsReview = group.cards.filter(card => projection.issues.has(card.id)).length
         return <section key={group.key} className="ov-waiting-dependency" data-dependency-key={group.key}>
-          <div className="ov-waiting-dependency-head"><button type="button" aria-expanded={expanded} aria-label={`${group.label}, ${group.cards.length} ${group.cards.length === 1 ? 'card' : 'cards'}`} title={group.label === group.id ? group.id : `${group.label} · ${group.id}`} onClick={() => toggle(group.key)}><span className="ov-waiting-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span><strong>{group.label}</strong><small>{group.cards.length} {group.cards.length === 1 ? 'card' : 'cards'}</small></button>
+          <div className="ov-waiting-dependency-head"><button type="button" aria-expanded={expanded} aria-label={`${group.label}, ${group.cards.length} ${group.cards.length === 1 ? 'card' : 'cards'}`} title={group.label === group.id ? group.id : `${group.label} · ${group.id}`} onClick={() => toggle(group.key)}><span className="ov-waiting-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span><strong>{group.label}</strong><small>{group.cards.length} {group.cards.length === 1 ? 'card' : 'cards'}{needsReview > 0 && ` · ${needsReview} to review`}</small></button>
             {destination && (destination.kind === 'url' ? <a href={destination.url} target="_blank" rel="noreferrer" aria-label={`Open ${group.label}`} title={destination.url}>↗</a> : <button type="button" className="ov-waiting-target" aria-label={`Open ${group.label} in Inspector`} onClick={() => {
               // Resolved by the same loaded record used to construct this projection.
               onSelect(destination.id)
@@ -44,7 +54,7 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
         </section>
       })}
     </section>)}
-    {projection.unclassified.length > 0 && <section className="ov-waiting-category ov-waiting-unclassified" aria-label="Needs classification"><h3><span>Needs classification</span><span>{projection.unclassified.length}</span></h3>{projection.unclassified.map(row)}</section>}
+    <section className="ov-waiting-category ov-waiting-unclassified" aria-label="Needs classification"><h3><span>Needs classification</span><span>{projection.unclassified.length}</span></h3>{projection.unclassified.map(row)}</section>
     {shown === 0 && (type !== 'All' || projection.unclassified.length === 0) && !partial && !failed && <p className="ov-empty">{projection.count || type !== 'All' ? 'No Waiting For cards in this group' : 'Nothing is Waiting For right now'}</p>}
   </section>
 }

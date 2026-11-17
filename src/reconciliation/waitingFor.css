@@ -28,6 +28,8 @@
 .ov .ov-item.ov-waiting-card:focus-visible,.ov-waiting-work button:focus-visible,.ov-waiting-work a:focus-visible{outline:2px solid var(--ov-ink);outline-offset:-2px}
 .ov-waiting-notice{font-size:11px;color:var(--ov-low);padding:4px 8px;margin:0}
 .ov-waiting-notice time{display:block}
+.ov-waiting-issues{margin:0;padding:0 8px 6px 9px;list-style:none;color:var(--ov-low);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.ov-waiting-issues strong{color:var(--ov-ink);font-weight:600}
 /* The existing phone canvas scrolls natively between full readable columns. */
 .ov .ov-waiting-canvas{min-width:0}
 @media(max-width:1100px){.ov-waiting-head{gap:4px}.ov-waiting-head button{font-size:10px;padding:4px 3px}}

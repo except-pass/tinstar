@@ -1,9 +1,11 @@
 import { updateWorkSchema, waitSchema } from '../workflow'
 import { describe, expect, it } from 'vitest'
-import { dispatchOnlyWait, independentWaitIssue, waitingForException, waitingForFieldIssue, workIdShape, waitLine, parseWaitLine } from '../waitingForPolicy'
+import { dispatchOnlyWait, independentWaitIssue, waitingForIssues, type WorkBlocker, type WaitState, type SourceCoverage, workIdShape, waitLine, parseWaitLine } from '../waitingForPolicy'
 
 const id = 'a'.repeat(32)
 const other = 'e'.repeat(32)
+const waitingForException = ({ knownWork = [], ...wait }: WaitState & { coverage: SourceCoverage; knownWork?: WorkBlocker[] }) =>
+  waitingForIssues(wait, new Map((wait.coverage === 'unknown' ? [] : knownWork).map(card => [card.id, card])))[0] ?? null
 const allow = (dependency: string, unblocks = 'The named outcome is recorded', blocker = 'Will') =>
   expect(independentWaitIssue({ type: 'Actor', id: blocker, dependency, unblocks_when: unblocks })).toBeNull()
 const dispatch = (dependency: string) => independentWaitIssue({ type: 'Actor', id: 'Build crew', dependency, unblocks_when: 'When that happens' })
@@ -34,10 +36,8 @@ describe('Waiting For independence', () => {
   })
 
   it('flags malformed Waiting For metadata and does not treat unknown coverage as absence', () => {
-    expect(waitingForFieldIssue({ cardId: id, status: 'Waiting For', type: '', id: '', knownWorkIds: [] })).toBe('Waiting For Type is missing.')
     expect(workIdShape(id, id)?.code).toBe('work-self')
     expect(workIdShape(id, 'not-a-card')?.code).toBe('invalid-work-id')
-    expect(waitingForFieldIssue({ cardId: id, status: 'Waiting For', type: 'Work', id: other, knownWorkIds: [] })).toMatch(/needs verification/)
     const exception = waitingForException({ cardId: id, status: 'Waiting For', type: '', id: '', waitingFor: 'HILDA mate is starting the worker', observedAt: '2026-11-16T00:00:00Z', coverage: 'unknown' })
     expect(exception).toMatchObject({ card_id: id, field: 'Waiting For Type', observed_at: '2026-11-16T00:00:00Z', coverage: 'unknown' })
     expect(exception!.reason).not.toMatch(/dead|stranded|unassigned/)
@@ -48,7 +48,7 @@ describe('Waiting For independence', () => {
 
 it('reports bypassed fields and Work references without rewriting', () => {
   const base = { cardId: id, status: 'Waiting For', type: 'Actor', id: 'Will', waitingFor: '', observedAt: null, coverage: 'complete' as const }
-  expect(waitingForException(base)?.field).toBe('Waiting For')
+  expect(waitingForException(base)?.field).toBe('Dependency')
   const waitingFor = 'Dependency: Approval | Unblocks when: Approved | Follow-up: Consumer | Type: Actor | ID: Will'
   expect(waitingForException({ ...base, waitingFor })?.field).toBe('Next check-in')
   expect(waitingForException({ ...base, type: 'Work', id: other })?.reason).toMatch(/needs verification/)
@@ -102,13 +102,14 @@ it.each(['Queued', 'Todo', 'Backlog', 'In Progress'])('reports unresolved typed 
 
 it.each(['dependency', 'unblocks_when', 'follow_up_by'] as const)('reports missing %s on directly edited waits', field => {
   const wait = { type: 'Actor', id: 'Will', dependency: 'Security approval', unblocks_when: 'Security approves', follow_up_by: 'Consumer', [field]: '' }
-  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })?.field).toBe('Waiting For')
+  const fields = { dependency: 'Dependency', unblocks_when: 'Unblocks when', follow_up_by: 'Follow-up by' }
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ field: fields[field], category: 'description' })
 })
 
 describe('wait text round trips', () => {
   const original = { type: 'Actor' as const, id: 'Security', dependency: 'Security approval', unblocks_when: 'Approval is recorded', follow_up_by: 'Consumer' }
   it.each(['dependency', 'unblocks_when', 'follow_up_by', 'id'] as const)('preserves quoted %s through serialization and diagnostics', field => {
-    for (const text of ['"Security approval" must be recorded', '"Security approval"', 'Security "approval" is required', '"Security"\nLegal approval', '"Security \\"approval\\""']) {
+    for (const text of ['A | Type: Work | ID: ambiguous | Follow-up: preserve', '"Security approval" must be recorded', '"Security approval"', 'Security "approval" is required', '"Security"\nLegal approval', '"Security \\"approval\\""']) {
       const wait = { ...original, [field]: text }
       const line = waitLine(wait)
       expect(parseWaitLine(line)).toEqual(wait)

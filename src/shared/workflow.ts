@@ -47,8 +47,12 @@ const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_i
 const resolvedWait = z.string().min(1)
 const waitId = z.string().trim().min(1).max(2048)
 export const waitSchema = z.object({
-  type: z.enum(waitingForTypes), id: waitId, dependency: prose, unblocks_when: prose, follow_up_by: label,
-  next_check_in: z.string().trim().min(1).max(100),
+  type: z.enum(waitingForTypes).describe('Actor, Event or Work.'),
+  id: waitId.describe('Actor identity, stable event reference or exact Work card ID.'),
+  dependency: prose.describe('Actual blocker.'),
+  unblocks_when: prose.describe('Observable unblock condition.'),
+  follow_up_by: label.describe('Follow-up owner.'),
+  next_check_in: z.string().trim().min(1).max(100).describe('Future ISO 8601 date or timestamp. Notion stores minutes.'),
 }).strict()
 const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Progress', 'Waiting For', 'Done', 'Archived']),
   worker: workerSchema.optional(), disposition: prose.optional(), evidence: prose.optional(),

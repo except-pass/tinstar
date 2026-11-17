@@ -40,11 +40,16 @@ export function useFloorScene(active = true, history = false) {
         do {
           const expected = revision
           again = false
+          const initial = lastAttempt === 0
           lastAttempt = Date.now()
           controller = new AbortController()
           const deadline = setTimeout(() => controller?.abort(), 60_000)
           try {
-            const response = await apiFetch(`/api/reconciliation/scene${force || history ? `?${new URLSearchParams({ ...(force ? { refresh: '1' } : {}), ...(history ? { history: '1' } : {}) })}` : ''}`, { signal: controller.signal })
+            const params = new URLSearchParams()
+            if (force) params.set('refresh', '1')
+            else if (initial && activeView.current) params.set('wait_references', '1')
+            if (history) params.set('history', '1')
+            const response = await apiFetch('/api/reconciliation/scene' + (params.size ? '?' + params : ''), { signal: controller.signal })
             if (!response.ok) throw new Error('read failed')
             const body = await response.json() as { ok: boolean; data?: FloorScene }
             if (!body.ok || !body.data) throw new Error('scene missing')

@@ -34,7 +34,7 @@ describe('one floor refresh owner', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
     expect(result.current.scene).toEqual(next)
     expect(result.current.lastSuccessfulSyncAt).toBe(next.coverage.intentions.observedAt)
-    expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene', '/api/reconciliation/scene'])
+    expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene?wait_references=1', '/api/reconciliation/scene'])
   })
   it('coalesces repeated manual requests and exposes busy state until the same read completes', async () => {
     const pending = deferred()
@@ -182,5 +182,5 @@ it('requests history only after an explicit history scope and returns to operati
   await flush()
   rerender({ history: true }); await flush()
   rerender({ history: false }); await flush()
-  expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene', '/api/reconciliation/scene?history=1', '/api/reconciliation/scene'])
+  expect(vi.mocked(apiFetch).mock.calls.map(([url]) => url)).toEqual(['/api/reconciliation/scene?wait_references=1', '/api/reconciliation/scene?wait_references=1&history=1', '/api/reconciliation/scene?wait_references=1'])
 })

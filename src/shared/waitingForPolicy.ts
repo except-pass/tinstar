@@ -15,6 +15,48 @@ export interface WaitingForException {
   observed_at: string | null
   coverage: SourceCoverage
 }
+export interface WaitingForIssue extends WaitingForException {
+  code: string
+  category: 'classification' | 'description' | 'reference' | 'status'
+}
+interface WaitIdentity { type: string; id: string }
+interface WaitDescription { dependency: string; unblocks_when: string; follow_up_by: string }
+type WaitFields = WaitIdentity & WaitDescription
+export interface WaitState extends WaitIdentity {
+  cardId: string
+  status: string
+  waitingFor: string
+  nextCheckIn?: { start?: string; time_zone?: string } | null
+  observedAt: string | null
+}
+export interface WorkBlocker {
+  id: string
+  status: string
+  title?: string
+  archived?: boolean
+  in_trash?: boolean
+}
+interface CardFields {
+  id: string
+  last_edited_time?: string
+  archived?: boolean
+  in_trash?: boolean
+  properties: Record<string, { value: unknown }>
+}
+
+export function waitState(card: CardFields): WaitState {
+  const text = (name: string) => String(card.properties[name]?.value ?? '')
+  return { cardId: card.id, status: text('Status'), type: text('Waiting For Type'), id: text('Waiting For ID'),
+    waitingFor: text('Waiting For'), nextCheckIn: card.properties['Next check-in']?.value as WaitState['nextCheckIn'],
+    observedAt: card.last_edited_time ?? null }
+}
+
+export function workBlocker(card: CardFields): WorkBlocker {
+  return { id: card.id, status: String(card.properties.Status?.value ?? ''), title: String(card.properties.Name?.value ?? ''),
+    archived: card.archived, in_trash: card.in_trash }
+}
+
+export const closedWorkBlocker = (card: WorkBlocker) => card.archived || card.in_trash || ['Done', 'Archived'].includes(card.status)
 
 const NOTION_ID = /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i
 const SCHEDULE_WORD = /\b(next|check-?in|check|in|on|at|date|the|a|an|waiting|wait|for|until|by|scheduled|arbitrary|monday|tuesday|wednesday|thursday|friday|saturday|sunday|am|pm|et|eastern)\b/gi
@@ -28,27 +70,84 @@ export function canonicalWorkId(id: string): string | null {
 
 export function coverageFromObservation(status?: string, coverage?: string): SourceCoverage {
   if (status === 'fresh' && coverage === 'complete') return 'complete'
-  if (status === 'fresh' && coverage === 'partial') return 'partial'
+  if ((status === 'fresh' || status === 'partial') && coverage === 'partial') return 'partial'
   return 'unknown'
 }
 
-const entryText = (text: string) => /[\r\n]/.test(text) || text.startsWith('"') ? JSON.stringify(text) : text
+const entryText = (text: string) => /[\r\n]/.test(text) || text.startsWith('"') || text.includes(' | ')
+  ? JSON.stringify(text).replaceAll('|', '\\u007c') : text
 
 /** The exact Waiting For line a later resolve must match. */
 export function waitLine(value: { dependency: string; unblocks_when: string; follow_up_by: string; type: string; id: string }): string {
   return `${value.type === 'Actor' && value.id === 'Will' ? 'Will: ' : ''}Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)} | Type: ${value.type} | ID: ${entryText(value.id)}`
 }
 
-export function parseWaitLine(line: string): { type: WaitingForType; id: string; dependency: string; unblocks_when: string; follow_up_by: string } | null {
-  const match = /^(?:Will: )?Dependency: (.+) \| Unblocks when: (.+) \| Follow-up: (.+) \| Type: (Actor|Event|Work) \| ID: (.+)$/.exec(line)
-  if (!match) return null
-  const decode = (text: string) => {
-    if (!text.startsWith('"')) return text
-    try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : text } catch { return text }
-  }
-  const value = { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4] as WaitingForType, id: decode(match[5]!) }
-  return Object.values(value).every(field => field.trim()) ? value : null
+const decode = (text: string) => {
+  if (!text.startsWith('"')) return text
+  try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : text } catch { return text }
 }
+
+function inlineWait(line: string): WaitFields | null {
+  const match = /^(?:Will: )?Dependency: (.*) \| Unblocks when: (.*) \| Follow-up: (.*) \| Type: (.*) \| ID: (.*)$/.exec(line)
+  if (!match) return null
+  return { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4]!, id: decode(match[5]!) }
+}
+
+function typedWait(fields: Partial<WaitFields>): (WaitFields & { type: WaitingForType }) | null {
+  const { type, id, dependency, unblocks_when, follow_up_by } = fields
+  const canonical = type?.trim() ?? ''
+  if (!canonicalType(canonical) || !id?.trim() || !dependency?.trim() || !unblocks_when?.trim() || !follow_up_by?.trim()) return null
+  return { type: canonical, id, dependency, unblocks_when, follow_up_by }
+}
+
+export function parseWaitLine(line: string) {
+  return typedWait(inlineWait(line) ?? {})
+}
+
+const descriptionFields = {
+  dependency: 'Dependency',
+  unblocks_when: 'Unblocks when',
+  follow_up_by: 'Follow-up by',
+} as const
+const labels: Record<string, keyof WaitFields> = {
+  dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by', 'follow-up': 'follow_up_by', type: 'type', id: 'id',
+}
+interface WaitEntry { text: string; fields: Partial<WaitFields> }
+
+/** Read the authored text and the generated entries without changing what an exact resolution matches. */
+export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
+  const entries: WaitEntry[] = []
+  let block: WaitEntry | undefined
+  let implicitIdentityUsed = false
+  const finish = () => {
+    if (!block) return
+    if (block.fields.type === undefined && block.fields.id === undefined && !implicitIdentityUsed) {
+      Object.assign(block.fields, { type: primary.type, id: primary.id })
+      implicitIdentityUsed = true
+    }
+    entries.push(block)
+    block = undefined
+  }
+  for (const line of text.split('\n')) {
+    const inline = inlineWait(line.replace(/\r$/, ''))
+    const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up(?: by)?|Type|ID):[ \t]*(.*)$/i.exec(line.trim())
+    if (inline || !labeled) {
+      finish()
+      if (line.trim()) entries.push({ text: line, fields: inline ?? { dependency: line } })
+      continue
+    }
+    const field = labels[labeled[1]!.toLowerCase()]!
+    if (!block || field in block.fields) {
+      finish()
+      block = { text: line, fields: {} }
+    } else block.text += '\n' + line
+    block.fields[field] = labeled[2]!
+  }
+  finish()
+  return entries
+}
+
+export const typedWaitEntry = (entry: WaitEntry) => typedWait(entry.fields)
 
 function scheduleOnly(text: string): boolean {
   const trimmed = text.trim()
@@ -78,74 +177,87 @@ export function independentWaitIssue(wait: { type: string; id: string; dependenc
   return null
 }
 
+const canonicalType = (type: string): type is WaitingForType => waitingForTypes.some(value => value === type)
+const comparableWaitId = (type: string, id: string) => type === 'Work' ? canonicalWorkId(id.trim()) : id.trim()
+
 export function workIdShape(cardId: string, workId: string): WaitIssue | null {
   const canonical = canonicalWorkId(workId)
-  if (!canonical || isJiraCard(cardId) !== isJiraCard(workId)) {
-    return { code: 'invalid-work-id', field: 'id', message: `Waiting For ID is not a valid ${isJiraCard(cardId) ? 'Jira' : 'Notion'} Work card identifier.` }
-  }
-  if (canonical === canonicalWorkId(cardId)) return { code: 'work-self', field: 'id', message: 'Waiting For ID references this same Work card.' }
+  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Use the exact Notion or Jira card ID for a Work dependency. Use Actor with the named identity if a person, team or service is the blocker.' }
+  if (canonical === canonicalWorkId(cardId)) return { code: 'work-self', field: 'id', message: 'Choose the exact ID of the other card that blocks this work.' }
   return null
 }
 
-/** Read-side field check. An id missing from the loaded set needs verification; it is not proof the card is gone. */
-export function waitingForFieldIssue(input: { cardId: string; status: string; type: string; id: string; knownWorkIds: readonly string[] }): string | null {
-  if (input.status !== 'Waiting For') return null
-  const type = input.type.trim(), id = input.id.trim()
-  if (!type) return 'Waiting For Type is missing.'
-  if (!waitingForTypes.includes(type as WaitingForType)) return `Waiting For Type “${type}” is not Work, Actor or Event.`
-  if (!id) return 'Waiting For ID is missing.'
-  if (type === 'Work') {
-    const shape = workIdShape(input.cardId, id)
-    if (shape) return shape.message
-    const known = new Set(input.knownWorkIds.flatMap(value => { const canonical = canonicalWorkId(value); return canonical ? [canonical] : [] }))
-    if (!known.has(canonicalWorkId(id)!)) return 'Waiting For ID does not resolve to a Work card in the loaded source. The reference needs verification.'
+function identityIssues(cardId: string, identity: WaitIdentity, add: AddIssue) {
+  const type = identity.type.trim(), id = identity.id.trim()
+  if (!type) add('classification', 'missing-type', 'Waiting For Type', 'Waiting For Type is missing. Choose Actor, Event or Work.')
+  else if (type === 'Person') add('classification', 'legacy-type', 'Waiting For Type', 'Replace legacy Person with Actor and retain the named blocker as the Actor ID.')
+  else if (type === 'Card') add('classification', 'legacy-type', 'Waiting For Type', 'Replace legacy Card with Work and confirm the exact ID of the blocking card.')
+  else if (!canonicalType(type)) add('classification', 'invalid-type', 'Waiting For Type', `“${type}” is unsupported. Choose Actor, Event or Work for the recorded blocker.`)
+  if (!id) add('classification', 'missing-id', 'Waiting For ID', 'Waiting For ID is missing. Enter the actor identity, event description or reference, or exact Work card ID.')
+  else if (type === 'Work') {
+    const shape = workIdShape(cardId, id)
+    if (shape) add('classification', shape.code, 'Waiting For ID', shape.message)
   }
-  return null
+}
+
+export function waitingForWorkIds(input: WaitState): string[] {
+  if (input.status !== 'Waiting For') return []
+  const identities = [input, ...waitEntries(input.waitingFor, input).map(entry => entry.fields)]
+  return [...new Set(identities.flatMap(({ type, id }) => {
+    const canonical = type?.trim() === 'Work' && id ? canonicalWorkId(id.trim()) : null
+    return canonical && canonical !== canonicalWorkId(input.cardId) ? [canonical] : []
+  }))]
 }
 
 export function hasActiveTypedWait(input: { type: string; id: string; waitingFor: string }): boolean {
-  return !!input.type.trim() || !!input.id.trim() || input.waitingFor.split('\n').some(line => parseWaitLine(line) !== null)
+  return !!input.type.trim() || !!input.id.trim() || waitEntries(input.waitingFor, input).some(entry => typedWaitEntry(entry) !== null)
 }
 
-/** Structural and dispatch-only problems on a card Tin Star did not rewrite.
- * Work-id membership in a filtered result is intentionally not treated as absence. */
-export function waitingForException(input: {
-  cardId: string; status: string; type: string; id: string; waitingFor: string; nextCheckIn?: { start?: string; time_zone?: string } | null; knownWork?: readonly { id: string; status: string; archived?: boolean; in_trash?: boolean }[]; observedAt: string | null; coverage: SourceCoverage
-}): WaitingForException | null {
-  if (input.status === 'Waiting for Prod Release') return null
-  const base = { card_id: input.cardId, observed_at: input.observedAt, coverage: input.coverage }
-  if (input.status === 'Waiting For') {
-    const referenceIssue = (type: string, id: string): WaitingForException | null => {
-      const reason = waitingForFieldIssue({ ...input, type, id, knownWorkIds: (input.knownWork ?? []).map(card => card.id) })
-      if (reason) return { ...base, field: reason.startsWith('Waiting For Type') ? 'Waiting For Type' : 'Waiting For ID', reason }
-      if (type === 'Work') {
-        const work = input.knownWork?.find(card => canonicalWorkId(card.id) === canonicalWorkId(id))
-        if (input.coverage !== 'complete') return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference needs verification from a fresh, complete source.' }
-        if (work && (work.archived || work.in_trash || ['Done', 'Archived'].includes(work.status))) return { ...base, field: 'Waiting For ID', reason: 'Waiting For Work reference is completed, archived or deleted; it is not an unfinished blocker.' }
+type AddIssue = (category: WaitingForIssue['category'], code: string, field: string, reason: string) => void
+type WaitObservation = WaitState & { coverage: SourceCoverage }
+
+export function waitingForIssues(input: WaitObservation, work: ReadonlyMap<string, WorkBlocker> = new Map()): WaitingForIssue[] {
+  const { cardId, status, coverage, observedAt, waitingFor } = input
+  const issues: WaitingForIssue[] = []
+  const add: AddIssue = (category, code, field, reason) => {
+    if (issues.some(issue => issue.code === code && issue.field === field && issue.reason === reason)) return
+    issues.push({ card_id: cardId, category, code, field, reason, coverage, observed_at: observedAt })
+  }
+  if (status === 'Waiting For') {
+    identityIssues(cardId, input, add)
+    const entries = waitEntries(waitingFor, input)
+    const descriptions = entries.length ? entries.map(entry => entry.fields) : [{}]
+    let hasPrimary = false
+    for (const fields of descriptions) {
+      const { type, id, dependency, unblocks_when } = fields
+      if (type !== undefined || id !== undefined) {
+        identityIssues(cardId, { type: type ?? '', id: id ?? '' }, add)
+        hasPrimary ||= !!type && type.trim() === input.type.trim() && comparableWaitId(type.trim(), id ?? '') === comparableWaitId(type.trim(), input.id)
       }
-      return null
+      for (const [key, label] of Object.entries(descriptionFields)) {
+        if (!fields[key as keyof WaitDescription]?.trim()) add('description', `missing-${key}`, label, `Add ${label} to the active Waiting For description.`)
+      }
+      if (dependency && unblocks_when && dispatchOnlyWait(dependency, unblocks_when)) {
+        add('description', 'not-independent', 'Unblocks when', DISPATCH_WAIT_REASON)
+      }
     }
-    const primary = referenceIssue(input.type, input.id)
-    if (primary) return primary
-    const waits = input.waitingFor.split('\n').filter(line => line.trim()).map(parseWaitLine)
-    for (const wait of waits) {
-      if (!wait) return { ...base, field: 'Waiting For', reason: 'Waiting For requires dependency, unblock condition, follow-up owner and typed identity on every active wait.' }
-      const reference = referenceIssue(wait.type, wait.id)
-      if (reference) return reference
-      const issue = independentWaitIssue(wait)
-      if (issue) return { ...base, field: 'Waiting For', reason: issue.message }
+    if (entries.length && descriptions.every(fields => fields.type && fields.id) && !hasPrimary) {
+      add('classification', 'primary-mismatch', 'Waiting For Type / ID', 'Match Waiting For Type and ID to one of the active wait entries.')
     }
-    if (waits.length && !waits.some(wait => wait?.type === input.type && wait.id === input.id)) return { ...base, field: 'Waiting For ID', reason: 'Active blocker metadata must match a remaining wait.' }
-    if (!input.waitingFor.trim()) return { ...base, field: 'Waiting For', reason: 'Waiting For dependency, unblock condition and follow-up owner are missing.' }
-    if (!Number.isFinite(checkInTime(input.nextCheckIn?.start ?? null, input.nextCheckIn?.time_zone))) return { ...base, field: 'Next check-in', reason: 'Next check-in is missing or invalid.' }
-    return null
+    for (const id of waitingForWorkIds(input)) {
+      const target = work.get(id)
+      if (!target) add('reference', 'work-unverified', 'Waiting For ID', `Work card ${id} needs verification. Its status is unknown. Refresh the source or check access to the exact card.`)
+      else if (closedWorkBlocker(target)) add('reference', 'work-not-blocking', 'Waiting For ID', `Work card ${id} is completed, archived or deleted. Review the dependency and resolve it explicitly if it has cleared.`)
+    }
+    if (!Number.isFinite(checkInTime(input.nextCheckIn?.start ?? null, input.nextCheckIn?.time_zone))) {
+      add('description', 'missing-check-in', 'Next check-in', 'Set a valid Next check-in for this wait.')
+    }
+  } else if (['Queued', 'Todo', 'Backlog', 'In Progress'].includes(status)) {
+    if (hasActiveTypedWait(input)) add('status', 'wait-unresolved', 'Waiting For', `Status is ${status}, but an unresolved typed blocker remains. Resolve the exact active wait or restore Waiting For; no fields were rewritten.`)
+    else if (waitEntries(waitingFor, input).some(({ fields }) => dispatchOnlyWait(fields.dependency ?? '', fields.unblocks_when ?? ''))) {
+      add('description', 'not-independent', 'Waiting For', `${DISPATCH_WAIT_REASON} Status is ${status}; this text was not rewritten.`)
+    }
   }
-  if (['Queued', 'Todo', 'Backlog', 'In Progress'].includes(input.status)) {
-    if (hasActiveTypedWait(input)) return { ...base, field: 'Waiting For', reason: `Status is ${input.status}, but an unresolved typed blocker remains. Resolve the exact active wait or restore Waiting For; no fields were rewritten.` }
-    for (const line of input.waitingFor.split('\n').filter(line => line.trim())) {
-      const wait = parseWaitLine(line)
-      if (dispatchOnlyWait(wait?.dependency ?? line, wait?.unblocks_when ?? '')) return { ...base, field: 'Waiting For', reason: `${DISPATCH_WAIT_REASON} Status is ${input.status}; this text was not rewritten.` }
-    }
-  }
-  return null
+  // Keep the compatibility summary pointed at classification and reference issues first.
+  return [...issues.filter(issue => issue.category !== 'description'), ...issues.filter(issue => issue.category === 'description')]
 }
