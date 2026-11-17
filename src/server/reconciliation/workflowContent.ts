@@ -3,7 +3,6 @@ import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
 import { isJiraCard } from '../../shared/workIdentity'
-import { recordNotionBodyFailure } from './notionApi'
 
 export const richText = (content: string) => {
   const rich_text: Array<{ type: 'text'; text: { content: string } }> = []
@@ -129,9 +128,6 @@ export class WorkflowContent {
         if (bytes > 4 * 1024 * 1024) throw new Error('Notion response too large')
         chunks.push(value)
       }
-    } catch (error) {
-      recordNotionBodyFailure(response, error)
-      throw error
     } finally { await stream.cancel().catch(() => {}) }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }

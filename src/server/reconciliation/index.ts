@@ -221,17 +221,16 @@ export class ReconciliationSources {
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
     const priority = await this.preparation.priorityCards()
-    this.preparationHistory.warm(ids, priority.ids, priority.published)
-    await Promise.all(ids.map(id => this.importCommentPackets(id)))
+    const discovery = this.preparationHistory.warm([...priority.ids, ...ids], priority)
+    await Promise.all(discovery.map(id => this.importCommentPackets(id)))
   }
 
   private async renewPreparedSources() {
     const priority = await this.preparation.priorityCards()
-    if (!priority.ids.length) return
     // The existing five-second runner also renews published/in-flight sources
     // with admission off, so a closed Desk does not stop source maintenance.
-    await this.snapshot()
-    this.preparationHistory.warm([], priority.ids, priority.published)
+    if (priority.ids.length) await this.snapshot()
+    this.preparationHistory.warm(priority.ids, priority)
   }
 
   private preparationDiagnostics() {
@@ -273,7 +272,7 @@ export class ReconciliationSources {
       // explicit Prepare now waits for source observations, then its own card.
       await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
-      await this.preparationHistory.read(cardId)
+      await this.preparationHistory.read(cardId, await this.preparation.priorityCards())
     } else {
       await this.snapshot()
       await this.warmPreparationHistory()
@@ -503,22 +502,22 @@ export class ReconciliationSources {
     }
   }
   async startWork(input: StartWorkInput, actor: string) {
-    const result = await this.notionApi.foregroundOperation(actor, () => this.workflow.start(input, actor))
+    const result = await this.workflow.start(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
     return { ...workReadback(result), lease: this.leases.status(input.card_id) }
   }
 
   async updateWork(input: UpdateWorkInput, actor: string) {
-    const result = await this.notionApi.foregroundOperation(actor, () => this.workflow.update(input, actor))
+    const result = await this.workflow.update(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidateProse(input.card_id)
     const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
     return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }
   async createWork(input: CreateWorkInput, actor: string) {
-    return workReadback(await this.notionApi.foregroundOperation(actor, () => this.workflow.create(input, actor)))
+    return workReadback(await this.workflow.create(input, actor))
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
-    const result = await this.notionApi.foregroundOperation(actor, () => this.workflow.submitHandoff(input, actor))
+    const result = await this.workflow.submitHandoff(input, actor)
     if ('record' in result && 'card_id' in result.record && typeof result.record.card_id === 'string') this.preparationHistory.invalidate(result.record.card_id)
     return workReadback(result)
   }
@@ -583,7 +582,7 @@ export class ReconciliationSources {
     const snapshot = await this.snapshot(false, {}, false), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
-    this.preparationHistory.warm(ids)
+    this.preparationHistory.warm(ids, await this.preparation.priorityCards())
     const contexts = new Map(ids.flatMap(id => {
       const history = this.preparationHistory.evidenceHistory(id)
       const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
@@ -754,9 +753,6 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  if (path === '/api/reconciliation/sources') {
-    const snapshot = await sources.snapshot()
-    return ok(res, { ...snapshot, diagnostics: { notion: { ...snapshot.diagnostics.notion, callerFailures: sources.notionApi.callerFailures } } }, { headers })
-  }
+  if (path === '/api/reconciliation/sources') return ok(res, await sources.snapshot(), { headers })
   return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}), { headers })
 }

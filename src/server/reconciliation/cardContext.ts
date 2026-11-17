@@ -1,5 +1,5 @@
+import type { NotionFetch } from './notionApi'
 import type { ReconciliationConfig } from './config'
-import { recordNotionBodyFailure } from './notionApi'
 import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
 import type { JiraAdapter } from './jira'
@@ -23,9 +23,9 @@ export interface CardContextRead {
 export class CardContextReader {
   private decisionCache = new Map<string, { pending: boolean; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory; body?: CardContextRead }>()
   private retainedDecisionCards: ReadonlySet<string> = new Set()
-  private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher?: typeof fetch }>()
-  private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher: typeof fetch }>()
-  constructor(private config: ReconciliationConfig['notion'], private fetcher: typeof fetch = fetch, private jira?: JiraAdapter) {}
+  private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher?: NotionFetch }>()
+  private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher: NotionFetch }>()
+  constructor(private config: ReconciliationConfig['notion'], private fetcher: NotionFetch = fetch, private jira?: JiraAdapter) {}
   /** Comments are an existing authorized coordinator update surface as well as
    * card paragraphs. Missing comment permission leaves paragraphs readable. */
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
@@ -123,7 +123,7 @@ export class CardContextReader {
     void value.then(result => { entry.resolved = result; entry.resolvedUntil = entry.until }).catch(() => {}).finally(() => { entry.pending = false })
     return value
   }
-  private async fetchContext(url: URL, init: RequestInit, retryRateLimit: boolean, fetcher: typeof fetch) {
+  private async fetchContext(url: URL, init: RequestInit, retryRateLimit: boolean, fetcher: NotionFetch) {
     for (let attempt = 0; ; attempt++) {
       const response = await fetcher(url, init)
       // NotionApi supplies shared Retry-After pacing. Retry only reads and
@@ -166,9 +166,6 @@ export class CardContextReader {
             if (bytes > 2 * 1024 * 1024) throw new Error('Comments too large')
             chunks.push(value)
           }
-        } catch (error) {
-          recordNotionBodyFailure(res, error)
-          throw error
         } finally { await reader.cancel().catch(() => {}) }
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Invalid comments')
@@ -234,9 +231,6 @@ export class CardContextReader {
             if (bytes > 2 * 1024 * 1024) throw new Error('context too large')
             chunks.push(value)
           }
-        } catch (error) {
-          recordNotionBodyFailure(res, error)
-          throw error
         } finally { await reader.cancel().catch(() => {}) }
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results)) throw new Error('invalid context')

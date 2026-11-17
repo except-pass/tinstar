@@ -3,7 +3,7 @@ import { CachedObservation, retainMissing } from './observation'
 import { record, text } from './values'
 import { FIRST_MATE_TASKS, readWorkerLinks, type WorkerLinks } from './workerLinks'
 import type { ReconciliationConfig } from './config'
-import { NotionQueueTimeoutError, recordNotionBodyFailure, type NotionFetch } from './notionApi'
+import { NotionQueueTimeoutError, type NotionFetch } from './notionApi'
 export interface WorkScope { owner?: string; statuses?: string[]; initiative?: string; epic?: string; checkpoint_before?: string; history?: boolean }
 
 // Malformed hyphen strings must not normalize into supposedly canonical links.
@@ -85,9 +85,6 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
       if (bytes > 4 * 1024 * 1024) throw new Error('Notion card response too large')
       chunks.push(value)
     }
-  } catch (error) {
-    recordNotionBodyFailure(response, error)
-    throw error
   } finally { await reader.cancel().catch(() => {}) }
   const raw = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
   const result = notionCard(raw)
@@ -99,7 +96,7 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
 // 2,000 cards leaves room beyond the current board size without unbounded
 // pagination. Schema, query pages and relation reads still share one 20s deadline.
 export const NOTION_QUERY_PAGE_LIMIT = 20
-export function notionObservation(config: ReconciliationConfig['notion'], fetcher: typeof fetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board', backgroundFetch = fetcher) {
+export function notionObservation(config: ReconciliationConfig['notion'], fetcher: NotionFetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board', backgroundFetch = fetcher) {
   return new CachedObservation(async background => {
     if (!config) throw new Error('Notion is not configured')
     const send = background ? backgroundFetch : fetcher
@@ -125,9 +122,6 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
           if (bytes > 4 * 1024 * 1024) throw new Error('Notion response too large')
           chunks.push(value)
         }
-      } catch (error) {
-        recordNotionBodyFailure(response, error)
-        throw error
       } finally { await reader.cancel().catch(() => {}) }
       return record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
     }

@@ -378,7 +378,9 @@ export class DecisionPreparation {
       })
       const ids = [...new Set([...jobs, ...reviewable.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers)
       const published = new Set(reviewable.filter(row => row.valid).map(row => row.card))
-      return { ids, published: ids.filter(id => published.has(id)) }
+      const selected = new Set(ids)
+      const excluded = new Set(packets.map(row => row.card).filter(card => !selected.has(card)))
+      return { ids, published: ids.filter(id => published.has(id)), excluded }
     })
   }
 

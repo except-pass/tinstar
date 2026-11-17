@@ -12,6 +12,8 @@ type HistoryJob = { promise: Promise<void>; resolve(): void; invalidated?: boole
 const completeHistory = (history: CachedDecisionHistory | undefined) =>
   history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
 
+type HistoryPriority = { ids: string[]; published: string[]; excluded: ReadonlySet<string> }
+
 /** One shared queue for display and admission. Two card reads at a time also
  * bound the body/comment requests waiting on the shared Notion rate limiter. */
 export class PreparationHistory {
@@ -21,6 +23,7 @@ export class PreparationHistory {
   private versions = new Map<string, { version: string; lastRead: number; completeVersion?: string; commentsDirty?: boolean }>()
   private priority = new Set<string>()
   private published = new Set<string>()
+  private excluded: ReadonlySet<string> = new Set()
   private queue: string[] = []
   private active = 0
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
@@ -28,14 +31,16 @@ export class PreparationHistory {
     private propertiesFresh: (id: string, until: number) => boolean = () => true,
     private boardVersion: (id: string) => BoardVersion | null | undefined = () => undefined) {}
 
-  warm(ids: string[], priority?: string[], published?: string[]) {
-    if (priority) this.priority = new Set(priority)
-    if (published) {
-      this.published = new Set(published)
+  warm(ids: string[], priority?: HistoryPriority) {
+    if (priority) {
+      this.priority = new Set(priority.ids)
+      this.published = new Set(priority.published)
+      this.excluded = priority.excluded
       this.reader.retainDecisionCards(this.published)
     }
     const important = this.priority
-    for (const id of new Set([...(priority ?? []), ...ids])) {
+    const discovery = [...new Set(ids)].filter(id => !this.excluded.has(id))
+    for (const id of discovery) {
       const board = this.boardVersion(id), version = this.versions.get(id), now = Date.now()
       // null is a configured Notion card without a current board row.
       // The next board observation can supply a version without probing prose.
@@ -53,14 +58,15 @@ export class PreparationHistory {
     // Existing queued board reads yield to exact sources, without adding readers.
     this.queue.sort((a, b) => Number(important.has(b)) - Number(important.has(a)))
     this.drain()
+    return discovery
   }
 
-  async read(id: string) {
+  async read(id: string, priority?: HistoryPriority) {
     // An explicit retry can bypass failure backoff for this card only.
     if (this.failures.has(id) && !this.pending.has(id)) {
       this.failures.delete(id)
     }
-    this.warm([id])
+    this.warm([id], priority)
     const index = this.queue.indexOf(id)
     if (index > 0) { this.queue.splice(index, 1); this.queue.unshift(id) }
     await this.pending.get(id)?.promise
@@ -143,6 +149,7 @@ export class PreparationHistory {
   }
 
   private async load(id: string, job: HistoryJob) {
+    if (this.excluded.has(id)) return
     const board = this.boardVersion(id), prior = this.versions.get(id)
     if (board === null || board && (board.status !== 'fresh' || board.coverage !== 'complete')) return
     job.invalidated = false
@@ -165,7 +172,7 @@ export class PreparationHistory {
         timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), decisionHistoryDeadlineMs)
         timer.unref?.()
       })])
-      if (job.invalidated || board && this.boardVersion(id)?.version !== board.version) return
+      if (job.invalidated || this.excluded.has(id) || board && this.boardVersion(id)?.version !== board.version) return
       const history = this.reader.cachedDecisionHistory(id)
       if (history?.context.commentsOutcome !== 'available') throw new Error(`Decision comment history is incomplete. ${history?.context.omissions ?? ''}`.trim())
       if (history.context.outcome !== 'available') throw new Error(`Decision body history is incomplete. ${history.context.omissions ?? ''}`.trim())

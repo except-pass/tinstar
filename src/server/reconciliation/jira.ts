@@ -57,7 +57,7 @@ const decodeProperty = (wire: unknown, type: string): unknown => {
 /** Bounded TSSPIKE reader/writer. It has no configuration mutation endpoints,
  * background jobs, sync, or dispatch capability. */
 export class JiraAdapter {
-  constructor(readonly config: JiraConfig, private fetcher: typeof fetch = fetch) {
+  constructor(readonly config: JiraConfig, private fetcher: (input: string, init?: RequestInit) => Promise<Response> = fetch) {
     if (config.url !== 'https://fortresspower-jira.atlassian.net' || config.projectId !== '10638') throw new Error('Jira pilot is restricted to TSSPIKE 10638')
   }
   private async response(path: string, init: RequestInit = {}) {

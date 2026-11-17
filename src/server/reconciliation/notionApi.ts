@@ -1,23 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
-
-export type NotionFetch = (input: Parameters<typeof fetch>[0], init?: RequestInit, timeoutMs?: number) => Promise<Response>
-type CallerClass = 'owner' | 'mate' | 'pm-bot' | 'background' | 'other'
-const callerContext = new AsyncLocalStorage<CallerClass>()
-function callerClass(actor: string): CallerClass {
-  switch (actor.toLowerCase()) {
-    case 'owner':
-    case 'owner-chatgpt': return 'owner'
-    case 'mate':
-    case 'firstmate':
-    case 'first mate': return 'mate'
-    case 'pm-bot':
-    case 'pm bot': return 'pm-bot'
-    default: return 'other'
-  }
-}
-export const withNotionCaller = <T>(actor: string, run: () => T) => callerContext.run(callerClass(actor), run)
-const bodyFailures = new WeakMap<Response, (error: unknown) => void>()
-export const recordNotionBodyFailure = (response: Response, error: unknown) => bodyFailures.get(response)?.(error)
+export type NotionFetch = (input: string | URL, init?: RequestInit, timeoutMs?: number) => Promise<Response>
 
 const queueDeadlineMs = 30_000
 export class NotionQueueTimeoutError extends DOMException {
@@ -29,7 +10,6 @@ type RequestJob = { start(): void }
  * forced refreshes. No automatic write retry: a lost response may have saved. */
 export class NotionApi {
   readonly diagnostics = { requests: {} as Record<string, number>, cacheHits: 0, rateLimits: 0, latencyMs: 0 }
-  readonly callerFailures: Partial<Record<CallerClass, { timeouts: number; sourceUnavailable: number }>> = {}
   private nextAt = 0
   private foreground: RequestJob[] = []
   private background: RequestJob[] = []
@@ -41,33 +21,8 @@ export class NotionApi {
   readonly backgroundFetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, true)
   readonly fetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, false)
 
-  foregroundOperation<T>(actor: string, run: () => Promise<T>) {
-    if (callerContext.getStore()) return run()
-    return withNotionCaller(actor, async () => {
-      const result = await run()
-      this.recordSourceResult(result)
-      return result
-    })
-  }
-
-  private count(kind: 'timeouts' | 'sourceUnavailable', caller: CallerClass) {
-    const counts = this.callerFailures[caller] ??= { timeouts: 0, sourceUnavailable: 0 }
-    counts[kind]++
-  }
-
-  recordSourceResult(result: unknown) {
-    const caller = callerContext.getStore()
-    if (!caller || !result || typeof result !== 'object') return
-    const { outcome, code, recovery, context, implementation_contract } = result as {
-      outcome?: string; code?: string; recovery?: { code?: string }; context?: { outcome?: string }; implementation_contract?: { code?: string }
-    }
-    const unavailable = [outcome, code, recovery?.code, implementation_contract?.code].some(value => typeof value === 'string' && value.endsWith('source-unavailable'))
-    if (unavailable || outcome === 'stale' || outcome === 'unavailable' || context?.outcome === 'unavailable') this.count('sourceUnavailable', caller)
-  }
-
-  private async cachedRequest(input: Parameters<typeof fetch>[0], init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean) {
-    const request = input instanceof Request ? input : undefined
-    const url = new URL(request?.url ?? String(input)), method = (init?.method ?? request?.method ?? 'GET').toUpperCase()
+  private async cachedRequest(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean) {
+    const url = new URL(input), method = (init?.method ?? 'GET').toUpperCase()
     const schema = method === 'GET' && /^\/v1\/data_sources\/[^/]+$/.test(url.pathname)
     const key = url.href
     const cached = schema ? this.schemas.get(key) : undefined
@@ -99,15 +54,11 @@ export class NotionApi {
     ;(this.foreground.shift() ?? this.background.shift())?.start()
   }
 
-  private request(input: Parameters<typeof fetch>[0], init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean, url: URL, method: string) {
+  private request(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean, url: URL, method: string) {
     const operation = `${method} ${url.pathname.split('/')[2] ?? 'other'}${url.pathname.endsWith('/query') ? '/query' : ''}`
     const started = Date.now()
     const queue = background ? this.background : this.foreground
-    const callerSignal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined
-    const caller = background ? 'background' : callerContext.getStore() ?? 'other'
-    const countTimeout = (error: unknown) => {
-      if (error instanceof Error && error.name === 'TimeoutError') this.count('timeouts', caller)
-    }
+    const callerSignal = init?.signal
     return new Promise<Response>((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(queueTimer)
@@ -121,7 +72,6 @@ export class NotionApi {
           this.dispatch()
         }
         this.diagnostics.latencyMs += Date.now() - started
-        countTimeout(reason)
         reject(reason)
       }
       const abort = () => cancel(callerSignal?.reason)
@@ -135,10 +85,6 @@ export class NotionApi {
         void (async () => {
           try {
             const response = await this.fetcher(input, deadline ? { ...init, signal } : init)
-            if (response.body && signal) bodyFailures.set(response, error => {
-              countTimeout(signal.aborted ? signal.reason : error)
-              bodyFailures.delete(response)
-            })
             if (response.status === 429) {
               this.diagnostics.rateLimits++
               const value = response.headers.get('retry-after'), seconds = Number(value)
@@ -147,7 +93,6 @@ export class NotionApi {
             }
             resolve(response)
           } catch (error) {
-            countTimeout(signal?.aborted ? signal.reason : error)
             reject(error)
           } finally {
             this.diagnostics.latencyMs += Date.now() - started
