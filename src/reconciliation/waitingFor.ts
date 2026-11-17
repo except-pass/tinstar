@@ -1,5 +1,5 @@
 import { cardSourceUrl } from '../shared/workIdentity'
-import { canonicalWorkId, waitingForIssues, waitingForTypes, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
+import { canonicalWorkId, waitingForIssues, waitingForTypes, waitingForWorkIds, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
 import type { SceneCard } from '../server/reconciliation/scene'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
@@ -56,25 +56,36 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
   const groups = new Map<string, WaitingForGroup>(), unclassified: SceneCard[] = []
   const issues = new Map<string, WaitingForIssue[]>()
   const work = new Map(references.map(target => [canonicalWorkId(target.id) ?? target.id, target]))
-  const loaded = new Set(known.map(card => canonicalWorkId(card.id) ?? card.id))
+  const loaded = new Map(known.map(card => [canonicalWorkId(card.id) ?? card.id, card.id]))
   for (const card of active.sort(compareCards)) {
     const state = waitState(card.source)
     const cardIssues = waitingForIssues({ ...state, coverage }, work)
     if (cardIssues.length) issues.set(card.id, cardIssues)
-    if (cardIssues.some(issue => issue.category === 'classification')) { unclassified.push(card); continue }
-    const type = state.type.trim() as WaitingForType, id = state.id.trim()
-    const canonical = type === 'Work' ? canonicalWorkId(id)! : normalize(type === 'Event' ? githubTarget(id)?.url ?? id : id)
-    const key = JSON.stringify([type, canonical])
-    let group = groups.get(key)
-    if (!group) {
-      const blocker = type === 'Work' ? work.get(canonical) : undefined
-      const target = blocker ? loaded.has(canonical)
-        ? { kind: 'card' as const, id: blocker.id }
-        : { kind: 'url' as const, url: cardSourceUrl(blocker.id) } : undefined
-      group = { key, type, id, label: blocker?.title || id, cards: [], target }
-      groups.set(key, group)
+    const unclassifiedCard = cardIssues.some(issue => issue.category === 'classification')
+    if (unclassifiedCard) unclassified.push(card)
+    const primaryType = state.type.trim()
+    const primaryId = state.id.trim()
+    const primaryWorkId = primaryType === 'Work' ? canonicalWorkId(primaryId) : null
+    const dependencies = waitingForWorkIds(state).map(canonical => ({
+      type: 'Work' as const, canonical, id: canonical === primaryWorkId ? primaryId : canonical,
+    }))
+    const primaryGroup = !unclassifiedCard && (primaryType === 'Actor' || primaryType === 'Event')
+      ? [{ type: primaryType, id: primaryId, canonical: normalize(primaryType === 'Event' ? githubTarget(primaryId)?.url ?? primaryId : primaryId) } as const]
+      : []
+    for (const { type, id, canonical } of [...primaryGroup, ...dependencies]) {
+      const key = JSON.stringify([type, canonical])
+      let group = groups.get(key)
+      if (!group) {
+        const blocker = type === 'Work' ? work.get(canonical) : undefined
+        const loadedId = loaded.get(canonical)
+        const target = blocker ? loadedId
+          ? { kind: 'card' as const, id: loadedId }
+          : { kind: 'url' as const, url: cardSourceUrl(blocker.id) } : undefined
+        group = { key, type, id, label: blocker?.title || id, cards: [], target }
+        groups.set(key, group)
+      }
+      group.cards.push(card)
     }
-    group.cards.push(card)
   }
   for (const group of groups.values()) if (group.type === 'Event') {
     const link = eventTarget(group.id, group.cards)

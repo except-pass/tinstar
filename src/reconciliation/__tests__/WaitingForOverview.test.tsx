@@ -6,6 +6,7 @@ import { Overview as NativeOverview } from '../Overview'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import type { FloorScene } from '../presentation'
 import { overviewDensityKey } from '../overviewDensity'
+import { waitLine } from '../../shared/waitingForPolicy'
 import { preferencesKey } from '../presentationPreferences'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, error: null as string | null }))
@@ -123,8 +124,12 @@ describe('Waiting For in the native Overview', () => {
     expect(card(container, 1)).toBeNull()
     expect(screen.getByRole('region', { name: 'Inspector' })).toBeTruthy()
   })
-  it('counts a blocker role and a faulty wait independently, including after refresh', () => {
-    set(1, { 'Waiting For Type': 'Work', 'Waiting For ID': fixtureId(6) })
+  it.each(['primary', 'appended'])('counts a %s blocker role and a faulty wait independently after refresh', mode => {
+    const blocker = { type: 'Work', id: fixtureId(6), dependency: 'Security review', unblocks_when: 'The review is posted', follow_up_by: 'Consumer' }
+    if (mode === 'primary') set(1, { 'Waiting For Type': blocker.type, 'Waiting For ID': blocker.id })
+    else set(1, { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will', waitLine(blocker),
+    ].join('\n') })
     set(6, { 'Waiting For Type': 'Person', 'Waiting For ID': 'Security' })
     const blockerTitle = String(scene.cards.find(card => card.id === fixtureId(6))?.source.properties.Name?.value)
     const { rerender } = mount(); select()

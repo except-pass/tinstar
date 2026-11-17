@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureScene, fixtureId } from '../../../test-fixtures/reconciliation/scenes'
+import { waitLine } from '../../shared/waitingForPolicy'
 import { waitingForGroups, waitingForActive } from '../waitingFor'
 import { notionCard } from '../../server/reconciliation/notion'
 import { sceneSearchDocuments } from '../../shared/searchDocuments'
@@ -50,6 +51,30 @@ describe('Waiting For projection', () => {
     expect(result.find(group => group.id.includes('/123') && group.id.includes('github'))?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/123' })
     expect(result.find(group => group.id === 'repo PR #124 merged')?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/124' })
     expect(result.find(group => group.id.includes('evil'))?.target).toBeUndefined()
+  })
+  it('projects primary and appended Work destinations without duplicating waiting cards', () => {
+    const loaded = card(3, 'Actor', 'Will', { Name: 'Loaded blocker' })
+    const offPage = { id: fixtureId(4), title: 'Off-page blocker', status: 'Queued' }
+    const work = (id: string) => waitLine({ type: 'Work', id, dependency: 'Blocker completes', unblocks_when: 'Work closes', follow_up_by: 'Consumer' })
+    const waiting = card(1, 'Actor', 'Will', { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will',
+      work(loaded.id), work(offPage.id), work(offPage.id.toUpperCase()),
+    ].join('\n') })
+    const primary = card(2, 'Work', loaded.id)
+    const result = waitingForGroups([waiting, primary], [loaded], [
+      { id: loaded.id, title: 'Loaded blocker', status: 'Queued' }, offPage,
+    ])
+    expect(result.count).toBe(2)
+    expect(result.categories.find(category => category.type === 'Work')?.groups).toMatchObject([
+      { cards: [{ id: waiting.id }, { id: primary.id }], target: { kind: 'card', id: loaded.id } },
+      { cards: [{ id: waiting.id }], target: { kind: 'url', url: 'https://www.notion.so/' + offPage.id } },
+    ])
+    waiting.source.properties['Waiting For Type']!.value = 'Person'
+    const faulty = waitingForGroups([waiting], [], [offPage])
+    expect(faulty.unclassified).toEqual([waiting])
+    expect(faulty.categories.find(category => category.type === 'Work')?.groups).toContainEqual(expect.objectContaining({
+      cards: [waiting], target: { kind: 'url', url: 'https://www.notion.so/' + offPage.id },
+    }))
   })
   it('separates invalid classification from an unknown exact Work reference', () => {
     const cards = [card(1, '', ''), card(2, 'Work', ''), card(3, 'Work', 'mcp'), card(4, 'Work', fixtureId(4)),

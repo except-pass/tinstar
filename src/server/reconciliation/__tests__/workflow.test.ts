@@ -2707,7 +2707,7 @@ describe('Waiting For status semantics', () => {
     expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(waitLine(next))
   })
 
-  it('retains the authored blocker when repairing a different wait and promoting a successor', async () => {
+  it.each(['wait', 'assign', 'answer_decision'] as const)('retains the authored blocker through %s', async kind => {
     const f = readyFixture()
     const original = actor({ id: 'hulk', dependency: 'Tariff approval', unblocks_when: 'Approval is posted' })
     const text = `Dependency: ${original.dependency}\nUnblocks when: ${original.unblocks_when}\nFollow-up by: ${original.follow_up_by}`
@@ -2716,19 +2716,29 @@ describe('Waiting For status semantics', () => {
     f.raw.properties.Status.status.name = 'Waiting For'
     f.raw.properties['Waiting For Type'].select = { name: original.type }
     f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: original.id }]
-    f.raw.properties['Waiting For'].rich_text = [{ plain_text: [waitLine(successor), text, replacement.dependency].join('\n') }]
-    const card = await f.reader.card(id, true)
-    const expected = Object.fromEntries(['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].map(name => [name, card.properties[name]?.value ?? null]))
-    const repair_waits = [{ current: replacement.dependency, replacement }]
-    expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    const repaired = await f.reader.card(id, true)
-    expect(repaired.properties['Waiting For ID']?.value).toBe(replacement.id)
-    expect(repaired.properties['Waiting For']?.value).toBe([waitLine(successor), waitLine(original), waitLine(replacement)].join('\n'))
-
-    f.raw.properties['Waiting For Type'].select = { name: original.type }
-    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: original.id }]
-    f.raw.properties['Waiting For'].rich_text = [{ plain_text: [waitLine(successor), text, waitLine(replacement)].join('\n') }]
-    expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: waitLine(replacement), operation_id: 'promote-successor' }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    f.raw.properties['Next check-in'].date = { start: checkIn() }
+    const resolve_wait = waitLine(replacement)
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: [
+      waitLine(successor), text, kind === 'wait' ? replacement.dependency : resolve_wait,
+    ].join('\n') }]
+    if (kind === 'wait') {
+      const card = await f.reader.card(id, true)
+      const expected = Object.fromEntries(['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].map(name => [name, card.properties[name]?.value ?? null]))
+      const repair_waits = [{ current: replacement.dependency, replacement }]
+      expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+      const repaired = await f.reader.card(id, true)
+      expect(repaired.properties['Waiting For ID']?.value).toBe(replacement.id)
+      expect(repaired.properties['Waiting For']?.value).toBe([waitLine(successor), waitLine(original), resolve_wait].join('\n'))
+      return
+    }
+    const next = { owner: 'Firstmate', status: 'Queued' }
+    const request_id = 'retained-blocker-decision'
+    if (kind === 'answer_decision') {
+      expect(await f.workflow.update(op('request_decision', { request_id, question: 'Is the firmware ready?', requested_from: 'Will' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    }
+    const update = kind === 'assign' ? op(kind, { ...next, resolve_wait })
+      : op(kind, { request_id, answer: 'The firmware is published', next, resolve_wait })
+    expect(await f.workflow.update(update, 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
     const promoted = await f.reader.card(id, true)
     expect(promoted.properties['Waiting For ID']?.value).toBe(successor.id)
     expect(promoted.properties['Waiting For']?.value).toBe([waitLine(successor), waitLine(original)].join('\n'))
@@ -3161,7 +3171,8 @@ it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-not
   const f = fixture()
   f.raw.properties.Owner.select.name = 'Will'
   f.raw.properties.Status.status.name = 'Waiting For'
-  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Will: Approve the exception' }]
+  const sibling = { type: 'Actor', id: 'hulk', dependency: 'Review the tariff', unblocks_when: 'The review is posted', follow_up_by: 'Consumer' }
+  f.raw.properties['Waiting For'].rich_text = [{ plain_text: 'Will: Approve the exception\n' + waitLine(sibling) }]
   f.raw.properties['Waiting For Type'].select = { name: 'Actor' }
   f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Will' }]
   f.raw.properties['Last touched by'].rich_text = [{ plain_text: mode === 'missing' ? 'owner-chatgpt' : mode.startsWith('ui-') ? 'Tin Star UI' : 'Clawson' }]
@@ -3196,6 +3207,8 @@ it.each(['Clawson', 'missing', 'ui-touch', 'ui-only', 'failed-note', 'failed-not
   expect(sources.leases.status(id)).toBeNull()
   expect((await sources.currentCard(id)).properties.Owner!.value).toBe('Clawson')
   expect((await sources.currentCard(id)).properties['Waiting For ID']!.value).toBe('Clawson')
+  const returnedWait = String((await sources.currentCard(id)).properties['Waiting For']!.value)
+  expect(returnedWait.split('\n').map(parseWaitLine)).toEqual([expect.objectContaining({ type: 'Actor', id: 'Clawson' }), sibling])
   expect((await sources.currentCard(id)).properties['Will action']!.value).toEqual([])
   expect(f.comments.filter(comment => JSON.stringify(comment).includes(input.reason))).toHaveLength(1)
   expect(changed).toHaveBeenCalledWith(expect.objectContaining({ kind: 'not_for_me', notes: expect.arrayContaining([expect.stringContaining(input.reason)]) }))
