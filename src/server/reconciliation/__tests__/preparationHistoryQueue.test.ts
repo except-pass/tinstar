@@ -108,9 +108,17 @@ it.each(['body', 'comments'] as const)('retains positive %s records across alter
   await queue.read('card')
   const original = queue.evidenceHistory('card')!
   round = 1; vi.setSystemTime(start + 16_000)
+  queue.warm(['card'], ['card'])
   await queue.read('card')
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({
+    outcome: 'partial', commentsOutcome: first === 'comments' ? 'available' : 'partial',
+    blocks: [expect.objectContaining({ id: first, text: `Observed ${first} answer/change` })],
+  })
   round = 2; vi.setSystemTime(start + 17_000)
   await queue.read('card')
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({
+    outcome: 'partial', commentsOutcome: first === 'body' ? 'available' : 'partial',
+  })
   const retained = queue.evidenceHistory('card')!
   expect(retained.context.blocks).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'body', text: 'Observed body answer/change' }),
