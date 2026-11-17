@@ -94,12 +94,14 @@ failures include a reason and retry time, with backoff from 30 seconds to five
 minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
 for snapshots. Generic MCP claim reads and admission follow the
 [session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
-Expired history leaves coverage unknown. These reads retain
-the 30-second evidence horizon, including cached failures.
+Expired history normally leaves coverage unknown. Priority sources have the
+bounded last-good renewal window described under preparation below. These reads
+retain the 30-second evidence horizon, including cached failures.
 Other source readers can also populate caches;
 looking at this projection never renews their timestamps. Both history caches
-must be resolved, complete and unexpired for readiness; the earlier cache expiry
-bounds their combined freshness. Missing, partial or expired history blocks
+must be resolved and complete, and either unexpired or retained during bounded
+renewal for readiness; the earlier cache expiry bounds their combined freshness.
+Missing, partial or expired history outside that renewal window blocks
 readiness rather than establishing that a request is unanswered. Legacy paragraph
 answers and conflicting body publications remain part of that history. Complete,
 fresh history with no decision request reports that absence as a source failure.
@@ -541,12 +543,25 @@ The runner explanation includes the most recent pass, including exhausted source
 Current packet cards and in-flight jobs take priority over queued board history
 reads, bounded by the saved target plus maximum preparers. Their canonical card
 properties and complete body/comment history are re-read when either has less
-than fifteen seconds of evidence remaining. Other queued cards refresh expired
+than fifteen seconds of evidence remaining. The five-second runner renews these
+sources even with automatic admission off and the Desk closed. Other queued cards refresh expired
 properties as well as history, including explicit retries outside the priority
-set. Two readers remain the concurrency bound;
-a slow or failed source can still expire and block review. Revalidation uses the
-same stored packet and semantic dependencies, with the original thirty-second
-source horizon measured from read start. Packet age itself is not an expiry
+set. Two readers remain the concurrency bound. During renewal or transient
+failures, a previously complete observation can keep the same packet Ready for
+at most three minutes beyond its original thirty-second horizon. Observed and
+expiry timestamps remain unchanged; dependencies disclose `renewal_until`.
+This covers paced reads and the 30/60-second failure retry backoff. Continued
+failure past that bound blocks Ready with the actual source reason and a retry
+time; Prepare now can retry immediately. Explicit recorded source changes clear
+retained history. A successful renewal replaces the old observation, and a
+changed request, card, option or answer blocks the old packet immediately.
+Positive records from a partial renewal are merged into retained history, so
+an observed answer still blocks review even if another history surface failed.
+Fleet, PR and release evidence keep their independent freshness protections.
+Revalidation uses the same stored packet and semantic dependencies. An older
+attestation confirms packet meaning; current dependency horizons determine
+freshness. Submit still forces exact current source reads before writing an
+answer. Packet age itself is not an expiry
 condition, and preparation never recomputes an unchanged revision merely to renew
 source evidence. Changed sources still invalidate it.
 

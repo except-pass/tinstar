@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CardContextReader } from '../cardContext'
@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
+import { validateDecisionPacket } from '../../../shared/decisionPacket'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -393,26 +394,38 @@ it('keeps one published packet Ready through fresh property/history cycles witho
   vi.useRealTimers()
 }, 60_000)
 
-it.each(['properties', 'comments'] as const)('blocks a previously Ready packet when priority %s refresh fails, preserving publication', async failure => {
+it.each(['properties', 'comments', 'body'] as const)('retains Ready through transient %s renewal failures, then blocks past the bound with the source reason', async failure => {
   let unavailable = false
   let time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
     const path = new URL(String(input)).pathname
-    if (unavailable && (failure === 'properties' ? path.includes('/v1/pages/') : path === '/v1/comments')) return Response.json({}, { status: 503 })
+    if (unavailable && (failure === 'properties' ? path.includes('/v1/pages/') : failure === 'comments' ? path === '/v1/comments' : path.includes('/v1/blocks/'))) return Response.json({}, { status: 503 })
     return transport(input, init)
   } })
   const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Source failure proof' })
   const packet = preparedDecisionFixture().packet, request = sources.preparationEvidence(cardId).requests[0]!
   packet.binding = request.binding!
   packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
-  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'source-failure-packet', packet })).toMatchObject({ ready: true })
+  const published = await sources.preparation.publish({ job_id: job.job_id, operation_id: 'source-failure-packet', packet })
+  expect(published).toMatchObject({ ready: true })
   unavailable = true; time += 16_000; vi.setSystemTime(time)
-  const snapshot = await loadedSnapshot(sources)
+  const transient = await loadedSnapshot(sources)
+  expect(transient.ready).toEqual([expect.objectContaining({ id: published.packet_id })])
+  expect(transient.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.stringContaining('HTTP 503') }))
+  for (const elapsed of [31_000, 61_000, 121_000]) {
+    time += elapsed; vi.setSystemTime(time)
+    await loadedSnapshot(sources)
+  }
+  const snapshot = await sources.preparedReviews.snapshot()
   expect(snapshot.ready).toEqual([])
-  expect(snapshot.source_failures).toContainEqual({ card_id: cardId, reasons: expect.arrayContaining([failure === 'properties' ? 'Canonical card property evidence is unavailable or stale' : 'Complete cached decision history is unavailable']) })
+  expect(snapshot.source_failures).toContainEqual({ card_id: cardId, reasons: expect.arrayContaining([expect.stringContaining('HTTP 503')]) })
   expect(snapshot.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.any(String) }))
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
+  expect(posts).toHaveLength(1)
+  unavailable = false
+  await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Explicit recovery after outage' })
+  expect((await sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
   expect(posts).toHaveLength(1)
 }, 20_000)
 
@@ -445,4 +458,121 @@ it.each(['receipt', 'comment'] as const)('registers a later owner %s from real h
   expect(await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'do-not-reoffer', review_session_token: session.review_session_token })).toMatchObject({ outcome: 'no-decision-requests' })
   expect(posts).toHaveLength(1)
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', readiness: { ready: false } })
+}, 20_000)
+
+it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow renewals and transient failures, with admission off and Desk closed', async () => {
+  const start = Date.now()
+  let time = start, slow = false, commentReads = 0
+  const waiting: Array<{ until: number; resolve(): void }> = []
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (slow && (path.includes('/v1/pages/') || path.includes('/v1/blocks/') || path === '/v1/comments')) {
+      // Some complete reads themselves outlive the 30-second source horizon.
+      const delay = commentReads % 3 === 0 ? 35_000 : 22_000
+      await new Promise<void>(resolve => waiting.push({ until: time + delay, resolve }))
+      if (path === '/v1/comments' && ++commentReads % 7 === 0) return Response.json({}, { status: 503 })
+    }
+    return transport(input, init)
+  } })
+  const job = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Thirty-minute continuity proof' })
+  const packet = preparedDecisionFixture().packet, request = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  const published = await f.sources.preparation.publish({ job_id: job.job_id, operation_id: 'thirty-minute-packet', packet })
+  expect(published.ready).toBe(true)
+  slow = true
+  let samples = 0, gaps = 0, expiredSamples = 0
+  try {
+    for (let second = 1; second <= 30 * 60; second++) {
+      time = start + second * 1000; vi.setSystemTime(time)
+      for (const entry of waiting.filter(entry => entry.until <= time)) entry.resolve()
+      for (let index = waiting.length - 1; index >= 0; index--) if (waiting[index]!.until <= time) waiting.splice(index, 1)
+      // Publish the same fleet meaning with a fresh collector timestamp.
+      if (second % 20 === 0) for (const source of f.config.fleet) {
+        const wire = JSON.parse(await readFile(source.snapshotFile!, 'utf8'))
+        wire.generated = new Date(time).toISOString()
+        await writeFile(source.snapshotFile!, JSON.stringify(wire))
+      }
+      if (second % 5 === 0) await f.sources.preparation.replenish()
+      await new Promise<void>(resolve => setImmediate(resolve))
+      const evidence = f.sources.preparationEvidence(f.cardId)
+      const current = await f.sources.decisionPackets.read(published.packet_id, evidence)
+      samples++
+      if (!current?.ready) gaps++
+      const withoutRenewal = structuredClone(evidence)
+      for (const row of withoutRenewal.requests) for (const dependency of row.dependencies) delete dependency.renewal_until
+      if (!validateDecisionPacket(packet, withoutRenewal, time).valid) expiredSamples++
+    }
+    expect({ samples, gaps }).toEqual({ samples: 1800, gaps: 0 })
+    expect(commentReads).toBeGreaterThan(30)
+    expect(expiredSamples).toBeGreaterThan(0)
+    expect((await f.sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
+    expect(f.posts).toHaveLength(1)
+    expect(await f.sources.decisionPackets.ids()).toEqual([published.packet_id])
+    expect((await f.sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
+  } finally {
+    slow = false
+    for (const entry of waiting) entry.resolve()
+    await loadedSnapshot(f.sources)
+  }
+}, 60_000)
+
+it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s change even when the same renewal has incomplete body history', async kind => {
+  let failing = false, time = Date.now()
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const path = new URL(String(input)).pathname
+    if (failing && path.includes('/v1/blocks/')) return Response.json({}, { status: 503 })
+    const response = await transport(input, init)
+    if (failing && kind === 'card' && path.includes('/v1/pages/')) {
+      const page = await response.json()
+      page.properties.Name = { type: 'title', title: [{ plain_text: 'Changed while history is incomplete' }] }
+      return Response.json(page)
+    }
+    if (failing && kind === 'answer' && path === '/v1/comments') {
+      const body = await response.json()
+      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Defer this request.' }] })
+      return Response.json(body)
+    }
+    return response
+  } })
+  const job = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Partial renewal answer proof' })
+  const packet = preparedDecisionFixture().packet, request = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  const published = await f.sources.preparation.publish({ job_id: job.job_id, operation_id: 'partial-renewal-answer', packet })
+  expect(published.ready).toBe(true)
+  failing = true; time += 16_000; vi.setSystemTime(time)
+  const snapshot = await loadedSnapshot(f.sources)
+  expect(snapshot.ready).toEqual([])
+  const evidence = f.sources.preparationEvidence(f.cardId)
+  expect(evidence.requests[0]!.answered).toBe(kind === 'answer')
+  expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain(kind === 'answer' ? 'This source request already has an answer' : 'Dependency changed')
+  expect(f.posts).toHaveLength(1)
+}, 20_000)
+
+it('bounds retention while a renewal is still in flight', async () => {
+  let time = Date.now(), delayed = false, release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
+  const f = await setup({ beforeRead: async url => { if (delayed && url.pathname === '/v1/comments') await gate } })
+  const job = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Stuck renewal bound' })
+  const packet = preparedDecisionFixture().packet, request = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await f.sources.preparation.publish({ job_id: job.job_id, operation_id: 'stuck-renewal', packet })).toMatchObject({ ready: true })
+  try {
+    delayed = true; time += 16_000; vi.setSystemTime(time)
+    expect((await f.sources.preparedReviews.snapshot()).ready).toHaveLength(1)
+    time += 30_000; vi.setSystemTime(time)
+    expect((await f.sources.preparedReviews.snapshot()).ready).toHaveLength(1)
+    time += 180_000; vi.setSystemTime(time)
+    const snapshot = await f.sources.preparedReviews.snapshot()
+    expect(snapshot.ready).toEqual([])
+    expect(snapshot.source_failures).toContainEqual({ card_id: f.cardId, reasons: expect.arrayContaining(['Source renewal exceeded the last-good evidence deadline.']) })
+  } finally {
+    delayed = false; release()
+    await loadedSnapshot(f.sources)
+  }
 }, 20_000)

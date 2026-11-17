@@ -36,14 +36,15 @@ export function preparedDecisionRequests(notes: CardContextRead['blocks']) {
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
  * PR/release details are not asserted from a link: they need their own reads. */
-export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>): DecisionEvidence {
+export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string, history: CachedDecisionHistory | undefined, now: number, cardObservation?: Pick<Observation<unknown>, 'status' | 'coverage' | 'observedAt' | 'expiresAt'>, projectedQueue?: ReturnType<typeof buildQueue>, renewalUntil?: string | null): DecisionEvidence {
   const card = snapshot.intentions.data?.cards.find(card => card.id === cardId)
   const reasons: string[] = []
   if (!card) reasons.push('Canonical card is not in the observed configured board')
-  if (cardObservation && (cardObservation.status !== 'fresh' || cardObservation.coverage !== 'complete' || !cardObservation.expiresAt || Date.parse(cardObservation.expiresAt) <= now)) reasons.push('Canonical card property evidence is unavailable or stale')
+  const renewing = !!renewalUntil && Date.parse(renewalUntil) > now
+  if (cardObservation && (cardObservation.status !== 'fresh' || cardObservation.coverage !== 'complete' || !cardObservation.expiresAt || Date.parse(cardObservation.expiresAt) <= now && !renewing)) reasons.push('Canonical card property evidence is unavailable or stale')
   if (card?.archived || card?.in_trash || ['Done', 'Archived'].includes(String(card?.properties.Status?.value))) reasons.push('Source card is closed')
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
-  const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
+  const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
   const notes = history?.context.blocks ?? []
   const rows = preparedRequestRows(notes)
@@ -107,6 +108,9 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
       dependencies[0] = { ...dependencies[0]!, status: freshHistory ? 'fresh' : 'unknown', coverage: completeHistory ? 'complete' : 'unknown',
         observed_at: history?.observed_at ?? null, expires_at: history?.expires_at ?? null }
     }
+    // Only the two sources this queue actually renews can use its last-good
+    // window. Fleet, PR and release freshness protections stay independent.
+    for (const dependency of dependencies) if (dependency.kind === 'card' || dependency.kind === 'answer' || cardNative && dependency.kind === 'request') dependency.renewal_until = renewalUntil
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })

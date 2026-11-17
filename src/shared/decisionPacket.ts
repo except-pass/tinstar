@@ -13,6 +13,8 @@ export interface DecisionDependencyObservation {
   status: 'fresh' | 'partial' | 'stale' | 'unknown'
   coverage: 'complete' | 'partial' | 'unknown'
   observed_at: string | null; expires_at: string | null
+  /** Last complete source observation retained during a bounded renewal. */
+  renewal_until?: string | null
 }
 export const decisionPacketBindingSchema = z.object({
   // Card-native requests bind to their card history record instead of a fleet request.
@@ -92,8 +94,9 @@ export function validateDecisionPacket(packet: DecisionPacket, evidence: Decisio
     for (const key of new Set([...current.keys(), ...declared.keys()])) {
       const actual = current.get(key), expected = declared.get(key)
       if (!actual || !expected || !actual.revision || actual.revision !== expected.revision) reasons.push(`Dependency changed or missing: ${key}`)
-      if (!actual || actual.status !== 'fresh' || actual.coverage !== 'complete' || !actual.observed_at || !Number.isFinite(Date.parse(actual.observed_at)) || Date.parse(actual.observed_at) > now || !actual.expires_at || !Number.isFinite(Date.parse(actual.expires_at)) || Date.parse(actual.expires_at) <= now) reasons.push(`Evidence is stale, partial or unavailable: ${key}`)
-      else validUntil = Math.min(validUntil, Date.parse(actual.expires_at))
+      const until = actual && Math.max(Date.parse(actual.expires_at ?? ''), Date.parse(actual.renewal_until ?? actual.expires_at ?? ''))
+      if (!actual || actual.status !== 'fresh' || actual.coverage !== 'complete' || !actual.observed_at || !Number.isFinite(Date.parse(actual.observed_at)) || Date.parse(actual.observed_at) > now || !until || !Number.isFinite(until) || until <= now) reasons.push(`Evidence is stale, partial or unavailable: ${key}`)
+      else validUntil = Math.min(validUntil, until)
     }
   }
   const unique = [...new Set(reasons)]

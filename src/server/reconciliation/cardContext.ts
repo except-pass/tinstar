@@ -6,6 +6,7 @@ import { workReadback } from './workReadback'
 import type { CachedDecisionHistory } from './decisionEvidence'
 
 export const decisionHistoryDeadlineMs = 120_000
+class CardHistoryReadError extends Error {}
 
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
@@ -71,7 +72,9 @@ export class CardContextReader {
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
     const comments = this.readComments(id, signal)
-    const value = Promise.all([this.read(id, signal), comments]).then(([body, comments]): CardContextRead => ({
+    const body = this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
+      omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
+    const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
       ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
       outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
       omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
@@ -128,6 +131,7 @@ export class CardContextReader {
     }
     if (!this.config) return { outcome: 'unavailable', blocks: [] }
     const signal = historySignal ?? AbortSignal.timeout(20_000)
+    let failure = 'Comments unavailable or truncated.'
     let cursor: string | undefined
     const cursors = new Set<string>()
     try {
@@ -136,7 +140,10 @@ export class CardContextReader {
         url.searchParams.set('block_id', id); url.searchParams.set('page_size', '100')
         if (cursor) url.searchParams.set('start_cursor', cursor)
         const res = await this.fetchContext(url, { signal, redirect: 'error', headers: { Authorization: `Bearer ${this.config.token}`, 'Notion-Version': '2025-09-03' } }, !!historySignal)
-        if (!res.ok || !res.body) throw new Error('Comments unavailable')
+        if (!res.ok || !res.body) {
+          failure = `Comment history read failed (HTTP ${res.status}).`
+          throw new Error('Comments unavailable')
+        }
         const reader = res.body.getReader(), chunks: Uint8Array[] = []
         let bytes = 0
         try {
@@ -168,7 +175,7 @@ export class CardContextReader {
         cursor = next
       }
     } catch { /* No comment access is not evidence of closure or missing data. */ }
-    return { ...context, outcome: 'partial', omissions: `${context.omissions ?? ''} Comments unavailable or truncated.` }
+    return { ...context, outcome: 'partial', omissions: `${context.omissions ?? ''} ${failure}` }
   }
   get(id: string, revision?: string) {
     const cached = this.cache.get(id)
@@ -200,7 +207,7 @@ export class CardContextReader {
         url.searchParams.set('page_size', '100')
         if (cursor) url.searchParams.set('start_cursor', cursor)
         const res = await this.fetchContext(url, { signal, redirect: 'error', headers: { Authorization: `Bearer ${this.config!.token}`, 'Notion-Version': '2025-09-03' } }, !!historySignal)
-        if (!res.ok || !res.body) throw new Error('context unavailable')
+        if (!res.ok || !res.body) throw new CardHistoryReadError(`Card body history read failed (HTTP ${res.status}).`)
         const reader = res.body.getReader(), chunks: Uint8Array[] = []
         if (historySignal) bytes = 0 // Limit each response, not the whole paginated history.
         try {

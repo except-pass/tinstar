@@ -61,7 +61,7 @@ export class DecisionPackets {
     }
     if (validation.reasons.length) { validation.valid = false; validation.valid_until = null }
     const sequence = this.event(db, id, 'validation', actor, { valid: validation.valid, reasons: validation.reasons, valid_until: validation.valid_until })
-    const coverage = evidence.requests.flatMap(request => request.dependencies).map(({ kind, key, status, coverage, observed_at, expires_at }) => ({ kind, key, status, coverage, observed_at, expires_at }))
+    const coverage = evidence.requests.flatMap(request => request.dependencies).map(({ kind, key, status, coverage, observed_at, expires_at, renewal_until }) => ({ kind, key, status, coverage, observed_at, expires_at, renewal_until }))
     db.prepare('INSERT INTO decision_packet_validations VALUES(?,?,?,?,?,?)').run(sequence, id, Number(validation.valid), validation.valid_until, JSON.stringify(validation.reasons), JSON.stringify(coverage))
     return validation
   }
@@ -132,7 +132,9 @@ export class DecisionPackets {
       const withdrawn = !!db.prepare("SELECT 1 FROM decision_packet_events WHERE packet_id = ? AND type IN ('research-requested','answer-confirmed') LIMIT 1").get(id)
       const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
         reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
-        valid_until: attestation?.valid_until && current.valid_until ? new Date(Math.min(Date.parse(attestation.valid_until), Date.parse(current.valid_until))).toISOString() : null }
+        // Attestation fixes packet meaning; current observations own freshness.
+        // Its old deadline must not expire an unchanged, renewed dependency.
+        valid_until: attestation?.valid ? current.valid_until : null }
       const pending = this.pendingAnswerInStorage(db, id)
       return { ...stored, validation, ...decisionPacketReady(validation, (!!lease?.caller && lease.expires > this.now()) || this.leases.reservedInStorage(db, stored.packet.binding.card_id) || pending, this.now()) }
   }
