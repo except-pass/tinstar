@@ -22,6 +22,7 @@
   "not_for_me",
   "open_prepared_review_session",
   "present_view",
+  "publish_prepared_packet",
   "read_record",
   "release_claim",
   "release_prepared_decision",
