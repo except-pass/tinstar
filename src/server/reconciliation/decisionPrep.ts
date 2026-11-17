@@ -365,22 +365,15 @@ export class DecisionPreparation {
     return this.packets.leases.readStorage(db => {
       const policy = this.packets.policyInStorage(db, this.scope)
       const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state)).map(job => job.card_id)
-      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card,
-        (SELECT json_extract(detail,'$.valid') FROM decision_packet_events
-         WHERE packet_id = p.id AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1) AS valid
-        FROM decision_packets p
+      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
         WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
         AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
-        ORDER BY valid DESC, published_at DESC`).all() as Array<{ card: string; valid: number | null }>
-      const reviewable = packets.filter(({ card }) => {
+        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
+      const reviewable = packets.map(row => row.card).filter(card => {
         const evidence = this.evidence(card)
         return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
       })
-      const ids = [...new Set([...jobs, ...reviewable.map(row => row.card)])].slice(0, policy.values.target_ready + policy.values.max_preparers)
-      const published = new Set(reviewable.filter(row => row.valid).map(row => row.card))
-      const selected = new Set(ids)
-      const excluded = new Set(packets.map(row => row.card).filter(card => !selected.has(card)))
-      return { ids, published: ids.filter(id => published.has(id)), excluded }
+      return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
     })
   }
 

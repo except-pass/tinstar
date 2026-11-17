@@ -22,7 +22,6 @@ export interface CardContextRead {
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
   private decisionCache = new Map<string, { pending: boolean; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory; body?: CardContextRead }>()
-  private retainedDecisionCards: ReadonlySet<string> = new Set()
   private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher?: NotionFetch }>()
   private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher: NotionFetch }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: NotionFetch = fetch, private jira?: JiraAdapter) {}
@@ -31,7 +30,6 @@ export class CardContextReader {
   checkpoints(id: string): Promise<CardContextRead> { return this.details(id, true) }
   invalidateProse(id: string) { this.cache.delete(id); this.commentCache.delete(id) }
   invalidate(id: string) { this.invalidateProse(id); this.decisionCache.delete(id) }
-  retainDecisionCards(ids: ReadonlySet<string>) { this.retainedDecisionCards = ids }
   /** Display cached evidence without making a property-only view wait on prose. */
   cachedComments(id: string): CardContextRead | undefined {
     const cached = this.commentCache.get(id)
@@ -73,10 +71,7 @@ export class CardContextReader {
   decisionDetails(id: string, force = false, reuseBody = false): Promise<CardContextRead> {
     const cached = this.decisionCache.get(id)
     if (cached && (cached.pending || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
-    if (!cached && this.decisionCache.size >= 100) {
-      const evict = [...this.decisionCache.keys()].find(card => !this.retainedDecisionCards.has(card))
-      this.decisionCache.delete(evict ?? this.decisionCache.keys().next().value!)
-    }
+    if (!cached && this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now(), signal = AbortSignal.timeout(decisionHistoryDeadlineMs)
     const comments = this.readComments(id, signal)
     const body = reuseBody && cached?.body?.outcome === 'available' ? Promise.resolve(cached.body)

@@ -90,34 +90,6 @@ it('loads cold history for automatic admission only after replenishment is turne
   expect(reconcile).not.toHaveBeenCalled()
 }, 20_000)
 
-it.each(['replenishment', 'prepared review', 'claims'] as const)('skips an excluded published card during %s while discovering unpublished history', async entry => {
-  vi.useFakeTimers({ toFake: ['Date'] })
-  const start = Date.now()
-  const f = await setup({ cards: 4 })
-  const { sources, cardId, cardIds, reads } = f
-  const scope = f.config.notion!.dataSourceId
-  await sources.decisionPackets.updatePolicy(scope, { expected_version: 0, values: { target_ready: 3, max_preparers: 1, automatic_replenishment: true } }, 'fixture-owner')
-  const { packet } = await publishFixture(f, 'oldest-packet')
-  const evidence = sources.preparationEvidence(cardId)
-  for (const [index, id] of cardIds.slice(1, 3).entries()) {
-    vi.setSystemTime(start + index + 1)
-    const copy = JSON.parse(JSON.stringify({ packet, evidence }).replaceAll(cardId, id)) as { packet: typeof packet; evidence: typeof evidence }
-    expect((await sources.decisionPackets.publish(copy.packet, copy.evidence, 'fixture', `publish-${id}`)).validation?.valid).toBe(true)
-  }
-  await sources.decisionPackets.updatePolicy(scope, { expected_version: 1, values: { target_ready: 1, max_preparers: 1, automatic_replenishment: true } }, 'fixture-owner')
-  const later = start + 31_000
-  vi.setSystemTime(later)
-  await publishFleet(f, later)
-  await sources.snapshot(true)
-  const before = reads.length
-  if (entry === 'replenishment') await sources.preparation.replenish()
-  if (entry === 'prepared review') await sources.preparedReviews.snapshot()
-  if (entry === 'claims') await sources.claimQueue()
-  const historyReads = (id: string) => reads.slice(before).filter(read => read.path === `/v1/blocks/${id}/children` || read.path === '/v1/comments' && read.cardId === id)
-  await vi.waitFor(() => expect(historyReads(cardIds[3]!)).toHaveLength(2), { timeout: 5_000 })
-  expect(historyReads(cardId)).toHaveLength(0)
-}, 30_000)
-
 it('claims through MCP while cold history remains blocked and preserves Desk preparation requirements', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })

@@ -12,8 +12,6 @@ type HistoryJob = { promise: Promise<void>; resolve(): void; invalidated?: boole
 const completeHistory = (history: CachedDecisionHistory | undefined) =>
   history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
 
-type HistoryPriority = { ids: string[]; published: string[]; excluded: ReadonlySet<string> }
-
 /** One shared queue for display and admission. Two card reads at a time also
  * bound the body/comment requests waiting on the shared Notion rate limiter. */
 export class PreparationHistory {
@@ -22,8 +20,6 @@ export class PreparationHistory {
   private complete = new Map<string, CachedDecisionHistory>()
   private versions = new Map<string, { version: string; lastRead: number; completeVersion?: string; commentsDirty?: boolean }>()
   private priority = new Set<string>()
-  private published = new Set<string>()
-  private excluded: ReadonlySet<string> = new Set()
   private queue: string[] = []
   private active = 0
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
@@ -31,25 +27,19 @@ export class PreparationHistory {
     private propertiesFresh: (id: string, until: number) => boolean = () => true,
     private boardVersion: (id: string) => BoardVersion | null | undefined = () => undefined) {}
 
-  warm(ids: string[], priority?: HistoryPriority) {
-    if (priority) {
-      this.priority = new Set(priority.ids)
-      this.published = new Set(priority.published)
-      this.excluded = priority.excluded
-      this.reader.retainDecisionCards(this.published)
-    }
+  warm(ids: string[], priority?: string[]) {
+    if (priority) this.priority = new Set(priority)
     const important = this.priority
-    const discovery = [...new Set(ids)].filter(id => !this.excluded.has(id))
-    for (const id of discovery) {
+    for (const id of new Set([...(priority ?? []), ...ids])) {
       const board = this.boardVersion(id), version = this.versions.get(id), now = Date.now()
       // null is a configured Notion card without a current board row.
       // The next board observation can supply a version without probing prose.
       if (board === null || board && (board.status !== 'fresh' || board.coverage !== 'complete')) continue
       if (board && version?.version !== board.version) this.failures.delete(id)
       const history = this.reader.cachedDecisionHistory(id)
-      if (board && history && version?.completeVersion === board.version && this.published.has(id) &&
+      if (board && history && version?.completeVersion === board.version && this.priority.has(id) &&
         !version.commentsDirty && version.lastRead + readyCommentRefreshMs > now) continue
-      if ((!board || version?.completeVersion === board.version && !this.published.has(id)) &&
+      if ((!board || version?.completeVersion === board.version && !this.priority.has(id)) &&
         !version?.commentsDirty && (board || this.propertiesFresh(id, now + (important.has(id) ? 15_000 : 0))) && completeHistory(history) &&
         Date.parse(history!.expires_at) > now + (important.has(id) ? 15_000 : 0)) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > now) continue
@@ -58,15 +48,14 @@ export class PreparationHistory {
     // Existing queued board reads yield to exact sources, without adding readers.
     this.queue.sort((a, b) => Number(important.has(b)) - Number(important.has(a)))
     this.drain()
-    return discovery
   }
 
-  async read(id: string, priority?: HistoryPriority) {
+  async read(id: string) {
     // An explicit retry can bypass failure backoff for this card only.
     if (this.failures.has(id) && !this.pending.has(id)) {
       this.failures.delete(id)
     }
-    this.warm([id], priority)
+    this.warm([id])
     const index = this.queue.indexOf(id)
     if (index > 0) { this.queue.splice(index, 1); this.queue.unshift(id) }
     await this.pending.get(id)?.promise
@@ -95,7 +84,7 @@ export class PreparationHistory {
   private historyExpiry(id: string, history: CachedDecisionHistory) {
     const board = this.boardVersion(id)
     if (!board || this.versions.get(id)?.completeVersion !== board.version) return Date.parse(history.expires_at)
-    return Math.min(Date.parse(board.expiresAt ?? history.expires_at), this.published.has(id)
+    return Math.min(Date.parse(board.expiresAt ?? history.expires_at), this.priority.has(id)
       ? Date.parse(history.observed_at) + readyCommentRefreshMs : Date.parse(history.expires_at))
   }
 
@@ -107,7 +96,7 @@ export class PreparationHistory {
     // failure. Board freshness keeps its own, shorter outage bound.
     const until = board && this.versions.get(id)?.completeVersion === board.version
       ? Math.min(Date.parse(board.expiresAt ?? history.expires_at) + decisionRenewalGraceMs,
-        this.published.has(id) ? Date.parse(history.observed_at) + 2 * readyCommentRefreshMs + decisionRenewalGraceMs
+        this.priority.has(id) ? Date.parse(history.observed_at) + 2 * readyCommentRefreshMs + decisionRenewalGraceMs
           : Date.parse(history.expires_at) + decisionRenewalGraceMs)
       : Date.parse(history.expires_at) + decisionRenewalGraceMs
     return until > Date.now() ? new Date(until).toISOString() : null
@@ -149,14 +138,13 @@ export class PreparationHistory {
   }
 
   private async load(id: string, job: HistoryJob) {
-    if (this.excluded.has(id)) return
     const board = this.boardVersion(id), prior = this.versions.get(id)
     if (board === null || board && (board.status !== 'fresh' || board.coverage !== 'complete')) return
     job.invalidated = false
     const version = board && { version: board.version, lastRead: Date.now(), completeVersion: prior?.completeVersion, commentsDirty: prior?.commentsDirty }
     if (version) {
       if (this.versions.size >= 100 && !prior) {
-        const evict = [...this.versions.keys()].find(card => !this.published.has(card)) ?? this.versions.keys().next().value!
+        const evict = this.versions.keys().next().value!
         this.versions.delete(evict)
         this.complete.delete(evict)
       }
@@ -172,7 +160,7 @@ export class PreparationHistory {
         timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), decisionHistoryDeadlineMs)
         timer.unref?.()
       })])
-      if (job.invalidated || this.excluded.has(id) || board && this.boardVersion(id)?.version !== board.version) return
+      if (job.invalidated || board && this.boardVersion(id)?.version !== board.version) return
       const history = this.reader.cachedDecisionHistory(id)
       if (history?.context.commentsOutcome !== 'available') throw new Error(`Decision comment history is incomplete. ${history?.context.omissions ?? ''}`.trim())
       if (history.context.outcome !== 'available') throw new Error(`Decision body history is incomplete. ${history.context.omissions ?? ''}`.trim())

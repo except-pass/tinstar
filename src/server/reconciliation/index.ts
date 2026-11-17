@@ -221,16 +221,17 @@ export class ReconciliationSources {
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
     const priority = await this.preparation.priorityCards()
-    const discovery = this.preparationHistory.warm([...priority.ids, ...ids], priority)
-    await Promise.all(discovery.map(id => this.importCommentPackets(id)))
+    this.preparationHistory.warm(ids, priority)
+    await Promise.all(ids.map(id => this.importCommentPackets(id)))
   }
 
   private async renewPreparedSources() {
     const priority = await this.preparation.priorityCards()
+    if (!priority.length) return
     // The existing five-second runner also renews published/in-flight sources
     // with admission off, so a closed Desk does not stop source maintenance.
-    if (priority.ids.length) await this.snapshot()
-    this.preparationHistory.warm(priority.ids, priority)
+    await this.snapshot()
+    this.preparationHistory.warm([], priority)
   }
 
   private preparationDiagnostics() {
@@ -272,7 +273,7 @@ export class ReconciliationSources {
       // explicit Prepare now waits for source observations, then its own card.
       await this.snapshot()
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
-      await this.preparationHistory.read(cardId, await this.preparation.priorityCards())
+      await this.preparationHistory.read(cardId)
     } else {
       await this.snapshot()
       await this.warmPreparationHistory()
@@ -582,7 +583,7 @@ export class ReconciliationSources {
     const snapshot = await this.snapshot(false, {}, false), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     const ids = [...new Set(queue.items.flatMap(item => item.cardIds))]
-    this.preparationHistory.warm(ids, await this.preparation.priorityCards())
+    this.preparationHistory.warm(ids)
     const contexts = new Map(ids.flatMap(id => {
       const history = this.preparationHistory.evidenceHistory(id)
       const context = history && Date.parse(history.expires_at) > Date.now() ? history.context : this.context.cachedComments(id)
@@ -753,6 +754,5 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  if (path === '/api/reconciliation/sources') return ok(res, await sources.snapshot(), { headers })
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}), { headers })
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
 }

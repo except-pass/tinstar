@@ -2,10 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { bindingMeaning, decisionMeaning, decisionPacketSchema, decisionPacketReady, defaultDecisionPolicy, decisionPolicyUpdateSchema, dependencyIdentity, validateDecisionPacket,
-  decisionPolicyValuesSchema, type DecisionPacket, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
+  decisionPolicyValuesSchema, type DecisionPacket, type DecisionEvidence, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
 import { requestAnchor } from '../../shared/deskSource'
 import { CardLeases } from './cardLeases'
-import type { ObservedDecisionEvidence as DecisionEvidence } from './decisionEvidence'
 
 export class DecisionDeskConflict extends Error {}
 export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string | null; packet: DecisionPacket }
@@ -63,9 +62,9 @@ export class DecisionPackets {
     }
     if (validation.reasons.length) { validation.valid = false; validation.valid_until = null }
     const previous = onlyChanged ? this.latestValidation(db, id) : null
-    if (previous && previous.source_version === evidence.source_version && previous.valid === validation.valid &&
+    if (previous && previous.valid === validation.valid &&
       decisionMeaning(previous.reasons) === decisionMeaning(validation.reasons)) return validation
-    const sequence = this.event(db, id, 'validation', actor, { ...validation, source_version: evidence.source_version })
+    const sequence = this.event(db, id, 'validation', actor, validation)
     const coverage = evidence.requests.flatMap(request => request.dependencies).map(({ kind, key, status, coverage, observed_at, expires_at, renewal_until }) => ({ kind, key, status, coverage, observed_at, expires_at, renewal_until }))
     db.prepare('INSERT INTO decision_packet_validations VALUES(?,?,?,?,?,?)').run(sequence, id, Number(validation.valid), validation.valid_until, JSON.stringify(validation.reasons), JSON.stringify(coverage))
     return validation
@@ -103,11 +102,11 @@ export class DecisionPackets {
       return this.attest(db, id, unpack(row).packet, evidence, actor, onlyChanged)
     })
   }
-  private latestValidation(db: DatabaseSync, id: string): (DecisionPacketValidation & { source_version?: string }) | null {
+  private latestValidation(db: DatabaseSync, id: string): DecisionPacketValidation | null {
     const event = db.prepare("SELECT type,detail FROM decision_packet_events WHERE packet_id = ? AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1").get(id) as { type: string; detail: string } | undefined
     if (!event) return null
     const detail = JSON.parse(event.detail)
-    return event.type === 'validation' ? detail : { valid: false, reasons: [detail.reason], valid_until: null }
+    return event.type === 'validation' ? { valid: detail.valid, reasons: detail.reasons, valid_until: detail.valid_until } : { valid: false, reasons: [detail.reason], valid_until: null }
   }
   /** A changed dependency only invalidates packets that actually relied on its
    * old meaning. Timestamps/collector ordering are not change triggers. */

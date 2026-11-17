@@ -64,7 +64,7 @@ it('refreshes priority history before expiry and promotes exact sources ahead of
   cached.set('published', { context: { outcome: 'available', commentsOutcome: 'available', blocks: [] }, observed_at: new Date(Date.now() - 20_000).toISOString(), expires_at: new Date(Date.now() + 10_000).toISOString() })
   queue.warm(['one', 'two', 'three', 'published'])
   expect(details.mock.calls.map(([id]) => id)).toEqual(['one', 'two'])
-  queue.warm(['three', 'published'], { ids: ['published'], published: [], excluded: new Set() })
+  queue.warm(['three', 'published'], ['published'])
   expect(queue.state('published').expires_at).toBe(cached.get('published')!.expires_at)
   completed.get('one')!()
   await vi.waitFor(() => expect(details.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'published']))
@@ -108,7 +108,7 @@ it.each(['body', 'comments'] as const)('retains positive %s records across alter
   await queue.read('card')
   const original = queue.evidenceHistory('card')!
   round = 1; vi.setSystemTime(start + 16_000)
-  queue.warm(['card'], { ids: ['card'], published: [], excluded: new Set() })
+  queue.warm(['card'], ['card'])
   await queue.read('card')
   expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({
     outcome: 'partial', commentsOutcome: first === 'comments' ? 'available' : 'partial',

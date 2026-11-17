@@ -117,6 +117,16 @@ it('appends coverage attestations for unchanged revalidation and targets invalid
   expect(JSON.parse(String(coverage))).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'fresh', coverage: 'complete' })]))
 })
 
+it('deduplicates unchanged validation across Notion edit timestamps', async () => {
+  const { packet, evidence } = preparedDecisionFixture(now), { packets } = await store()
+  const observed = { ...evidence, source_version: new Date(now).toISOString() }
+  const first = await packets.publish(packet, observed, 'fixture-preparer', 'one')
+  const refreshed = { ...observed, source_version: new Date(now + 1_000).toISOString() }
+  expect(await packets.validate(first.id, refreshed, 'decision-desk', true)).toEqual(first.validation)
+  const events = (await packets.events()).filter(event => event.type === 'validation')
+  expect(events.map(event => JSON.parse(String(event.detail)))).toEqual([first.validation])
+})
+
 it('persists validated default policy, serializes competing saves, and refuses invalid settings', async () => {
   const { packets, root } = await store()
   expect(await packets.readPolicy('board')).toMatchObject({ version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: false } })
