@@ -728,3 +728,13 @@ Browser proof uses a named `chrome-devtools-axi` session which must be stopped
 after capture. Browser Performance measures distinguish claim API/visible and
 submit API/visible timings, with outcomes separating filled-buffer, empty and
 unavailable cases; source prose and capability tokens are never measure names.
+
+For the historical CI card `41a50ce6d42281998e2ee26fa2364c54`, the owner and
+Grok used the same provider user, without an application-actor marker on the
+owner's plain comments. Provider-author guessing is deliberately excluded.
+Immediately after deployment, firstmate must record the existing answers for
+`fleet-ci-deploy-plan-20261116` and `fleet-ci-route-tags-20261116` using
+`answer_decision`, the selected option IDs and the owner's verbatim words. This
+backfills canonical answer receipts and closes those two requests; it does not
+ask the owner to decide again. This deployment prerequisite belongs in the PR
+handoff, since unmarked historical comments are not automatically classified.
