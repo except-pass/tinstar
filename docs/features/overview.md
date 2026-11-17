@@ -37,14 +37,17 @@ Cards legends on desktop; its zones stack on narrower screens. Tokens and
 status buttons wrap with full labels rather than clipping or scrolling horizontally.
 
 Two small hierarchy controls beside the organizer presets independently toggle
-**Initiatives** and **Epics**. Initiatives applies when Outer is Initiative;
-Epics applies when Inner is Epic, only within expanded outer groups. For each
-control, any expanded target means **collapse all**; all collapsed means
-**expand all**. Tooltips and accessible names identify the level and current
-action. A control with no applicable visible groups is disabled; if every
-initiative is collapsed, the Epic tooltip prompts you to expand an initiative.
-Collapsing initiatives preserves child expansion preferences, and toggling epics
-never changes initiative expansion. Individual group toggles keep using the same
+the current organizer's outer groups and its inner groups. The first control
+is every top-level group; the second is every second-level group inside an
+expanded parent. Tooltips and accessible names use that organizer's real level
+names (Initiatives and Epics under By Initiative, Machines and Initiatives
+under By Machine). For each control, any expanded target means **collapse all**;
+all collapsed means **expand all**. A control with no applicable visible groups
+is disabled. The inner control is disabled when the organizer has no second
+level, and its tooltip says so. If every outer group is collapsed, the inner
+tooltip names the outer level and prompts you to expand one. Collapsing an
+outer level preserves child expansion preferences, and toggling an inner level
+never changes outer expansion. Individual group toggles keep using the same
 expansion state. These controls follow the current organizer and filtered tree;
 in [Waiting For](#waiting-for-dependency-groups), they apply to the worker tree,
 leaving dependency-group expansion separate. They change only UI expansion,
@@ -52,7 +55,7 @@ preserving filters and source records.
 
 | Preset | Outer | Inner | Order |
 | --- | --- | --- | --- |
-| By Initiative (default) | Initiative, alphabetical | Manager, alphabetical | Operational status |
+| By Initiative (default) | Initiative, alphabetical | Epic, alphabetical | Operational status |
 | By Machine | Machine, alphabetical | Initiative, alphabetical | Operational status |
 | By Manager | Manager, configured hierarchy then alphabetical | Initiative, alphabetical | Operational status |
 
@@ -139,7 +142,7 @@ Work fields are Initiative, Epic, Task Status, Task Owner, Priority, Next check-
 Due Date, Last edited, Area and Sub-area. Initiative and Epic use only explicit
 Notion properties named exactly Initiative and Epic: canonical IDs for relations,
 option values for select, and text for rich_text. Missing properties place tasks
-in Unassigned / Unknown; parent chains never establish either. Initiative search
+in Unassigned / Unknown; parent chains never establish either. Under By Initiative, a card with an initiative and no epic stays in that initiative's Unassigned inner group. Initiative search
 options and matching use this same explicit-property contract.
 The initial and Reset organizer uses the By Initiative preset. Explicitly saved browser choices take precedence
 on reload.

@@ -4,7 +4,8 @@ import { nextLevelCollapsed, overviewLevelControls, type LevelControl } from './
 import './levelToggles.css'
 
 export function LevelToggles({ groups, state, send }: { groups: readonly FloorGroup[]; state: PresentationState; send: (action: PresentationAction) => void }) {
-  const controls = overviewLevelControls(groups, state.collapsed, state.organizer ?? defaultOrganizer())
+  const organizer = state.organizer ?? defaultOrganizer()
+  const controls = overviewLevelControls(groups, state.collapsed, organizer)
   const activate = (control: LevelControl) => {
     if (control.disabled) return
     // One transition per group keeps the existing expansion sync. Child ids are not in this list.
@@ -16,10 +17,10 @@ export function LevelToggles({ groups, state, send }: { groups: readonly FloorGr
       send({ type: 'set-expanded', target: { kind: 'group', id: id.slice(id.indexOf(':') + 1) }, expanded })
     }
   }
-  return <div className="ov-level-toggles" role="group" aria-label="Hierarchy">{(['initiatives', 'epics'] as const).map(level => {
-    const control = controls[level]
-    const tier = level === 'initiatives' ? 'one' : 'two'
-    return <span key={level} title={control.name}><button type="button" data-level={level === 'initiatives' ? 'initiative' : 'epic'} data-tier={tier} data-action={control.disabled ? undefined : control.action} aria-label={control.name} disabled={control.disabled} onClick={() => activate(control)}><LevelIcon tier={tier} action={control.disabled ? undefined : control.action} /></button></span>
+  return <div className="ov-level-toggles" role="group" aria-label="Hierarchy">{(['outer', 'inner'] as const).map(slot => {
+    const control = controls[slot]
+    const tier = slot === 'outer' ? 'one' : 'two'
+    return <span key={slot} title={control.name}><button type="button" data-level={slot === 'outer' ? organizer.outer : organizer.inner} data-tier={tier} data-action={control.disabled ? undefined : control.action} aria-label={control.name} disabled={control.disabled} onClick={() => activate(control)}><LevelIcon tier={tier} action={control.disabled ? undefined : control.action} /></button></span>
   })}</div>
 }
 

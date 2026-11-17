@@ -84,7 +84,7 @@ describe('Overview toolbar and filter shelf', () => {
     const customize = screen.getByRole('button', { name: 'Customize' })
     fireEvent.click(customize)
     expect(screen.getByLabelText('Outer grouping')).toHaveValue('initiative')
-    expect(screen.getByLabelText('Inner grouping')).toHaveValue('manager')
+    expect(screen.getByLabelText('Inner grouping')).toHaveValue('epic')
     expect(screen.getByLabelText('Order by')).toHaveValue('operational')
     fireEvent.change(screen.getByLabelText('Order by'), { target: { value: 'due' } })
     fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }))

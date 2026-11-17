@@ -207,7 +207,7 @@ test('shared task/worker grouping, nested order, filters, references and persist
   await clickAdvanced(page, 'Reset')
   await expectAdvanced(page, 'Status preset', 'operational')
   await expectAdvanced(page, 'Outer grouping', 'initiative')
-  await expectAdvanced(page, 'Inner grouping', 'manager')
+  await expectAdvanced(page, 'Inner grouping', 'epic')
   await expect(page.getByLabel('Fields', { exact: true })).toHaveCount(0)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -617,7 +617,7 @@ for (const viewport of [{ width: 1920, height: 1200 }, { width: 1366, height: 90
   await page.getByRole('button', { name: 'Copy session ID', exact: true }).click()
   await expect(page.locator('.session-connection-menu')).toContainText(/Full session ID copied|Session ID:/)
   await page.getByTitle('ChatGPT tab connection', { exact: true }).click()
-  for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'manager']]) {
+  for (const [label, outer, inner] of [['By Machine', 'machine', 'initiative'], ['By Manager', 'manager', 'initiative'], ['By Initiative', 'initiative', 'epic']]) {
     await page.getByRole('button', { name: label!, exact: true }).click()
     await expect(page.locator('.ov')).toHaveAttribute('data-outer', outer!)
     await expect(page.locator('.ov')).toHaveAttribute('data-inner', inner!)

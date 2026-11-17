@@ -37,7 +37,7 @@ export type FloorField = typeof floorFields[number]['id']
 export interface Organizer { outer: FloorField | 'none'; inner: FloorField | 'none'; order: FloorField | 'operational'; direction: 'asc' | 'desc' }
 export interface StatusFilter { preset: 'operational' | 'all' | 'custom'; statuses: string[] }
 export const organizerPresets = {
-  initiative: { outer: 'initiative', inner: 'manager', order: 'operational', direction: 'asc' },
+  initiative: { outer: 'initiative', inner: 'epic', order: 'operational', direction: 'asc' },
   machine: { outer: 'machine', inner: 'initiative', order: 'operational', direction: 'asc' },
   manager: { outer: 'manager', inner: 'initiative', order: 'operational', direction: 'asc' },
 } as const satisfies Record<string, Organizer>

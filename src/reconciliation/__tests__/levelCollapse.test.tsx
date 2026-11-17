@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { fixtureId, fixtureQueue, fixtureScene } from '../../../test-fixtures/reconciliation/scenes'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
-import { organizedGroups, waitingForWorkerScope } from '../../shared/floorOrganization'
+import { organizedGroups, organizerPresets, waitingForWorkerScope } from '../../shared/floorOrganization'
 import { applyPresentationAction, initialPresentation, semanticId } from '../presentation'
 import type { FloorScene } from '../presentation'
 import { preferencesKey } from '../presentationPreferences'
@@ -91,19 +91,22 @@ describe('initiative and epic bulk collapse', () => {
     const state = { ...initialPresentation(), organizer, statusFilter: { preset: 'all' as const, statuses: [] } }
     const groups = organizedGroups(scene, state, Date.now())
     const controls = overviewLevelControls(groups, [], organizer)
-    expect(controls.initiatives.disabled).toBe(false)
-    expect(controls.epics.disabled).toBe(false)
-    expect(controls.initiatives.action).toBe('collapse')
+    expect(controls.outer.disabled).toBe(false)
+    expect(controls.inner.disabled).toBe(false)
+    expect(controls.outer.action).toBe('collapse')
+    expect(controls.outer.name).toBe('Initiatives — collapse all')
+    expect(controls.inner.name).toBe('Epics — collapse all')
     const hidden = 'group:hidden-epic'
     const manager = semanticId({ kind: 'manager', id: '/fixture/hulk' })
-    const collapsed = nextLevelCollapsed([hidden, manager, controls.epics.ids[0]!], controls.initiatives.ids, 'collapse')
-    expect(collapsed).toEqual(expect.arrayContaining([hidden, manager, controls.epics.ids[0]!, ...controls.initiatives.ids]))
-    expect(nextLevelCollapsed(collapsed, controls.initiatives.ids, 'expand')).toEqual([hidden, manager, controls.epics.ids[0]!])
-    const visibleOnly = overviewLevelControls(groups, controls.initiatives.ids, organizer)
-    expect(visibleOnly.epics.disabled).toBe(true)
-    expect(visibleOnly.epics.name).toMatch(/no visible groups/)
-    const epicCollapse = nextLevelCollapsed(collapsed, visibleOnly.epics.ids, 'collapse')
-    expect(epicCollapse.filter(id => controls.initiatives.ids.includes(id))).toEqual(controls.initiatives.ids)
+    const collapsed = nextLevelCollapsed([hidden, manager, controls.inner.ids[0]!], controls.outer.ids, 'collapse')
+    expect(collapsed).toEqual(expect.arrayContaining([hidden, manager, controls.inner.ids[0]!, ...controls.outer.ids]))
+    expect(nextLevelCollapsed(collapsed, controls.outer.ids, 'expand')).toEqual([hidden, manager, controls.inner.ids[0]!])
+    const visibleOnly = overviewLevelControls(groups, controls.outer.ids, organizer)
+    expect(visibleOnly.inner.disabled).toBe(true)
+    expect(visibleOnly.inner.name).toMatch(/no visible groups/)
+    expect(visibleOnly.inner.name).toMatch(/Expand an initiative first/)
+    const epicCollapse = nextLevelCollapsed(collapsed, visibleOnly.inner.ids, 'collapse')
+    expect(epicCollapse.filter(id => controls.outer.ids.includes(id))).toEqual(controls.outer.ids)
   })
 
   it.each(['donut', 'custom-status'] as const)('accepts Waiting For worker groups through set-expanded with %s filtering', mode => {
@@ -119,7 +122,7 @@ describe('initiative and epic bulk collapse', () => {
     expect(organizedGroups(scene, state, now).some(group => group.outerId === workerGroup.outerId)).toBe(false)
     const initiative = semanticId({ kind: 'group', id: workerGroup.outerId })
     const epic = semanticId({ kind: 'group', id: workerGroup.id })
-    const activate = (level: 'initiatives' | 'epics') => {
+    const activate = (level: 'outer' | 'inner') => {
       const control = overviewLevelControls(workerGroups, state.collapsed, organizer)[level]
       expect(control.disabled).toBe(false)
       for (const id of control.ids) {
@@ -128,27 +131,101 @@ describe('initiative and epic bulk collapse', () => {
         state = result.state as typeof state
       }
     }
-    activate('epics')
+    activate('inner')
     expect(state.collapsed).toContain(epic)
     expect(state.collapsed).not.toContain(initiative)
     const childState = [...state.collapsed]
-    activate('initiatives')
+    activate('outer')
     expect(state.collapsed).toContain(initiative)
     expect(state.collapsed).toEqual(expect.arrayContaining(childState))
-    activate('initiatives')
+    activate('outer')
     expect(state.collapsed).toEqual(childState)
-    activate('epics')
+    activate('inner')
     expect(state.collapsed).not.toContain(epic)
     expect(state.collapsed).not.toContain(initiative)
     expect({ statusFilter: state.statusFilter, donutFilter: state.donutFilter, organizer: state.organizer }).toEqual(savedFilters)
     expect(scene).toEqual(originalScene)
   })
 
-  it('disables both controls when the current tree has neither level', () => {
+  it.each([
+    ['machine', 'Machines', 'Initiatives', 'a machine'],
+    ['manager', 'Managers', 'Initiatives', 'a manager'],
+  ] as const)('collapses %s groups by depth and names those levels', (preset, outerName, innerName, expandPrompt) => {
     const { container } = mount()
-    fireEvent.click(screen.getByRole('button', { name: 'By Machine' }))
-    expect(level('Initiatives — no visible groups')).toBeDisabled()
-    expect(level('Epics — no visible groups')).toBeDisabled()
-    expect(container.querySelectorAll('.ov-outer').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: preset === 'machine' ? 'By Machine' : 'By Manager' }))
+    expect(container.querySelector('.ov')).toHaveAttribute('data-outer', preset)
+    expect(container.querySelector('.ov')).toHaveAttribute('data-inner', 'initiative')
+    expect(level(`${outerName} — collapse all`)).toBeEnabled()
+    expect(level(`${innerName} — collapse all`)).toBeEnabled()
+    expect(container.querySelector(`[data-level="${preset}"]`)).toHaveAttribute('data-tier', 'one')
+    expect(container.querySelector('[data-level="initiative"]')).toHaveAttribute('data-tier', 'two')
+    const innerButtons = epics(container)
+    expect(innerButtons.length).toBeGreaterThan(0)
+    fireEvent.click(innerButtons[0]!)
+    fireEvent.click(level(`${outerName} — collapse all`))
+    expect(outers(container).every(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+    const hiddenInner = level(new RegExp(`${innerName} — no visible groups`))
+    expect(hiddenInner).toBeDisabled()
+    expect(hiddenInner).toHaveAttribute('aria-label', expect.stringContaining(expandPrompt))
+    fireEvent.click(level(`${outerName} — expand all`))
+    expect(epics(container).some(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+    fireEvent.click(level(`${innerName} — collapse all`))
+    expect(epics(container).every(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+    expect(outers(container).every(button => button.getAttribute('aria-expanded') === 'true')).toBe(true)
+  })
+
+  it('disables the inner control when the organizer has no second level', () => {
+    localStorage.setItem(preferencesKey, JSON.stringify({ organizer: { outer: 'machine', inner: 'none', order: 'operational', direction: 'asc' }, statusFilter: { preset: 'all', statuses: [] } }))
+    const { container } = mount()
+    expect(level('Machines — collapse all')).toBeEnabled()
+    const inner = level('No second level in this organizer')
+    expect(inner).toBeDisabled()
+    expect(container.querySelector('[data-level="none"]')).toHaveAttribute('data-tier', 'two')
+    fireEvent.click(inner)
+    fireEvent.click(level('Machines — collapse all'))
+    const heads = [...container.querySelectorAll<HTMLButtonElement>('.ov-group > .ov-group-head > button')]
+    expect(heads.length).toBeGreaterThan(0)
+    expect(heads.every(button => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+    expect(level('Machines — expand all')).toBeEnabled()
+  })
+
+  it('shows a card with no epic in its initiative Unassigned group', () => {
+    const card = scene.cards.find(item => item.id === fixtureId(2))!
+    delete card.source.properties.Epic
+    const { container } = mount()
+    const tinStar = container.querySelector<HTMLElement>('[data-outer="Tin Star"]')!
+    const bare = [...tinStar.querySelectorAll<HTMLElement>('.ov-inner .ov-group')].find(group => group.querySelector('.ov-group-name')?.textContent === 'Unassigned')
+    expect(bare?.querySelector(`[data-entity-id="${fixtureId(2)}"]`)).toBeTruthy()
+    expect(bare?.querySelector(`[data-entity-id="${fixtureId(1)}"]`)).toBeFalsy()
+  })
+
+  it.each(Object.keys(organizerPresets) as Array<keyof typeof organizerPresets>)('names %s outer and inner levels from the current fields', preset => {
+    const organizer = { ...organizerPresets[preset] }
+    const groups = organizedGroups(scene, { ...initialPresentation(), organizer, statusFilter: { preset: 'all', statuses: [] } }, Date.now())
+    const controls = overviewLevelControls(groups, [], organizer)
+    expect(controls.outer.disabled).toBe(false)
+    expect(controls.inner.disabled).toBe(false)
+    expect(controls.outer.ids.length).toBeGreaterThan(0)
+    expect(controls.inner.ids.length).toBeGreaterThan(0)
+    expect(controls.outer.ids.some(id => controls.inner.ids.includes(id))).toBe(false)
+    const titles = { initiative: ['Initiatives', 'Epics'], machine: ['Machines', 'Initiatives'], manager: ['Managers', 'Initiatives'] } as const
+    expect(controls.outer.name).toBe(`${titles[preset][0]} — collapse all`)
+    expect(controls.inner.name).toBe(`${titles[preset][1]} — collapse all`)
+    const hidden = overviewLevelControls(groups, controls.outer.ids, organizer)
+    expect(hidden.inner.disabled).toBe(true)
+    expect(hidden.inner.name).toMatch(/no visible groups/)
+    expect(hidden.outer.name).toBe(`${titles[preset][0]} — expand all`)
+  })
+
+  it('keeps the inner control disabled for a flat organizer even when outer groups exist', () => {
+    const organizer = { outer: 'status' as const, inner: 'none' as const, order: 'operational' as const, direction: 'asc' as const }
+    const groups = organizedGroups(scene, { ...initialPresentation(), organizer, statusFilter: { preset: 'all', statuses: [] } }, Date.now())
+    const controls = overviewLevelControls(groups, [], organizer)
+    expect(controls.outer.name).toBe('Task statuses — collapse all')
+    expect(controls.outer.disabled).toBe(false)
+    expect(controls.inner.name).toBe('No second level in this organizer')
+    expect(controls.inner.ids).toEqual([])
+    const collapsed = nextLevelCollapsed([], controls.outer.ids, 'collapse')
+    expect(overviewLevelControls(groups, collapsed, organizer).inner.name).toBe('No second level in this organizer')
   })
 })
