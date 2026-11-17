@@ -53,7 +53,7 @@ function recommendation(text: string, optionsText: string | undefined, request: 
   return options[index]?.id
 }
 
-export function mapCommentPacket(comment: Comment, evidence: DecisionEvidence): { packet: DecisionPacket; job_id: string | null; comment_id: string; createdAt: number } | null {
+export function mapCommentPacket(comment: Comment, evidence: DecisionEvidence): { packet: DecisionPacket; job_id: string | null; comment_id: string } | null {
   if (!isPreparedPacketComment(comment)) return null
   const fields = sections(comment.text)
   const requestId = fields.decision?.split(/[·\n]/)[0]?.trim()
@@ -105,7 +105,7 @@ export function mapCommentPacket(comment: Comment, evidence: DecisionEvidence): 
     authorization: { scope: commentPacketAuthorization, next_owner: 'Firstmate', next_status: 'Queued', permitted_follow_up: commentPacketAuthorization, remaining_gates: [] },
     references, dependencies, invalidation_conditions: ['Source request, revision, options or evidence changes.'], review_within_ms: 3600_000,
   })
-  return { packet, job_id: fields.decision?.match(/\b(?:prep\s+)?job\s+([a-z0-9-]+)/i)?.[1] ?? null, comment_id: comment.id, createdAt: Date.parse(comment.created_time ?? comment.createdAt ?? '') }
+  return { packet, job_id: fields.decision?.match(/\b(?:prep\s+)?job\s+([a-z0-9-]+)/i)?.[1] ?? null, comment_id: comment.id }
 }
 
 /** Notion history normally arrives oldest first. Timestamps take precedence;

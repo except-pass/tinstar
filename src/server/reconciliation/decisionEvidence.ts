@@ -16,7 +16,7 @@ import { isPreparedPacketComment } from './commentPacket'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
 
-export function sourceComment(note: CardContextRead['blocks'][number]) {
+function sourceComment(note: CardContextRead['blocks'][number]) {
   return note.type === 'comment' && !note.watchdogReply && !isPreparedPacketComment(note)
     && !workflowReceipt(note)?.startsWith(`${workflowMarkers.operation} ["waiting-on-main",`)
 }

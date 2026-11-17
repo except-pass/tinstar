@@ -380,7 +380,8 @@ export class CheckInWatchdog {
     })
   }
   async requestIds(cardId: string) {
-    return new Set((await this.rows()).filter(row => row.cardId === cardId && row.state !== 'resolved' && row.state !== 'superseded').map(row => row.request.requestId))
+    return new Set((await this.rows()).filter(row => row.cardId === cardId)
+      .flatMap(row => [row.request, row.followUp].flatMap(item => item?.offeredAt ? [item.requestId] : [])))
   }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }
   ingest(input: BridgeUpdate) {

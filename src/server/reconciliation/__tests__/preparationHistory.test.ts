@@ -201,7 +201,7 @@ it.each(['sole', 'shared'] as const)('saves a prepared answer with a %s wait', a
   expect((await sources.workflow.preparedHistory(cardId)).some(note => note.text.includes('Existing wait retained for independent requests.'))).toBe(shared)
 }, 20_000)
 
-it('files a new prepared wait over inactive legacy prose', async () => {
+it('preserves inactive legacy prose when the normal wait transition rejects it', async () => {
   const { sources, cardId, requestId } = await setup({ independentRequest: true, cardStatus: 'Queued', inactiveWait: 'An old dependency note' })
   const saved = await sources.workflow.answerPrepared({
     kind: 'answer_decision', card_id: cardId, request_id: requestId, operation_id: 'new-prepared-wait',
@@ -209,10 +209,10 @@ it('files a new prepared wait over inactive legacy prose', async () => {
     next: { owner: 'Firstmate', status: 'Waiting For', wait: { type: 'Actor', id: 'Will', dependency: 'Approve the current preview',
       unblocks_when: 'Owner approval arrives', follow_up_by: 'Firstmate', next_check_in: new Date(Date.now() + 30 * 60_000).toISOString() } },
   }, 'Fixture owner')
-  expect(saved).toMatchObject({ outcome: 'saved', code: 'saved' })
+  expect(saved).toMatchObject({ outcome: 'not-saved', code: 'wait-invalid' })
   const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
-  expect(card.properties.Status?.value).toBe('Waiting For')
-  expect(card.properties['Waiting For']?.value).toBe('Will: Dependency: Approve the current preview | Unblocks when: Owner approval arrives | Follow-up: Firstmate | Type: Actor | ID: Will')
+  expect(card.properties.Status?.value).toBe('Queued')
+  expect(card.properties['Waiting For']?.value).toBe('An old dependency note')
 })
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {

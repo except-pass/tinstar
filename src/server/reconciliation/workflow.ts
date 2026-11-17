@@ -697,7 +697,6 @@ export class WorkflowOperations {
         } else transition(input.next.owner, input.next.status)
         if (input.next.status === 'Waiting For' && !heldWait) {
           if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
-          if (!soleRequest) set('Waiting For', '')
           await wait(input.next.wait)
         }
         if (!heldWait) resolveWait(input.resolve_wait, input.next.status)

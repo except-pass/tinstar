@@ -494,8 +494,9 @@ before anything is stored.
 
 The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
-one current, unanswered request on that same card. Complete, fresh history is
-required. Labelled sections are mapped into a normal packet and run through the
+one current, unanswered request and a matching preparation job for that card
+and source revision. A comment without a matching job leaves the request
+queued for normal preparation. Complete, fresh history is required. Labelled sections are mapped into a normal packet and run through the
 same schema and evidence validation. The question always comes from the exact
 request record; the bot's question is advisory background. Options use the
 request's identities. Explicit undo/rollback wording supplies reversibility;
@@ -511,7 +512,7 @@ Comment imports are marked `card comment (default authorization)`. Their
 That route applies to every answer. Per-option next actions from the bot remain
 advisory prose, not executable authorization. Importing does not claim a card,
 answer it, change its status, or dispatch another job. The comment ID and card
-identify a single durable import, with the job ID recorded when supplied. A
+identify a single durable import, with its preparation job ID recorded. A
 matching expired job may complete through this fallback. A newer comment
 supersedes the request's older packet. Re-reading a comment can renew source
 evidence automatically after restart or source recovery, but never rebinds it
