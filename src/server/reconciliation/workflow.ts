@@ -36,6 +36,23 @@ const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decisio
   source: input.source_request || source ? requestKey(input.source_request ?? source!) : null,
 })
 
+function repairIdentity(fields: { type?: string; id?: string }) {
+  const type = fields.type?.trim() ?? '', id = fields.id?.trim() ?? ''
+  if (!id) return null
+  switch (type) {
+    case 'Person': return { type: 'Actor', id }
+    case 'Card': {
+      const workId = canonicalWorkId(id)
+      return workId ? { type: 'Work', id: workId } : { type, id }
+    }
+    case 'Work': {
+      const workId = canonicalWorkId(id)
+      return workId ? { type, id: workId } : { type: 'Actor', id }
+    }
+    default: return { type, id }
+  }
+}
+
 const cardVersion = (card: WorkCard) => JSON.stringify([card.last_edited_time, card.properties, card.archived, card.in_trash])
 
 /** Shared per-card policy/mutation path for UI, MCP and coordinator updates. */
@@ -499,9 +516,12 @@ export class WorkflowOperations {
     let editedWaits: ReturnType<typeof waitEntries> | undefined
     const currentWaits = () => {
       const identity = waitIdentity()
-      return editedWaits ?? waitEntries(originalWaitText, identity).map(entry => entry.freeForm
-        ? { ...entry, implicitIdentity: true, fields: { ...entry.fields, ...identity } }
-        : entry)
+      if (editedWaits) return editedWaits
+      const entries = waitEntries(originalWaitText, identity)
+      const [only] = entries
+      return entries.length === 1 && only?.freeForm
+        ? [{ ...only, implicitIdentity: true, fields: { ...only.fields, ...identity } }]
+        : entries
     }
     const wait = async (value: { type: 'Actor' | 'Event' | 'Work'; id: string; dependency: string; unblocks_when: string; follow_up_by: string; next_check_in: string }, replace?: string) => {
       if (String(card.properties.Status?.value ?? '') === 'Waiting for Prod Release') throw new WorkflowError('release-lifecycle', 'Waiting for Prod Release stays on the release lifecycle. This operation does not convert it to generic Waiting For. Nothing was written.')
@@ -516,19 +536,16 @@ export class WorkflowOperations {
       if (replace !== undefined) {
         const matches = entries.filter(entry => entry.text === replace)
         const entry = matches.length === 1 ? matches[0] : undefined
-        if (!entry || typedWaitEntry(entry) || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
+        if (!entry || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
           throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one incomplete or legacy wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
         }
-        const recordedType = entry.fields.type?.trim()
-        const recordedId = entry.fields.id?.trim()
-        const workId = recordedId && (recordedType === 'Work' || recordedType === 'Card' || (!recordedType && value.type === 'Work'))
-          ? canonicalWorkId(recordedId) : null
-        const requiredType = recordedType === 'Person' ? 'Actor'
-          : recordedType === 'Card' && (!recordedId || workId) ? 'Work' : recordedType
-        const requiredId = workId ?? recordedId
-        if ((requiredType && value.type !== requiredType) || (requiredId && id !== requiredId)) {
-          const identity = [requiredType && `Type ${JSON.stringify(requiredType)}`, requiredId && `ID ${JSON.stringify(requiredId)}`].filter(Boolean).join(' and ')
-          throw new WorkflowError('wait-repair-identity', `Repair must preserve the recorded blocker using ${identity}. Use an explicit wait update to set a different blocker. Nothing was written.`)
+        const required = repairIdentity(entry.fields)
+        if (required && (value.type !== required.type || id !== required.id)) {
+          throw new WorkflowError('wait-repair-identity', `Repair must preserve the recorded blocker using Type ${JSON.stringify(required.type)} and ID ${JSON.stringify(required.id)}. Nothing was written.`)
+        }
+        const typed = typedWaitEntry(entry)
+        if (typed && typed.type === required?.type) {
+          throw new WorkflowError('wait-repair-conflict', 'The exact entry already has a complete typed wait. Nothing was written.')
         }
         editedWaits = entries.map(item => item === entry ? added : item)
         set('Waiting For Type', value.type); set('Waiting For ID', id)

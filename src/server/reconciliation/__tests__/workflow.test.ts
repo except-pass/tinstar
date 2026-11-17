@@ -2836,11 +2836,15 @@ describe('Waiting For status semantics', () => {
     ['Actor', 'Actor', 'Alice', 'Bob', 'free-form'],
     ['Event', 'Event', 'Scheduled review', 'A different review', 'inline'],
     ['Work', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'multiline'],
+    ['Work', 'Actor', 'mcp', 'Bob', 'inline'],
+    ['Work', 'Actor', 'hulk', 'Bob', 'free-form'],
+    ['Card', 'Actor', 'mcp', 'Bob', 'inline', false],
+    ['Other', 'Actor', 'mcp', 'Bob', 'inline', false],
     ['Person', 'Actor', 'Alice', 'Bob', 'inline'],
     ['Person', 'Actor', 'Alice', 'Bob', 'free-form'],
     ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'multiline'],
     ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'free-form'],
-  ] as const)('repairs %s as %s from %s without changing the blocker (%s, %s)', async (recordedType, type, originalId, changedId, format) => {
+  ] as const)('repairs %s as %s from %s without changing the blocker (%s, %s)', async (recordedType, type, originalId, changedId, format, allowed = true) => {
     const f = readyFixture()
     const savedId = originalId.replaceAll('-', '')
     if (type === 'Work') {
@@ -2865,6 +2869,12 @@ describe('Waiting For status semantics', () => {
         .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining(savedId) })
     }
     expect(patches(f)).toBe(before)
+    if (!allowed) {
+      expect(await f.workflow.update(op('wait', { ...wait, expected, repair_waits: [{ current, replacement: wait }], operation_id: 'repair-unsupported' }), 'Consumer'))
+        .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining(recordedType) })
+      expect(patches(f)).toBe(before)
+      return
+    }
     expect(await f.workflow.update(op('wait', { ...wait, expected, repair_waits: [{ current, replacement: wait }], operation_id: 'repair-same-blocker' }), 'Consumer'))
       .toMatchObject({ outcome: 'saved' })
     const card = await f.reader.card(id, true)
@@ -2877,7 +2887,7 @@ describe('Waiting For status semantics', () => {
   it.each([
     ['Person', 'Actor', 'Alice', 'free-form'],
     ['Card', 'Work', 'd'.repeat(32), 'multiline'],
-    ['Event', 'Event', 'Scheduled review', 'inline'],
+    ['Event', 'Actor', 'Alice', 'inline'],
   ] as const)('fills a missing ID for %s as %s (%s, %s)', async (recordedType, type, targetId, format) => {
     const f = readyFixture()
     if (type === 'Work') {
@@ -2920,8 +2930,10 @@ describe('Waiting For status semantics', () => {
   })
 
   it('repairs all legacy blockers atomically with exact current-state preconditions', async () => {
-    const f = readyFixture(), first = actor({ dependency: 'Security approval' }), second = actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware publication', unblocks_when: 'The firmware source is published' })
+    const f = readyFixture(), first = actor({ id: 'Alice', dependency: 'Security approval' }), second = actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware publication', unblocks_when: 'The firmware source is published' })
     f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: 'Person' }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Alice' }]
     const unrelated = actor({ id: 'Legal', dependency: 'Legal acceptance', unblocks_when: 'Legal approves' })
     f.raw.properties['Waiting For'].rich_text = [{ plain_text: `Security approval\nFirmware publication\n${waitLine(unrelated)}` }]
     const card = await f.reader.card(id, true)
