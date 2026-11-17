@@ -112,9 +112,10 @@ workers. Tin Star cannot certify whole-farm absence from configured sources.
 
 ## First Mate workflow
 
-Only the responsible First Mate coordinator writes the field, serializing edits
+The responsible First Mate coordinator maintains associations, serializing edits
 per card. Second mates report changes through their supervision channel to that
-coordinator. PM Bot may nudge for accountability but does not own worker linkage.
+coordinator. Authenticated owners, PM Bot and finish paths can explicitly retire
+a declaration through the [audited close-out operation](features/worker-closeout-release-waits.md).
 
 1. **Pickup:** Read the canonical Notion page, verify current Owner/Status and
    identify the responsible First Mate home. Plan the primary card association
@@ -137,11 +138,11 @@ coordinator. PM Bot may nudge for accountability but does not own worker linkage
    Retain the four-working-hour / next-business-morning ceiling and meaningful
    evidence rules. Link maintenance never advances Next check-in, clears overdue
    commitments or erases missed checkpoints.
-5. **Completion:** Record outcome/status under existing board rules and retain
-   historical links, even when finished workers leave the active floor. Change or
-   remove declarations only for verified reassignment or duplicate error, with a
-   meaningful audit explanation. Done/archived status or Owner changes alone do
-not invalidate identity.
+5. **Completion:** Record outcome/status under existing board rules. Use the
+   [audited close-out operation](features/worker-closeout-release-waits.md) to
+   retire a finished or absent worker declaration. Done/archived status or Owner
+   changes alone do not invalidate identity; retained declarations remain visible
+   as historical links when finished workers leave the active floor.
 6. **Ad hoc work:** Follow the [spawn card requirements](#spawn-card-and-backlog-closure-exceptions); never invent an association from missing evidence.
 
 Use fresh read–merge–write–readback, validating the complete property and merging
@@ -196,6 +197,7 @@ The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 | --- | --- |
 | `evaluatedAt` | Input snapshot's `generatedAt`; expiry is evaluated at this timestamp. |
 | `coverage` | Notion and each configured home's observation metadata, pagination completeness, card declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
+| `coverage.unconfiguredHomes` | Sorted explicit absolute homes from valid card declarations or published task `paths.home`, excluding configured homes. Remote worktree roots and prose are not home declarations. This inventories observed identities, not every host directory; it neither scans other homes nor changes configuration. |
 | `homes[].tiers` / `counts` | Exactly six tiers per home: `already confirmed`, `eligible auto-write`, `ambiguous`, `independent`, `conflicts`, `unavailable`. Counts are report rows, not an assertion of total worker coverage. |
 | `homes[].tiers.ambiguous[].proposals[]` | Manual verification candidates: exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and categorical `strength`. No raw brief/backlog text. |
 | `homes[].tiers["eligible auto-write"][].proposals[]` | Exact coordinator dispatch proposals, with `dispatch-ledger` strength. Only these may be automatically applied. |

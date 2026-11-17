@@ -1,3 +1,4 @@
+import { buildWorkerLinkReport } from '../workerLinkReport'
 import { CardLeases, withLeaseCaller } from '../cardLeases'
 import { reconcileDecision } from '../decisionResolution'
 import { buildQueue } from '../queue'
@@ -3193,3 +3194,56 @@ it('owner-chatgpt HTTP admits record-free asks across real history failures and 
   await close()
   if (process.env.TINSTAR_CLAIM_PROOF_DIR) await writeFile(join(process.env.TINSTAR_CLAIM_PROOF_DIR, 'claim-boundaries-transcript.json'), JSON.stringify(transcript, (key, value) => key === 'lease_token' ? '[redacted]' : value, 2))
 }, 60_000)
+describe('explicit worker close-out and release waits', () => {
+  it.each(['done', 'failed', 'absent', 'cancelled'] as const)('closes %s with exact identity, durable audit and no absent declaration', async disposition => {
+    const f = fixture(), worker = f.native.worker
+    if (worker.kind !== 'firstmate') throw new Error('fixture')
+    f.raw.properties['First Mate tasks'].rich_text = workerLinkRecord([{ fm_home: worker.fm_home, task_id: worker.task_id, first_observed_spawn_gen: worker.first_observed_spawn_gen }]).properties['First Mate tasks'].rich_text
+    f.home.observation.data!.tasks = []
+    const snapshot = fixtureSources()
+    snapshot.fleet = [f.home]
+    snapshot.intentions.data!.cards = [await f.reader.card(id, true)]
+    expect(buildWorkerLinkReport(snapshot).findings.some(row => row.detector === 'declared-absent')).toBe(true)
+    const input: UpdateWorkInput = { card_id: id, operation_id: `close-${disposition}`, kind: 'close_worker', worker, disposition, evidence: 'Finish path observed the terminal outcome; worker endpoint is gone.' }
+    expect(await f.workflow.update(input, 'PM Bot')).toMatchObject({ outcome: 'saved', saved_fields: expect.arrayContaining(['First Mate tasks', 'note']) })
+    const after = await f.reader.card(id, true)
+    expect(after.properties['First Mate tasks']!.workerLinks).toEqual({ status: 'valid', tasks: [] })
+    expect(after.properties.Status!.value).toBe('Queued')
+    const note = f.comments.at(-1)!.rich_text.map((row: any) => row.text?.content ?? row.plain_text).join('')
+    expect(note).toContain('By: PM Bot'); expect(note).toContain(`"disposition":"${disposition}"`)
+    expect(note).toContain(worker.task_id); expect(note).toContain(worker.first_observed_spawn_gen); expect(note).toContain(input.evidence)
+    snapshot.intentions.data!.cards = [after]
+    expect(buildWorkerLinkReport(snapshot).findings.some(row => row.detector === 'declared-absent')).toBe(false)
+    const restarted = new WorkflowOperations(f.reader, async () => [f.home])
+    const count = f.comments.length
+    expect(await restarted.update(input, 'PM Bot')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+    expect(f.comments).toHaveLength(count)
+  })
+
+  it('preserves siblings and refuses a different spawn generation or unreadable declaration', async () => {
+    const f = fixture(), worker = f.native.worker
+    if (worker.kind !== 'firstmate') throw new Error('fixture')
+    const sibling = { fm_home: '/another/home', task_id: 'other', first_observed_spawn_gen: 'g2' }
+    f.raw.properties['First Mate tasks'].rich_text = workerLinkRecord([{ fm_home: worker.fm_home, task_id: worker.task_id, first_observed_spawn_gen: worker.first_observed_spawn_gen }, sibling]).properties['First Mate tasks'].rich_text
+    const input = { card_id: id, operation_id: 'close-generation', kind: 'close_worker' as const, worker: { ...worker, first_observed_spawn_gen: 'wrong' }, disposition: 'absent' as const, evidence: 'Worker is absent from inventory.' }
+    expect(await f.workflow.update(input, 'Owner')).toMatchObject({ code: 'worker-generation-conflict' })
+    expect(await f.workflow.update({ ...input, operation_id: 'close-right', worker }, 'Owner')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['First Mate tasks']!.workerLinks).toEqual({ status: 'valid', tasks: [sibling] })
+    f.raw.properties['First Mate tasks'].rich_text = [{ plain_text: 'invalid' }]
+    expect(await f.workflow.update({ ...input, operation_id: 'close-unreadable', worker }, 'Owner')).toMatchObject({ code: 'worker-links-unreadable' })
+  })
+
+  it('records release PRs additively with audit, preserving the release lifecycle and all ordinary waits', async () => {
+    const f = fixture(), pr = 'https://github.com/owner/repo/pull/1'
+    f.raw.properties.Status.status.name = 'Waiting for Prod Release'
+    f.raw.properties['GitHub PRs'] = { type: 'rich_text', rich_text: [{ plain_text: 'https://github.com/owner/repo/pull/2' }] }
+    const input: UpdateWorkInput = { card_id: id, operation_id: 'release-prs', kind: 'release_wait', pulls: [pr, pr + '?tab=checks'], evidence: 'Both changes must reach the production release.' }
+    expect(await f.workflow.update(input, 'Firstmate')).toMatchObject({ outcome: 'saved' })
+    const saved = await f.reader.card(id, true)
+    expect(saved.properties.Status!.value).toBe('Waiting for Prod Release')
+    expect(saved.properties['Waiting For']!.value).toBe('Preserve another request')
+    expect(saved.properties['GitHub PRs']!.value).toBe('https://github.com/owner/repo/pull/2\n' + pr)
+    expect(f.comments.at(-1)!.rich_text.map((row: any) => row.text?.content ?? '').join('')).toContain(input.evidence)
+    expect(await f.workflow.update({ card_id: id, operation_id: 'ordinary-wait-still-refused', kind: 'wait', type: 'Event', id: 'release', dependency: 'Release change', unblocks_when: 'Production release finishes', follow_up_by: 'Owner', next_check_in: new Date(Date.now() + 3600000).toISOString() }, 'Firstmate')).toMatchObject({ code: 'release-lifecycle' })
+  })
+})

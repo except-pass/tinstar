@@ -52,16 +52,16 @@ export class DomainReadTools {
   async releaseStatus({ offset, limit }: { offset: number; limit: number }) {
     try {
       const data = await this.releases.read(false)
-      const pulls = page(data.pulls, offset, limit), exceptions = page(data.unassociatedCards, offset, limit)
+      const pulls = page(data.pulls, offset, limit), exceptions = page(data.unassociatedCards, offset, limit), releases = page(data.releases ?? [], offset, limit)
       const cards = data.reconciliation ? page(data.reconciliation.cards, offset, limit) : null
       const targets = data.reconciliation ? page(data.reconciliation.targets, offset, limit) : null
       // Keep every feed warning and dry-run eligibility/receipt field. Pagination
       // applies independently to each collection, so no missing section becomes
       // an apparent zero. UI automation drafts are intentionally not exported.
       return { outcome: 'available', generatedAt: data.generatedAt, pulls: pulls.items, unassociatedCards: exceptions.items,
-        warnings: data.warnings, associationsComplete: data.associationsComplete, associationsWritable: false, githubSync: data.githubSync,
+        releases: releases.items, releaseSource: data.releaseSource, warnings: data.warnings, associationsComplete: data.associationsComplete, associationsWritable: false, githubSync: data.githubSync,
         reconciliation: data.reconciliation ? { ...data.reconciliation, cards: cards!.items, targets: targets!.items } : null,
-        pagination: { pulls: { total: pulls.total, next_offset: pulls.next_offset },
+        pagination: { releases: { total: releases.total, next_offset: releases.next_offset }, pulls: { total: pulls.total, next_offset: pulls.next_offset },
           unassociatedCards: { total: exceptions.total, next_offset: exceptions.next_offset },
           cards: cards ? { total: cards.total, next_offset: cards.next_offset } : null,
           targets: targets ? { total: targets.total, next_offset: targets.next_offset } : null },
@@ -73,5 +73,5 @@ export class DomainReadTools {
 export function registerDomainReadTools(server: ToolRegistrar, readers?: DomainReadTools, request?: IncomingMessage) {
   server.registerTool('list_prs', { description: 'Read the same scoped open PR inventory as PR Operations, with canonical repository#number IDs, captured heads, many-to-many card links and explicit repository/association coverage. CI/review need is unknown until get_pr. Requires a configured grant verifying installation and caller credentials for an existing owner.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.listPulls(input, request) : unauthorized))
   server.registerTool('get_pr', { description: 'Inspect one PR URL at its captured head using shared PR Operations detail/check/review/file and attribution readers. Refresh list_prs after a head change. Partial/stale evidence is not merge readiness. No patches or terminal transcripts. Requires a configured verified owner binding.', inputSchema: { url: pullUrl, head: z.string().regex(/^[a-f0-9]{40,64}$/), include_files: z.boolean().default(false), ...pagination }, annotations: readAnnotations }, async input => result(readers ? await readers.getPull(input, request) : unauthorized))
-  server.registerTool('get_release_status', { description: 'Read the Releases PR-first queue, shared card links, production receipt/ancestry reconciliation and opt-in verification requirements. Missing/stale/partial evidence stays explicit and never proves shipment. offset/limit paginate pulls, card exceptions, eligibility cards and targets independently. Read-only.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.releaseStatus(input) : { outcome: 'unavailable', message: 'Release reader unavailable; queue and production status are unknown.' }))
+  server.registerTool('get_release_status', { description: 'Read the Releases PR-first queue, shared card links, production receipt/ancestry reconciliation and opt-in verification requirements. Missing/stale/partial evidence stays explicit and never proves shipment. offset/limit paginate native releases, pulls, card exceptions, eligibility cards and targets independently. Published production release membership is distinct from deployment proof. Read-only.', inputSchema: pagination, annotations: readAnnotations }, async input => result(readers ? await readers.releaseStatus(input) : { outcome: 'unavailable', message: 'Release reader unavailable; queue and production status are unknown.' }))
 }

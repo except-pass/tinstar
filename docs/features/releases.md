@@ -75,8 +75,10 @@ notes](../releases-notes.md) keep their acceptance and audience rules.
 The live API does not read `releases/reconciliation.json` or coordinator exports.
 The old export reader remains for historical CLI fixtures/tests. The legacy
 Notion writer's scheduled pass is disabled and the API reports review-only.
-No GitHub/Notion writes, workflow dispatch, publication or production changes
-are performed by this source. The following export/activation contracts are
+The source reads perform no GitHub/Notion writes, workflow dispatch, publication
+or production changes. A separate scheduled writer handles
+[native production release waits](worker-closeout-release-waits.md).
+The following export/activation contracts are
 **historical**, not instructions for configuring the live Releases view.
 
 Native upstream contracts:

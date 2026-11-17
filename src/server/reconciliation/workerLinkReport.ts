@@ -191,6 +191,12 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
   })
   // One duplicate-primary detector row can be supported by multiple declaration
   // findings; retain unique, sorted evidence rows rather than source ordering.
+  const configured = new Set(input.fleet.map(home => home.source.home))
+  // Explicit home identities only. Remote worktree roots and prose are not homes.
+  const unconfiguredHomes = sorted([
+    ...cards.flatMap(({ declaration }) => declaration.status === 'valid' ? declaration.tasks.map(task => task.fm_home) : []),
+    ...input.fleet.flatMap(home => home.observation.data?.tasks.flatMap(task => task.paths.home ? [task.paths.home] : []) ?? []),
+  ].filter(home => home.startsWith('/') && !configured.has(home)))
   const uniqueFindings = [...new Map(findings.map(f => [JSON.stringify(f), f])).values()]
   return {
     schema: 'tinstar.worker-link-report.v1', mode: 'report-only', evaluatedAt: input.generatedAt, scope: input.scope,
@@ -201,6 +207,7 @@ export function buildWorkerLinkReport(input: SourceSnapshot, repairCards: Readon
     coverage: {
       wholeFarm: scene.coverage.wholeFarm, absenceConclusions: scene.coverage.absenceConclusions,
       intentions: { ...intentions, cardPaginationComplete: !!input.intentions.data && !input.intentions.data.hasMore },
+      unconfiguredHomes,
       homes: ordered(scene.coverage.homes.map(({ source, observation }) => ({ fm_home: source.home, ...observation }))),
       cards: ordered(cards.map(({ card, declaration, mergeable }) => ({ cardId: card.id, declaration: declaration.status,
         ...('reason' in declaration ? { reason: declaration.reason } : {}), mergeable: notionCurrent && mergeable }))),

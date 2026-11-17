@@ -1,3 +1,4 @@
+import { releasePull } from '../../shared/pullIdentity'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
 import { responsibleMate, strictlyNeedsWill } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
@@ -548,7 +549,28 @@ export class WorkflowOperations {
       else if (successor) { set('Waiting For Type', successor.type); set('Waiting For ID', successor.id) }
       if (still.length > 0 && requestedStatus !== 'Waiting For') { set('Status', 'Waiting For'); heldWait = true; note += '\nStatus retained: Waiting For. Another independent wait remains.' }
     }
-    if (input.kind === 'edit') {
+    if (input.kind === 'close_worker') {
+      const property = card.properties[FIRST_MATE_TASKS], links = property?.workerLinks
+      if (property?.type !== 'rich_text' || property.hasMore || links?.status !== 'valid') throw new WorkflowError('worker-links-unreadable', 'Close-out requires a complete valid First Mate tasks declaration; nothing was removed')
+      const worker = input.worker
+      const existing = links.tasks.find(task => task.fm_home === worker.fm_home && task.task_id === worker.task_id)
+      if (existing && existing.first_observed_spawn_gen !== worker.first_observed_spawn_gen) throw new WorkflowError('worker-generation-conflict', 'The declared worker has a different spawn generation; nothing was removed')
+      // An absent exact identity is a supported idempotent close-out, including
+      // recovery after the property saved but its audit comment did not.
+      const record = workerLinkRecord(links.tasks.filter(task => task !== existing))
+      set(FIRST_MATE_TASKS, record.json)
+      note += `\nWorker close-out: ${JSON.stringify({ worker, disposition: input.disposition, evidence: input.evidence, previously_declared: !!existing })}`
+    } else if (input.kind === 'release_wait') {
+      reads.add('Status')
+      if (card.properties.Status?.value !== 'Waiting for Prod Release') throw new WorkflowError('release-lifecycle', 'Record release PRs only on Waiting for Prod Release cards')
+      const current = card.properties['GitHub PRs']
+      if (current?.type !== 'rich_text' || current.hasMore) throw new WorkflowError('unsupported-property', 'GitHub PRs must be complete readable rich text')
+      const old = String(current.value ?? '')
+      const urls = new Set((old.match(/https:\/\/github\.com\/[^\s<>"\[\]()]+/gi) ?? []).flatMap(value => releasePull(value)?.url ?? []))
+      const added = [...new Set(input.pulls.map(value => releasePull(value)!.url))].filter(url => !urls.has(url))
+      set('GitHub PRs', [old, ...added].filter(Boolean).join('\n'))
+      note += `\nAwaited production PRs: ${JSON.stringify(input.pulls.map(value => releasePull(value)!.url))}\nEvidence: ${input.evidence}`
+    } else if (input.kind === 'edit') {
       for (const [name, value] of Object.entries(input.properties ?? {})) set(name, value)
       Object.assign(sections, input.content)
       if (input.note) note += `\n${input.note}`

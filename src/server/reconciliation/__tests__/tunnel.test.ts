@@ -163,7 +163,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   }
   const update = tools.find(tool => tool.name === 'update_work')!.inputSchema
   const kinds = updateWorkSchema.options.map(option => option.shape.kind.value)
-  expect(kinds).toHaveLength(12)
+  expect(kinds).toHaveLength(14)
   expect(update.properties!.kind).toEqual({ type: 'string', enum: kinds })
   expect(update.oneOf).toHaveLength(kinds.length)
   expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
@@ -171,6 +171,10 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
   expect(validate({ ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' })).toBe(true)
+  expect(validate({ ...base, kind: 'close_worker', worker: { kind: 'firstmate', fm_home: '/fixture', task_id: 'finished', first_observed_spawn_gen: 'g1' }, disposition: 'done', evidence: 'Terminal receipt proves completion.' })).toBe(true)
+  expect(validate({ ...base, kind: 'close_worker', disposition: 'done' })).toBe(false)
+  expect(validate({ ...base, kind: 'release_wait', pulls: ['https://github.com/acme/repo/pull/15'], evidence: 'Awaiting this production release.' })).toBe(true)
+  expect(validate({ ...base, kind: 'release_wait', pulls: [] })).toBe(false)
   expect(validate({ ...base, kind: 'wait' })).toBe(false)
   expect(validate({ ...base, kind: 'unknown' })).toBe(false)
   expect(validate({ ...base, kind: 'edit', worker: {} })).toBe(false)

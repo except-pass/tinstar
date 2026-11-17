@@ -16,6 +16,11 @@ export interface ReleaseTarget extends RequiredTarget {
   readinessEvidence: Array<{ name: string; status: string; url: string | null }>
   receipt: DeploymentReceipt | null
 }
+export interface ReleaseContainment {
+  pull: string; mergeSha: string | null
+  state: 'included' | 'absent' | 'unknown'
+  observedAt: string | null; reason: string | null
+}
 export interface ReleaseObject {
   github?: NativeReleaseEvidence
   id: string; repository: string; version: string; sourceSha: string | null
@@ -28,6 +33,9 @@ export interface ReleaseObject {
   membership: { status: 'pending' | 'complete' | 'partial' | 'unknown'; baseline: string | null; baselineSha: string | null; observedAt: string | null; reason: string | null }
   pulls: ReleasePull[]
   supportingPulls?: ReleasePull[]
+  // Exact requested PR merge ancestry in this production source, independently
+  // of the incremental Changes range or intervening prerelease tags.
+  containedPulls?: ReleaseContainment[]
   gaps: string[]
 }
 export interface ReleaseChange {

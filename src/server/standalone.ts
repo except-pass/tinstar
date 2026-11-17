@@ -16,6 +16,7 @@ import { FirstmateUpdates } from './reconciliation/firstmateUpdates'
 import { WaitingOnMain, mainWaitNotifier } from './reconciliation/waitingOnMain'
 import { CheckInWatchdog } from './reconciliation/checkInWatchdog'
 import { ReleasesApi } from './releases/routes'
+import { ProductionWaitWriter } from './releases/productionWaits'
 import { ReleaseAutomationWriter } from './releases/writer'
 import { PullsApi } from './pulls/routes'
 import { ActionsApi } from './actions/routes'
@@ -97,8 +98,13 @@ export function startServer(opts: ServerOptions) {
   const releases = new ReleasesApi(reconciliation)
   const releaseWriter = new ReleaseAutomationWriter(getConfigRoot(), reconciliation.releaseTransport(), () => releases.read(false, true))
   reconciliation.releaseDesk = () => releaseWriter.desk()
-  // The coordinator writer's completion policy is obsolete. Keep its audit/Desk
-  // history readable; no scheduled writes until a separate owner activation.
+  // Native production membership resolves release waits independently of the
+  // obsolete coordinator deployment policy; its historical audit stays readable.
+  const productionWaitWriter = new ProductionWaitWriter(reconciliation.releaseTransport(), async () => ({ data: await releases.read(false, true), scene: await reconciliation.scene(true, { history: true }) }))
+  const sweepProductionWaits = () => { void productionWaitWriter.run().then(result => { if (result.unconfirmed.length) log.warn('release', `Production release wait writes unconfirmed for ${result.unconfirmed.join(', ')}; next scheduled pass will reconcile`) }).catch(() => log.warn('release', 'Production release wait reconciliation unavailable; next scheduled pass will retry')) }
+  const productionWaitTimer = setInterval(sweepProductionWaits, 60_000)
+  productionWaitTimer.unref()
+  sweepProductionWaits()
   const pulls = new PullsApi(reconciliation, releases.store)
   const decisionBoard = reconciliation.mainWaitNotionConfig()?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
   const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req), reconciliation.preparedReviews, reconciliation.sourceWriteRecovery(), reconciliation.preparedSubmissions, reconciliation.preparation)
