@@ -371,9 +371,10 @@ it.each(['failed', 'blocked', 'published', 'withdrawn', 'imported-withdrawn'] as
   }
 })
 
-it('suppresses an in-flight job when its source is answered without reporting a bot failure', async () => {
+it.each([false, true])('suppresses an answered in-flight job without a bot failure when deferred is %s', async deferred => {
   const { prep, fixture, posts, rows } = await harness()
   const first = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Owner may answer during preparation' })
+  fixture.evidence.deferred = deferred
   fixture.evidence.requests[0]!.answered = true
   rows[0]!.answered = true
   await prep.revalidate(fixture.cardId)

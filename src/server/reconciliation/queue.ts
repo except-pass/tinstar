@@ -292,14 +292,14 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     const card = cards.get(id)
     const actions = card && prop(card, 'Will action')
     const tags = (Array.isArray(actions) ? actions : [actions]).filter(value => typeof value === 'string' && value.trim())
-    if (card && !deferredDecisionCard(card) && !complete(word(card, 'Status')) &&
+    if (card && !card.archived && !card.in_trash && !complete(word(card, 'Status')) &&
       accountable(card, bindings[0]!.request.home) &&
       !card.properties['Will action']?.hasMore && tags.length === 1 && normalize(String(tags[0])) === 'decision' &&
       new Set(bindings.map(binding => requestAnchor(binding.request))).size === 1) ownerDecisions.set(id, bindings[0]!)
   }
 
   for (const card of cards.values()) {
-    if (deferredDecisionCard(card) || fresh(intentions) && complete(word(card, 'Status'))) continue
+    if (fresh(intentions) && (card.archived || card.in_trash || complete(word(card, 'Status')))) continue
     const actions = prop(card, 'Will action')
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
@@ -357,7 +357,6 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
         (request.taskId === null || request.taskId === binding.request.taskId)) : undefined
       const canonical = exactBinding ? { cardId: exactBinding[0] } : decisionCard(request, refs, intentions, now)
       const known = canonical.cardId ? [cards.get(canonical.cardId)].filter((card): card is Card => !!card) : []
-      if (known.some(deferredDecisionCard)) continue
       const canonicalRelationship = known.length === 1
       const binding = canonical.cardId ? ownerDecisions.get(canonical.cardId) : undefined
       const ownerDecision = !!binding && request.home === binding.request.home && (request.taskId === binding.request.taskId || !!exactBinding) &&

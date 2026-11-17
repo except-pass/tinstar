@@ -91,6 +91,9 @@ it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s car
   try {
     status = deferred
     const paused = await f.sources.snapshot(true)
+    const queue = await f.sources.queue()
+    expect(queue.items.some(item => item.cardIds.includes(f.cardId) && item.sources.some(source => source.kind === 'firstmate'))).toBe(true)
+    expect(queue.needsWill?.some(item => item.cardIds.includes(f.cardId))).toBe(false)
     expect(mainWaitCandidates(paused).items).not.toContainEqual(expect.objectContaining({ key: f.cardId }))
     expect(await prepare()).toMatchObject({ outcome: 'ineligible' })
     await f.sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')

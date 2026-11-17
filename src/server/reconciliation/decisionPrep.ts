@@ -343,7 +343,6 @@ export class DecisionPreparation {
   async revalidate(cardId: string) {
     await this.initialize()
     const evidence = this.evidence(cardId)
-    if (evidence.deferred) return
     const answered = evidence.requests.filter(request => request.answered && request.binding)
     if (answered.length) await this.packets.leases.writeStorage(db => {
       for (const request of answered) {

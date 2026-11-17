@@ -1,3 +1,4 @@
+import { isOwnerDecisionHeading } from '../../../../scripts/decision-owner-answer-sweep'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -355,4 +356,15 @@ it('rejects duplicate request IDs even with a newer meaningful publication', () 
   expect(revised.reasons).toContain('Decision publication history is contradictory or incomplete')
   expect(revised.requests.every(request => request.reasons.length > 0)).toBe(true)
   expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
+})
+
+it.each([
+  ['OWNER DECISION (Will, 2026-11-16 10:59 PM ET, via Tinstar Decision Prep): Defer.', true],
+  ['OWNER DECISION — 2026-11-17: Defer.', true],
+  ['OWNER DECISION NEEDED: please pick an option', false],
+  ['OWNER DECISION (Will): Defer.', false],
+  ['OWNER DECISION — please choose: urgent', false],
+  ['OWNER DECISION — 2026-11-17 Defer.', false],
+])('classifies sweep heading %s', (text, expected) => {
+  expect(isOwnerDecisionHeading(text)).toBe(expected)
 })

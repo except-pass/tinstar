@@ -7,7 +7,7 @@ import type { CardContextRead } from './cardContext'
 import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
 import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
-import { currentWillRequests, oldestOpenRequestSince } from './claimPolicy'
+import { currentWillRequests, deferredDecisionCard, oldestOpenRequestSince } from './claimPolicy'
 import { decisionRequests } from '../../shared/workflowRequests'
 
 export interface NeedsWillItem extends QueueItem {
@@ -25,12 +25,14 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
   readiness: ReadonlyMap<string, PullReadiness>, authorized = false, publications: import('./proposalSource').ProposalPublication[] = []): NeedsWillItem[] {
   if (!authorized) { inventory = null; readiness = new Map() }
   const cards = new Map(scene.cards.map(card => [card.id, card]))
+  const deferred = new Set(scene.cards.filter(card => deferredDecisionCard(card.source)).map(card => card.id))
   return queue.items.flatMap(item => {
+    if (item.cardIds.length && item.cardIds.every(id => deferred.has(id))) return []
     let real = !!item.decisionResolution && item.decisionResolution.state !== 'resolved' || item.sources.some(source => source.kind === 'firstmate' && !!source.responseAnchor && !!source.action)
     const requests: Array<ReturnType<typeof decisionRequests>[number] & { cardId: string }> = []
     for (const id of item.cardIds) {
       const card = cards.get(id)
-      if (!card || card.source.archived || card.source.in_trash || ['Done', 'Archived'].includes(String(card.source.properties.Status?.value))) continue
+      if (!card || deferred.has(id)) continue
       const actionTags = item.sources.find(source => (source.kind === 'notion' || source.kind === 'jira') && source.request?.home === null && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id)

@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { decisionRequests } from '../src/shared/workflowRequests'
 import { decisionProposals } from '../src/server/reconciliation/decisionResolution'
@@ -6,6 +8,13 @@ import { CardContextReader } from '../src/server/reconciliation/cardContext'
 import { loadReconciliationConfig } from '../src/server/reconciliation/config'
 import { NotionApi } from '../src/server/reconciliation/notionApi'
 import { WorkReader } from '../src/server/reconciliation/workReader'
+
+export function isOwnerDecisionHeading(text: string) {
+  const heading = text.trimStart()
+  if (/^OWNER DECISION \(Will, [^\r\n)]+\):/.test(heading)) return true
+  const date = /^OWNER DECISION — ([^:\r\n]+):/.exec(heading)?.[1]
+  return !!date && Number.isFinite(Date.parse(date))
+}
 
 async function main() {
   const { values } = parseArgs({ options: { 'config-home': { type: 'string' }, help: { type: 'boolean' } } })
@@ -28,8 +37,7 @@ async function main() {
       incomplete.push(card.id)
       continue
     }
-    const ownerComments = context.blocks.filter(block => block.type === 'comment' &&
-      /^OWNER DECISION\b/.test(block.text.trimStart()))
+    const ownerComments = context.blocks.filter(block => block.type === 'comment' && isOwnerDecisionHeading(block.text))
     if (!ownerComments.length) continue
     let current: Set<string>
     try { current = new Set(decisionProposals(context.blocks.map(({ id, text }) => ({ id, text }))).map(row => row.id)) }
@@ -47,4 +55,6 @@ async function main() {
   if (!complete) process.exitCode = 1
 }
 
-main().catch(error => { console.error(error instanceof Error ? error.message : 'Owner answer sweep failed'); process.exitCode = 1 })
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(error => { console.error(error instanceof Error ? error.message : 'Owner answer sweep failed'); process.exitCode = 1 })
+}

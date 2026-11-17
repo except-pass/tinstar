@@ -333,7 +333,8 @@ export class ReconciliationSources {
     const warning = entry.failed ? 'Request evidence could not refresh. Last-known requests remain visible; verify sources before choosing.'
       : 'Refreshing request evidence. Known requests remain visible; choices need verification until refresh completes.'
     // An unfinished read cannot establish that a retained request disappeared.
-    const rows = new Map([...prior])
+    const deferred = new Set(scene.cards.filter(card => deferredDecisionCard(card.source)).map(card => card.id))
+    const rows = new Map([...prior].filter(([, item]) => !item.cardIds.length || !item.cardIds.every(id => deferred.has(id))))
     for (const item of known) rows.set(item.id, { ...prior.get(item.id), ...item,
       proposal: prior.get(item.id)?.proposal ?? item.proposal,
       proposals: prior.get(item.id)?.proposals ?? item.proposals,
