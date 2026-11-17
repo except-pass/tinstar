@@ -114,6 +114,8 @@ Mate use the inbox nudge instead. This uses Notion's owner inbox/push
 path; actual push delivery depends on the owner's Notion notification settings.
 Owner-wait alerts are comments on that card. The nudge is offered on the
 existing Ask bridge pull. No new notification service is involved.
+See the [reminder reservation contract](decision-desk-foundation.md#per-card-source-write-reservations-and-recovery)
+for Decision Desk availability, write fencing and interrupted-delivery recovery.
 
 On the first alert sweep, already-overdue owner waits produce **one summary comment**
 on the backstop card `41550ce6d42281239fd4f9f20c901b80`, listing every known overdue owner wait with its key, age and
