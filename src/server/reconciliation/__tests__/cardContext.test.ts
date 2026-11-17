@@ -187,3 +187,23 @@ it('retains a known comment answer for claims when the publication body read fai
   expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({ outcome: 'partial', commentsOutcome: 'available',
     blocks: [expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' })] })
 })
+
+it.each(['http', 'transport', 'cursor'] as const)('retains legacy answer paragraphs before a later body-page %s failure', async failure => {
+  const fetcher: typeof fetch = async input => {
+    const url = new URL(String(input))
+    if (url.pathname === '/v1/comments') return Response.json({ results: [], has_more: false })
+    if (url.searchParams.has('start_cursor')) {
+      if (failure === 'http') return new Response('', { status: 503 })
+      if (failure === 'transport') throw new Error('Connection lost')
+      return Response.json({ results: [], has_more: true, next_cursor: 'next-page' })
+    }
+    return Response.json({ results: [{ id: 'legacy-answer', type: 'paragraph',
+      paragraph: { rich_text: [{ plain_text: 'Tin Star answer: "decision"' }] },
+    }], has_more: true, next_cursor: 'next-page' })
+  }
+  const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
+  expect(await reader.decisionDetails('card')).toMatchObject({ outcome: 'partial', commentsOutcome: 'available',
+    blocks: [expect.objectContaining({ id: 'legacy-answer', text: 'Tin Star answer: "decision"' })] })
+  expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'legacy-answer' }))
+  expect(reader.cachedDecisionHistory('card')?.context.outcome).toBe('partial')
+})

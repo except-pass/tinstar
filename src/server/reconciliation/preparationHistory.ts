@@ -63,7 +63,9 @@ export class PreparationHistory {
     if (!current || !previous || !this.renewalUntil(id) || current.context.outcome === 'available' && current.context.commentsOutcome === 'available') return current
     const blocks = new Map(previous.context.blocks.map(block => [block.id, block]))
     for (const block of current.context.blocks) blocks.set(block.id, block)
-    return { ...previous, context: { ...previous.context, blocks: [...blocks.values()] } }
+    const retained = { ...previous, context: { ...previous.context, blocks: [...blocks.values()] } }
+    this.complete.set(id, retained)
+    return retained
   }
 
   state(id: string) {
@@ -106,7 +108,10 @@ export class PreparationHistory {
       const attempts = (this.failures.get(id)?.attempts ?? 0) + 1
       this.failures.set(id, { attempts, retryAt: Date.now() + Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
         message: `${reason} A background retry is scheduled; Prepare now can retry this card.` })
-    } finally { clearTimeout(timer) }
+    } finally {
+      clearTimeout(timer)
+      this.evidenceHistory(id)
+    }
   }
 
   private drain() {

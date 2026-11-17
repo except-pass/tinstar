@@ -519,11 +519,11 @@ it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow 
 }, 60_000)
 
 it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s change even when the same renewal has incomplete body history', async kind => {
-  let failing = false, time = Date.now()
+  let failing = false, alternating = false, time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const f = await setup({ wrapFetch: transport => async (input, init) => {
     const path = new URL(String(input)).pathname
-    if (failing && path.includes('/v1/blocks/')) return Response.json({}, { status: 503 })
+    if (failing && (alternating ? path === '/v1/comments' : path.includes('/v1/blocks/'))) return Response.json({}, { status: 503 })
     const response = await transport(input, init)
     if (failing && kind === 'card' && path.includes('/v1/pages/')) {
       const page = await response.json()
@@ -549,6 +549,9 @@ it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s c
   const evidence = f.sources.preparationEvidence(f.cardId)
   expect(evidence.requests[0]!.answered).toBe(kind === 'answer')
   expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain(kind === 'answer' ? 'This source request already has an answer' : 'Dependency changed')
+  alternating = true; time += 31_000; vi.setSystemTime(time)
+  expect((await loadedSnapshot(f.sources)).ready).toEqual([])
+  expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(kind === 'answer')
   expect(f.posts).toHaveLength(1)
 }, 20_000)
 

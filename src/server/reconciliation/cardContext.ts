@@ -244,7 +244,10 @@ export class CardContextReader {
         if (cursor) cursors.add(cursor)
       } while (cursor)
     }
-    await visit(id, 0)
+    try { await visit(id, 0) } catch (error) {
+      if (!historySignal) throw error
+      return { outcome: 'partial', blocks, omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }
+    }
     return { outcome: partial ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: historySignal ? 'Complete paginated workflow history from top-level paragraphs and page comments. Nested specification content, code, files and embeds are not workflow publication surfaces.' : 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
   }
 }
