@@ -138,7 +138,7 @@ it('prepare now dispatches one audited job while automatic replenishment is off'
   expect(JSON.stringify(events)).not.toContain('isolated-prep-sender')
 })
 
-it('records webhook failures without the sender key and never dispatches the same revision again', async () => {
+it('retries webhook failures automatically and manually without exposing the sender key', async () => {
   const { prep, posts, fixture, rows, turnOn } = await harness({ status: 500 })
   rows[1]!.card_status = 'Todo'
   await turnOn()
@@ -146,13 +146,13 @@ it('records webhook failures without the sender key and never dispatches the sam
   await prep.replenish()
   await prep.replenish()
   await prep.replenish()
-  expect(posts).toHaveLength(1)
+  expect(posts).toHaveLength(4)
   expect((await prep.status()).explanation).toContain('HTTP 500')
   expect(JSON.stringify(await prep.status())).not.toContain('isolated-prep-sender')
   const manual = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Retry this decision explicitly' })
-  expect(manual.outcome).toBe('already-attempted')
-  expect(posts).toHaveLength(1)
-  expect((await prep.status()).jobs).toHaveLength(1)
+  expect(manual.outcome).toBe('failed')
+  expect(posts).toHaveLength(5)
+  expect((await prep.status()).jobs).toHaveLength(5)
 })
 
 it('publishes a valid packet to Ready and keeps an invalid packet out of Ready without claiming or answering', async () => {
@@ -232,7 +232,6 @@ it('corrects a rejected packet and accepts late publication on its original job 
   const invalid = structuredClone(fixture.packet)
   invalid.question = 'Different source question?'
   await prep.publish({ job_id: first.job_id, operation_id: 'rejected-first', packet: invalid })
-  expect(await prep.prepareNow('Will', request)).toMatchObject({ outcome: 'already-attempted', job_id: first.job_id })
   now += 11 * 60_000
   await prep.replenish()
   expect((await prep.status()).jobs[0]).toMatchObject({ state: 'failed' })
@@ -285,7 +284,7 @@ it('does not dispatch an unchanged successful packet again just because its atte
   await turnOn(20, 4)
   await prep.replenish()
   expect(posts).toHaveLength(1)
-  expect((await prep.status()).refill_pass).toMatchObject({ outcome: 'no-admissible-work', rejections: [{ outcome: 'already-attempted', count: 1 }] })
+  expect((await prep.status()).refill_pass).toMatchObject({ outcome: 'no-admissible-work', rejections: [{ outcome: 'already-prepared', count: 1 }] })
   await packets.validate(stored.packet_id, fixture.evidence, 'source-refresh')
   expect(await packets.read(stored.packet_id, fixture.evidence)).toMatchObject({ ready: true })
 })
@@ -345,26 +344,31 @@ it('recovers a legacy published job mislabeled failed from its actual successful
   expect((await restarted.status()).jobs[0]).toMatchObject({ state: 'published', published_at: publishedAt, readiness: { ready: false } })
 })
 
-it.each(['failed', 'blocked', 'published'] as const)('never admits another job for a %s revision, including after expiry and restart', async state => {
-  const { prep, packets, fixture, rows, posts } = await harness()
-  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Permanent exact revision identity' }
+it.each(['failed', 'blocked', 'published', 'withdrawn', 'imported-withdrawn'] as const)('retries only unsuccessful or withdrawn %s research after restart', async state => {
+  const { prep, packets, fixture, rows, leases } = await harness()
+  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Retry eligibility' }
   const first = await prep.prepareNow('Will', request)
   if (state !== 'failed') {
     const packet = structuredClone(fixture.packet)
     if (state === 'blocked') packet.question = 'Incorrect source question'
-    await prep.publish({ job_id: first.job_id, operation_id: 'original-result', packet })
+    const published = await prep.publish({ job_id: first.job_id, operation_id: 'original-result', packet })
+    if (state.includes('withdrawn')) await leases.writeStorage(db => {
+      db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(published.packet_id, 'research-requested', 'Will', new Date(now).toISOString(), '{}')
+      if (state === 'imported-withdrawn') db.prepare('DELETE FROM decision_prep_jobs').run()
+    })
   }
   now += 2 * 3600_000
+  let dispatches = 0
   const restarted = new DecisionPreparation(packets, 'board', { candidates: () => rows.slice(0, 1), coverage: () => 'complete' }, () => fixture.evidence,
-    async () => JSON.stringify({ url: 'http://127.0.0.1/unused', key: 'test' }), () => now, async () => { throw new Error('Unchanged revision must not dispatch') })
-  await restarted.replenish()
+    async () => JSON.stringify({ url: 'http://127.0.0.1/unused', key: 'test' }), () => now, async () => { dispatches++; return new Response('', { status: 202 }) })
   const result = await restarted.prepareNow('Will', request)
-  expect(result).toMatchObject({ outcome: 'already-attempted', job_id: first.job_id })
-  expect((await restarted.status()).jobs).toHaveLength(1)
-  expect(posts).toHaveLength(1)
-  rows[0]!.source_revision = 'new-source-revision'
-  expect(await restarted.prepareNow('Will', request)).toMatchObject({ outcome: 'failed' })
-  expect((await restarted.status()).jobs).toHaveLength(2)
+  expect(result.outcome).toBe(state === 'published' ? 'already-prepared' : 'dispatched')
+  expect(dispatches).toBe(state === 'published' ? 0 : 1)
+  if (state !== 'published') {
+    expect(result.job_id).not.toBe(first.job_id)
+    expect(await restarted.prepareNow('Will', request)).toMatchObject({ outcome: 'already-preparing', job_id: result.job_id })
+    expect(dispatches).toBe(1)
+  }
 })
 
 it('suppresses an in-flight job when its source is answered without reporting a bot failure', async () => {

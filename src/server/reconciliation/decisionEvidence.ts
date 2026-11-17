@@ -17,28 +17,6 @@ const ownerAnswerNote = (note: CardContextRead['blocks'][number]) => {
   return !!ownerReceipt || note.type === 'comment' && (note.author === 'owner-chatgpt' || note.authorName === 'owner-chatgpt')
 }
 
-/** A newly published, meaningfully different request with a strictly later
- * source timestamp is a new revision of the same ID. Ambiguous duplicates stay
- * visible to the existing binding validator instead of silently picking one. */
-function preparationRequestHistory(notes: CardContextRead['blocks']) {
-  const publications = notes.flatMap(note => decisionRecordRows([note], 'Tin Star request: ').flatMap(row =>
-    decisionRecordRows([note], 'Tin Star answer data: ').some(answer => answer.binding) ? [] : [{ note, row }]))
-  const superseded = new Set<string>(), revisedAt = new Map<string, number>()
-  for (const id of new Set(publications.map(entry => entry.row.id))) {
-    const versions = publications.filter(entry => entry.row.id === id).sort((a, b) => noteTime(b.note) - noteTime(a.note))
-    if (versions.length < 2 || versions.some(entry => !Number.isFinite(noteTime(entry.note)))) continue
-    const latest = versions[0]!
-    const meaning = (entry: typeof latest) => decisionMeaning([entry.row.id, entry.row.action, entry.row.preserve_action,
-      Array.isArray(entry.row.options) ? entry.row.options.slice().sort((a: { id?: string } | null, b: { id?: string } | null) => String(a?.id).localeCompare(String(b?.id))) : entry.row.options, entry.row.source_request, entry.row.source_question, entry.row.source_spawn_gen,
-      entry.row.proposal ? { ...entry.row.proposal, published_at: undefined } : null, entry.note.text.split('\n').filter(line => line.startsWith('Question: ') || line.startsWith('Requested from: '))])
-    if (versions.slice(1).some(entry => noteTime(entry.note) >= noteTime(latest.note) || meaning(entry) === meaning(latest))) continue
-    for (const entry of versions.slice(1)) superseded.add(entry.note.id)
-    revisedAt.set(id, noteTime(latest.note))
-  }
-  return notes.filter(note => !superseded.has(note.id) && !decisionRecordRows([note], 'Tin Star answer: ').some(id =>
-    Number.isFinite(noteTime(note)) && revisedAt.has(id) && noteTime(note) <= revisedAt.get(id)!))
-}
-
 function preparedRequestRows(notes: CardContextRead['blocks']) {
   return decisionRequests(notes).map(row => {
     const sourceNote = notes.find(note => note.id === row.sourceId)
@@ -52,7 +30,7 @@ function preparedRequestRows(notes: CardContextRead['blocks']) {
 /** Request counts share the exact owner-answer projection without building the
  * whole queue for each card on the display path. */
 export function preparedDecisionRequests(notes: CardContextRead['blocks']) {
-  return preparedRequestRows(preparationRequestHistory(notes))
+  return preparedRequestRows(notes)
 }
 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
@@ -67,7 +45,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && Date.parse(history!.expires_at) > now
   if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
-  const notes = preparationRequestHistory(history?.context.blocks ?? [])
+  const notes = history?.context.blocks ?? []
   const rows = preparedRequestRows(notes)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
   let currentRequests: string[] = []

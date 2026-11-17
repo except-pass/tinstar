@@ -687,12 +687,6 @@ export class WorkflowOperations {
       for (const name of Object.keys(sections)) sectionOriginal[name] = blocks.find(block => block.text.split('\n')[0] === sectionMarker(name))?.text ?? ''
     }
     const original = { ...input.expected, ...Object.fromEntries([...reads].map(name => [name, card.properties[name]?.value ?? null])) }
-    const changes = Object.fromEntries(Object.entries(desired).filter(([name, value]) => !this.matches(card, name, value))
-      .map(([name, after]) => [name, { before: card.properties[name]?.value ?? null, after }]))
-    const receiptData = `Tin Star changed properties: ${JSON.stringify(changes)}`
-    const lines = note.split('\n'), operationLine = lines.findIndex(line => line === `Operation: ${input.kind}`)
-    lines.splice(operationLine >= 0 ? operationLine + 1 : lines.findIndex(line => line === `By: ${actor}`) + 1, 0, receiptData)
-    note = lines.join('\n')
     return { desired, properties, original, sections, sectionOriginal, note, heldWait }
   }
   private matches(card: WorkCard, name: string, value: unknown) {

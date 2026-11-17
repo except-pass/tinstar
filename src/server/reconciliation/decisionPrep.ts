@@ -168,7 +168,6 @@ export class DecisionPreparation {
     return null
   }
 
-  /** Admit at most one job for this revision. Network I/O stays outside this transaction. */
   private admit(db: DatabaseSync, candidate: PrepCandidate, mode: 'automatic' | 'prepare-now', actor: string, reason: string): PrepareResult & { job?: Row } {
     this.expire(db)
     const blocked = this.refusal(candidate)
@@ -177,16 +176,14 @@ export class DecisionPreparation {
     if (this.readyRevision(db, candidate)) return { outcome: 'already-ready', explanation: 'This decision revision is already ready for review.' }
     const prior = db.prepare(`SELECT * FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?
       ORDER BY created_at DESC, attempt DESC, id DESC LIMIT 1`).get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as Row | undefined
-    if (prior) return { outcome: ['admitted', 'dispatched'].includes(prior.state) ? 'already-preparing' : 'already-attempted',
-      explanation: ['admitted', 'dispatched'].includes(prior.state) ? 'This decision revision is already being prepared.'
-        : `This exact source revision already has a ${prior.state} job. ${prior.reason} Correct or publish its packet using the existing job ID; a new job requires a new source revision.`,
-      job_id: prior.id, state: prior.state }
-    // Imported/direct packets need evidence renewal too, never another research job.
+    if (prior && ['admitted', 'dispatched'].includes(prior.state)) return { outcome: 'already-preparing',
+      explanation: 'This decision revision is already being prepared.', job_id: prior.id, state: prior.state }
     const stored = db.prepare(`SELECT p.id FROM decision_packets p
       WHERE json_extract(body,'$.binding.card_id') = ? AND json_extract(body,'$.binding.request_id') = ?
       AND json_extract(body,'$.binding.source_revision') = ?
       AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
-      AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) LIMIT 1`)
+      AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1)
+      AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type = 'research-requested') LIMIT 1`)
       .get(candidate.card_id, candidate.request_id, candidate.source_revision)
     if (stored) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
     const policy = this.packets.policyInStorage(db, this.scope)
@@ -195,7 +192,7 @@ export class DecisionPreparation {
     if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
     const id = randomUUID(), at = new Date(this.now()).toISOString()
     const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
-      state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
+      state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: (prior?.attempt ?? 0) + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
     db.prepare('INSERT INTO decision_prep_jobs (id,scope,card_id,request_id,source_revision,card_url,state,reason,actor,mode,operation_id,attempt,created_at,updated_at,dispatched_at,packet_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, candidate.card_url, 'admitted', job.reason, actor, mode, `prep-${id}`, job.attempt, at, at, null, null)
     db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(null, mode === 'prepare-now' ? 'prepare-now' : 'prep-admit', actor, at, JSON.stringify({ job_id: id, card_id: candidate.card_id, request_id: candidate.request_id, reason }))
     return { outcome: 'admitted', explanation: job.reason, job_id: id, state: 'admitted', job }
@@ -451,8 +448,6 @@ export class DecisionPreparation {
         const current = this.packets.readInStorage(db, job.packet_id, evidence)
         return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
       }
-      // A late callback can complete its original job, including an expired or
-      // rejected dispatch. Permanent revision deduplication never needs a new job.
       if (!['admitted', 'dispatched', 'blocked', 'failed'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
       const stored = this.packets.publishInStorage(db, parsed.packet, evidence, preparerName, parsed.operation_id)
       const current = this.packets.readInStorage(db, stored.id, evidence)

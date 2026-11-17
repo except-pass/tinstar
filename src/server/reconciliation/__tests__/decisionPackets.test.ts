@@ -344,7 +344,7 @@ it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-ed
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(false)
 })
 
-it('allows the same request ID only after a newer meaningful request publication, keeping its old packet invalid', () => {
+it('rejects duplicate request IDs even with a newer meaningful publication', () => {
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   f.history.context.blocks.push({ id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
@@ -353,9 +353,7 @@ it('allows the same request ID only after a newer meaningful request publication
   f.history.context.blocks.push({ ...request, id: 'new-request-revision', createdAt: new Date(now - 5_000).toISOString(),
     text: request.text.replace(f.packet.question, 'Authorize the revised preview scope?') })
   const revised = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
-  expect(revised.requests).toHaveLength(1)
-  expect(revised.requests[0]).toMatchObject({ answered: false, reasons: [], question: 'Authorize the revised preview scope?' })
-  expect(revised.requests[0]!.binding!.request_id).toBe(f.packet.binding.request_id)
-  expect(revised.requests[0]!.binding!.source_revision).not.toBe(f.packet.binding.source_revision)
+  expect(revised.reasons).toContain('Decision publication history is contradictory or incomplete')
+  expect(revised.requests.every(request => request.reasons.length > 0)).toBe(true)
   expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
 })

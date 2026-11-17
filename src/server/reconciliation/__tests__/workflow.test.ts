@@ -3251,16 +3251,6 @@ describe('explicit worker close-out and release waits', () => {
   })
 })
 
-it('writes structured changed-property evidence in future owner workflow receipts', async () => {
-  const f = fixture()
-  expect(await f.workflow.update({ card_id: id, operation_id: 'owner-structural-edit', kind: 'edit', properties: { Name: 'Updated title' } }, 'owner-chatgpt')).toMatchObject({ outcome: 'saved' })
-  const note: string = f.comments.map(note => note.rich_text.map((text: { plain_text?: string; text?: { content: string } }) => text.plain_text ?? text.text?.content ?? '').join(''))
-    .find(text => text.includes('owner-structural-edit'))!
-  const changes = JSON.parse(note.split('\n').find(line => line.startsWith('Tin Star changed properties: '))!.slice('Tin Star changed properties: '.length))
-  expect(changes).toMatchObject({ Name: { before: 'Fixture start', after: 'Updated title' } })
-  expect(workflowReceipt({ text: note })).toBe('Tin Star operation: ["owner-chatgpt","owner-structural-edit"]')
-})
-
 it('answers the two paginated native CI request shapes with a valid option plus verbatim wording and without an option', async () => {
   const f = fixture(), cardId = '41a50ce6d42281998e2ee26fa2364c54'
   const wait = { type: 'Actor' as const, id: 'Will', dependency: 'Run the separately approved farm controller session command', unblocks_when: 'Controller session completed', follow_up_by: 'Firstmate', next_check_in: new Date(Date.now() + 3600_000).toISOString() }

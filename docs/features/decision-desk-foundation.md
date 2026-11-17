@@ -459,9 +459,9 @@ admission and Prepare now require in-flight jobs below the preparer cap, fresh
 eligible source evidence, an unanswered request, no review lease or source-write
 reservation, a card outside Todo, and no job in flight or Ready packet for that
 source revision. Prepare now bypasses the target depth. Each exact request/revision
-gets at most one job, permanently, including failed, blocked, completed and expired
-attempts. Automatic passes and Prepare now return that existing job instead of
-dispatching it again. A new job requires a new source request revision. There is no token limit or spend record.
+has at most one active job. Failed or rejected attempts and explicitly withdrawn
+packets can be prepared again. Successful unchanged research is revalidated
+without dispatching it again. There is no token limit or spend record.
 
 `publish_prepared_packet` stores the packet through the P1 store. The packet is
 Ready only when that validation passes. The tool does not answer, claim a lease,
@@ -599,14 +599,6 @@ from prose. Receipt identity comes from the terminal `Tin Star operation` tuple;
 plain comment identity comes from source author metadata. Unknown ordering blocks
 verification rather than asserting an answer. Canonical `Tin Star answer` records
 continue to count as answers.
-
-A newly published request with the same ID, a strictly later source timestamp and
-changed question/options/binding is a new revision and can be prepared again.
-Ambiguous duplicates and missing revision timestamps remain subject to existing
-binding protections; cosmetic option ordering alone is not a new revision. The
-old packet cannot become Ready for the revised request. Future workflow receipts
-also include `Tin Star changed properties` with the actual before/after values,
-so the broad owner rule can later be narrowed without inferring old edits.
 
 Decision history reads all pages of page comments and top-level paragraphs
 (the legacy workflow record surface). Specification code, embeds, and nested
