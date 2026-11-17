@@ -4,6 +4,7 @@ import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
 import type { JiraAdapter } from './jira'
 import { workReadback } from './workReadback'
+import { checkInReplyRequestId } from './checkInWatchdog'
 import type { CachedDecisionHistory } from './decisionEvidence'
 
 export const decisionHistoryDeadlineMs = 120_000
@@ -138,7 +139,7 @@ export class CardContextReader {
   checkInRequestIds?: (cardId: string) => Promise<Set<string>>
   async markWatchdogReplies(id: string, blocks: CardContextRead['blocks']) {
     const replies = blocks.flatMap(block => {
-      const requestId = block.type === 'comment' && /^Check-in request: ([^\r\n]+)(?:\r?\n|$)/.exec(block.text)?.[1]
+      const requestId = block.type === 'comment' && checkInReplyRequestId(block.text)
       return requestId ? [{ block, requestId }] : []
     })
     if (!replies.length || !this.checkInRequestIds) return

@@ -146,6 +146,7 @@ it('admits a jobless fallback only when it is newer than the substantive discuss
     { id: 'owner-correction', text: 'The preview now writes production data.', created_time: '2026-11-17T00:00:00Z' },
   ])
   expect((await loaded(sources)).ready).toEqual([])
+  expect(await sources.decisionPackets.ids()).toEqual([])
   setComments([
     { id: 'fresh-packet', text: packet, created_time: '2026-11-17T00:10:00Z' },
     { id: 'owner-correction', text: 'The preview now writes production data.', created_time: '2026-11-17T00:00:00Z' },

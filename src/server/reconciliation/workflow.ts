@@ -13,7 +13,7 @@ import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from
 import { openDecisionCount } from './decisionEvidence'
 import { checkInReport } from './checkInWatchdog'
 import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSchema, type SubmitHandoffInput, type UpdateWorkInput, type CreateWorkInput, type StartWorkInput, type StartWorkResult } from '../../shared/workflow'
-import { canonicalWorkId, independentWaitIssue, retainedWaitText, typedWaitEntry, waitEntries, waitLine, hasActiveTypedWait, waitingForIssues, waitState, workIdShape } from '../../shared/waitingForPolicy'
+import { canonicalWorkId, independentWaitIssue, retainedWaitText, typedWaitEntry, waitEntries, waitLine, hasActiveWait, waitingForIssues, waitState, workIdShape } from '../../shared/waitingForPolicy'
 import { ContractError, ImplementationContracts } from './implementationContract'
 import { HandoffOperations } from './workflowHandoff'
 import { codexTurn } from '../../shared/codexActivity'
@@ -33,7 +33,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, source?: Extract<UpdateWorkInput, { kind: 'answer_decision' }>['source_request']) => ({
   request_id: input.request_id, answer: input.answer, option_id: input.option_id, next: input.next,
-  resolve_wait: input.resolve_wait, legacy_action: input.legacy_action,
+  resolve_wait: input.resolve_wait?.trim(), legacy_action: input.legacy_action,
   source: input.source_request || source ? requestKey(input.source_request ?? source!) : null,
 })
 
@@ -98,7 +98,7 @@ export class WorkflowOperations {
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
     }
     const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait?.trim() !== input.resolve_wait?.trim() || row.legacy_action !== input.legacy_action)
     const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
     let desired: Record<string, unknown> | undefined
     if (!conflict && !answers.length && own) {
@@ -465,7 +465,7 @@ export class WorkflowOperations {
     if (!['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in'].some(name => name in desired)) return
     const value = (name: string) => name in desired ? desired[name] : card.properties[name]?.value
     const status = String(value('Status') ?? '')
-    if ((card.properties.Status?.value === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })) && status !== 'Waiting For') {
+    if (hasActiveWait(waitState(card)) && status !== 'Waiting For') {
       const current = waitState(card)
       const entries = waitEntries(current.waitingFor, current).map(entry => entry.text)
       if (!resolve || entries.filter(line => line === resolve).length !== 1 || entries.some(line => line !== resolve) || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
@@ -561,7 +561,7 @@ export class WorkflowOperations {
       }
       note += `\n${line}`
     }
-    const wasWaiting = () => String(card.properties.Status?.value ?? '') === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })
+    const wasWaiting = () => hasActiveWait(waitState(card))
     const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
       const entries = currentWaits()
       if (!wasWaiting()) {
@@ -697,6 +697,7 @@ export class WorkflowOperations {
         } else transition(input.next.owner, input.next.status)
         if (input.next.status === 'Waiting For' && !heldWait) {
           if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
+          if (!soleRequest) set('Waiting For', '')
           await wait(input.next.wait)
         }
         if (!heldWait) resolveWait(input.resolve_wait, input.next.status)
@@ -816,7 +817,7 @@ export class WorkflowOperations {
           const proposal = eligibleRequests.find(row => row.id === input.request_id)
           const intent = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.input?.request_id === input.request_id && row.input?.answer === data?.answer)
           if (input.source_request && requestKey(proposal.source_request) !== requestKey(input.source_request)) throw new WorkflowError('decision-conflict', 'This proposal is already bound to a different First Mate request')
-          if (!data || data.answer !== input.answer || !same(data.next, input.next) || data.resolve_wait !== input.resolve_wait || data.option_id !== input.option_id || (data.legacy_action ?? intent?.input?.legacy_action) !== input.legacy_action) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
+          if (!data || data.answer !== input.answer || !same(data.next, input.next) || data.resolve_wait?.trim() !== input.resolve_wait?.trim() || data.option_id !== input.option_id || (data.legacy_action ?? intent?.input?.legacy_action) !== input.legacy_action) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
           return { ...result('saved', 'already-saved', 'This exact proposal answer is already recorded; no comment or property changes replayed'), saved_fields: ['note'] }
         }
       }
@@ -836,7 +837,7 @@ export class WorkflowOperations {
         notePending = repair.note
       } else {
         if (!pending && input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh and re-issue with a new operation_id', true)
-        if (pending && JSON.stringify(pending.input) !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
+        if (pending && JSON.stringify({ ...pending.input, resolve_wait: pending.input.resolve_wait?.trim() }) !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
         const planningCard = pending ? { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([name, property]) => [name,
           name in pending.original ? { ...property, value: pending.original[name] } : property])) } : card
         // Rebuild policy from validated input; a human-editable note never

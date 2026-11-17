@@ -99,22 +99,34 @@ export async function checkInSettings(root = getConfigRoot()): Promise<Settings>
 
 const labels = ['Check-in request', 'Date', 'By', 'Progress', 'Evidence', 'Blocker/owner', 'Next action', 'Next check-in'] as const
 type Report = Record<typeof labels[number], string>
-/** A small labeled checkpoint is both readable on Notion and verifiable without
- * a model. The request correlation prevents unrelated edits from closing it. */
-function readReport(body: string, requestId: string): { report?: Report; issue?: string } {
+function labeledFields(body: string) {
   const fields: Partial<Report> = {}
+  const requestIds: string[] = []
   let issue: string | undefined
-  let correlated = false
   for (const line of body.split(/\r?\n/)) {
     const colon = line.indexOf(':')
     const label = line.slice(0, colon).trim() as typeof labels[number]
     if (colon < 0 || !labels.includes(label)) continue
     const value = line.slice(colon + 1).trim()
-    if (label === 'Check-in request' && value === requestId) correlated = true
+    if (label === 'Check-in request') requestIds.push(value)
     if (fields[label] !== undefined) issue ??= `${label}: duplicate field`
     fields[label] = value
   }
-  if (!correlated) return {}
+  return { fields, requestIds, issue }
+}
+
+export function checkInReplyRequestId(body: string) {
+  const { requestIds } = labeledFields(body)
+  return requestIds.length === 1 ? requestIds[0] : undefined
+}
+
+/** A small labeled checkpoint is both readable on Notion and verifiable without
+ * a model. The request correlation prevents unrelated edits from closing it. */
+function readReport(body: string, requestId: string): { report?: Report; issue?: string } {
+  const parsed = labeledFields(body)
+  const { fields } = parsed
+  let { issue } = parsed
+  if (!parsed.requestIds.includes(requestId)) return {}
   for (const label of labels) {
     if (!fields[label] || /^<.*>$/.test(fields[label]!)) issue ??= `${label}: missing value or placeholder`
   }
@@ -368,7 +380,7 @@ export class CheckInWatchdog {
     })
   }
   async requestIds(cardId: string) {
-    return new Set((await this.rows()).filter(row => row.cardId === cardId).map(row => row.request.requestId))
+    return new Set((await this.rows()).filter(row => row.cardId === cardId && row.state !== 'resolved' && row.state !== 'superseded').map(row => row.request.requestId))
   }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }
   ingest(input: BridgeUpdate) {
