@@ -21,8 +21,6 @@ function githubTarget(value: string) {
   } catch { return null }
 }
 function eventTarget(id: string, cards: SceneCard[]) {
-  const direct = githubTarget(id)
-  if (direct) return direct
   const candidates = cards.flatMap(card => [...propertyText(card, 'Waiting For').matchAll(/https:\/\/github\.com\/[^\s<>"()]+/g)].flatMap(match => {
     const parsed = githubTarget(match[0].replace(/[.,;]+$/, ''))
     return parsed && normalize(id).includes(parsed.repo.toLowerCase()) && new RegExp(`(?:#|\\b)${parsed.number}\\b`).test(id) ? [parsed] : []
@@ -99,8 +97,11 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
     }
   }
   for (const group of groups.values()) if (group.type === 'Event') {
-    const link = eventTarget(group.id, group.cards)
-    if (link) { group.target = { kind: 'url', url: link.url }; if (githubTarget(group.id)) group.label = link.label }
+    const exact = githubTarget(group.id)
+    const primaryOnly = group.cards.every(card => propertyText(card, 'Waiting For Type').trim() === 'Event' &&
+      normalize(propertyText(card, 'Waiting For ID')) === normalize(group.id))
+    const link = exact ?? (primaryOnly ? eventTarget(group.id, group.cards) : null)
+    if (link) { group.target = { kind: 'url', url: link.url }; if (exact) group.label = link.label }
   }
   const categories = waitingForTypes.map(type => ({ type, groups: [...groups.values()].filter(group => group.type === type).sort((a, b) =>
     (type === 'Actor' ? Number(normalize(b.id) === 'will') - Number(normalize(a.id) === 'will') : 0) || b.cards.length - a.cards.length || a.label.localeCompare(b.label) || a.key.localeCompare(b.key)) }))

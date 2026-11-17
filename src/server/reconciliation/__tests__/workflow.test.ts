@@ -2718,13 +2718,14 @@ describe('Waiting For status semantics', () => {
     f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: original.id }]
     f.raw.properties['Next check-in'].date = { start: checkIn() }
     const resolve_wait = waitLine(replacement)
+    const incomplete = waitLine({ ...replacement, follow_up_by: '' })
     f.raw.properties['Waiting For'].rich_text = [{ plain_text: [
-      waitLine(successor), text, kind === 'wait' ? replacement.dependency : resolve_wait,
+      waitLine(successor), text, kind === 'wait' ? incomplete : resolve_wait,
     ].join('\n') }]
     if (kind === 'wait') {
       const card = await f.reader.card(id, true)
       const expected = Object.fromEntries(['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID'].map(name => [name, card.properties[name]?.value ?? null]))
-      const repair_waits = [{ current: replacement.dependency, replacement }]
+      const repair_waits = [{ current: incomplete, replacement }]
       expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits }), 'Consumer')).toMatchObject({ outcome: 'saved' })
       const repaired = await f.reader.card(id, true)
       expect(repaired.properties['Waiting For ID']?.value).toBe(replacement.id)
@@ -2806,11 +2807,14 @@ describe('Waiting For status semantics', () => {
   })
 
   it.each([
+    ['Actor', 'Actor', 'Alice', 'Bob', 'free-form'],
+    ['Event', 'Event', 'Scheduled review', 'A different review', 'inline'],
+    ['Work', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'multiline'],
     ['Person', 'Actor', 'Alice', 'Bob', 'inline'],
     ['Person', 'Actor', 'Alice', 'Bob', 'free-form'],
     ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'multiline'],
     ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32), 'free-form'],
-  ] as const)('repairs legacy %s as %s from %s without changing the blocker (%s, %s)', async (legacy, type, originalId, changedId, format) => {
+  ] as const)('repairs %s as %s from %s without changing the blocker (%s, %s)', async (recordedType, type, originalId, changedId, format) => {
     const f = readyFixture()
     const savedId = originalId.replaceAll('-', '')
     if (type === 'Work') {
@@ -2822,17 +2826,18 @@ describe('Waiting For status semantics', () => {
     }
     const wait = actor({ type, id: savedId })
     const current = format === 'free-form' ? wait.dependency : format === 'inline'
-      ? waitLine({ ...wait, type: legacy, id: originalId })
-      : `Dependency: ${wait.dependency}\nUnblocks when: ${wait.unblocks_when}\nFollow-up by: ${wait.follow_up_by}`
+      ? waitLine({ ...wait, type: recordedType, id: originalId, follow_up_by: type === recordedType ? '' : wait.follow_up_by })
+      : `Dependency: ${wait.dependency}\nUnblocks when: ${wait.unblocks_when}`
     f.raw.properties.Status.status.name = 'Waiting For'
-    f.raw.properties['Waiting For Type'].select = { name: legacy }
+    f.raw.properties['Waiting For Type'].select = { name: recordedType }
     f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: originalId }]
     f.raw.properties['Waiting For'].rich_text = [{ plain_text: current }]
-    const expected = { Status: 'Waiting For', 'Waiting For Type': legacy, 'Waiting For ID': originalId, 'Waiting For': current }
+    const expected = { Status: 'Waiting For', 'Waiting For Type': recordedType, 'Waiting For ID': originalId, 'Waiting For': current }
     const before = patches(f)
-    const changed = { ...wait, id: changedId }
-    expect(await f.workflow.update(op('wait', { ...changed, expected, repair_waits: [{ current, replacement: changed }] }), 'Consumer'))
-      .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining(savedId) })
+    for (const replacement of [{ ...wait, id: changedId }, { ...wait, type: type === 'Actor' ? 'Event' : 'Actor' }]) {
+      expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits: [{ current, replacement }] }), 'Consumer'))
+        .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining(savedId) })
+    }
     expect(patches(f)).toBe(before)
     expect(await f.workflow.update(op('wait', { ...wait, expected, repair_waits: [{ current, replacement: wait }], operation_id: 'repair-same-blocker' }), 'Consumer'))
       .toMatchObject({ outcome: 'saved' })

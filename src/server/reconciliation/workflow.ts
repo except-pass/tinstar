@@ -519,14 +519,16 @@ export class WorkflowOperations {
         if (!entry || typedWaitEntry(entry) || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
           throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one incomplete or legacy wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
         }
-        const legacyType = entry.fields.type?.trim()
-        const legacyId = entry.fields.id?.trim()
-        if (legacyType === 'Person' && legacyId && (value.type !== 'Actor' || id !== legacyId)) {
-          throw new WorkflowError('wait-repair-identity', `Repair legacy Person as Actor with the same ID ${JSON.stringify(legacyId)}. Nothing was written.`)
-        }
-        const legacyWorkId = legacyType === 'Card' && legacyId ? canonicalWorkId(legacyId) : null
-        if (legacyWorkId && (value.type !== 'Work' || id !== legacyWorkId)) {
-          throw new WorkflowError('wait-repair-identity', `Repair legacy Card as Work with the same exact card ID ${JSON.stringify(legacyWorkId)}. Nothing was written.`)
+        const recordedType = entry.fields.type?.trim()
+        const recordedId = entry.fields.id?.trim()
+        const workId = recordedId && (recordedType === 'Work' || recordedType === 'Card' || (!recordedType && value.type === 'Work'))
+          ? canonicalWorkId(recordedId) : null
+        const requiredType = recordedType === 'Person' && recordedId ? 'Actor'
+          : recordedType === 'Card' && workId ? 'Work' : recordedType
+        const requiredId = workId ?? recordedId
+        if ((requiredType && value.type !== requiredType) || (requiredId && id !== requiredId)) {
+          const identity = [requiredType && `Type ${JSON.stringify(requiredType)}`, requiredId && `ID ${JSON.stringify(requiredId)}`].filter(Boolean).join(' and ')
+          throw new WorkflowError('wait-repair-identity', `Repair must preserve the recorded blocker using ${identity}. Use an explicit wait update to set a different blocker. Nothing was written.`)
         }
         editedWaits = entries.map(item => item === entry ? added : item)
         set('Waiting For Type', value.type); set('Waiting For ID', id)

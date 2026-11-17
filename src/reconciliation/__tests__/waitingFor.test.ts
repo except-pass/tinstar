@@ -52,6 +52,17 @@ describe('Waiting For projection', () => {
     expect(result.find(group => group.id === 'repo PR #124 merged')?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/124' })
     expect(result.find(group => group.id.includes('evil'))?.target).toBeUndefined()
   })
+  it('links appended Events only when their own ID is an exact GitHub URL', () => {
+    const fields = { unblocks_when: 'Review closes', follow_up_by: 'Consumer' }
+    const actor = card(1, 'Actor', 'Will', { 'Waiting For': [
+      waitLine({ ...fields, type: 'Actor', id: 'Will', dependency: 'Review https://github.com/other/repo/pull/124 before replying' }),
+      waitLine({ ...fields, type: 'Event', id: 'repo PR #124 merged', dependency: 'Merge prerequisite' }),
+      waitLine({ ...fields, type: 'Event', id: 'https://github.com/acme/repo/pull/125', dependency: 'Merge prerequisite' }),
+    ].join('\n') })
+    const events = flat(waitingForGroups([actor])).filter(group => group.type === 'Event')
+    expect(events.find(group => group.id === 'repo PR #124 merged')?.target).toBeUndefined()
+    expect(events.find(group => group.id.endsWith('/125'))?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/125' })
+  })
   it('projects primary and appended Work destinations without duplicating waiting cards', () => {
     const loaded = card(3, 'Actor', 'Will', { Name: 'Loaded blocker' })
     const offPage = { id: fixtureId(4), title: 'Off-page blocker', status: 'Queued' }
