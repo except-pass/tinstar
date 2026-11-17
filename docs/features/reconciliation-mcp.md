@@ -430,8 +430,9 @@ request in existing queue order, ready-now cards first, and includes its `readin
 operation-id replays also include these fields, using current queue evidence;
 when evidence for the card is unavailable, `readiness` is `unknown` and
 `readiness_reasons` explains the missing evidence. Check the card before acting
-when it is not certified ready. Automatic claims skip Done, archived or trashed
-cards, future Start Dates and cached known answered requests. Desk readiness and
+when it is not certified ready. Automatic claims skip
+[deferred cards](workflow.md#deferred-decision-cards), future Start Dates and
+cached known answered requests. Desk readiness and
 independent waits do not block a current strict Will property ask.
 New next-card and exact-card leases
 require exact structured fields: Owner `Will`, Status `Waiting For`, at least one

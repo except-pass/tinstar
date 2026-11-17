@@ -478,8 +478,9 @@ Automatic admission requires ready unleased packets plus in-flight jobs to be
 below the saved target depth and source coverage to be complete. Both automatic
 admission and Prepare now require in-flight jobs below the preparer cap, fresh
 eligible source evidence, an unanswered request, no review lease or workflow
-source-write reservation, a card outside Todo, and no job in flight or Ready packet for that
-source revision. Prepare now bypasses the target depth. Each exact request/revision
+source-write reservation, a [non-deferred card](workflow.md#deferred-decision-cards),
+and no job in flight or Ready packet for that source revision. Prepare now
+bypasses the target depth. Each exact request/revision
 has at most one active job. Failed or rejected attempts and explicitly withdrawn
 packets can be prepared again, as can packets whose material dependency revisions
 have changed even when the request revision is unchanged. Successful research

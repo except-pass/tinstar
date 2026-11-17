@@ -42,7 +42,8 @@ before the first `|`, while legacy entries use `X: ...`, `X - ...`, or `via main
 Follow-up owners and unblock conditions do not name the dependency. A prose mention alone never
 matches; `Firstmate` and `firstmate maintainer` are different actors. Main identity matching
 lives in `src/shared/waitingOnMain.ts`; candidate audience classification lives
-in `src/server/reconciliation/waitingOnMain.ts`. Archived, trashed and Done cards are excluded.
+in `src/server/reconciliation/waitingOnMain.ts`.
+[Deferred cards](workflow.md#deferred-decision-cards) are excluded.
 Card age is an at-least estimate until Tin Star observes the wait start.
 The initial estimate uses the card's last edit when the wait was first observed.
 Unrelated later edits do not reset that saved age; changed
