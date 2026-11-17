@@ -3,8 +3,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
-import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
+import { bindingMeaning, decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
+import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
 import type { CardContextRead } from './cardContext'
 
@@ -282,28 +282,39 @@ export class DecisionPreparation {
     const comments = newestCommentPackets(blocks, evidence)
     if (!comments.length) return
     await this.initialize()
-    await this.packets.leases.writeStorage(db => {
-      for (const comment of comments) {
-        const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
-        const previous = db.prepare('SELECT id FROM decision_packets WHERE publication_key = ?').get(JSON.stringify([commentPacketActor, operation])) as { id: string } | undefined
-        // A comment is imported once. Re-reading history may re-attest the same
-        // revision, but must never bind an old comment to a changed request.
-        if (previous) continue
-        const stored = this.packets.publishInStorage(db, comment.packet, evidence, commentPacketActor, operation)
-        db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: comment.packet.binding.request_id, source_revision: comment.packet.binding.source_revision, comment_id: comment.comment_id, job_id: comment.job_id }))
-        if (comment.job_id) {
-          const current = this.packets.readInStorage(db, stored.id, evidence)
-          db.prepare('UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?')
-            .run(current?.ready ? 'published' : 'blocked', current?.ready ? 'Packet imported from card comment and ready for review.' : current?.reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), stored.id, comment.job_id, this.scope, cardId, comment.packet.binding.request_id, comment.packet.binding.source_revision)
-        }
-      }
-    })
-    // Fresh, complete history can renew evidence for an unchanged comment, but
-    // cannot extend the immutable packet's review freshness or change its body.
-    for (const comment of comments) {
+    const imported = await this.packets.leases.writeStorage(db => comments.map(comment => {
       const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
-      const previous = this.packets.leases.readStorage(db => db.prepare('SELECT id FROM decision_packets WHERE publication_key = ?').get(JSON.stringify([commentPacketActor, operation]))) as { id: string } | undefined
-      if (previous) await this.packets.validate(previous.id, evidence, commentPacketActor)
+      const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
+      let packet = comment.packet, publication = operation
+      const prior = previous && this.packets.readInStorage(db, previous.id, evidence)
+      if (prior) {
+        // Correct only the two mapper defects in an existing current import.
+        // Retain its original binding/dependencies; an older comment must not
+        // replace newer preparation or borrow a changed source revision.
+        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return { id: prior.id, comment }
+        const questionChanged = prior.packet.question !== packet.question
+        const reversibilityMissing = prior.packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
+        const reversibilityRecovered = reversibilityMissing && !packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
+        if (!questionChanged && !reversibilityRecovered) return { id: prior.id, comment }
+        packet = { ...prior.packet, question: packet.question,
+          ...(questionChanged ? { background: packet.background } : {}),
+          ...(reversibilityRecovered ? { reversibility: packet.reversibility, material_unknowns: prior.packet.material_unknowns.filter(reason => !/^Missing required field: reversibility(?:\.|$)/.test(reason)) } : {}) }
+        publication = createHash('sha256').update(JSON.stringify([operation, 'mapping-correction', packetContentHash(packet)])).digest('hex')
+      }
+      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication)
+      if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: comment.job_id, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
+      return { id: stored.id, comment }
+    }))
+    // A restart or a later source refresh renews evidence even when publication
+    // was idempotent. Validation failures never become a permanent Ready bit.
+    for (const { id, comment } of imported) {
+      await this.packets.validate(id, evidence, commentPacketActor)
+      if (!comment.job_id) continue
+      await this.packets.leases.writeStorage(db => {
+        const current = this.packets.readInStorage(db, id, evidence)
+        db.prepare('UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND (packet_id IS NULL OR packet_id = ? OR state IN (\'failed\',\'blocked\'))')
+          .run(current?.ready ? 'published' : 'blocked', current?.ready ? 'Packet imported from card comment and ready for review.' : current?.reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), id, comment.job_id, this.scope, cardId, comment.packet.binding.request_id, comment.packet.binding.source_revision, id)
+      })
     }
   }
 

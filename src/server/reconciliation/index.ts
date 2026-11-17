@@ -3,6 +3,7 @@ import { matchesClaimFilters, currentWillRequests, oldestOpenRequestSince, type 
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
+import { decisionMeaning } from '../../shared/decisionPacket'
 import { DecisionPreparation, readClavisValue, type PrepCandidate } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { projectDecisionEvidence, projectPreparedSubmitEvidence } from './decisionEvidence'
@@ -185,7 +186,7 @@ export class ReconciliationSources {
   private importCommentPackets(cardId: string): Promise<void> {
     const history = this.context.cachedDecisionHistory(cardId)
     if (!history || history.context.outcome !== 'available' || history.context.commentsOutcome !== 'available' || Date.parse(history.expires_at) <= Date.now()) return Promise.resolve()
-    const observation = `${history.observed_at}:${history.expires_at}`
+    const observation = decisionMeaning([history.observed_at, history.expires_at, this.preparationEvidence(cardId)])
     const previous = this.commentImports.get(cardId)
     if (previous?.observation === observation) return previous.pending
     const pending = this.preparation.importComments(cardId, history.context.blocks).catch(error => { this.commentImports.delete(cardId); throw error })

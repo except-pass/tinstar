@@ -472,7 +472,10 @@ The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
 one current, unanswered request on that same card. Complete, fresh history is
 required. Labelled sections are mapped into a normal packet and run through the
-same schema and evidence validation; absent question/options use the request.
+same schema and evidence validation. The question always comes from the exact
+request record; the bot's question is advisory background. Options use the
+request's identities. Explicit undo/rollback wording supplies reversibility;
+missing evidence still blocks the named field.
 Missing substantive fields block readiness with the field name. Lettered
 recommendations resolve to the filed source options; they never create options.
 
@@ -487,8 +490,12 @@ answer it, change its status, or dispatch another job. The comment ID and card
 identify a single durable import, with the job ID recorded when supplied. A
 matching expired job may complete through this fallback. A newer comment
 supersedes the request's older packet. Re-reading a comment can renew source
-evidence, but never rebinds it to a changed request revision or extends its
-one-hour review freshness; a new comment supplies a replacement packet.
+evidence automatically after restart or source recovery, but never rebinds it
+to a changed request revision or extends its
+one-hour review freshness; a new comment supplies a replacement packet. Existing
+imports blocked by the former prose-question or undo-mapping defects receive
+one audited corrected version, retaining their original binding/dependencies.
+A correction cannot supersede newer preparation.
 
 The isolated sample proof is reproducible after `npm run build:all`:
 

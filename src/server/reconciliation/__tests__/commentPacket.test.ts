@@ -2,11 +2,12 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mapCommentPacket, commentPacketAuthorization, commentPacketSource } from '../commentPacket'
+import { mapCommentPacket, commentPacketAuthorization, commentPacketSource, commentPacketActor } from '../commentPacket'
 import { commentPacketHistoryFixture, sampleCommentPacket, sampleCommentQuestion, sampleCommentOptions } from '../../../../test-fixtures/reconciliation/commentPacketHistory'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { validateDecisionPacket } from '../../../shared/decisionPacket'
 import { CardLeases } from '../cardLeases'
+import { createHash } from 'node:crypto'
 import { DecisionPackets } from '../decisionPackets'
 import { DecisionPreparation } from '../decisionPrep'
 
@@ -17,7 +18,7 @@ afterEach(async () => {
 })
 async function setup(options: Parameters<typeof commentPacketHistoryFixture>[1] = {}) {
   const root = await mkdtemp(join(tmpdir(), 'comment-packet-')); roots.push(root)
-  return commentPacketHistoryFixture(root, options)
+  return { ...await commentPacketHistoryFixture(root, options), root }
 }
 async function loaded(sources: Awaited<ReturnType<typeof setup>>['sources']) {
   await sources.preparedReviews.snapshot()
@@ -72,11 +73,13 @@ it('does not import another card/request, an answered request, or a body paragra
   expect(mapCommentPacket(comment, evidence)).toBeNull()
 })
 
-it('validates the comment question and refuses an unresolvable recommendation', () => {
+it('uses the exact request question despite bot paraphrasing and refuses an unresolvable recommendation', () => {
   const { evidence } = mapperFixture()
   const text = sampleCommentPacket.replace(sampleCommentQuestion, 'An unrelated question?').replace('Recommendation: A.', 'Recommendation: Z.')
   const packet = mapCommentPacket({ id: 'bad-comment', type: 'comment', text }, evidence)!.packet
-  expect(validateDecisionPacket(packet, evidence, Date.now()).reasons).toEqual(expect.arrayContaining(['Packet question differs from the exact source question', 'Material evidence is unknown: Missing required field: recommended_option_id']))
+  expect(packet.question).toBe(sampleCommentQuestion)
+  expect(packet.background).toContain('An unrelated question?')
+  expect(validateDecisionPacket(packet, evidence, Date.now()).reasons).toEqual(['Material evidence is unknown: Missing required field: recommended_option_id'])
 })
 
 it('imports the stub Notion sample into a Ready Desk exactly once, without source writes or claims', async () => {
@@ -175,4 +178,66 @@ it('preserves explicit difficult reversibility rather than treating negation as 
   const { evidence } = mapperFixture()
   const text = sampleCommentPacket.replace(/^Reversibility:.*$/m, 'Reversibility: Not reversible once the archive is deleted.')
   expect(mapCommentPacket({ id: 'irreversible-comment', type: 'comment', text }, evidence)!.packet.reversibility.rating).toBe('Difficult')
+})
+
+it.each([
+  ['Undo', 'Revert the scoped change and restore the previous configuration.', 'Moderate'],
+  ['Rollback / undo', 'Can be rolled back before rollout.', 'Moderate'],
+  ['Reversibility / undo', 'Easy to undo by reverting the PR.', 'Easy'],
+  ['Undo', 'Cannot be undone after deletion.', 'Difficult'],
+])('maps explicit %s wording without requiring the literal word reversible', (label, prose, rating) => {
+  const { evidence } = mapperFixture()
+  const text = sampleCommentPacket.replace(/^Reversibility:.*$/m, `${label}: ${prose}`)
+  const packet = mapCommentPacket({ id: 'undo-comment', type: 'comment', text }, evidence)!.packet
+  expect(packet.reversibility.rating).toBe(rating)
+  expect(packet.reversibility.explanation).toBe(prose)
+  expect(packet.material_unknowns).toEqual([])
+})
+
+it('keeps missing undo evidence blocked with the exact field', () => {
+  const { evidence } = mapperFixture()
+  const text = sampleCommentPacket.replace(/^Reversibility:.*$/m, 'Reversibility: The team has not assessed this yet.')
+  const packet = mapCommentPacket({ id: 'unknown-undo', type: 'comment', text }, evidence)!.packet
+  expect(packet.material_unknowns).toContain('Missing required field: reversibility.rating')
+})
+
+it('automatically corrects legacy imported prose questions and undo ratings after restart', async () => {
+  const f = await setup()
+  f.setComments([])
+  await loaded(f.sources)
+  const evidence = f.sources.preparationEvidence(f.cardId)
+  const text = sampleCommentPacket.replace(sampleCommentQuestion, 'Approve this staged plan?').replace(/^Reversibility:.*$/m, 'Undo: Revert the scoped change and restore the previous configuration.')
+  const packet = mapCommentPacket({ id: 'sample-packet-comment', type: 'comment', text }, evidence)!.packet
+  packet.question = 'Approve this staged plan?'
+  packet.reversibility = { rating: 'Moderate', explanation: 'Not provided in card comment: reversibility', rollback: 'Not provided in card comment: reversibility', residual_exposure: 'Not provided in card comment: reversibility' }
+  packet.material_unknowns = ['Missing required field: reversibility', 'Missing required field: reversibility.rating']
+  const operation = createHash('sha256').update(JSON.stringify([f.cardId, 'sample-packet-comment'])).digest('hex')
+  const legacy = await f.sources.decisionPackets.publish(packet, evidence, commentPacketActor, operation)
+  await f.sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { source: commentPacketSource, card_id: f.cardId, comment_id: 'sample-packet-comment' }, legacy.id)
+  await f.sources.decisionPackets.validate(legacy.id, { ...evidence, reasons: ['Complete cached decision history is unavailable'] }, commentPacketActor)
+  const restarted = await commentPacketHistoryFixture(f.root, { packet: text })
+  expect(restarted.sources.preparationEvidence(f.cardId).reasons).toContain('Complete cached decision history is unavailable')
+  const recovered = await loaded(restarted.sources)
+  expect(recovered.counts.ready).toBe(1)
+  const stored = await restarted.sources.decisionPackets.read(recovered.ready[0]!.id, restarted.sources.preparationEvidence(f.cardId))
+  expect(stored).toMatchObject({ version: 2, ready: true, packet: { question: sampleCommentQuestion, reversibility: { rating: 'Moderate', explanation: 'Revert the scoped change and restore the previous configuration.' }, material_unknowns: [] } })
+  expect(stored!.packet.binding).toEqual(legacy.packet.binding)
+  expect(stored!.packet.dependencies).toEqual(legacy.packet.dependencies)
+  await restarted.sources.preparedReviews.snapshot()
+  expect(await restarted.sources.decisionPackets.ids()).toHaveLength(2)
+})
+
+it('automatically retries validation when source evidence recovers with unchanged cached history', async () => {
+  const { sources, reads } = await setup()
+  const project = sources.preparationEvidence.bind(sources)
+  let unavailable = true
+  vi.spyOn(sources, 'preparationEvidence').mockImplementation(card => {
+    const evidence = project(card)
+    return unavailable ? { ...evidence, reasons: [...evidence.reasons, 'Source properties are not loaded yet'] } : evidence
+  })
+  expect((await loaded(sources)).ready).toEqual([])
+  const before = reads.length
+  unavailable = false
+  expect((await sources.preparedReviews.snapshot()).counts.ready).toBe(1)
+  expect(reads).toHaveLength(before)
 })
