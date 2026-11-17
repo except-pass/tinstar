@@ -117,12 +117,21 @@ it('appends coverage attestations for unchanged revalidation and targets invalid
   expect(JSON.parse(String(coverage))).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'fresh', coverage: 'complete' })]))
 })
 
-it('deduplicates unchanged validation across Notion edit timestamps', async () => {
-  const { packet, evidence } = preparedDecisionFixture(now), { packets } = await store()
-  const observed = { ...evidence, source_version: new Date(now).toISOString() }
-  const first = await packets.publish(packet, observed, 'fixture-preparer', 'one')
-  const refreshed = { ...observed, source_version: new Date(now + 1_000).toISOString() }
-  expect(await packets.validate(first.id, refreshed, 'decision-desk', true)).toEqual(first.validation)
+it('renews the validation deadline without appending an unchanged verdict', async () => {
+  let clock = now
+  const { packet, evidence } = preparedDecisionFixture(now), { packets } = await store(() => clock)
+  const first = await packets.publish(packet, evidence, 'fixture-preparer', 'one')
+  const refreshed = structuredClone(evidence)
+  for (const request of refreshed.requests) {
+    for (const dependency of request.dependencies) {
+      if (dependency.observed_at) dependency.observed_at = new Date(Date.parse(dependency.observed_at) + 1_000).toISOString()
+      if (dependency.expires_at) dependency.expires_at = new Date(Date.parse(dependency.expires_at) + 1_000).toISOString()
+    }
+  }
+  clock += 1_000
+  expect(await packets.validate(first.id, refreshed, 'decision-desk', true)).toEqual({
+    ...first.validation, valid_until: new Date(Date.parse(first.validation!.valid_until!) + 1_000).toISOString(),
+  })
   const events = (await packets.events()).filter(event => event.type === 'validation')
   expect(events.map(event => JSON.parse(String(event.detail)))).toEqual([first.validation])
 })

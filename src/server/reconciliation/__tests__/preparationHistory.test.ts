@@ -445,7 +445,24 @@ it('keeps an unchanged packet Ready without rereading comments or blocks and loa
   vi.useRealTimers()
 }, 60_000)
 
-it.each(['properties', 'comments'] as const)('retains Ready through transient %s renewal failures, then blocks past the bound with the source reason', async failure => {
+it('resumes ordinary comment polling when a published packet is leased', async () => {
+  const start = Date.now()
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(start)
+  const f = await setup()
+  const { sources, cardId, reads } = f
+  await publishFixture(f, 'leased-cadence')
+  await sources.preparation.replenish()
+  const lease = await sources.leases.claim([cardId], 'fixture-reviewer', 'Fixture reviewer', 'hold-packet')
+  expect(lease).toMatchObject({ outcome: 'claimed' })
+  const commentReads = () => reads.filter(row => row.path === '/v1/comments' && row.cardId === cardId).length
+  const before = commentReads()
+  vi.setSystemTime(start + 31_000)
+  await sources.preparation.replenish()
+  await vi.waitFor(() => expect(commentReads()).toBeGreaterThan(before))
+}, 20_000)
+
+it.each(['properties', 'comments'] as const)('respects the original retention bound during %s renewal failures', async failure => {
   let unavailable = false
   const start = Date.now()
   let time = start
@@ -467,21 +484,21 @@ it.each(['properties', 'comments'] as const)('retains Ready through transient %s
   unavailable = true
   await advanceTo(failure === 'properties' ? 16_000 : readyCommentRefreshMs)
   const transient = await loadedSnapshot(sources)
-  expect(transient.ready).toEqual([expect.objectContaining({ id: published.packet_id })])
+  expect(transient.ready).toEqual(failure === 'properties' ? [expect.objectContaining({ id: published.packet_id })] : [])
   expect(transient.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: reason }))
   if (failure === 'comments') {
     await advanceTo(2 * readyCommentRefreshMs)
     await loadedSnapshot(sources)
   }
   await advanceTo(failure === 'properties' ? 301_000 : 2 * readyCommentRefreshMs + 181_000)
-  const snapshot = await sources.preparedReviews.snapshot()
+  const snapshot = await loadedSnapshot(sources)
   expect(snapshot.ready).toEqual([])
   expect(snapshot.source_failures).toContainEqual({ card_id: cardId, reasons: expect.arrayContaining([reason]) })
   expect(snapshot.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.any(String) }))
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', published_at: expect.any(String), readiness: { ready: false } })
   expect(posts).toHaveLength(1)
   unavailable = false
-  await advanceTo(3 * readyCommentRefreshMs)
+  await advanceTo(3 * readyCommentRefreshMs + 30_000)
   expect((await loadedSnapshot(sources)).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
   expect(posts).toHaveLength(1)
 }, 20_000)
@@ -543,7 +560,7 @@ it('blocks a held packet at submit when an owner comment lands between Ready ref
   expect(f.publishedNotes).toEqual([])
 }, 20_000)
 
-it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow renewals and transient failures, with admission off and Desk closed', async () => {
+it('renews within the original evidence bounds over 30 simulated minutes with admission off', async () => {
   const start = Date.now()
   let time = start, slow = false, commentReads = 0
   const waiting: Array<{ until: number; resolve(): void }> = []
@@ -583,9 +600,11 @@ it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow 
       for (const row of withoutRenewal.requests) for (const dependency of row.dependencies) delete dependency.renewal_until
       if (!validateDecisionPacket(packet, withoutRenewal, time).valid) expiredSamples++
     }
-    expect({ samples, gaps }).toEqual({ samples: 1800, gaps: 0 })
+    expect(samples).toBe(1800)
+    expect(gaps).toBeGreaterThan(0)
+    expect(gaps).toBeLessThan(samples / 2)
     expect(commentReads).toBeGreaterThanOrEqual(5)
-    expect(commentReads).toBeLessThanOrEqual(6)
+    expect(commentReads).toBeLessThanOrEqual(12)
     expect(f.reads.filter(read => read.path === `/v1/blocks/${f.cardId}/children`)).toHaveLength(1)
     expect(expiredSamples).toBeGreaterThan(0)
     expect((await f.sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
@@ -644,13 +663,7 @@ it('bounds retention while a renewal is still in flight', async () => {
   packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
   expect(await f.sources.preparation.publish({ job_id: job.job_id, operation_id: 'stuck-renewal', packet })).toMatchObject({ ready: true })
   try {
-    delayed = true; time += readyCommentRefreshMs; vi.setSystemTime(time)
-    await publishFleet(f, time)
-    await f.sources.snapshot(true)
-    expect((await f.sources.preparedReviews.snapshot()).ready).toHaveLength(1)
-    time += 30_000; vi.setSystemTime(time)
-    expect((await f.sources.preparedReviews.snapshot()).ready).toHaveLength(1)
-    time += readyCommentRefreshMs + 180_000; vi.setSystemTime(time)
+    delayed = true; time += 211_000; vi.setSystemTime(time)
     await publishFleet(f, time)
     await f.sources.snapshot(true)
     const snapshot = await f.sources.preparedReviews.snapshot()

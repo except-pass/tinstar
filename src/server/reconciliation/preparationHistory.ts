@@ -83,24 +83,10 @@ export class PreparationHistory {
     return !!(previous && board && board.version !== previous)
   }
 
-  private historyExpiry(id: string, history: CachedDecisionHistory) {
-    const board = this.boardVersion(id)
-    if (!board || this.versions.get(id)?.completeVersion !== board.version) return Date.parse(history.expires_at)
-    return Math.min(Date.parse(board.expiresAt ?? history.expires_at), this.hasReadyPacket(id)
-      ? Date.parse(history.observed_at) + readyCommentRefreshMs : Date.parse(history.expires_at))
-  }
-
   renewalUntil(id: string) {
     const history = this.complete.get(id)
     if (!history || !this.reader.cachedDecisionHistory(id) || !this.priority.has(id) && !this.pending.has(id) && !this.failures.has(id)) return null
-    const board = this.boardVersion(id)
-    // Leave room for the next scheduled comment probe after one transient
-    // failure. Board freshness keeps its own, shorter outage bound.
-    const until = board && this.versions.get(id)?.completeVersion === board.version
-      ? Math.min(Date.parse(board.expiresAt ?? history.expires_at) + decisionRenewalGraceMs,
-        this.hasReadyPacket(id) ? Date.parse(history.observed_at) + 2 * readyCommentRefreshMs + decisionRenewalGraceMs
-          : Date.parse(history.expires_at) + decisionRenewalGraceMs)
-      : Date.parse(history.expires_at) + decisionRenewalGraceMs
+    const until = Date.parse(history.expires_at) + decisionRenewalGraceMs
     return until > Date.now() ? new Date(until).toISOString() : null
   }
 
@@ -109,8 +95,7 @@ export class PreparationHistory {
   evidenceHistory(id: string) {
     if (this.versions.get(id)?.commentsDirty) return undefined
     const current = this.reader.cachedDecisionHistory(id), previous = this.complete.get(id)
-    if (current && completeHistory(current)) return { ...current, expires_at: new Date(this.historyExpiry(id, current)).toISOString() }
-    if (!current || !previous || !this.renewalUntil(id)) return current
+    if (!current || !previous || completeHistory(current) || !this.renewalUntil(id)) return current
     const blocks = new Map(previous.context.blocks.map(block => [block.id, block]))
     for (const block of current.context.blocks) blocks.set(block.id, block)
     const retained = { ...previous, context: { ...previous.context, blocks: [...blocks.values()] } }
