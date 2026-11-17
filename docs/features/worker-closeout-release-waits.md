@@ -47,10 +47,21 @@ still refuses to convert a release wait to `Waiting For`.
 `get_release_status` exposes the same native `releases` and `releaseSource` as
 the Releases screen, alongside the existing deployment reconciliation. A scheduled
 pass every minute advances a release wait once every actively associated PR is
-in a published production release with complete, current membership. It rechecks
-associations, owner and verification requirement before writing. The existing
-Notion release transport saves a durable audit marker before the status change;
-failed writes reconcile on the next pass. Reads remain read-only.
+in a published production release. The shared native reader exposes
+`containedPulls`: effective merge ancestry in the production source, independent
+of the incremental Changes range between tags. Earlier required PRs and changes
+first tagged in a prerelease can therefore qualify after a cold restart. Unknown
+ancestry stays explicit; bounded comparison reads continue on later refreshes.
+
+The writer rechecks associations, owner, production verification and independent
+typed blockers before writing. It preserves both destinations while an active
+Actor/Event/Work blocker remains; resolve that blocker through the shared
+workflow first. The existing Notion release transport saves a durable audit
+marker before the status change. A stable source-operation identity lets a later
+pass recover an applied audit after a lost response, even across restart or a new
+production release. An uncertain mutable status PATCH retains its fence for the
+existing audited source-write reconciliation; matching mutable properties alone
+do not clear it. Reads remain read-only.
 
 The existing `Requires production verification` checkbox routes to `In Progress`
 for the named owner; otherwise the release wait goes to `Done`. The audit states
