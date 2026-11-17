@@ -91,7 +91,7 @@ export class ReconciliationSources {
     this.leases = new CardLeases(receiptRoot)
     this.decisionPackets = new DecisionPackets(this.leases)
     const decisionScope = config.notion?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
-    this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id), () => this.decisionQueue())
+    this.preparedReviews = new PreparedReviews(this.decisionPackets, decisionScope, id => this.preparationEvidence(id, true), () => this.decisionQueue())
     this.preparation = new DecisionPreparation(this.decisionPackets, decisionScope, { candidates: cardId => this.preparationCandidates(cardId), renew: () => this.renewPreparedSources(), coverage: () => this.decisionQueue().coverage, diagnostics: () => this.preparationDiagnostics() }, id => this.preparationEvidence(id), preparationSecret)
     this.preparedReviews.reportPreparation = () => this.preparation.status(true)
     this.preparedReviews.refreshEvidence = () => this.warmPreparationHistory()
@@ -145,7 +145,7 @@ export class ReconciliationSources {
     }, (id, until) => {
       const properties = this.preparationProperties.get(id)
       return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
-    }, id => this.preparationBoardVersion(id))
+    }, id => this.preparationBoardVersion(id), id => this.preparation.hasReadyPacket(id))
     this.workflow.onRecordedChange = (id, bodyChanged) => {
       this.preparationProjection = undefined
       this.preparationHistory.invalidate(id, bodyChanged)
@@ -254,7 +254,7 @@ export class ReconciliationSources {
     const evidence = this.preparationEvidence(cardId)
     // A real change in dependencies can make a cached publication eligible,
     // even when no new Notion history reads are needed.
-    const revision = decisionMeaning([history.observed_at, evidence.source_version, evidence.reasons,
+    const revision = decisionMeaning([history.observed_at, this.preparationBoardVersion(cardId)?.version, evidence.reasons,
       evidence.requests.map(({ binding, dependencies, reasons, answered }) => [binding, reasons, answered,
         dependencies.map(({ kind, key, revision, status, coverage }) => [kind, key, revision, status, coverage])])])
     const previous = this.commentImports.get(cardId)
@@ -302,7 +302,7 @@ export class ReconciliationSources {
 
   /** P1 evidence-only projection. Unlike queue()/getWork(refresh), this never
    * refreshes sources, reconciles receipts, or changes source work. */
-  preparationEvidence(cardId: string) {
+  preparationEvidence(cardId: string, retainBoard = false) {
     // A display/admission batch projects many cards from the same known sources.
     // Share only that synchronous queue build, never history or validation TTLs.
     if (!this.preparationProjection) {
@@ -311,16 +311,18 @@ export class ReconciliationSources {
       queueMicrotask(() => { this.preparationProjection = undefined })
     }
     const { snapshot, queue } = this.preparationProjection
-    const renewalUntil = this.preparationHistory.renewalUntil(cardId)
     const board = this.preparationBoardVersion(cardId)
+    const boardCurrent = board === undefined || board?.status === 'fresh' && board.coverage === 'complete'
+    const renewalUntil = retainBoard || boardCurrent ? this.preparationHistory.renewalUntil(cardId) : null
     const versionChanged = this.preparationHistory.versionChanged(cardId)
-    const properties = board && renewalUntil && board.observedAt && !versionChanged
+    const properties = board && renewalUntil && board.observedAt && !versionChanged && (boardCurrent || retainBoard && board.status === 'stale')
       ? { ...board, status: 'fresh' as const, coverage: 'complete' as const } : board ?? this.preparationProperties.get(cardId)
     // Keep last-good packet evidence during the bounded board recovery window.
     // The public census and forced submit continue to use their real coverage.
-    const retainingBoard = !this.config.jira && board?.status === 'stale' && properties?.status === 'fresh' && renewalUntil
+    const retainingBoard = retainBoard && !this.config.jira && board?.status === 'stale' && properties?.status === 'fresh' && renewalUntil
     const source = retainingBoard ? { ...snapshot, intentions: { ...snapshot.intentions, status: 'fresh' as const, coverage: 'complete' as const, expiresAt: renewalUntil } } : snapshot
     const evidence = projectDecisionEvidence(source, cardId, this.preparationHistory.evidenceHistory(cardId), Date.now(), properties, retainingBoard ? undefined : queue, renewalUntil)
+    if (!boardCurrent && !retainingBoard && !evidence.reasons.includes('Canonical card property evidence is unavailable or stale')) evidence.reasons.push('Canonical card property evidence is unavailable or stale')
     if (versionChanged) evidence.reasons.push('Card version changed; complete decision history must be refreshed')
     const state = this.preparationHistory.state(cardId)
     if (state.message && !renewalUntil) evidence.reasons.push(state.message)

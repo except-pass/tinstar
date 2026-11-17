@@ -25,7 +25,8 @@ export class PreparationHistory {
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
     private readProperties: (id: string) => Promise<void> = async () => {},
     private propertiesFresh: (id: string, until: number) => boolean = () => true,
-    private boardVersion: (id: string) => BoardVersion | null | undefined = () => undefined) {}
+    private boardVersion: (id: string) => BoardVersion | null | undefined = () => undefined,
+    private hasReadyPacket: (id: string) => boolean = () => false) {}
 
   warm(ids: string[], priority?: string[]) {
     if (priority) this.priority = new Set(priority)
@@ -37,9 +38,10 @@ export class PreparationHistory {
       if (board === null || board && (board.status !== 'fresh' || board.coverage !== 'complete')) continue
       if (board && version?.version !== board.version) this.failures.delete(id)
       const history = this.reader.cachedDecisionHistory(id)
-      if (board && history && version?.completeVersion === board.version && this.priority.has(id) &&
+      const ready = !!board && version?.completeVersion === board.version && this.hasReadyPacket(id)
+      if (ready && history && version &&
         !version.commentsDirty && version.lastRead + readyCommentRefreshMs > now) continue
-      if ((!board || version?.completeVersion === board.version && !this.priority.has(id)) &&
+      if ((!board || version?.completeVersion === board.version && !ready) &&
         !version?.commentsDirty && (board || this.propertiesFresh(id, now + (important.has(id) ? 15_000 : 0))) && completeHistory(history) &&
         Date.parse(history!.expires_at) > now + (important.has(id) ? 15_000 : 0)) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > now) continue
@@ -84,7 +86,7 @@ export class PreparationHistory {
   private historyExpiry(id: string, history: CachedDecisionHistory) {
     const board = this.boardVersion(id)
     if (!board || this.versions.get(id)?.completeVersion !== board.version) return Date.parse(history.expires_at)
-    return Math.min(Date.parse(board.expiresAt ?? history.expires_at), this.priority.has(id)
+    return Math.min(Date.parse(board.expiresAt ?? history.expires_at), this.hasReadyPacket(id)
       ? Date.parse(history.observed_at) + readyCommentRefreshMs : Date.parse(history.expires_at))
   }
 
@@ -96,7 +98,7 @@ export class PreparationHistory {
     // failure. Board freshness keeps its own, shorter outage bound.
     const until = board && this.versions.get(id)?.completeVersion === board.version
       ? Math.min(Date.parse(board.expiresAt ?? history.expires_at) + decisionRenewalGraceMs,
-        this.priority.has(id) ? Date.parse(history.observed_at) + 2 * readyCommentRefreshMs + decisionRenewalGraceMs
+        this.hasReadyPacket(id) ? Date.parse(history.observed_at) + 2 * readyCommentRefreshMs + decisionRenewalGraceMs
           : Date.parse(history.expires_at) + decisionRenewalGraceMs)
       : Date.parse(history.expires_at) + decisionRenewalGraceMs
     return until > Date.now() ? new Date(until).toISOString() : null

@@ -359,6 +359,19 @@ export class DecisionPreparation {
     }
   }
 
+  hasReadyPacket(cardId: string) {
+    return this.packets.leases.readStorage(db => {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_prep_jobs'").get()) return false
+      if (db.prepare("SELECT 1 FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND state IN ('admitted', 'dispatched')").get(this.scope, cardId)) return false
+      return !!db.prepare(`SELECT 1 FROM decision_packets p
+        WHERE json_extract(body,'$.binding.card_id') = ?
+        AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
+        AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
+        AND (SELECT json_extract(detail,'$.valid') FROM decision_packet_events
+          WHERE packet_id = p.id AND type IN ('validation','invalidation') ORDER BY sequence DESC LIMIT 1) = 1`).get(cardId)
+    })
+  }
+
   /** Bounded priority set: in-flight exact jobs, then current reviewable packets. */
   async priorityCards() {
     await this.initialize()

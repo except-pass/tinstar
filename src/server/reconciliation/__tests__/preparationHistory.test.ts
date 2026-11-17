@@ -90,6 +90,44 @@ it('loads cold history for automatic admission only after replenishment is turne
   expect(reconcile).not.toHaveBeenCalled()
 }, 20_000)
 
+it('polls comments on the normal cadence while a preparation is in flight', async () => {
+  const start = Date.now()
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(start)
+  const f = await setup()
+  const { sources, cardId, requestId, reads } = f
+  expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Exercise in-flight cadence' })).toMatchObject({ outcome: 'dispatched' })
+  const commentReads = () => reads.filter(row => row.path === '/v1/comments' && row.cardId === cardId).length
+  const before = commentReads()
+  vi.setSystemTime(start + 31_000)
+  await publishFleet(f, start + 31_000)
+  await sources.preparation.replenish()
+  await vi.waitFor(() => expect(commentReads()).toBeGreaterThan(before))
+  expect(reads.filter(row => row.path === `/v1/blocks/${cardId}/children`)).toHaveLength(1)
+}, 20_000)
+
+it('cannot validate a new card-native publication from stale board evidence', async () => {
+  let unavailable = false
+  const f = await setup({ historySurface: 'none', cardStatus: 'Queued', wrapFetch: transport => async (input, init) =>
+    unavailable && new URL(String(input)).pathname.endsWith('/query') ? new Response('', { status: 503 }) : transport(input, init) })
+  const { sources, cardId, requestId } = f
+  const packet = preparedDecisionFixture().packet
+  expect(await sources.updateWork({ kind: 'request_decision', card_id: cardId, operation_id: 'card-native-request', request_id: requestId,
+    question: packet.question, requested_from: 'Will', action: 'Decision', options: packet.binding.options }, 'fixture-owner')).toMatchObject({ outcome: 'saved' })
+  await loadedSnapshot(sources)
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare a card-native request' })
+  expect(job).toMatchObject({ outcome: 'dispatched' })
+  const request = sources.preparationEvidence(cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  await sources.preparation.replenish()
+  unavailable = true
+  expect((await sources.snapshot(true)).intentions.status).toBe('stale')
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'during-board-outage', packet })).toMatchObject({
+    ready: false, reasons: expect.arrayContaining([expect.stringContaining('property evidence is unavailable or stale')]),
+  })
+}, 20_000)
+
 it('claims through MCP while cold history remains blocked and preserves Desk preparation requirements', async () => {
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
