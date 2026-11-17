@@ -264,6 +264,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
       operation_id: crypto.randomUUID(), review_session_token: context.current.token, lease_token: current.lease_token,
       packet_id: packet.id, packet_version: packet.version, request_id: packet.packet.binding.request_id, option_id: option,
       next: { owner: packet.packet.authorization.next_owner, status: packet.packet.authorization.next_status },
+      ...(current.resolve_wait ? { resolve_wait: current.resolve_wait } : {}),
     }
     if (confirmed && (packet.packet.risk.rating === 'High' || packet.packet.reversibility.rating === 'Difficult')) input.confirmation = { option_id: option, scope: packet.packet.authorization.scope }
     context.current.attempts[key] = input; context.current.recoveryLease = input.lease_token; persist()

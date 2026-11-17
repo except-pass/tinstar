@@ -5,6 +5,7 @@ import { requestAnchor } from '../../shared/deskSource'
 import { decisionRequests, decisionRecordRows, workflowReceipt } from '../../shared/workflowRequests'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { redactSourceText } from '../../shared/searchDocuments'
+import { parseWaitLine } from '../../shared/waitingForPolicy'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
@@ -114,7 +115,15 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
-  return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}), observed_at: observation.observedAt,
+  // Only an unambiguous Will wait belongs to this owner decision. Preserve
+  // the exact source line so the workflow writer can compare it at submit.
+  const waits = String(card?.properties['Waiting For']?.value ?? '').split('\n').filter(line => {
+    const wait = parseWaitLine(line)
+    return wait?.type === 'Actor' && wait.id === 'Will'
+      || !wait && line.startsWith('Will:') && card?.properties['Waiting For ID']?.value === 'Will'
+  })
+  return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),
+    ...(waits.length === 1 ? { owner_wait: waits[0] } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 

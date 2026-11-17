@@ -193,6 +193,18 @@ function cardNativeFixture() {
   return f
 }
 
+it('projects only the exact Will wait from the card, preserving independent waits for the workflow writer', () => {
+  const f = cardNativeFixture()
+  const card = f.snapshot.intentions.data!.cards.find(card => card.id === f.cardId)!
+  const will = 'Will: Dependency: Choose scope | Unblocks when: Will answers | Follow-up: Firstmate | Type: Actor | ID: Will'
+  const event = 'Dependency: Vendor upgrade | Unblocks when: Vendor confirms | Follow-up: Firstmate | Type: Event | ID: upgrade'
+  const property = { id: 'wait', type: 'rich_text', hasMore: false, value: [event, will].join('\n') }
+  card.properties['Waiting For'] = property
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBe(will)
+  property.value += '\n' + will.replace('Choose scope', 'Choose timing')
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBeUndefined()
+})
+
 it('binds card-native requests without a fleet source and versions their packets normally', async () => {
   const f = cardNativeFixture(), { packets } = await store()
   expect(f.evidence.reasons).toEqual([])

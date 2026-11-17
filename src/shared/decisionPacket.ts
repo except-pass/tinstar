@@ -70,6 +70,7 @@ export interface DecisionRequestEvidence {
 }
 export interface DecisionEvidence {
   deferred?: boolean
+  owner_wait?: string
   card_id: string; requests: DecisionRequestEvidence[]; reasons: string[]
   omissions: string[]; observed_at: string | null
 }
