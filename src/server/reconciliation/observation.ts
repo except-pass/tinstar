@@ -15,7 +15,8 @@ export function ageObservation<T>(value: Observation<T>, now = Date.now()): Obse
     ? { ...value, status: 'stale', coverage: 'unknown' } : value
 }
 
-/** One bounded read per TTL, including failures; concurrent clients share it. */
+/** Cache bounded reads, including failures. Foreground demand can replace an
+ * in-flight background observation without accepting its superseded result. */
 export class CachedObservation<T> {
   private cached: Observation<T> | null = null
   private pending: { background: boolean; value: Promise<Observation<T>> } | null = null

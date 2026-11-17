@@ -79,10 +79,7 @@ board/fleet metadata and cached card-body and comment history. It does **not**
 refresh sources, call the mutating queue refresh, reconcile receipts, answer,
 repair source links, or take a lease. On a cold cache it honestly reports missing
 coverage. The Desk snapshot and automatic admission enqueue missing/expired
-history and immediately project known evidence. A shared background queue reads
-at most two cards at once through the existing paced Notion client, including
-its shared Retry-After backoff. History HTTP responses release the pacing slot
-once started, so a slow history response cannot monopolize property reads.
+history and immediately project known evidence.
 Each completed read, when automatic replenishment is enabled, schedules a coalesced
 replenishment pass, so an eligible decision can be admitted before its history
 expires. Prepare now waits only for the selected card, prioritizing it ahead of
@@ -271,10 +268,12 @@ prepared-claim selection timings; capabilities and source prose never enter
 these events. Owner-authenticated GET `/api/reconciliation/decision-desk/review-events?after=0` exposes the bounded audit stream; `operation_key` dedupes retry metrics. These are server-side timings, excluding HTTP/rendering, and are
 not end-to-end claim-to-visible measurements.
 
-A timeout, ambiguous response or failed readback retains the reservation across
-restart and lease expiry. Workflow reservations block new holders, and every
-reservation blocks competing source writes.
-A definitive provider rejection or a pre-write validation failure releases it.
+A timeout after dispatch, ambiguous response or failed readback retains the
+reservation across restart and lease expiry. Workflow reservations block new
+holders, and every reservation blocks competing source writes. A queued
+mutation counts as dispatched when it is sent. Cancellation before send,
+definitive provider rejection and pre-write validation failure release the
+reservation.
 The original source operation can still inspect its existing recovery records.
 An immutable unique note/contract marker that fully reads back can reconcile its
 same-operation reservation automatically. Interrupted note writes also attempt
@@ -651,9 +650,11 @@ make the decision history partial. General `get_work` prose remains explicitly
 bounded and does not claim to contain the full implementation contract.
 
 The Desk queues at most two card-history reads and never makes snapshots or
-claims wait for that queue. Reads retain shared Notion request pacing and
-Retry-After backoff, retry transient 429s, and have a 120-second source deadline
-instead of the conversational reader's 20 seconds. Missing permissions, failed
+claims wait for that queue. Desk source work uses the background priority in
+the [shared request policy](workflow.md#read-contracts). Each active history
+attempt shares a 120-second cancellation deadline across properties, comments
+and body reads, including their queue waits. Notion history reads retry
+transient 429s within that deadline. Missing permissions, failed
 pages and invalid pagination still leave history unavailable with a visible
 retry. Reading the cache never extends its timestamps; see the
 [P4 renewal contract](#p4--preparation-jobs) for freshness and bounded retention.

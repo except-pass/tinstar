@@ -40,14 +40,18 @@ schema caches for ten minutes; details for 30 seconds. Active scans omit hierarc
 expansion and body/comment reads. The existing search index’s bounded background
 prose collection remains independent of these property-only scans.
 
-All application Notion requests share pacing (350 ms between requests) and
-honor Retry-After before another request. Exact-card property GETs make at most
-three attempts for timeout/network failures, HTTP 408, 429 and 5xx, with
-250 ms/500 ms backoff and a fresh five-second deadline per attempt, including
-queue wait. Cancelled queue waits return promptly without bypassing earlier
-requests or pacing. Permanent HTTP failures, malformed responses and card/source
-identity mismatches are not retried. Unrecovered source failures remain visible
-in coverage; writes are never automatically retried. Counts by method/resource/query, cache hits,
+All application Notion requests share a minimum 350 ms between request starts
+and honor Retry-After. Foreground requests start ahead of queued background
+work. Passive reads, interactive board queries, and bounded card details can
+remain in flight without occupying the serial foreground slot used by exact
+card reads and writes. Requests without a caller deadline can wait in the
+queue for up to 30 seconds. Cancellation removes queued requests before they
+are sent. Exact-card property GETs make up to three attempts for HTTP timeouts,
+network failures, HTTP 408, 429 and 5xx, with 250 ms/500 ms backoff and a fresh
+five-second HTTP deadline starting at each send. A queue deadline ends the
+read without another attempt. Permanent HTTP failures, malformed responses
+and card/source identity mismatches are not retried. Unrecovered source failures
+remain visible in coverage. Counts by method/resource/query, cache hits,
 429 responses and cumulative request/queue latency appear in the existing sources
 and work-read diagnostics. There is no persistent mirror or offline write queue.
 
@@ -705,8 +709,8 @@ UTF-16 code units per element without dividing Unicode code points; contract
 chunks are at most 8,000 code units and append batches at most 20 blocks. These
 stay below the [Notion request limits](https://developers.notion.com/reference/request-limits).
 The brief uses [Notion's insert-at-start position](https://developers.notion.com/reference/patch-block-children#controlling-insert-position).
-For Notion, the existing shared limiter and Retry-After policy serve every
-read/write. Both MCP transport request bounds are 2 MiB so large contracts can traverse the same
+Notion requests follow the [shared pacing policy](#read-contracts).
+Both MCP transport request bounds are 2 MiB so large contracts can traverse the same
 tunnel. Oversize input fails explicitly; nothing is condensed to fit.
 
 Routine `get_work` still reads bounded/redacted context and explicitly says the
@@ -846,7 +850,8 @@ Source failures in `update_work` identify the stage (canonical card, comments,
 publication history, planning, properties or receipt) and the actual redacted
 exception/HTTP cause, also recorded with a server-side stack. A failed read is
 separate from a rejected or unconfirmed write. Transient Notion GET failures can
-retry within the existing twenty-second request budget; POST/PATCH operations
-are never retried automatically. This lets a transient comment-read outage
-recover before a mutation, while persistent permissions/pagination/data failures
-stay explicit and cannot be mistaken for empty history.
+retry within a twenty-second budget that starts at the first send when no
+caller deadline is supplied. POST/PATCH operations are never retried
+automatically. A transient comment-read outage can recover before a mutation.
+Persistent permissions, pagination and data failures stay explicit and cannot
+be mistaken for empty history.

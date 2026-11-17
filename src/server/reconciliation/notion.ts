@@ -48,12 +48,10 @@ export class NotionCardReadError extends Error {
   constructor(readonly transient: boolean, status: number) { super(`Notion card read failed (HTTP ${status})`) }
 }
 
-/** Exact uncached page read, sharing the source parser. Used immediately before
- * inbox delivery and for closure; cached scene data cannot authorize either.
- * Retry source errors without changing write intent. Each HTTP attempt gets a
- * fresh five-second budget, with one bounded queue wait before reporting congestion. */
 const directFetch: NotionFetch = (input, init, timeoutMs = 5_000) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) })
 
+/** Exact uncached page read used before inbox delivery and for closure.
+ * Cached scene data cannot authorize either. */
 export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: NotionFetch = directFetch, signal?: AbortSignal) {
   if (!config || notionPageId(id) !== id) throw new Error('Notion card unavailable')
   for (let attempt = 0; ; attempt++) {
