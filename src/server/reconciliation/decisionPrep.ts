@@ -344,7 +344,7 @@ export class DecisionPreparation {
       if (validation.valid) await this.packets.leases.writeStorage(db => {
         db.prepare(`UPDATE decision_prep_jobs SET state = 'published', published_at = coalesce(published_at, ?),
           reason = CASE WHEN published_at IS NULL THEN 'Published packet validated against refreshed source evidence.' ELSE reason END
-          WHERE scope = ? AND packet_id = ?`).run(new Date(this.now()).toISOString(), this.scope, id)
+          WHERE scope = ? AND packet_id = ? AND state != 'superseded'`).run(new Date(this.now()).toISOString(), this.scope, id)
       })
     }
   }
