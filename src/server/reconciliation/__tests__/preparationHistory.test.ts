@@ -6,10 +6,13 @@ import { tmpdir } from 'node:os'
 import { CardContextReader } from '../cardContext'
 import { ReconciliationMcp } from '../mcp'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
+import { mainWaitCandidates } from '../waitingOnMain'
 import { validateDecisionPacket } from '../../../shared/decisionPacket'
+import { decisionMarker, receiptMarker } from '../workflowContent'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -40,6 +43,22 @@ async function loadedSnapshot(sources: Awaited<ReturnType<typeof setup>>['source
   return sources.preparedReviews.snapshot()
 }
 
+function structuredAnswerComment(requestId: string, createdAt: string, withReceipt = false) {
+  const answer = 'Defer this request.'
+  const next = { owner: 'Firstmate', status: 'Queued' }
+  const lines = [
+    'Operation: answer_decision',
+    decisionMarker(requestId),
+    `Tin Star answer: ${JSON.stringify(requestId)}`,
+    `Answer: ${answer}`,
+    `Next owner: ${next.owner}`,
+    `Next status: ${next.status}`,
+    `Tin Star answer data: ${JSON.stringify({ request_id: requestId, answer, next })}`,
+  ]
+  if (withReceipt) lines.push(receiptMarker('owner-chatgpt', 'later-owner-answer'))
+  return { id: 'later-owner-answer', created_time: createdAt, rich_text: [{ plain_text: lines.join('\n') }] }
+}
+
 it('loads cold body and comment history for Prepare now without other readers, writes, or reconciliation', async () => {
   const { sources, cardId, requestId, reads, posts, reconcile } = await setup()
   expect(sources.preparationEvidence(cardId).reasons).toContain('Complete cached decision history is unavailable')
@@ -55,6 +74,90 @@ it('loads cold body and comment history for Prepare now without other readers, w
   expect(reads.filter(read => !read.path.endsWith('/query')).every(read => read.method === 'GET')).toBe(true)
   expect(reconcile).not.toHaveBeenCalled()
   expect(sources.leases.status(cardId)).toBeNull()
+}, 20_000)
+
+it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s cards and restores them when active', async deferred => {
+  let status = 'Waiting For'
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    const path = new URL(String(input)).pathname
+    if (!path.endsWith('/query') && !path.includes('/v1/pages/')) return response
+    const body = await response.json()
+    for (const page of body.results ?? [body]) {
+      page.properties.Status.status.name = status
+      page.last_edited_time = new Date(Date.now() - 5 * 3600_000).toISOString()
+    }
+    return Response.json(body)
+  } })
+  const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare only active work' })
+  const first = await prepare()
+  expect(first.outcome).toBe('dispatched')
+  const packet = preparedDecisionFixture().packet, request = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await f.sources.preparation.publish({ job_id: first.job_id, operation_id: 'ready-before-defer', packet })).toMatchObject({ ready: true })
+
+  const client = new Client({ name: 'deferred-claim-test', version: '1' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await new ReconciliationMcp(f.sources, f.root).createServer('Fixture owner').connect(serverTransport)
+  await client.connect(clientTransport)
+  const claimNext = async (operation_id: string) => {
+    const result = await client.callTool({ name: 'claim_next_card', arguments: { operation_id } }) as { content: Array<{ text: string }> }
+    return JSON.parse(result.content[0]!.text)
+  }
+  try {
+    status = deferred
+    const paused = await f.sources.snapshot(true)
+    const queue = await f.sources.queue()
+    expect(queue.items.some(item => item.cardIds.includes(f.cardId) && item.sources.some(source => source.kind === 'firstmate'))).toBe(true)
+    expect(queue.needsWill?.some(item => item.cardIds.includes(f.cardId))).toBe(false)
+    expect(mainWaitCandidates(paused).items).not.toContainEqual(expect.objectContaining({ key: f.cardId }))
+    expect(await prepare()).toMatchObject({ outcome: 'ineligible' })
+    await f.sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
+    await f.sources.preparation.replenish()
+    expect(f.posts).toHaveLength(1)
+    expect(await f.sources.preparation.priorityCards()).not.toContain(f.cardId)
+    expect(await loadedSnapshot(f.sources)).toMatchObject({ ready: [], pending: [], counts: { requests: 0, to_prepare: 0 } })
+    expect(await f.sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'deferred-desk-claim', card_id: f.cardId })).toMatchObject({ outcome: 'no-decision-requests' })
+    expect((await f.sources.claimQueue()).needsWill).toEqual([])
+    expect(await claimNext('deferred')).toMatchObject({ outcome: 'no-unclaimed-card' })
+
+    status = 'Waiting For'
+    const active = await f.sources.snapshot(true)
+    expect(mainWaitCandidates(active).items).toContainEqual(expect.objectContaining({ key: f.cardId, audience: 'owner' }))
+    expect((await loadedSnapshot(f.sources)).ready).toEqual([expect.objectContaining({ card_id: f.cardId })])
+    expect(await claimNext('active-again')).toMatchObject({ outcome: 'claimed', lease: { card_id: f.cardId } })
+    expect(f.posts).toHaveLength(1)
+  } finally { await client.close() }
+}, 20_000)
+
+it('keeps one preparation across owner prose and First Mate check-ins', async () => {
+  let added = false
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
+    const body = await response.json()
+    body.results.push(
+      { id: 'owner-prose', created_time: new Date().toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
+      { id: 'owner-edit', created_time: new Date().toISOString(), rich_text: [{ plain_text: `Operation: edit\n${receiptMarker('owner-chatgpt', 'owner-edit')}` }] },
+      { id: 'check-in', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'First Mate check-in: still waiting.' }] },
+    )
+    return Response.json(body)
+  } })
+  const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
+  const first = await prepare()
+  const packet = preparedDecisionFixture().packet, before = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = before.binding!
+  packet.dependencies = before.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await f.sources.preparation.publish({ job_id: first.job_id, operation_id: 'stable-packet', packet })).toMatchObject({ ready: true })
+  added = true
+  await f.sources.updateContext(f.cardId)
+  expect((await loadedSnapshot(f.sources)).ready).toHaveLength(1)
+  const after = f.sources.preparationEvidence(f.cardId).requests[0]!
+  expect(after.answered).toBe(false)
+  expect(after.binding?.source_revision).toBe(before.binding?.source_revision)
+  expect((await prepare()).outcome).toBe('already-ready')
+  expect(f.posts).toHaveLength(1)
 }, 20_000)
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {
@@ -429,15 +532,14 @@ it.each(['properties', 'comments', 'body'] as const)('retains Ready through tran
   expect(posts).toHaveLength(1)
 }, 20_000)
 
-it.each(['receipt', 'comment'] as const)('registers a later owner %s from real history reads and never re-offers or re-prepares the request', async kind => {
+it.each(['with receipt', 'without receipt'] as const)('registers a later structured answer (%s) from real history reads and never re-offers or re-prepares the request', async kind => {
   let time = Date.now(), ownerAt: string | undefined
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
     if (ownerAt && new URL(String(input)).pathname === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: { id: 'provider-user-id', ...(kind === 'comment' ? { name: 'owner-chatgpt' } : {}) },
-        rich_text: [{ plain_text: kind === 'receipt' ? 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-edit"]' : 'A response with no decision protocol or keyword.' }] })
+      body.results.push(structuredAnswerComment(requestId, ownerAt, kind === 'with receipt'))
       return Response.json(body)
     }
     return response
@@ -532,7 +634,7 @@ it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s c
     }
     if (failing && kind === 'answer' && path === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Defer this request.' }] })
+      body.results.push(structuredAnswerComment(f.requestId, new Date(time).toISOString()))
       return Response.json(body)
     }
     return response

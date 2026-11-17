@@ -1,3 +1,4 @@
+import { isOwnerDecisionHeading } from '../../../../scripts/decision-owner-answer-sweep'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -323,16 +324,15 @@ it('keeps unchanged research Ready beyond its former review deadline only with n
   expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
 })
 
-it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('suppresses preparation after a later structural owner %s without guessing wording', kind => {
+it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('keeps preparation evidence unchanged after a non-request owner %s', kind => {
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   const owner = { id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
     text: kind.startsWith('comment') ? 'No decision keywords are necessary for this owner response.' : `Operation: ${kind}\nTin Star operation: ["owner-chatgpt","owner-response"]`,
     ...(kind === 'comment' ? { author: 'owner-chatgpt' } : kind === 'comment-name' ? { author: 'notion-owner-id', authorName: 'owner-chatgpt' } : {}) }
+  const before = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
   f.history.context.blocks.push(owner)
-  const evidence = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
-  expect(evidence.requests[0]).toMatchObject({ answered: true, reasons: [] })
-  expect(validateDecisionPacket(f.packet, evidence, now)).toMatchObject({ valid: false, reasons: expect.arrayContaining(['This source request already has an answer']) })
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests).toEqual(before.requests)
 })
 
 it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-edited-only'] as const)('does not guess an owner answer from %s evidence', kind => {
@@ -349,11 +349,22 @@ it('rejects duplicate request IDs even with a newer meaningful publication', () 
   request.createdAt = new Date(now - 20_000).toISOString()
   f.history.context.blocks.push({ id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
     text: 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-response"]' })
-  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(true)
+  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests[0]!.answered).toBe(false)
   f.history.context.blocks.push({ ...request, id: 'new-request-revision', createdAt: new Date(now - 5_000).toISOString(),
     text: request.text.replace(f.packet.question, 'Authorize the revised preview scope?') })
   const revised = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
   expect(revised.reasons).toContain('Decision publication history is contradictory or incomplete')
   expect(revised.requests.every(request => request.reasons.length > 0)).toBe(true)
   expect(validateDecisionPacket(f.packet, revised, now).valid).toBe(false)
+})
+
+it.each([
+  ['OWNER DECISION (Will, 2026-11-16 10:59 PM ET, via Tinstar Decision Prep): Defer.', true],
+  ['OWNER DECISION — 2026-11-17: Defer.', true],
+  ['OWNER DECISION NEEDED: please pick an option', false],
+  ['OWNER DECISION (Will): Defer.', false],
+  ['OWNER DECISION — please choose: urgent', false],
+  ['OWNER DECISION — 2026-11-17 Defer.', false],
+])('classifies sweep heading %s', (text, expected) => {
+  expect(isOwnerDecisionHeading(text)).toBe(expected)
 })

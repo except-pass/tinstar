@@ -7,6 +7,7 @@ import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type Decision
 import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
 import type { CardContextRead } from './cardContext'
+import { deferredDecisionStatus } from './claimPolicy'
 
 const exec = promisify(execFile)
 const attemptMs = 10 * 60 * 1000
@@ -162,7 +163,7 @@ export class DecisionPreparation {
   private refusal(candidate: PrepCandidate): string | null {
     if (candidate.answered) return 'This source request already has an answer.'
     if (candidate.leased) return 'A reviewer holds this card. Preparation does not claim or replace that lease.'
-    if (candidate.card_status === 'Todo') return 'Todo work is not prepared to fill the queue.'
+    if (deferredDecisionStatus(candidate.card_status)) return `Preparation is deferred while the source card is ${candidate.card_status}.`
     if (!candidate.request_id || !candidate.source_revision) return 'This decision has no exact source request to prepare.'
     if (candidate.reasons.length) return candidate.reasons[0]!
     return null
@@ -218,6 +219,10 @@ export class DecisionPreparation {
   private async dispatch(job: Row) {
     const secret = this.secret
     if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
+    if (this.evidence(job.card_id).deferred) {
+      await this.mark(job.id, 'cancelled', 'Preparation is deferred while the source card is inactive.')
+      return
+    }
     const payload = { request_id: job.request_id, card_url: job.card_url, publish: { tool: 'publish_prepared_packet', job_id: job.id } }
     try {
       const response = await this.fetchImpl(secret.url, {
@@ -364,14 +369,14 @@ export class DecisionPreparation {
     await this.initialize()
     return this.packets.leases.readStorage(db => {
       const policy = this.packets.policyInStorage(db, this.scope)
-      const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state)).map(job => job.card_id)
+      const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state) && !this.evidence(job.card_id).deferred).map(job => job.card_id)
       const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
         WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
         AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
         ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
       const reviewable = packets.map(row => row.card).filter(card => {
         const evidence = this.evidence(card)
-        return !evidence.reasons.includes('Source card is closed') && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
+        return !evidence.deferred && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
       })
       return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
     })

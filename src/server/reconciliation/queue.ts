@@ -13,7 +13,7 @@ import { record, text } from './values'
 import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
 import type { ExecutionWarning } from './workflowViews'
-import { strictlyNeedsWill } from './claimPolicy'
+import { deferredDecisionCard, strictlyNeedsWill } from './claimPolicy'
 import { parseWaitLine } from '../../shared/waitingForPolicy'
 import { requestText, isCoordinationRequest, displayRequestText } from '../../shared/requestText'
 
@@ -164,7 +164,7 @@ export function claimCardReadiness(item: ClaimItem, card: Card, now = Date.now()
   const current = word(card, 'Next action') ?? word(card, 'Next Action')
   const actions = prop(card, 'Will action')
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(normalize)
-  if (card.archived || card.in_trash || complete(word(card, 'Status')) || future(date(card, 'Start Date'), now)) return null
+  if (deferredDecisionCard(card) || complete(word(card, 'Status')) || future(date(card, 'Start Date'), now)) return null
   // Retain known answers even when the rest of the history is incomplete.
   // A property ask must not resurrect an already answered structured request;
   // an answer bound to another source does not close an independent request.

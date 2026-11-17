@@ -572,6 +572,18 @@ answers, changed source question/generation or ambiguous card linkage requires
 verification; it never answers a similarly named request. Notion status edits
 and navigation do not acknowledge First Mate requests.
 
+Preparation binds to the published request and checks structured answer history
+and material source dependencies separately. Ordinary card comments, including
+check-ins and `OWNER DECISION` prose, leave the request and its preparation
+revision intact. Use the structured answer format above or record the answer
+through the Desk or `answer_decision` to close the matching request.
+
+Run `npx tsx scripts/decision-owner-answer-sweep.ts [--config-home DIR]` to
+inventory current open Notion requests followed by a comment with a recognized
+`OWNER DECISION` heading. The read-only report matches headings and timestamps,
+without verifying authorship or request intent. It reports card, request and
+comment IDs and exits with status 1 when coverage is incomplete.
+
 For an older approval such as the already-approved R3 request, use
 `answer_decision` with `request_id` set to the exact existing proposal/approval
 comment or paragraph ID, `source_request` set to the exact originating request,
@@ -581,6 +593,15 @@ or asking the owner to choose again. Omit `legacy_action` and `resolve_wait` whe
 those asks were already removed; never clear an unrelated remaining action.
 
 Published decisions may include optional `options: [{id, label}]` on `update_work` `request_decision` (one to five unique stable IDs and plain-text labels). First Mate can publish these alongside the exact `source_request`. Decisions renders those choices in its existing detail. A click calls the same `answer_decision` operation as MCP, with the proposal `request_id`, selected `option_id`, exact label as `answer`, and Firstmate / Queued. The server checks the option against the durable proposal; the one status line reflects reconciliation, and a click does not dismiss the request. MCP may include `option_id` together with the owner's verbatim free-text `answer`, including qualifications; only membership of the option ID is validated, with no label-equality requirement. Proposals without options retain their existing behavior.
+
+### Deferred decision cards
+
+When the source observation shows a card in Todo, Backlog, Archived or Done,
+or marks it archived or trashed, the card is excluded from preparation, new
+packet publication, review offers, claims and Waiting on you reminders.
+Needs Will omits items whose linked cards are all known to be deferred.
+Returning a card with an open request to an active status lets the request
+qualify again under the usual eligibility checks.
 
 ### Decisions workbench proposals
 

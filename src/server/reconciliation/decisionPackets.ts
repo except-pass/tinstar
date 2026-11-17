@@ -78,6 +78,7 @@ export class DecisionPackets {
       if (previous.content_hash !== contentHash) throw new DecisionDeskConflict('Publication operation already used for different packet meaning')
       return { ...unpack(previous), validation: this.latestValidation(db, previous.id), replayed: true }
     }
+    if (evidence.deferred) throw new DecisionDeskConflict('Source card is deferred or closed')
     const sourceKey = JSON.stringify([packet.binding.card_id, packet.binding.source_request ? requestAnchor(packet.binding.source_request) : packet.binding.request_key, packet.binding.request_id])
     const version = Number((db.prepare('SELECT coalesce(max(version),0)+1 AS version FROM decision_packets WHERE source_key = ?').get(sourceKey) as { version: number }).version)
     // Keep the legacy SQLite deadline column readable by older binaries. It is

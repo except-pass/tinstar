@@ -69,6 +69,7 @@ export interface DecisionRequestEvidence {
   dependencies: DecisionDependencyObservation[]; reasons: string[]; answered: boolean
 }
 export interface DecisionEvidence {
+  deferred?: boolean
   card_id: string; requests: DecisionRequestEvidence[]; reasons: string[]
   omissions: string[]; observed_at: string | null
 }
