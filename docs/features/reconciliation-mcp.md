@@ -266,11 +266,12 @@ completeness and claim verification/state fields. Files are bounded metadata,
 with independent source completeness and response pagination. No patches are
 returned. Observed approval/CI is never a merge permission or branch-policy claim.
 
-`get_release_status` calls `ReleasesApi.read(false)`. Its `pulls`,
+`get_release_status` calls `ReleasesApi.read(false)`. Its `releases`, `pulls`,
 `unassociatedCards`, `reconciliation.cards` and `reconciliation.targets` are each
 paginated independently using the same `offset`/`limit`. Each collection has its
 own `{total,next_offset}` under `pagination`; follow every relevant next offset.
 These totals describe observed rows, not a certified production queue count.
+Native releases and `releaseSource` use the [Releases source contract](releases.md#github-native-source-and-evidence-boundaries).
 All collection warnings, association completeness, GitHub sync status, receipt
 source status/timestamps, per-target provenance and opt-in verification decisions
 remain visible. An `available` outcome means the projection was read; inspect

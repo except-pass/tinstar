@@ -89,11 +89,9 @@ snapshot from stewie to the specified local file:
 The snapshot must identify `/home/farm/fm-obsf` as `fm_home`; local file placement
 does not change its identity. Follow the existing [publication freshness and
 completeness contract](../notion-worker-links.md#published-home-freshness-and-completeness).
-The worker-link report includes configured remote homes and their workers, and
-adds `coverage.unconfiguredHomes`: sorted explicit homes seen in card declarations
-or published task `paths.home`, excluding configured homes. It never interprets
-remote worktree roots or prose as home declarations, scans other homes, or changes
-configuration. This inventories observed identities, not every host directory.
+The worker-link report includes configured remote homes and their workers. Its
+[`coverage.unconfiguredHomes` field](../notion-worker-links.md#slice-b-backfill-and-deterministic-mismatch-report)
+inventories other observed home identities for configuration review.
 
 `search_work` owner/status filters and `coverage.intentions` are unchanged; the
 Clawson poller can continue requesting owner `Clawson`, statuses `["In Progress"]`.

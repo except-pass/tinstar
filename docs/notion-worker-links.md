@@ -197,6 +197,7 @@ The report schema is `tinstar.worker-link-report.v1`, with `mode: report-only`:
 | --- | --- |
 | `evaluatedAt` | Input snapshot's `generatedAt`; expiry is evaluated at this timestamp. |
 | `coverage` | Notion and each configured home's observation metadata, pagination completeness, card declaration readability/mergeability, and Slice A absence coverage. No whole-farm certification. |
+| `coverage.unconfiguredHomes` | Sorted explicit absolute homes from valid card declarations or published task `paths.home`, excluding configured homes. Remote worktree roots and prose are not home declarations. This inventories observed identities, not every host directory; it neither scans other homes nor changes configuration. |
 | `homes[].tiers` / `counts` | Exactly six tiers per home: `already confirmed`, `eligible auto-write`, `ambiguous`, `independent`, `conflicts`, `unavailable`. Counts are report rows, not an assertion of total worker coverage. |
 | `homes[].tiers.ambiguous[].proposals[]` | Manual verification candidates: exact `cardId`, `fm_home`, `task_id`, `spawn_gen`, supporting `sources`, and categorical `strength`. No raw brief/backlog text. |
 | `homes[].tiers["eligible auto-write"][].proposals[]` | Exact coordinator dispatch proposals, with `dispatch-ledger` strength. Only these may be automatically applied. |
