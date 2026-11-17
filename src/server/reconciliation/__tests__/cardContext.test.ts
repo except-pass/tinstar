@@ -139,8 +139,7 @@ it.each(['body', 'comments'])('does not certify missing or looping %s pagination
     return Response.json({ results: [], has_more: target === source, next_cursor: target === source ? 'same-cursor' : null })
   }
   const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
-  if (source === 'body') await expect(reader.decisionDetails('card')).rejects.toThrow('cursor')
-  else expect(await reader.decisionDetails('card')).toMatchObject({ outcome: 'partial', commentsOutcome: 'partial' })
+  expect(await reader.decisionDetails('card')).toMatchObject({ outcome: 'partial', commentsOutcome: source === 'comments' ? 'partial' : 'available' })
 })
 
 it('retries a throttled history page through shared Notion Retry-After pacing', async () => {
@@ -183,7 +182,8 @@ it('retains a known comment answer for claims when the publication body read fai
     ? Response.json({ results: [{ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "decision"' }] }], has_more: false })
     : new Response('', { status: 503 })
   const reader = new CardContextReader({ token: 'fake', dataSourceId: 'a'.repeat(32) }, fetcher)
-  await expect(reader.decisionDetails('card')).rejects.toThrow('context unavailable')
+  expect(await reader.decisionDetails('card')).toMatchObject({ outcome: 'partial', commentsOutcome: 'available', omissions: 'Card body history read failed (HTTP 503).' })
   expect(reader.cachedClaimBlocks('card')).toContainEqual(expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' }))
-  expect(reader.cachedDecisionHistory('card')).toBeUndefined()
+  expect(reader.cachedDecisionHistory('card')?.context).toMatchObject({ outcome: 'partial', commentsOutcome: 'available',
+    blocks: [expect.objectContaining({ id: 'answer', text: 'Tin Star answer: "decision"' })] })
 })
