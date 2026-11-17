@@ -61,11 +61,12 @@ dependency revision changes meaning. Evidence attestations can be appended to
 the same immutable packet when source meaning is unchanged.
 
 `validateDecisionPacket` is pure. It requires exact source/card/option/question
-membership, complete fresh unexpired material evidence, and an unanswered source.
+membership, complete current material evidence under the
+[P4 renewal contract](#p4--preparation-jobs), and an unanswered source.
 Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
-successful unexpired persisted validation, the latest packet version and **no active canonical review lease or source-write reservation**.
+successful persisted validation, the latest packet version and **no active canonical review lease or source-write reservation**.
 [P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery) defines
 additional answer/research exclusions. It evaluates leases and evidence expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
@@ -94,13 +95,9 @@ failures include a reason and retry time, with backoff from 30 seconds to five
 minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
 for snapshots. Generic MCP claim reads and admission follow the
 [session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
-Expired history normally leaves coverage unknown. Priority sources have the
-bounded last-good renewal window described under preparation below. These reads
-retain the 30-second evidence horizon, including cached failures.
-Other source readers can also populate caches;
-looking at this projection never renews their timestamps. Both history caches
-must be resolved and complete, and either unexpired or retained during bounded
-renewal for readiness; the earlier cache expiry bounds their combined freshness.
+The [P4 renewal contract](#p4--preparation-jobs) owns priority-source retention
+and readiness deadlines. Other source readers can also populate caches;
+looking at this projection never renews their timestamps.
 Missing, partial or expired history outside that renewal window blocks
 readiness rather than establishing that a request is unanswered. Legacy paragraph
 answers and conflicting body publications remain part of that history. Complete,
@@ -555,8 +552,10 @@ failure past that bound blocks Ready with the actual source reason and a retry
 time; Prepare now can retry immediately. Explicit recorded source changes clear
 retained history. A successful renewal replaces the old observation, and a
 changed request, card, option or answer blocks the old packet immediately.
-Positive records from a partial renewal are merged into retained history, so
-an observed answer still blocks review even if another history surface failed.
+Positive records from successive partial renewals, including legacy answer
+paragraphs read before a later body page fails, accumulate in retained history.
+An observed answer still blocks review when another history surface fails;
+these partial observations never extend the original completeness deadline.
 Fleet, PR and release evidence keep their independent freshness protections.
 Revalidation uses the same stored packet and semantic dependencies. An older
 attestation confirms packet meaning; current dependency horizons determine
@@ -644,8 +643,9 @@ claims wait for that queue. Reads retain shared Notion request pacing and
 Retry-After backoff, retry transient 429s, and have a 120-second source deadline
 instead of the conversational reader's 20 seconds. Missing permissions, failed
 pages and invalid pagination still leave history unavailable with a visible
-retry. Evidence keeps its original 30-second freshness; reading the cache never
-extends it. A sweep can outlive that freshness. **Prepare now** prioritizes and
+retry. Reading the cache never extends its timestamps; see the
+[P4 renewal contract](#p4--preparation-jobs) for freshness and bounded retention.
+A sweep can outlive ordinary freshness. **Prepare now** prioritizes and
 refreshes the selected card plus expired source observations, so it does not
 require the whole sweep to be simultaneously fresh. It works with automatic
 replenishment off and does not change that switch.
