@@ -952,21 +952,6 @@ describe('remaining shared workflow operations', () => {
     expect((await f.reader.card(id)).properties['Waiting For']!.value).toBe('Preserve another request')
     expect(await f.workflow.update({ ...answer, operation_id: 'duplicate-answer' } as any, 'Owner')).toMatchObject({ code: 'decision-not-open' })
   })
-  it('refuses closed request publication and comment IDs as legacy sources', async () => {
-    const f = fixture()
-    expect(await f.workflow.update(input('request_decision', { request_id: 'closed', question: 'Proceed?', requested_from: 'Will' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    const publication = f.comments.at(-1)!
-    const publicationId = publication.id
-    const created_time = new Date(Date.parse(publication.created_time) + 1000).toISOString()
-    f.comments.push({ id: 'owner-answer', created_time, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.\nRequest ID: closed' }] },
-      { id: 'later-checkin', created_time, rich_text: [{ plain_text: 'Request ID: closed\nChecking in on the spike.' }] })
-    const before = structuredClone(f.raw.properties)
-    for (const request_id of [publicationId, 'owner-answer', 'later-checkin']) {
-      const answer = input('answer_decision', { request_id, operation_id: `legacy-${request_id}`, answer: 'Proceed instead', next: { owner: 'Firstmate', status: 'Queued' } })
-      expect(await f.workflow.update(answer, 'owner-chatgpt')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
-    }
-    expect(f.raw.properties).toEqual(before)
-  })
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {
     const f = fixture()
     await f.workflow.update(input('request_decision', { request_id: 'ask', question: 'Continue?', requested_from: 'Will' }), 'Consumer')
@@ -2278,8 +2263,8 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   const select = (proposal: typeof p) => fetch(`http://127.0.0.1:${port}/api/ask/selections`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Tinstar-UI': '1', 'Tailscale-User-Login': 'owner@example.test' }, body: JSON.stringify({ answer_id: proposalAnswerId(proposal), action_id: 'proceed', client_key: crypto.randomUUID() }) })
   if (scenario === 'partial history') {
     const { CardContextReader } = await import('../cardContext')
-    const original = CardContextReader.prototype.decisionDetails
-    const partial = vi.spyOn(CardContextReader.prototype, 'decisionDetails').mockImplementation(async function (this: InstanceType<typeof CardContextReader>, cardId, force) {
+    const original = CardContextReader.prototype.commentDetails
+    const partial = vi.spyOn(CardContextReader.prototype, 'commentDetails').mockImplementation(async function (this: InstanceType<typeof CardContextReader>, cardId, force) {
       return { ...await original.call(this, cardId, force), outcome: 'partial' }
     })
     const retained = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
@@ -2307,9 +2292,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
     const projected = (await sources.queue()).needsWill!.find(row => row.id === item.id)!
     expect(projected.readiness).toBe('ready-now')
     expect(projected.proposal).toBeUndefined()
-    expect(projected.currentProposalAnswerId).toBeNull()
-    expect(JSON.stringify(projected)).not.toContain(turn.request_id)
-    expect(JSON.stringify(await sources.card(id))).not.toContain(turn.request_id)
+    expect(projected.currentProposalAnswerId).toBe(turn.request_id)
     const { decisionProposalReady } = await import('../../../shared/decisionProposal')
     expect(decisionProposalReady(projected, projected.proposals!.find(entry => entry.value.proposal_id === p.proposal_id), undefined, Date.now())).toBe(false)
     if (scenario === 'other-owner supersession') {
@@ -2320,7 +2303,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
       for (const privateText of ['PRIVATE_OWNER_QUESTION', 'PRIVATE_OWNER_RATIONALE', 'PRIVATE_OWNER_MESSAGE']) expect(JSON.stringify({ projected, visible })).not.toContain(privateText)
     }
     expect((await select(p)).status).toBe(409)
-    expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open', message: expect.stringContaining('superseded by an Ask publication') })
+    expect(await sources.updateWork({ ...f.answer, operation_id: 'obsolete-work-answer' }, 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
     f.comments.push({ id: 'obsolete-direct-answer', rich_text: [{ plain_text: 'Tin Star answer: "r3-proposal"\nAnswer: R3\nNext owner: Firstmate\nNext status: Queued' }] })
     expect(await sources.workflow.reconcileDecisions(id, f.fleet)).toBeUndefined()
     expect(f.bridge.submit).not.toHaveBeenCalled()
@@ -2352,7 +2335,7 @@ it.each(['revision', 'unrelated', 'missing intermediate', 'legacy', 'ask superse
   expect(response.status).toBe(200)
   expect((await response.json()).data.action_selection.answer_id).toBe(proposalAnswerId(latest))
   expect((await asks.store.list('owner@example.test')).filter(row => row.action_selection)).toHaveLength(scenario === 'missing intermediate' ? 2 : 1)
-}, 20_000)
+})
 
 it('shares unchanged reconciliation across windows and invalidates only for typed Ask publication changes', async () => {
   const { fixtureProposal } = await import('../../../../test-fixtures/reconciliation/decisionProposal')
@@ -2452,7 +2435,7 @@ it.each(['none', 'work', 'ask', 'work recovery', 'ask recovery'])('retains an an
   }
   if (supersession !== 'none') {
     const q = { ...p, source: { ...p.source, revision: '2' }, proposal_id: 'replacement-q', supersedes: p.proposal_id, published_at: new Date(Date.parse(p.published_at) + 1000).toISOString() }
-    let answerId: string | null
+    let answerId: string
     if (supersession.startsWith('work')) {
       expect(await sources.updateWork({ ...f.request, request_id: 'replacement-publication', operation_id: 'publish-replacement', proposal: q } as UpdateWorkInput, 'Publisher')).toMatchObject({ outcome: 'saved' })
       answerId = proposalAnswerId(q)
@@ -2462,7 +2445,7 @@ it.each(['none', 'work', 'ask', 'work recovery', 'ask recovery'])('retains an an
       const proposal = { ...q, source: { kind: 'ask-reply' as const, id: turn.request_id, revision: '2' } }
       await sources.askStore.ingest({ request_id: turn.request_id, note: { schema: 'fm-inbox-note.v1', outcome: 'created', id: 'replacement-note', request_id: inboxRequestId(turn.request_id), saved: true, announced: true, acknowledged: false } })
       await sources.askStore.ingest({ request_id: turn.request_id, reply: { id: 'replacement-note', cursor: '1', at: new Date().toISOString(), body: JSON.stringify({ schema: 'tinstar.ask-reply.v1', request_id: turn.request_id, summary: 'Revised recommendation', detail: '', references: [], suggested_actions: [], decision_proposal: proposal }) } })
-      answerId = null
+      answerId = turn.request_id
     }
     expect((await sources.queue()).needsWill!.find(row => row.id === item.id)?.currentProposalAnswerId).toBe(answerId)
     expect(await sources.updateWork({ ...f.answer, operation_id: 'retry-recorded-answer', resolve_wait: undefined } as UpdateWorkInput, 'Owner')).toMatchObject({ decision_resolution: { state: 'pending' } })

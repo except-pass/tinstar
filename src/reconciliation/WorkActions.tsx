@@ -3,7 +3,7 @@ import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
-import { canUseLegacyDecisionSource, decisionRequests } from '../shared/workflowRequests'
+import { decisionRequests } from '../shared/workflowRequests'
 import { workflowSaved } from './workflowSaved'
 import { displayRequestText } from '../shared/requestText'
 
@@ -33,8 +33,7 @@ export function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>
 const field = (label: string, value: string, set: (value: string) => void, required = true, multiline = false) => <label>{label}{multiline ? <textarea required={required} maxLength={12000} value={value} onChange={e => set(e.target.value)} /> : <input required={required} value={value} onChange={e => set(e.target.value)} />}</label>
 
 /** These forms collect consumer intent; the same backend policy serves MCP. */
-export type CardDecisionRequests = Pick<ReturnType<typeof decisionRequests>[number], 'id' | 'sourceId' | 'answered' | 'superseded' | 'verification'>[]
-export function WorkActions({ card, onSaved, sources = [], requests = decisionRequests(sources), answerOnly = false }: { answerOnly?: boolean; card: SceneCard; sources?: Array<{ id: string; text: string; type?: string }>; requests?: CardDecisionRequests; onSaved: (result?: StartWorkResult) => Promise<void> }) {
+export function WorkActions({ card, onSaved, sources = [], answerOnly = false }: { answerOnly?: boolean; card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
   const [kind, setKind] = useState<typeof actions[number][0]>(answerOnly ? 'answer_decision' : 'edit')
   const [owner, setOwner] = useState(String(card.source.properties.Owner?.value ?? ''))
   const [status, setStatus] = useState('Queued'), [note, setNote] = useState('')
@@ -50,11 +49,9 @@ export function WorkActions({ card, onSaved, sources = [], requests = decisionRe
   const [home, setHome] = useState(''), [task, setTask] = useState(''), [generation, setGeneration] = useState('')
   const [system, setSystem] = useState(''), [run, setRun] = useState(''), [reference, setReference] = useState(''), [observed, setObserved] = useState(''), [running, setRunning] = useState(false)
   const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
-  const inactiveSources = new Set(requests.filter(request => request.answered || request.superseded || request.verification).map(request => request.sourceId))
-  const closed = new Set(requests.filter(request => request.answered).flatMap(request => [request.id, request.sourceId]))
-  const openSources = new Set(requests.filter(request => !inactiveSources.has(request.sourceId)).map(request => request.sourceId))
-  const choices = sources.filter(source => openSources.has(source.id) ||
-    !inactiveSources.has(source.id) && canUseLegacyDecisionSource(source, closed, closed.size > 0 && !openSources.size))
+  const requests = decisionRequests(sources)
+  const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
+  const choices = sources.filter(source => !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }

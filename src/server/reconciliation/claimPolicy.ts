@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { WorkCard } from './workReader'
 import { parseWorkerLinks, FIRST_MATE_TASKS } from './workerLinks'
-import { decisionRequests, projectDecisionHistory, workflowReceipt } from '../../shared/workflowRequests'
+import { decisionRequests, workflowReceipt } from '../../shared/workflowRequests'
 
 export const willActions = ['Decision', 'Do', 'Merge', 'Elevated command'] as const
 export const claimFilters = {
@@ -25,14 +25,12 @@ export function needsWillIssues(card: WorkCard): string[] {
   if (typeof value(card, 'Waiting For') !== 'string' || !String(value(card, 'Waiting For')).startsWith('Will:') || card.properties['Waiting For']?.hasMore) issues.push('Waiting For must start Will:')
   return issues
 }
-export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown, publications?: Parameters<typeof projectDecisionHistory>[1], complete = true) {
+export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown) {
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(action => action.trim().toLowerCase())
-  const projection = projectDecisionHistory(notes, publications, complete)
-  if (projection.verification) return []
-  return decisionRequests(notes, projection.requests).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
+  return decisionRequests(notes).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
 }
 export function oldestOpenRequestSince(requests: ReturnType<typeof decisionRequests>) {
-  return requests.filter(request => !request.superseded && !request.answered).flatMap(request => request.since && Number.isFinite(Date.parse(request.since)) ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
+  return requests.filter(request => !request.answered).flatMap(request => request.since && Number.isFinite(Date.parse(request.since)) ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null
 }
 export const strictlyNeedsWill = (card: WorkCard) => !deferredDecisionCard(card) && needsWillIssues(card).length === 0
 export function matchesClaimFilters(card: WorkCard, filters: ClaimFilters, requestSince: string | null = null, now = Date.now()) {

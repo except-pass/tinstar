@@ -542,29 +542,22 @@ answers, not delivery, acknowledgment, closure or recovery of recorded answers.
 There is no independent poller or request store.
 
 Queue refresh inspects at most 20 linked candidate/outstanding-delivery cards, with coalesced 30-second reconciliation reads.
-A fresh board census is loaded only when an answered request without an explicit
-source card reference needs binding validation, and is shared within that pass;
-`get_work({card_id, refresh: true})` reconciles one exact card.
+Preparation revisions track the published request, structured answer, and their
+source dependencies. Ordinary card comments, including check-ins and
+`OWNER DECISION` prose, leave the request and its preparation revision intact.
 
-An `OWNER DECISION (Will, <when>, via <source>):` or `OWNER DECISION — <date>:`
-card comment records the owner's answer in the card's own history. Add a `Request ID: <id>` line to target a specific request.
-An unnamed decision applies to the single open current request. When multiple requests
-are open, the Desk asks for verification. An explicit option pick recorded by
-the owner connector also closes its request and preserves the owner's words.
-The answer stops preparation for that request. A new `request_decision`
-requires a fresh ID. Check-ins, reminders and prepared packets leave the request unchanged.
-The prose form records a decision without specifying a workflow transition.
-
-Todo, Backlog, Archived and Done cards are excluded from preparation, review
-offers, claims and Waiting on you reminders. Returning an open request to an
-active card status restores eligibility with its existing Will action.
+Todo, Backlog, Archived and Done cards are excluded from preparation, packet
+publication, review offers, claims and Waiting on you reminders. Returning an
+open request to an active status restores eligibility.
 
 Run `npx tsx scripts/decision-owner-answer-sweep.ts [--config-home DIR]` to
-list requests that prose closes without a structured
-answer row. The read-only report prints card and comment IDs, a count, and any
-gaps in source coverage.
+list open Notion requests followed by an `OWNER DECISION` comment. The
+read-only report includes card, request and comment IDs and any coverage gaps.
 
-A direct Notion answer can also include a workflow transition in this format:
+A fresh board census is loaded only when an answered request without an explicit
+source card reference needs binding validation, and is shared within that pass;
+`get_work({card_id, refresh: true})` reconciles one exact card. A direct Notion
+answer can use the same published proposal and this format:
 
 ```text
 Tin Star answer: "the-published-proposal-id"

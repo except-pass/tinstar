@@ -66,12 +66,11 @@ export const bindingMeaning = (binding: DecisionPacketBinding) => decisionMeanin
 
 export interface DecisionRequestEvidence {
   binding: DecisionPacketBinding | null; question: string | null
-  request_id?: string
   dependencies: DecisionDependencyObservation[]; reasons: string[]; answered: boolean
 }
 export interface DecisionEvidence {
-  card_id: string; requests: DecisionRequestEvidence[]; reasons: string[]
   deferred?: boolean
+  card_id: string; requests: DecisionRequestEvidence[]; reasons: string[]
   omissions: string[]; observed_at: string | null
 }
 export interface DecisionPacketValidation { valid: boolean; reasons: string[]; valid_until: string | null }

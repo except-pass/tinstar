@@ -10,9 +10,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
-import { validateDecisionPacket } from '../../../shared/decisionPacket'
-import { decisionRecordRows } from '../../../shared/workflowRequests'
 import { mainWaitCandidates } from '../waitingOnMain'
+import { validateDecisionPacket } from '../../../shared/decisionPacket'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -110,6 +109,34 @@ it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s car
     expect(await claimNext('active-again')).toMatchObject({ outcome: 'claimed', lease: { card_id: f.cardId } })
     expect(f.posts).toHaveLength(1)
   } finally { await client.close() }
+}, 20_000)
+
+it('keeps one preparation across owner prose and First Mate check-ins', async () => {
+  let added = false
+  const f = await setup({ wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
+    const body = await response.json()
+    body.results.push(
+      { id: 'owner-prose', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
+      { id: 'check-in', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'First Mate check-in: still waiting.' }] },
+    )
+    return Response.json(body)
+  } })
+  const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
+  const first = await prepare()
+  const packet = preparedDecisionFixture().packet, before = f.sources.preparationEvidence(f.cardId).requests[0]!
+  packet.binding = before.binding!
+  packet.dependencies = before.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await f.sources.preparation.publish({ job_id: first.job_id, operation_id: 'stable-packet', packet })).toMatchObject({ ready: true })
+  added = true
+  await f.sources.updateContext(f.cardId)
+  expect((await loadedSnapshot(f.sources)).ready).toHaveLength(1)
+  const after = f.sources.preparationEvidence(f.cardId).requests[0]!
+  expect(after.answered).toBe(false)
+  expect(after.binding?.source_revision).toBe(before.binding?.source_revision)
+  expect((await prepare()).outcome).toBe('already-ready')
+  expect(f.posts).toHaveLength(1)
 }, 20_000)
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {
@@ -300,8 +327,8 @@ it('returns a 64-card snapshot under two seconds while shared capped history rea
     const readCount = reads.length
     await sources.preparedReviews.snapshot()
     expect(reads).toHaveLength(readCount)
+    expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(64)
     await sources.preparation.replenish()
-    expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(65)
     expect(posts).toHaveLength(1)
     expect(reconcile).not.toHaveBeenCalled()
     expect(cardIds.every(id => sources.leases.status(id) === null)).toBe(true)
@@ -323,7 +350,7 @@ it('reads only the Prepare now card and shares concurrent requests for it', asyn
   expect((await first).outcome).toMatch(/dispatched|already-preparing/)
   expect((await second).outcome).toMatch(/dispatched|already-preparing/)
   expect(details).toHaveBeenCalledTimes(1)
-  expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(2)
+  expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(1)
 }, 20_000)
 
 it.each(['comments', 'body'] as const)('loads a late %s request on a 13-page contract without treating code or nested specs as missing history', async historySurface => {
@@ -347,7 +374,7 @@ it('refreshes just an explicitly requested expired card after a sweep outlives t
     const before = reads.length
     expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Fresh exact card after long sweep' })).toMatchObject({ outcome: 'dispatched' })
     const freshReads = reads.slice(before)
-    expect(freshReads).toHaveLength(29)
+    expect(freshReads).toHaveLength(15)
     expect(freshReads.every(read => read.path === `/v1/pages/${cardId}` || read.path === `/v1/blocks/${cardId}/children` || read.path === '/v1/comments')).toBe(true)
   } finally { clock.mockRestore() }
 }, 20_000)
@@ -449,7 +476,7 @@ it('keeps one published packet Ready through fresh property/history cycles witho
   vi.useRealTimers()
 }, 60_000)
 
-it.each(['properties', 'comments', 'body'] as const)('reports %s renewal failures and withdraws Ready when history is incomplete', async failure => {
+it.each(['properties', 'comments', 'body'] as const)('retains Ready through transient %s renewal failures, then blocks past the bound with the source reason', async failure => {
   let unavailable = false
   let time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
@@ -466,7 +493,7 @@ it.each(['properties', 'comments', 'body'] as const)('reports %s renewal failure
   expect(published).toMatchObject({ ready: true })
   unavailable = true; time += 16_000; vi.setSystemTime(time)
   const transient = await loadedSnapshot(sources)
-  expect(transient.ready).toEqual(failure === 'properties' ? [expect.objectContaining({ id: published.packet_id })] : [])
+  expect(transient.ready).toEqual([expect.objectContaining({ id: published.packet_id })])
   expect(transient.history).toContainEqual(expect.objectContaining({ card_id: cardId, state: 'unavailable', message: expect.stringContaining('HTTP 503') }))
   for (const elapsed of [31_000, 61_000, 121_000]) {
     time += elapsed; vi.setSystemTime(time)
@@ -484,19 +511,15 @@ it.each(['properties', 'comments', 'body'] as const)('reports %s renewal failure
   expect(posts).toHaveLength(1)
 }, 20_000)
 
-it.each(['option-pick', 'influx-comment'] as const)('registers an owner %s and never re-offers or re-prepares the request after a check-in', async kind => {
-  let time = Date.now(), ownerAt: string | undefined, checkInAt: string | undefined
-  const words = 'B, not now. Do not re-request this decision until the spike reports.'
-  const integration = { id: 'shared-notion-integration' }
+it.each(['receipt', 'comment'] as const)('registers a later owner %s from real history reads and never re-offers or re-prepares the request', async kind => {
+  let time = Date.now(), ownerAt: string | undefined
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
-  const { sources, cardId, requestId, posts, sourceRequest } = await setup({ wrapFetch: transport => async (input, init) => {
+  const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
-    if ((ownerAt || checkInAt) && (init?.method ?? 'GET') === 'GET' && new URL(String(input)).pathname === '/v1/comments') {
+    if (ownerAt && new URL(String(input)).pathname === '/v1/comments') {
       const body = await response.json()
-      if (ownerAt) body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: integration,
-        rich_text: [{ plain_text: `OWNER DECISION (Will, 2026-11-16 10:59 PM ET, via Tinstar Decision Prep): ${words}` }] })
-      if (checkInAt) body.results.push({ id: 'later-firstmate-check-in', created_time: checkInAt, created_by: integration,
-        rich_text: [{ plain_text: 'Firstmate check-in: spike pending. Quoting the packet for reference.' }] })
+      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: { id: 'provider-user-id', ...(kind === 'comment' ? { name: 'owner-chatgpt' } : {}) },
+        rich_text: [{ plain_text: kind === 'receipt' ? 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-edit"]' : 'A response with no decision protocol or keyword.' }] })
       return Response.json(body)
     }
     return response
@@ -506,27 +529,10 @@ it.each(['option-pick', 'influx-comment'] as const)('registers an owner %s and n
   packet.binding = request.binding!
   packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
   expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'owner-suppression-packet', packet })).toMatchObject({ ready: true })
-  time += 1000; vi.setSystemTime(time)
-  if (kind === 'option-pick') {
-    expect(await sources.workflow.update({ card_id: cardId, kind: 'answer_decision', operation_id: 'owner-answer',
-      request_id: requestId, option_id: 'defer', answer: words, next: { owner: 'Firstmate', status: 'Queued' },
-      resolve_wait: 'Will: Choose the bounded preview route?' }, 'owner-chatgpt')).toMatchObject({ saved_fields: expect.arrayContaining(['note']) })
-  } else ownerAt = new Date(time).toISOString()
-  time += 31_000; vi.setSystemTime(time)
+  ownerAt = new Date(time + 1000).toISOString(); time += 16_000; vi.setSystemTime(time)
   const snapshot = await loadedSnapshot(sources)
   expect(sources.preparationEvidence(cardId).requests[0]!.answered).toBe(true)
-  expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0, needs_repreparation: 0 }, ready: [], pending: [] })
-  const answered = sources.preparationEvidence(cardId).requests[0]!
-  expect(await sources.workflow.reconcileDecisions(cardId)).toMatchObject({ request_id: requestId, answered: true })
-  const views = await sources.queue(undefined, undefined, false, 'read')
-  expect(views.items.some(item => item.decisionResolution?.answered)).toBe(true)
-  expect(JSON.stringify(views)).not.toContain(words)
-  if (kind === 'option-pick') expect(decisionRecordRows(await sources.workflow.preparedHistory(cardId), 'Tin Star answer data: '))
-    .toContainEqual(expect.objectContaining({ request_id: requestId, option_id: 'defer', answer: words }))
-  checkInAt = new Date(time + 1000).toISOString(); time += 31_000; vi.setSystemTime(time)
-  expect(await loadedSnapshot(sources)).toMatchObject({ ready: [], pending: [] })
-  expect(sources.preparationEvidence(cardId).requests[0]!.binding).toEqual(answered.binding)
-  expect(sources.preparationEvidence(cardId).requests[0]!.dependencies.map(dep => dep.revision)).toEqual(answered.dependencies.map(dep => dep.revision))
+  expect(snapshot).toMatchObject({ counts: { requests: 0, ready: 0, to_prepare: 0 }, ready: [], pending: [] })
   await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true } }, 'fixture-owner')
   await sources.preparation.replenish()
   expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Do not repeat this answer' })).toMatchObject({ outcome: 'ineligible' })
@@ -534,48 +540,9 @@ it.each(['option-pick', 'influx-comment'] as const)('registers an owner %s and n
   expect(await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'do-not-reoffer', review_session_token: session.review_session_token })).toMatchObject({ outcome: 'no-decision-requests' })
   expect(posts).toHaveLength(1)
   expect((await sources.preparation.status()).jobs[0]).toMatchObject({ state: 'published', readiness: { ready: false } })
-  if (kind === 'influx-comment') {
-    const laterRequest = { card_id: cardId, kind: 'request_decision' as const, operation_id: 'new-request-after-spike',
-      request_id: requestId, question: 'The spike reported. Reconsider the preview?', requested_from: 'Will', action: 'Decision',
-      source_request: sourceRequest, options: packet.binding.options }
-    expect(await sources.workflow.update(laterRequest, 'Firstmate')).toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
-    const freshId = 'preview-after-spike'
-    expect(await sources.workflow.update({ ...laterRequest, operation_id: 'publish-fresh-request', request_id: freshId }, 'Firstmate')).toMatchObject({ outcome: 'saved' })
-    await loadedSnapshot(sources)
-    expect(sources.preparationEvidence(cardId).requests).toMatchObject([{ answered: true, request_id: requestId },
-      { answered: false, binding: { request_id: freshId, source_id: expect.stringMatching(/^published-comment-/) } }])
-    await sources.preparation.replenish()
-    expect(posts).toHaveLength(2)
-  }
 }, 20_000)
 
-it.each(['automatic', 'prepare-now'])('blocks %s dispatch when the owner answers inside the cache horizon', async mode => {
-  const time = Date.now()
-  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
-  let answered = false
-  const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
-    const response = await transport(input, init)
-    if (!answered || new URL(String(input)).pathname !== '/v1/comments') return response
-    const body = await response.json()
-    body.results.push({ id: 'same-minute-answer', created_time: new Date().toISOString(),
-      rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer the preview.' }] })
-    return Response.json(body)
-  } })
-  await loadedSnapshot(sources)
-  vi.setSystemTime(time + 1000)
-  answered = true
-  expect(sources.preparationEvidence(cardId).requests[0]!.answered).toBe(false)
-  if (mode === 'automatic') {
-    await sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0, values: { target_ready: 10, max_preparers: 3, automatic_replenishment: true } }, 'fixture-owner')
-    await sources.preparation.replenish()
-  } else {
-    expect(await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this open decision' })).toMatchObject({ outcome: 'cancelled' })
-  }
-  expect((await sources.preparation.status()).jobs).toMatchObject([{ request_id: requestId, state: 'cancelled' }])
-  expect(posts).toEqual([])
-}, 20_000)
-
-it('withdraws Ready during incomplete renewals over 1800 samples with admission off and Desk closed', async () => {
+it('has zero Ready gaps in 1800 samples over 30 simulated minutes of paced slow renewals and transient failures, with admission off and Desk closed', async () => {
   const start = Date.now()
   let time = start, slow = false, commentReads = 0
   const waiting: Array<{ until: number; resolve(): void }> = []
@@ -614,18 +581,15 @@ it('withdraws Ready during incomplete renewals over 1800 samples with admission 
       const evidence = f.sources.preparationEvidence(f.cardId)
       const current = await f.sources.decisionPackets.read(published.packet_id, evidence)
       samples++
-      if (!current?.ready) {
-        gaps++
-        expect(evidence.reasons).toContain('Complete cached decision history is unavailable')
-      }
+      if (!current?.ready) gaps++
       const withoutRenewal = structuredClone(evidence)
       for (const row of withoutRenewal.requests) for (const dependency of row.dependencies) delete dependency.renewal_until
       if (!validateDecisionPacket(packet, withoutRenewal, time).valid) expiredSamples++
     }
-    expect(samples).toBe(1800)
-    expect(gaps).toBeGreaterThan(0)
+    expect({ samples, gaps }).toEqual({ samples: 1800, gaps: 0 })
     expect(commentReads).toBeGreaterThan(30)
     expect(expiredSamples).toBeGreaterThan(0)
+    expect((await f.sources.preparedReviews.snapshot()).ready).toEqual([expect.objectContaining({ id: published.packet_id })])
     expect(f.posts).toHaveLength(1)
     expect(await f.sources.decisionPackets.ids()).toEqual([published.packet_id])
     expect((await f.sources.decisionPackets.readPolicy('f'.repeat(32))).values.automatic_replenishment).toBe(false)
@@ -636,7 +600,7 @@ it('withdraws Ready during incomplete renewals over 1800 samples with admission 
   }
 }, 60_000)
 
-it.each(['answer', 'card'] as const)('keeps the last complete answer history during partial renewal with a change to %s', async kind => {
+it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s change even when the same renewal has incomplete body history', async kind => {
   let failing = false, alternating = false, time = Date.now()
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const f = await setup({ wrapFetch: transport => async (input, init) => {
@@ -650,7 +614,7 @@ it.each(['answer', 'card'] as const)('keeps the last complete answer history dur
     }
     if (failing && kind === 'answer' && path === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { id: 'shared-notion-integration' }, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer this request.' }] })
+      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Defer this request.' }] })
       return Response.json(body)
     }
     return response
@@ -665,11 +629,11 @@ it.each(['answer', 'card'] as const)('keeps the last complete answer history dur
   const snapshot = await loadedSnapshot(f.sources)
   expect(snapshot.ready).toEqual([])
   const evidence = f.sources.preparationEvidence(f.cardId)
-  expect(evidence.requests[0]!.answered).toBe(false)
-  if (kind === 'card') expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain('Dependency changed')
+  expect(evidence.requests[0]!.answered).toBe(kind === 'answer')
+  expect((await f.sources.decisionPackets.read(published.packet_id, evidence))!.reasons.join(' ')).toContain(kind === 'answer' ? 'This source request already has an answer' : 'Dependency changed')
   alternating = true; time += 31_000; vi.setSystemTime(time)
   expect((await loadedSnapshot(f.sources)).ready).toEqual([])
-  expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(false)
+  expect(f.sources.preparationEvidence(f.cardId).requests[0]!.answered).toBe(kind === 'answer')
   expect(f.posts).toHaveLength(1)
 }, 20_000)
 

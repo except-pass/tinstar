@@ -7,7 +7,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { canUseLegacyDecisionSource, projectDecisionHistory, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -18,7 +18,7 @@ import { HandoffOperations } from './workflowHandoff'
 import { codexTurn } from '../../shared/codexActivity'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
-import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, type WorkflowNote, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
+import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
 import { CreationReceipts } from './workflowReceipts'
 import { notionCard } from './notion'
 import { JiraWriteError, JiraMappingError, JiraConflictError } from './jira'
@@ -89,7 +89,7 @@ export class WorkflowOperations {
     // Full notes, not a property timestamp or cached UI history. An absent
     // marker in truncated/unavailable history cannot authorize a second write.
     await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
-    const notes = await this.preparedHistory(input.card_id)
+    const notes = await this.content.notes(input.card_id)
     const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
     const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
     const matches = (value: unknown) => {
@@ -97,8 +97,7 @@ export class WorkflowOperations {
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
     }
     const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-    const publications = await this.proposals?.read(input.card_id, notes)
-    const conflict = unrelatedReceipt || !!projectDecisionHistory(notes, publications).requests.get(input.request_id)?.ownerAnswer || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
+    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
     const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
     let desired: Record<string, unknown> | undefined
     if (!conflict && !answers.length && own) {
@@ -112,7 +111,7 @@ export class WorkflowOperations {
   }
   async preparedHistory(cardId: string) {
     const [notes, sections] = await Promise.all([this.content.notes(cardId), this.content.sections(cardId, false, true)])
-    return [...sections, ...notes.map(note => ({ ...note, type: 'comment' }))]
+    return [...notes.map(note => ({ ...note, type: 'comment' })), ...sections]
   }
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     return withSourceOperation(actor, input.submission_id, async () => {
@@ -294,7 +293,7 @@ export class WorkflowOperations {
       if (!resolution) return result
       return { ...result, decision_resolution: resolution, ...(resolution.state !== 'resolved' ? {
         outcome: 'partially-saved' as const, code: 'firstmate-pending', message: resolution.message,
-      } : { message: resolution.source_anchor ? 'Decision recorded · First Mate reconciled' : resolution.message }) }
+      } : { message: 'Decision recorded · First Mate reconciled' }) }
     })
   }
   async savedReviewAssociations() {
@@ -337,17 +336,15 @@ export class WorkflowOperations {
   private async performDecisionReconcile(cardId: string, fleet?: SourceSnapshot['fleet'], repair = false, census = this.decisionCensus()) {
     let card = await this.reader.card(cardId, true)
     if (card.source?.synthetic) return null
-    let notes = await this.preparedHistory(cardId)
-    const publications = await this.proposals?.read(cardId, notes)
-    const recordedRequests = decisionHistory(notes, publications)
+    let notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
+    const jsonLines = (prefix: string) => decisionRecordRows(notes, prefix)
+    const recordedRequests = decisionHistory(notes, await this.proposals?.read(cardId, notes))
     if (repair) {
       // Recover a property/comment interruption from the same durable Notion
       // history, including after restart. Never replay a different user edit.
-      const states = projectDecisionHistory(notes, publications).requests
-      for (const intent of decisionRecordRows(notes, 'Tin Star decision intent: ')) {
+      for (const intent of jsonLines('Tin Star decision intent: ')) {
         const input = updateWorkSchema.safeParse(intent.input)
         if (!input.success || input.data.card_id !== cardId || input.data.kind !== 'answer_decision' || typeof intent.actor !== 'string') continue
-        if (states.get(input.data.request_id)?.ownerAnswer) continue
         const result = await this.performUpdate(input.data, intent.actor)
         if (result.outcome !== 'saved') return { state: 'pending' as const, message: 'Decision recorded · First Mate not yet updated' }
       }
@@ -367,7 +364,7 @@ export class WorkflowOperations {
         if (result.outcome !== 'saved') return { state: 'verification-needed' as const, message: `Decision reconciliation needs verification: ${result.message}` }
       }
       card = await this.reader.card(cardId, true)
-      notes = await this.preparedHistory(cardId)
+      notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
     }
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
       async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
@@ -618,13 +615,11 @@ export class WorkflowOperations {
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const publications = await this.proposals?.read(card.id, notes)
       const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
-      const states = projectDecisionHistory(notes, publications).requests
-      const answered = new Set<string>(decisionRecordRows(notes, 'Tin Star answer: '))
-      for (const [id, state] of states) if (state.answers.length) answered.add(id)
+      const answered = new Set(decisionRecordRows(notes, 'Tin Star answer: '))
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
       if (input.kind === 'request_decision') {
-        if (states.has(input.request_id) || answered.has(input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
+        if (decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id)) throw new WorkflowError('decision-conflict', 'This decision ID already exists; use a new ID for a new request')
         const fleet = input.source_request ? await this.fleet() : undefined
         const sourceRequestKey = input.proposal && input.source_request ? queueRequestKey(card, fleet!, input.source_request) : undefined
         if (input.proposal && (!input.source_request || !workProposalMatchesRequest(input.proposal, input.source_request, sourceRequestKey, card.id))) throw new WorkflowError('decision-conflict', 'Published proposal request_key must match its bound First Mate source request and canonical card')
@@ -639,15 +634,12 @@ export class WorkflowOperations {
           // Older Notion asks retain their actual paragraph/comment identity.
           // The caller explicitly judges which aggregate action tag is resolved;
           // absent that judgment, leave every legacy action tag untouched.
-          const source = notes.find(note => note.id === input.request_id)
-          const closed = new Set([...answered, ...[...states.values()].filter(state => state.answers.length).map(state => state.publication.id)])
-          const closedOnly = closed.size > 0 && ![...states.values()].some(state => state.effective && !state.answers.length)
-          if (source && canUseLegacyDecisionSource(source, closed, closedOnly)) {
+          const source = notes.find(note => note.id === input.request_id) ?? (await this.content.sections(card.id)).find(block => block.id === input.request_id)
+          if (source && source.text.trim()) {
             if (input.legacy_action && !tags.includes(input.legacy_action)) throw new WorkflowError('decision-conflict', 'The explicitly resolved legacy action tag is no longer present')
             request = { id: input.request_id, action: input.legacy_action ?? '', preserve_action: !input.legacy_action }
           }
         }
-        if (states.get(input.request_id)?.ownerAnswer) throw new WorkflowError('decision-not-open', 'This specific decision has an owner answer recorded on the card')
         const savedAnswers = notes.filter(note => decisionRecordRows([note], 'Tin Star answer: ').includes(input.request_id))
         const published = requests.find(row => row.id === input.request_id)
         if (!request || answered.has(input.request_id) && (!(published?.source_request || input.source_request) || savedAnswers.some(note => decisionAnswerText(note) !== input.answer))) throw new WorkflowError('decision-not-open', 'This specific recorded decision is absent or already answered; no other ask was cleared')
@@ -720,7 +712,7 @@ export class WorkflowOperations {
       if (card.source?.synthetic && 'source_request' in input && input.source_request) throw new WorkflowError('synthetic-source', 'Synthetic Jira decisions cannot deliver to live First Mate requests')
       const before = card
       stage = 'read card comments'
-      const notes: WorkflowNote[] = input.kind === 'request_decision' || input.kind === 'answer_decision' ? await this.preparedHistory(card.id) : await this.content.notes(card.id)
+      const notes = await this.content.notes(card.id)
       stage = 'read decision publications'
       const publications = input.kind === 'answer_decision' ? await this.proposals?.read(card.id, notes) : undefined
       const intents = input.kind === 'answer_decision' ? decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
@@ -730,12 +722,8 @@ export class WorkflowOperations {
       }) : []
       const recorded = intents.length > 0 || input.kind === 'answer_decision' && notes.some(note => workflowReceipt(note) && decisionRecordRows([note], 'Tin Star answer data: ').some(row => row.request_id === input.request_id))
       const eligibleRequests = input.kind === 'answer_decision' ? recorded ? decisionHistory(notes, publications) : decisionProposals(notes, publications) : []
+      if (input.kind === 'answer_decision' && decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === input.request_id && row.proposal) && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This proposal is no longer current')
       if (input.kind === 'answer_decision' && !recorded) {
-        const projection = projectDecisionHistory(notes, publications)
-        if (projection.verification) throw new WorkflowError('decision-not-open', projection.verification)
-        const state = projection.requests.get(input.request_id)
-        if (state?.supersededBy) throw new WorkflowError('decision-not-open', `This request was superseded by ${state.supersededBy}.`)
-        if (state && !eligibleRequests.some(row => row.id === input.request_id)) throw new WorkflowError('decision-not-open', 'This request has no current workflow publication.')
         const published = eligibleRequests.find(row => row.id === input.request_id)
         const request = published?.source_request ?? input.source_request
         if (request) {

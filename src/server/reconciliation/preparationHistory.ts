@@ -56,11 +56,16 @@ export class PreparationHistory {
     return until > Date.now() ? new Date(until).toISOString() : null
   }
 
+  /** A partial read cannot prove absence. Retain the last complete history,
+   * but merge positive new records so an observed answer/change still wins. */
   evidenceHistory(id: string) {
-    const current = this.reader.cachedDecisionHistory(id)
-    if (current?.context.outcome === 'available' && current.context.commentsOutcome === 'available') return current
-    const previous = this.renewalUntil(id) ? this.complete.get(id) : undefined
-    return current && previous ? { ...current, context: { ...current.context, blocks: previous.context.blocks } } : current
+    const current = this.reader.cachedDecisionHistory(id), previous = this.complete.get(id)
+    if (!current || !previous || !this.renewalUntil(id) || current.context.outcome === 'available' && current.context.commentsOutcome === 'available') return current
+    const blocks = new Map(previous.context.blocks.map(block => [block.id, block]))
+    for (const block of current.context.blocks) blocks.set(block.id, block)
+    const retained = { ...previous, context: { ...previous.context, blocks: [...blocks.values()] } }
+    this.complete.set(id, retained)
+    return retained
   }
 
   state(id: string) {
@@ -105,6 +110,7 @@ export class PreparationHistory {
         message: `${reason} A background retry is scheduled; Prepare now can retry this card.` })
     } finally {
       clearTimeout(timer)
+      this.evidenceHistory(id)
     }
   }
 

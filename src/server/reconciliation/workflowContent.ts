@@ -21,7 +21,7 @@ export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'c
 export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
-export interface WorkflowNote { id: string; text: string; type?: string; author?: string; createdAt?: string }
+export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
 export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`
 export const decisionMarker = (id: string) => `${workflowMarkers.decision} ${JSON.stringify(id)}`
 export const sectionMarker = (name: string) => `${workflowMarkers.section} ${name}`
@@ -139,7 +139,7 @@ export class WorkflowContent {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`comments?${query}`, 'GET', undefined, signal)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
-      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), type: 'comment', author: item.created_by?.id, createdAt: item.created_time })
+      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
       if (!body.has_more) return result
       if (!body.next_cursor || body.next_cursor === cursor) break
       cursor = body.next_cursor
@@ -150,7 +150,7 @@ export class WorkflowContent {
   async sections(id: string, includeStructured = false, complete = false) {
     const jira = this.jira(id)
     if (jira) return jira.sections(id, complete)
-    const result: Array<{ id: string; text: string; type: string; createdAt?: string }> = []; let cursor: string | undefined
+    const result: Array<{ id: string; text: string; type: string }> = []; let cursor: string | undefined
     const cursors = new Set<string>()
     // Only an explicit full-contract read/write requests complete pagination.
     // Normal managed-brief operations retain their existing bounded reads.
@@ -158,7 +158,7 @@ export class WorkflowContent {
       const query = new URLSearchParams({ page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`blocks/${id}/children?${query}`)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete body read')
-      for (const block of body.results) if ((block.type === 'paragraph' || includeStructured && ['heading_2', 'code'].includes(block.type)) && !block.archived && !block.in_trash) result.push({ id: block.id, type: block.type, text: plainText(block[block.type]?.rich_text), createdAt: block.created_time })
+      for (const block of body.results) if ((block.type === 'paragraph' || includeStructured && ['heading_2', 'code'].includes(block.type)) && !block.archived && !block.in_trash) result.push({ id: block.id, type: block.type, text: plainText(block[block.type]?.rich_text) })
       if (!body.has_more) return result
       const nextCursor = body.next_cursor
       if (typeof nextCursor !== 'string' || !nextCursor || cursors.has(nextCursor)) break

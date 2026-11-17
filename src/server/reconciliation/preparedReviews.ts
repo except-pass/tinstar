@@ -93,7 +93,7 @@ export class PreparedReviews {
       const queue = this.queue(), now = this.now()
       const evidenceByCard = new Map(queue.card_ids.map(card => [card, this.evidence(card)]))
       const sourceFailures = [...evidenceByCard].flatMap(([card_id, evidence]) => {
-        const reasons = [...evidence.reasons, ...evidence.requests.flatMap(request => request.answered ? [] : request.reasons)]
+        const reasons = [...evidence.reasons, ...evidence.requests.flatMap(request => request.reasons)]
         return reasons.length ? [{ card_id, reasons: [...new Set(reasons)] }] : []
       })
       const answers = db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get()
@@ -104,19 +104,15 @@ export class PreparedReviews {
       const current = rows.map(row => {
         const stored = this.packets.readInStorage(db, row.id)!
         return this.packets.readInStorage(db, row.id, evidenceByCard.get(stored.packet.binding.card_id) ?? this.evidence(stored.packet.binding.card_id))!
-      }).filter(stored => {
-        const binding = stored.packet.binding, evidence = evidenceByCard.get(binding.card_id)
-        return evidence && !evidence.deferred && !recorded(binding) && !evidence.requests.some(request =>
-          request.answered && (request.request_id ?? request.binding?.request_id) === binding.request_id)
-      })
+      }).filter(stored => queue.card_ids.includes(stored.packet.binding.card_id) && !recorded(stored.packet.binding))
       const needsResearch = (packet: (typeof current)[number]) => !packet.validation.valid || !packet.validation.valid_until || Date.parse(packet.validation.valid_until) <= now
       const held = new Set(queue.card_ids.filter(card => this.leases.activeInStorage(this.leases.rowInStorage(db, card))))
       const ready = current.filter(stored => stored.ready)
       const pending = queue.card_ids.flatMap(card => {
         const evidence = evidenceByCard.get(card)!
-        return evidence.requests.filter(request => !evidence.deferred && !request.answered && (!request.binding || !recorded(request.binding))).map(request => {
+        return evidence.requests.filter(request => !request.answered && (!request.binding || !recorded(request.binding))).map(request => {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
-          return { card_id: card, request_id: request.request_id ?? request.binding?.request_id ?? null, source_revision: request.binding?.source_revision ?? null,
+          return { card_id: card, request_id: request.binding?.request_id ?? null, source_revision: request.binding?.source_revision ?? null,
             title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
             state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : packet?.prepared_by === commentPacketActor ? 'Blocked' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
