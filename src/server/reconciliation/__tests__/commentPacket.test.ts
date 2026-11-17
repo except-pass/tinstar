@@ -153,7 +153,7 @@ it('imports identical comment/request IDs independently on six cards', async () 
   expect(await sources.decisionPackets.ids()).toHaveLength(6)
 })
 
-it('completes an expired matching job from its card comment without redispatch', async () => {
+it.each([false, true])('accepts expired comment publication only without replacement: replaced=%s', async replaced => {
   const root = await mkdtemp(join(tmpdir(), 'comment-expired-job-')); roots.push(root)
   let now = Date.now()
   const { evidence, request } = mapperFixture()
@@ -166,6 +166,14 @@ it('completes an expired matching job from its card comment without redispatch',
   for (const dependency of request.dependencies) { dependency.observed_at = new Date(now).toISOString(); dependency.expires_at = new Date(now + 60_000).toISOString() }
   await prep.replenish() // Expire the attempt; automatic replenishment is off.
   expect((await prep.status()).jobs[0]!.state).toBe('failed')
+  if (replaced) {
+    await prep.prepareNow('fixture-owner', { card_id: evidence.card_id, request_id: request.binding!.request_id, reason: 'Replace expired attempt' })
+    const text = sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', job.job_id!)
+    await prep.importComments(evidence.card_id, [{ id: 'replaced-job-comment', type: 'comment', text }])
+    expect(await packets.ids()).toEqual([])
+    expect((await prep.status()).jobs.find(row => row.id === job.job_id)).toMatchObject({ state: 'superseded' })
+    return
+  }
   const text = sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', job.job_id!)
   await prep.importComments(evidence.card_id, [{ id: 'expired-job-comment', type: 'comment', text }])
   expect((await prep.status()).jobs[0]).toMatchObject({ id: job.job_id, state: 'published', packet_id: expect.any(String) })

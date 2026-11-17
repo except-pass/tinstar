@@ -74,3 +74,21 @@ it('refreshes priority history before expiry and promotes exact sources ahead of
   await vi.waitFor(() => expect(details).toHaveBeenCalledWith('three', true))
   completed.get('three')!()
 })
+
+it.each([false, true])('refreshes expired properties with fresh history for explicit=%s', async explicit => {
+  const reader = new CardContextReader(undefined)
+  const context = { outcome: 'available' as const, commentsOutcome: 'available' as const, blocks: [] }
+  vi.spyOn(reader, 'cachedDecisionHistory').mockReturnValue({ context, observed_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30_000).toISOString() })
+  const details = vi.spyOn(reader, 'decisionDetails').mockResolvedValue(context)
+  let fresh = false
+  const properties = vi.fn(async () => { fresh = true })
+  const queue = new PreparationHistory(reader, () => {}, async () => {}, properties, () => fresh)
+  if (explicit) await queue.read('retry')
+  else { queue.warm(['retry']); await vi.waitFor(() => expect(queue.state('retry').state).toBe('available')) }
+  expect(properties).toHaveBeenCalledTimes(1)
+  expect(properties).toHaveBeenCalledWith('retry')
+  expect(details).toHaveBeenCalledTimes(1)
+  expect(details).toHaveBeenCalledWith('retry', true)
+  queue.warm(['retry'])
+  expect(properties).toHaveBeenCalledTimes(1)
+})

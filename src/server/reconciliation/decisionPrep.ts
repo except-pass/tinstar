@@ -104,7 +104,7 @@ export class DecisionPreparation {
         SELECT min(e.at) FROM decision_packet_events e JOIN decision_packet_validations v ON v.sequence = e.sequence
         WHERE e.packet_id = decision_prep_jobs.packet_id AND v.valid = 1)
         WHERE published_at IS NULL AND packet_id IS NOT NULL;
-        UPDATE decision_prep_jobs SET reason = CASE WHEN state != 'published' THEN 'Packet published successfully; see current readiness for validation or lease restrictions.' ELSE reason END, state = 'published' WHERE published_at IS NOT NULL;`)
+        UPDATE decision_prep_jobs SET reason = CASE WHEN state != 'published' THEN 'Packet published successfully; see current readiness for validation or lease restrictions.' ELSE reason END, state = 'published' WHERE published_at IS NOT NULL AND state != 'superseded';`)
     }))
   }
 
@@ -193,6 +193,8 @@ export class DecisionPreparation {
     const id = randomUUID(), at = new Date(this.now()).toISOString()
     const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
       state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: (prior?.attempt ?? 0) + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
+    db.prepare("UPDATE decision_prep_jobs SET state = 'superseded', reason = 'Replaced by a newer preparation attempt.', updated_at = ? WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?")
+      .run(at, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision)
     db.prepare('INSERT INTO decision_prep_jobs (id,scope,card_id,request_id,source_revision,card_url,state,reason,actor,mode,operation_id,attempt,created_at,updated_at,dispatched_at,packet_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, candidate.card_url, 'admitted', job.reason, actor, mode, `prep-${id}`, job.attempt, at, at, null, null)
     db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(null, mode === 'prepare-now' ? 'prepare-now' : 'prep-admit', actor, at, JSON.stringify({ job_id: id, card_id: candidate.card_id, request_id: candidate.request_id, reason }))
     return { outcome: 'admitted', explanation: job.reason, job_id: id, state: 'admitted', job }
@@ -398,7 +400,8 @@ export class DecisionPreparation {
     const comments = newestCommentPackets(blocks, evidence)
     if (!comments.length) return
     await this.initialize()
-    const imported = await this.packets.leases.writeStorage(db => comments.map(comment => {
+    const imported = await this.packets.leases.writeStorage(db => comments.flatMap(comment => {
+      if (comment.job_id && db.prepare("SELECT 1 FROM decision_prep_jobs WHERE id = ? AND state = 'superseded'").get(comment.job_id)) return []
       const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
       const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
       let packet = comment.packet, publication = operation
@@ -407,11 +410,11 @@ export class DecisionPreparation {
         // Correct only the two mapper defects in an existing current import.
         // Retain its original binding/dependencies; an older comment must not
         // replace newer preparation or borrow a changed source revision.
-        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return { id: prior.id, comment }
+        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return [{ id: prior.id, comment }]
         const questionChanged = prior.packet.question !== packet.question
         const reversibilityMissing = prior.packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
         const reversibilityRecovered = reversibilityMissing && !packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
-        if (!questionChanged && !reversibilityRecovered) return { id: prior.id, comment }
+        if (!questionChanged && !reversibilityRecovered) return [{ id: prior.id, comment }]
         packet = { ...prior.packet, question: packet.question,
           ...(questionChanged ? { background: packet.background } : {}),
           ...(reversibilityRecovered ? { reversibility: packet.reversibility, material_unknowns: prior.packet.material_unknowns.filter(reason => !/^Missing required field: reversibility(?:\.|$)/.test(reason)) } : {}) }
@@ -419,7 +422,7 @@ export class DecisionPreparation {
       }
       const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication)
       if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: comment.job_id, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
-      return { id: stored.id, comment }
+      return [{ id: stored.id, comment }]
     }))
     // A restart or a later source refresh renews evidence even when publication
     // was idempotent. Validation failures never become a permanent Ready bit.
@@ -428,7 +431,7 @@ export class DecisionPreparation {
       if (!comment.job_id) continue
       await this.packets.leases.writeStorage(db => {
         const current = this.packets.readInStorage(db, id, evidence)
-        db.prepare('UPDATE decision_prep_jobs SET state = CASE WHEN published_at IS NOT NULL OR ? THEN \'published\' ELSE ? END, published_at = CASE WHEN ? THEN coalesce(published_at, ?) ELSE published_at END, reason = CASE WHEN published_at IS NOT NULL THEN reason ELSE ? END, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND (packet_id IS NULL OR packet_id = ? OR state IN (\'failed\',\'blocked\'))')
+        db.prepare('UPDATE decision_prep_jobs SET state = CASE WHEN published_at IS NOT NULL OR ? THEN \'published\' ELSE ? END, published_at = CASE WHEN ? THEN coalesce(published_at, ?) ELSE published_at END, reason = CASE WHEN published_at IS NOT NULL THEN reason ELSE ? END, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state != \'superseded\' AND (packet_id IS NULL OR packet_id = ? OR state IN (\'failed\',\'blocked\'))')
           .run(Number(!!current?.validation.valid), 'blocked', Number(!!current?.validation.valid), new Date(this.now()).toISOString(), current?.ready ? 'Packet imported from card comment and ready for review.' : current?.reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), id, comment.job_id, this.scope, cardId, comment.packet.binding.request_id, comment.packet.binding.source_revision, id)
       })
     }
@@ -443,6 +446,7 @@ export class DecisionPreparation {
       const job = db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(parsed.job_id, this.scope) as Row | undefined
       if (!job) throw new DecisionDeskConflict('Preparation job is unavailable')
       if (parsed.packet.binding.card_id !== job.card_id || parsed.packet.binding.request_id !== job.request_id || parsed.packet.binding.source_revision !== job.source_revision) throw new DecisionDeskConflict('Packet does not match this preparation job')
+      if (job.state === 'superseded') throw new DecisionDeskConflict('This preparation attempt has been replaced')
       const evidence = this.evidence(job.card_id)
       if (job.state === 'published' && job.packet_id) {
         const current = this.packets.readInStorage(db, job.packet_id, evidence)

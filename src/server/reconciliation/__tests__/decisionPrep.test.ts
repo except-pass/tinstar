@@ -381,3 +381,15 @@ it('suppresses an in-flight job when its source is answered without reporting a 
   expect(await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Do not repeat owner answer' })).toMatchObject({ outcome: 'ineligible' })
   expect(posts).toHaveLength(1)
 })
+
+it('rejects replaced attempt publications without superseding a successful retry', async () => {
+  const { prep, fixture, packets } = await harness()
+  const request = { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Replace rejected research' }
+  const first = await prep.prepareNow('Will', request)
+  await prep.publish({ job_id: first.job_id, operation_id: 'first-invalid', packet: { ...fixture.packet, question: 'Wrong question' } })
+  const second = await prep.prepareNow('Will', request)
+  const published = await prep.publish({ job_id: second.job_id, operation_id: 'second-valid', packet: fixture.packet })
+  await expect(prep.publish({ job_id: first.job_id, operation_id: 'late-invalid', packet: { ...fixture.packet, question: 'Wrong again' } })).rejects.toThrow('replaced')
+  expect(await packets.read(published.packet_id, fixture.evidence)).toMatchObject({ ready: true })
+  expect((await prep.status()).jobs.find(job => job.id === first.job_id)).toMatchObject({ state: 'superseded' })
+})

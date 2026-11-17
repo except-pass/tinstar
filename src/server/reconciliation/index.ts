@@ -78,7 +78,6 @@ export class ReconciliationSources {
   private context
   private preparationHistory
   private preparationProjection?: { snapshot: SourceSnapshot; queue: ReturnType<typeof buildQueue> }
-  private preparationPriority = new Set<string>()
   private preparationProperties = new Map<string, { status: 'fresh' | 'unknown'; coverage: 'complete' | 'unknown'; observedAt: string; expiresAt: string }>()
   private commentImports = new Map<string, { observation: string; pending: Promise<void> }>()
   private reconciler = new SceneReconciler()
@@ -125,7 +124,6 @@ export class ReconciliationSources {
       await this.importCommentPackets(id)
       await this.preparation.revalidate(id)
     }, async id => {
-      if (!this.preparationPriority.has(id)) return
       const observedAt = new Date().toISOString(), expiresAt = new Date(Date.now() + 30_000).toISOString()
       try {
         const card = await this.workReader.card(id, true, true)
@@ -135,6 +133,9 @@ export class ReconciliationSources {
         this.preparationProperties.set(id, { status: 'unknown', coverage: 'unknown', observedAt, expiresAt })
         throw new Error('Canonical card properties could not be refreshed.')
       }
+    }, (id, until) => {
+      const properties = this.preparationProperties.get(id)
+      return !!properties && properties.status === 'fresh' && properties.coverage === 'complete' && !!properties.expiresAt && Date.parse(properties.expiresAt) > until
     })
     this.workflow.onRecordedChange = id => { this.preparationProjection = undefined; this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.leases.onChange = () => this.invalidateQueueDisplays()
@@ -198,7 +199,6 @@ export class ReconciliationSources {
   private async warmPreparationHistory() {
     const ids = this.decisionQueue().card_ids
     const priority = await this.preparation.priorityCards()
-    this.preparationPriority = new Set(priority)
     this.preparationHistory.warm(ids, priority)
     await Promise.all(ids.map(id => this.importCommentPackets(id)))
   }

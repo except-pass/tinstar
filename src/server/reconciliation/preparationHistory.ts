@@ -8,13 +8,14 @@ export class PreparationHistory {
   private queue: string[] = []
   private active = 0
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
-    private readProperties: (id: string) => Promise<void> = async () => {}) {}
+    private readProperties: (id: string) => Promise<void> = async () => {},
+    private propertiesFresh: (id: string, until: number) => boolean = () => true) {}
 
   warm(ids: string[], priority: string[] = []) {
     const important = new Set(priority)
     for (const id of new Set([...priority, ...ids])) {
       const history = this.reader.cachedDecisionHistory(id)
-      if (history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now() + (important.has(id) ? 15_000 : 0)) continue
+      if (this.propertiesFresh(id, Date.now() + (important.has(id) ? 15_000 : 0)) && history?.context.outcome === 'available' && history.context.commentsOutcome === 'available' && Date.parse(history.expires_at) > Date.now() + (important.has(id) ? 15_000 : 0)) continue
       if ((this.failures.get(id)?.retryAt ?? 0) > Date.now()) continue
       this.enqueue(id)
     }
