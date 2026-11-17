@@ -1,4 +1,7 @@
-export type NotionFetch = (input: string | URL, init?: RequestInit, timeoutMs?: number) => Promise<Response>
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { sourceWriteDispatched } from './cardLeases'
+
+export type NotionFetch = (input: string | URL, init?: RequestInit, timeoutMs?: number, onSend?: (signal?: AbortSignal | null) => void) => Promise<Response>
 
 const queueDeadlineMs = 30_000
 export class NotionQueueTimeoutError extends DOMException {
@@ -18,10 +21,12 @@ export class NotionApi {
   private schemas = new Map<string, { until: number; value: Promise<Response>; background: boolean }>()
   constructor(private fetcher: typeof fetch = fetch, private intervalMs = 350) {}
 
-  readonly backgroundFetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, true)
-  readonly fetch: NotionFetch = (input, init, timeoutMs) => this.cachedRequest(input, init, timeoutMs, false)
+  readonly backgroundFetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, true, false, onSend)
+  readonly parallelFetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, false, false, onSend)
+  readonly fetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, false, true, onSend)
 
-  private async cachedRequest(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean) {
+  private async cachedRequest(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean, exclusive: boolean, onSend?: Parameters<NotionFetch>[3]) {
+    init?.signal?.throwIfAborted()
     const url = new URL(input), method = (init?.method ?? 'GET').toUpperCase()
     const schema = method === 'GET' && /^\/v1\/data_sources\/[^/]+$/.test(url.pathname)
     const key = url.href
@@ -30,7 +35,7 @@ export class NotionApi {
       this.diagnostics.cacheHits++
       return (await cached.value).clone()
     }
-    const pending = this.request(input, init, timeoutMs, background, url, method)
+    const pending = this.request(input, init, timeoutMs, background, exclusive, url, method, onSend)
     if (!schema) return pending
 
     const entry = { until: Date.now() + 600_000, background, value: pending.then(response => {
@@ -54,11 +59,13 @@ export class NotionApi {
     ;(this.foreground.shift() ?? this.background.shift())?.start()
   }
 
-  private request(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean, url: URL, method: string) {
+  private request(input: string | URL, init: RequestInit | undefined, timeoutMs: number | undefined, background: boolean, exclusive: boolean, url: URL, method: string, onSend?: Parameters<NotionFetch>[3]) {
     const operation = `${method} ${url.pathname.split('/')[2] ?? 'other'}${url.pathname.endsWith('/query') ? '/query' : ''}`
     const started = Date.now()
     const queue = background ? this.background : this.foreground
     const callerSignal = init?.signal
+    const markWrite = method !== 'GET' && !url.pathname.endsWith('/query') && !url.pathname.endsWith('/search/jql')
+      ? AsyncLocalStorage.bind(sourceWriteDispatched) : undefined
     return new Promise<Response>((resolve, reject) => {
       const cleanup = () => {
         clearTimeout(queueTimer)
@@ -78,12 +85,14 @@ export class NotionApi {
       const job: RequestJob = { start: () => {
         cleanup()
         this.nextAt = Date.now() + this.intervalMs
-        if (!background) this.activeForeground = true
+        if (exclusive) this.activeForeground = true
         this.diagnostics.requests[operation] = (this.diagnostics.requests[operation] ?? 0) + 1
         const deadline = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)
         const signal = deadline && callerSignal ? AbortSignal.any([deadline, callerSignal]) : deadline ?? callerSignal
         void (async () => {
           try {
+            onSend?.(signal)
+            markWrite?.()
             const response = await this.fetcher(input, deadline ? { ...init, signal } : init)
             if (response.status === 429) {
               this.diagnostics.rateLimits++
@@ -96,7 +105,7 @@ export class NotionApi {
             reject(error)
           } finally {
             this.diagnostics.latencyMs += Date.now() - started
-            if (!background) {
+            if (exclusive) {
               this.activeForeground = false
               this.nextAt = Math.max(this.nextAt, Date.now() + this.intervalMs)
             }
@@ -104,8 +113,8 @@ export class NotionApi {
           }
         })()
         // A pending history response must not occupy the foreground slot.
-        if (background && this.intervalMs > 0) this.dispatch()
-        else if (background) queueMicrotask(() => this.dispatch())
+        if (!exclusive && this.intervalMs > 0) this.dispatch()
+        else if (!exclusive) queueMicrotask(() => this.dispatch())
       } }
       const queueTimer = callerSignal ? undefined : setTimeout(() =>
         cancel(new NotionQueueTimeoutError()), queueDeadlineMs)

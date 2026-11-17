@@ -54,24 +54,30 @@ const decodeProperty = (wire: unknown, type: string): unknown => {
   return p[type] ?? null
 }
 
+const jiraFetch = (input: string, init?: RequestInit) => {
+  init?.signal?.throwIfAborted()
+  if (init?.method && init.method !== 'GET' && !input.endsWith('/search/jql')) sourceWriteDispatched()
+  return fetch(input, init)
+}
+
 /** Bounded TSSPIKE reader/writer. It has no configuration mutation endpoints,
  * background jobs, sync, or dispatch capability. */
 export class JiraAdapter {
-  constructor(readonly config: JiraConfig, private fetcher: (input: string, init?: RequestInit) => Promise<Response> = fetch) {
+  constructor(readonly config: JiraConfig, private fetcher: typeof jiraFetch = jiraFetch,
+    private backgroundFetcher = fetcher, private parallelFetcher = fetcher) {
     if (config.url !== 'https://fortresspower-jira.atlassian.net' || config.projectId !== '10638') throw new Error('Jira pilot is restricted to TSSPIKE 10638')
   }
-  private async response(path: string, init: RequestInit = {}) {
-    if ((init.method ?? 'GET') !== 'GET') sourceWriteDispatched()
+  private async response(path: string, init: RequestInit = {}, fetcher = this.fetcher) {
     const deadline = AbortSignal.timeout(20_000)
-    const response = await this.fetcher(`${this.config.url}/rest/api/3/${path}`, { ...init,
+    const response = await fetcher(`${this.config.url}/rest/api/3/${path}`, { ...init,
       redirect: 'error', signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline, headers: { Accept: 'application/json',
         Authorization: `Basic ${Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64')}`,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
     if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }
     return response
   }
-  private async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<Record<string, any>> {
-    const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  private async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, fetcher = this.fetcher): Promise<Record<string, any>> {
+    const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetcher)
     return response.status === 204 ? {} : this.json(response)
   }
   private async json(response: Response): Promise<Record<string, any>> {
@@ -96,9 +102,9 @@ export class JiraAdapter {
   private assertIssue(raw: Record<string, any>) {
     if (!/^[1-9][0-9]*$/.test(raw.id) || raw.fields?.project?.id !== '10638' || raw.fields.project.key !== 'TSSPIKE' || !raw.fields.labels?.includes(JIRA_SYNTHETIC_LABEL)) throw new Error('Issue is outside the authorized synthetic TSSPIKE scope')
   }
-  async issue(id: string, signal?: AbortSignal) {
+  async issue(id: string, signal?: AbortSignal, fetcher = this.fetcher) {
     const itemId = this.issueId(id)
-    const raw = await this.request(`issue/${itemId}?fields=summary,status,project,issuetype,updated,labels,description,attachment,duedate,customfield_10015&properties=*all`, 'GET', undefined, signal)
+    const raw = await this.request(`issue/${itemId}?fields=summary,status,project,issuetype,updated,labels,description,attachment,duedate,customfield_10015&properties=*all`, 'GET', undefined, signal, fetcher)
     this.assertIssue(raw)
     if (raw.id !== itemId) throw new Error('Jira issue identity changed')
     return raw
@@ -136,7 +142,7 @@ export class JiraAdapter {
       archived: false, in_trash: false, properties,
       source: { provider: 'jira', instanceId: this.config.url, collectionId: '10638', itemId: raw.id, displayKey: raw.key, synthetic: true } }
   }
-  async read(id: string, signal?: AbortSignal) { return this.card(await this.issue(id, signal)) }
+  async read(id: string, signal?: AbortSignal, background = false) { return this.card(await this.issue(id, signal, background ? this.backgroundFetcher : this.fetcher)) }
   private payload(properties: Record<string, unknown>) {
     const fields: Record<string, unknown> = {}, metadata: Array<{ key: string; value: unknown }> = []
     let status: string | undefined
@@ -206,7 +212,8 @@ export class JiraAdapter {
     if (payload.status) await this.patch(id, { Status: { status: { name: payload.status } } })
     return this.read(id)
   }
-  async list() {
+  async list(background = false) {
+    const fetcher = background ? this.backgroundFetcher : this.parallelFetcher
     const cards: WorkCard[] = []; let next: string | undefined
     const cursors = new Set<string>(), signal = AbortSignal.timeout(20_000)
     for (let page = 0; page < 20; page++) {
@@ -215,11 +222,11 @@ export class JiraAdapter {
       const body = await this.request('search/jql', 'POST', {
         jql: `project = 10638 AND labels = "${JIRA_SYNTHETIC_LABEL}" ORDER BY id`, maxResults: 100,
         fields: ['project', 'labels'], ...(next ? { nextPageToken: next } : {}),
-      }, signal)
+      }, signal, fetcher)
       if (!Array.isArray(body.issues) || typeof body.isLast !== 'boolean') throw new Error('Incomplete Jira search')
       for (const raw of body.issues) {
         this.assertIssue(raw)
-        cards.push(await this.read(jiraCardPrefix + raw.id, signal))
+        cards.push(this.card(await this.issue(jiraCardPrefix + raw.id, signal, fetcher)))
       }
       if (body.isLast) return { cards, hasMore: false }
       if (typeof body.nextPageToken !== 'string' || cursors.has(body.nextPageToken)) throw new Error('Invalid Jira search cursor')
@@ -228,21 +235,25 @@ export class JiraAdapter {
     return { cards, hasMore: true }
   }
   observation(scope: WorkScope) {
-    return new CachedObservation<WorkData>(async () => {
-      const { cards, hasMore } = await this.list()
+    return new CachedObservation<WorkData>(async background => {
+      const { cards, hasMore } = await this.list(background)
       return { observedAt: new Date().toISOString(), coverage: hasMore ? 'partial' as const : 'complete' as const,
         data: { dataSourceId: jiraCardPrefix.slice(0, -1), schema: {}, cards: cards.filter(card => scopeMatches(card, scope)), hasMore,
           truncatedRelations: [] as Array<{ pageId: string; property: string }>, missingSchemaProperties: [] as string[], scope: 'TSSPIKE synthetic issues only' } }
     }, 60_000, 120_000, 'Jira source unavailable; no absence or successful-write conclusion', Date.now,
     (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))
   }
-  async notes(id: string) {
-    await this.issue(id)
+  async notes(id: string, signal?: AbortSignal, background?: boolean, onPage?: (notes: Array<{ id: string; text: string; author?: string; createdAt?: string }>) => void) {
+    const fetcher = background === undefined ? this.fetcher : background ? this.backgroundFetcher : this.parallelFetcher
+    await this.issue(id, signal, fetcher)
     const notes: Array<{ id: string; text: string; author?: string; createdAt?: string }> = []
     for (let start = 0, page = 0; page < 5; page++) {
-      const body = await this.request(`issue/${this.issueId(id)}/comment?startAt=${start}&maxResults=100`)
+      const body = await this.request(`issue/${this.issueId(id)}/comment?startAt=${start}&maxResults=100`, 'GET', undefined, signal, fetcher)
+      signal?.throwIfAborted()
       if (!Array.isArray(body.comments) || !Number.isInteger(body.total) || body.startAt !== start) throw new Error('Incomplete Jira comments')
-      notes.push(...body.comments.map((note: any) => ({ id: note.id, text: adfText(note.body), author: note.author?.accountId, createdAt: note.created })))
+      const rows = body.comments.map((note: any) => ({ id: note.id, text: adfText(note.body), author: note.author?.accountId, createdAt: note.created }))
+      notes.push(...rows)
+      onPage?.(rows)
       start += body.comments.length
       if (start >= body.total) return notes
       if (!body.comments.length) break
@@ -256,14 +267,15 @@ export class JiraAdapter {
   private sectionNode(section: { type: string; text: string }) {
     return { type: section.type === 'heading_2' ? 'heading' : 'paragraph', ...(section.type === 'heading_2' ? { attrs: { level: 2 } } : {}), content: section.text ? [{ type: 'text', text: section.text }] : [] }
   }
-  async sections(id: string, contracts = false): Promise<JiraSection[]> {
-    const issue = await this.issue(id), doc = record(issue.fields.description)
+  async sections(id: string, contracts = false, signal?: AbortSignal, background?: boolean): Promise<JiraSection[]> {
+    const fetcher = background === undefined ? this.fetcher : background ? this.backgroundFetcher : this.parallelFetcher
+    const issue = await this.issue(id, signal, fetcher), doc = record(issue.fields.description)
     const sections: JiraSection[] = (Array.isArray(doc.content) ? doc.content : []).map((node, index) => ({ id: `${id}:description:${index}`, type: record(node).type === 'heading' ? 'heading_2' : 'paragraph', text: adfText(node) }))
     if (contracts) {
       const attachments = issue.fields.attachment
       if (!Array.isArray(attachments)) throw new Error('Jira attachment inventory unavailable')
       for (const attachment of attachments.filter((a: any) => /^tinstar-contract-[a-f0-9-]+\.json$/.test(a.filename)).sort((a: any, b: any) => Number(a.id) - Number(b.id))) {
-        const body = await this.json(await this.response(`attachment/content/${encodeURIComponent(attachment.id)}?redirect=false`))
+        const body = await this.json(await this.response(`attachment/content/${encodeURIComponent(attachment.id)}?redirect=false`, { signal }, fetcher))
         if (body.schema !== 'tinstar.contract-sections.v1' || !Array.isArray(body.sections)) throw new Error('Invalid Jira contract attachment')
         for (const [index, section] of body.sections.entries()) {
           if (typeof section.text !== 'string' || !['paragraph', 'heading_2', 'code'].includes(section.type)) throw new Error('Malformed Jira contract section')

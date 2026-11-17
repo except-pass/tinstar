@@ -156,7 +156,7 @@ export class ReconciliationSources {
     return homes.map(row => ({ ...row, observation: ageObservation(row.observation) }))
   }
 
-  async snapshot(force = false, scope: WorkScope = {}, background = true) {
+  async snapshot(force = false, scope: WorkScope = {}, background = false) {
     const [fleet, intentions] = await Promise.all([this.fleetSnapshot(force), this.workReader.query(scope, force, background)])
     // Scene refreshes read source properties only. Awaiting per-card comments
     // here makes a large board exceed the source deadline. Comment updates use
@@ -211,7 +211,7 @@ export class ReconciliationSources {
     if (!priority.length) return
     // The existing five-second runner also renews published/in-flight sources
     // with admission off, so a closed Desk does not stop source maintenance.
-    await this.snapshot()
+    await this.snapshot(false, {}, true)
     this.preparationHistory.warm([], priority)
   }
 
@@ -245,7 +245,7 @@ export class ReconciliationSources {
       if (!this.decisionQueue().card_ids.includes(cardId)) return []
       await this.preparationHistory.read(cardId)
     } else {
-      await this.snapshot()
+      await this.snapshot(false, {}, true)
       await this.warmPreparationHistory()
     }
     return this.prepCandidates(cardId)
@@ -317,7 +317,7 @@ export class ReconciliationSources {
 
     // Start the normal cached property/fleet reads, but never make list delivery
     // wait for a slow source or for per-card history/reconciliation.
-    void this.snapshot().catch(() => {})
+    void this.snapshot(false, {}, true).catch(() => {})
     const snapshot = this.knownSnapshot(), scene = this.reconciler.project(snapshot)
     const queue = buildQueue(snapshot)
     queue.readOnly = false // The shared refresh can finalize an already-recorded answer.
@@ -348,7 +348,7 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string) { return { ...workReadback(await this.context.details(id, false, this.notionApi.fetch)), lease: this.leases.status(id) } }
+  async card(id: string) { return { ...workReadback(await this.context.details(id, false, this.notionApi.parallelFetch)), lease: this.leases.status(id) } }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */
@@ -449,7 +449,7 @@ export class ReconciliationSources {
       const intentions = { status: 'fresh' as const, coverage: 'complete' as const, data: { dataSourceId: card.source?.collectionId ?? this.config.notion!.dataSourceId, schema: {}, cards: [card], hasMore: false, truncatedRelations: [], missingSchemaProperties: [], scope: 'exact configured-source card' },
         observedAt: this.workReader.lastKnown(card.id)!.observedAt, attemptedAt: new Date().toISOString(), expiresAt: new Date(Date.parse(this.workReader.lastKnown(card.id)!.observedAt) + 120_000).toISOString(), error: null }
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
-      const context = args.details ? await this.context.details(card.id, false, this.notionApi.fetch) : undefined
+      const context = args.details ? await this.context.details(card.id, false, this.notionApi.parallelFetch) : undefined
       const review = reviewView(intentions, new Map(context && (context.commentsOutcome ?? context.outcome) === 'available' ? [[card.id, context.blocks]] : [])).items[0] ?? null
       const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
         ...(context ? { context } : {}) })

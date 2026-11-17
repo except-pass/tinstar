@@ -22,20 +22,20 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
 export class WorkReader {
   leases?: CardLeases
   private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
-  private cards = new Map<string, { until: number; value: Promise<WorkCard> }>()
+  private cards = new Map<string, { until: number; value: Promise<WorkCard>; background: boolean }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
   mutate<T>(id: string, perform: () => Promise<T>, intent?: SourceWriteIntent, probe?: (intent: SourceWriteIntent) => Promise<'applied' | 'different' | 'unknown'>) { return this.leases ? this.leases.mutate(id, perform, intent, probe) : perform() }
   lastKnown(id: string) { return this.known.get(id) }
   readonly jira?: JiraAdapter
-  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira']) { if (jira) this.jira = new JiraAdapter(jira, api.fetch) }
+  constructor(readonly config: ReconciliationConfig['notion'], readonly api: NotionApi, jira?: ReconciliationConfig['jira']) { if (jira) this.jira = new JiraAdapter(jira, api.fetch, api.backgroundFetch, api.parallelFetch) }
   query(scope: WorkScope = {}, force = false, background = false) {
     const key = JSON.stringify([scope.owner, scope.statuses?.slice().sort(), scope.initiative, scope.epic, scope.checkpoint_before, !!scope.history])
     let entry = this.queries.get(key)
     if (!entry) {
       if (this.queries.size >= 100) this.queries.delete(this.queries.keys().next().value!)
-      const notion = notionObservation(this.config, this.api.fetch, scope, this.api.backgroundFetch), jira = this.jira?.observation(scope)
+      const notion = notionObservation(this.config, this.api.parallelFetch, scope, this.api.backgroundFetch), jira = this.jira?.observation(scope)
       const observation = !jira ? notion : !this.config ? jira : new CachedObservation<WorkData>(async background => {
-        const reads = await Promise.all([notion.get(true, background), jira.get(true)])
+        const reads = await Promise.all([notion.get(true, background), jira.get(true, background)])
         const available = reads.flatMap(read => read.data ? [read.data] : [])
         if (!available.length) throw new Error('Work sources unavailable')
         const complete = reads.every(read => read.status === 'fresh' && read.coverage === 'complete')
@@ -56,20 +56,22 @@ export class WorkReader {
   }
   card(id: string, force = false, background = false, signal?: AbortSignal) {
     const cached = this.cards.get(id)
-    if (!force && cached && cached.until > Date.now()) { this.api.diagnostics.cacheHits++; return cached.value }
-    const read = isJiraCard(id) ? this.jira ? this.jira.read(id, signal) : Promise.reject(new Error('Jira is not configured')) : readNotionCard(this.config, id, background ? this.api.backgroundFetch : this.api.fetch, signal)
+    if (!force && cached && cached.until > Date.now() && (background || !cached.background)) { this.api.diagnostics.cacheHits++; return cached.value }
+    const read = isJiraCard(id) ? this.jira ? this.jira.read(id, signal, background) : Promise.reject(new Error('Jira is not configured')) : readNotionCard(this.config, id, background ? this.api.backgroundFetch : this.api.fetch, signal)
     const value: Promise<WorkCard> = read.then(card => {
       signal?.throwIfAborted()
+      if (this.cards.get(id)?.value !== value) return card
+      this.cards.get(id)!.background = false
       if (this.known.size >= 200) this.known.delete(this.known.keys().next().value!)
       this.known.set(id, { card, observedAt: new Date().toISOString() }); return card
     }).catch(error => { if (this.cards.get(id)?.value === value) this.cards.delete(id); throw error })
     if (this.cards.size >= 200) this.cards.delete(this.cards.keys().next().value!)
-    this.cards.set(id, { until: Date.now() + 60_000, value })
+    this.cards.set(id, { until: Date.now() + 60_000, value, background })
     return value
   }
   confirm(card: WorkCard) {
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })
-    this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card) })
+    this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card), background: false })
     for (const [key, { scope, observation }] of this.queries) observation.updateData(data => {
       const matches = scopeMatches(card, scope)
       const present = data.cards.some(item => item.id === card.id)

@@ -3120,9 +3120,9 @@ it('owner-chatgpt HTTP admits record-free asks across real history failures and 
     f.comments.splice(0)
     const sources = f.sources(root), mcp = new ReconciliationMcp(sources, root)
     const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
-    await new Promise<void>(resolve => server.listen(5295, '127.0.0.1', resolve))
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const client = new Client({ name: 'owner-chatgpt-boundary', version: '1' }); clients.push(client)
-    await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:5295/api/reconciliation/mcp'), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${(await readFile(join(root, 'mcp-token'), 'utf8')).trim()}`, 'X-Tinstar-Caller': 'owner-chatgpt' } } }))
     let operation = 0
     const call = async (name: string, args: Record<string, unknown> = {}) => {
       const start = performance.now()

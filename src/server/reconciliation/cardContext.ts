@@ -77,7 +77,7 @@ export class CardContextReader {
       omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
     const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
       ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
-      outcome: body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
+      outcome: !signal.aborted && body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
       omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
     }))
     const entry = { pending: true, signal, value, resolved: cached?.resolved }
@@ -85,13 +85,15 @@ export class CardContextReader {
     // Positive comment evidence remains useful to claims even if the body
     // fails. Preserve the hotfix's independent-cache behavior and freshness.
     void comments.then(result => {
-      if (signal.aborted || this.decisionCache.get(id) !== entry) return
+      if (this.decisionCache.get(id) !== entry || signal.aborted && !result.blocks.length) return
+      if (signal.aborted) result = { ...result, outcome: 'partial' }
       const until = observed + 30_000, current = this.commentCache.get(id)
       if (current?.pending || current && current.resolvedUntil > until) return
       this.commentCache.set(id, { until, pending: false, resolvedUntil: until, value: Promise.resolve(result), resolved: result })
     }).catch(() => {})
     void value.then(context => {
-      if (!signal.aborted) entry.resolved = { context, observed_at: new Date(observed).toISOString(), expires_at: new Date(observed + 30_000).toISOString() }
+      if (this.decisionCache.get(id) !== entry || signal.aborted && !context.blocks.length) return
+      entry.resolved = { context, observed_at: new Date(observed).toISOString(), expires_at: new Date(observed + 30_000).toISOString() }
     })
       .catch(() => {}).finally(() => { entry.pending = false })
     return value
@@ -108,7 +110,16 @@ export class CardContextReader {
     const cached = this.commentCache.get(id)
     if (!force && cached && (cached.pending ? fetcher === this.fetcher || cached.fetcher === fetcher : cached.until > Date.now())) return cached.value
     if (this.commentCache.size >= 100) this.commentCache.delete(this.commentCache.keys().next().value!)
-    const value = this.readComments(id, undefined, fetcher)
+    const value: Promise<CardContextRead> = this.readComments(id, undefined, fetcher).then(async result => {
+      if (!force && cached?.pending && result.outcome !== 'available') {
+        const previous = await cached.value
+        if (previous.outcome === 'available') {
+          entry.until = cached.until
+          return previous
+        }
+      }
+      return result
+    })
     const entry = { until: Date.now() + 30_000, pending: true, value, resolved: cached?.resolved, resolvedUntil: cached?.resolvedUntil ?? 0, fetcher }
     this.commentCache.set(id, entry)
     void value.then(result => { entry.resolved = result; entry.resolvedUntil = entry.until }).catch(() => {}).finally(() => { entry.pending = false })
@@ -129,8 +140,11 @@ export class CardContextReader {
     if (isJiraCard(id)) {
       try {
         if (!this.jira) throw new Error('Jira is not configured')
-        return { outcome: 'available', blocks: workReadback((await this.jira.notes(id)).map(note => ({ ...note, type: 'comment' }))) }
-      } catch { return { outcome: 'partial', blocks: [], omissions: 'Jira comment history unavailable or truncated; decision and receipt absence unknown.' } }
+        await this.jira.notes(id, historySignal, fetcher === this.fetcher, notes => {
+          context.blocks.push(...workReadback(notes.map(note => ({ ...note, type: 'comment' }))))
+        })
+        return context
+      } catch { return { ...context, outcome: 'partial', omissions: 'Jira comment history unavailable or truncated; decision and receipt absence unknown.' } }
     }
     if (!this.config) return { outcome: 'unavailable', blocks: [] }
     const signal = historySignal ?? AbortSignal.timeout(20_000)
@@ -158,6 +172,7 @@ export class CardContextReader {
             chunks.push(value)
           }
         } finally { await reader.cancel().catch(() => {}) }
+        signal.throwIfAborted()
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Invalid comments')
         for (const item of body.results) {
@@ -185,7 +200,17 @@ export class CardContextReader {
     if (cached && (cached.pending ? fetcher === this.fetcher || cached.fetcher === fetcher : cached.until > Date.now()) &&
       (revision === undefined || revision === cached.revision)) return cached.value
     if (this.cache.size >= 100) this.cache.delete(this.cache.keys().next().value!)
-    const value = this.read(id, undefined, fetcher).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
+    const value: Promise<CardContextRead> = this.read(id, undefined, fetcher).catch((): CardContextRead => ({ outcome: 'unavailable', message: 'Card context read failed; verify configured Notion read access', blocks: [] }))
+      .then(async result => {
+        if (cached?.pending && (revision === undefined || revision === cached.revision) && result.outcome !== 'available') {
+          const previous = await cached.value
+          if (previous.outcome === 'available') {
+            entry.until = cached.until
+            return previous
+          }
+        }
+        return result
+      })
     const entry = { until: Date.now() + 30_000, pending: true, revision, value, resolved: cached?.resolved, resolvedUntil: cached?.resolvedUntil ?? 0, fetcher }
     this.cache.set(id, entry)
     void value.then(result => { entry.resolved = result; entry.resolvedUntil = entry.until }).catch(() => {}).finally(() => { entry.pending = false })
@@ -194,7 +219,7 @@ export class CardContextReader {
   async read(id: string, historySignal?: AbortSignal, fetcher = this.fetcher): Promise<CardContextRead> {
     if (isJiraCard(id)) {
       if (!this.jira) return { outcome: 'unavailable', blocks: [], message: 'Jira is not configured' }
-      return { outcome: 'available', observedAt: new Date().toISOString(), blocks: workReadback(await this.jira.sections(id)),
+      return { outcome: 'available', observedAt: new Date().toISOString(), blocks: workReadback(await this.jira.sections(id, false, historySignal, fetcher === this.fetcher)),
         omissions: 'Jira Description prose only. Exact implementation contracts in attachments are not requested; use get_work implementation_contract for verified chunks.' }
     }
     if (!this.config) return { outcome: 'unavailable', message: 'Notion card context source is not configured', blocks: [] }
@@ -223,6 +248,7 @@ export class CardContextReader {
             chunks.push(value)
           }
         } finally { await reader.cancel().catch(() => {}) }
+        signal.throwIfAborted()
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results)) throw new Error('invalid context')
         for (const item of body.results) {

@@ -1,4 +1,4 @@
-import { sourceWriteDispatched, type SourceWriteIntent } from './cardLeases'
+import { type SourceWriteIntent } from './cardLeases'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { workflowNoteHasMarker } from '../../shared/workflowRequests'
 import type { WorkReader } from './workReader'
@@ -99,13 +99,13 @@ export class WorkflowContent {
   async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal) {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
-    if (method !== 'GET') sourceWriteDispatched()
     let response: Response
     for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted()
       try {
         response = await this.reader.api.fetch(`https://api.notion.com/v1/${path}`, { method, redirect: 'error', signal,
           headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03', 'Content-Type': 'application/json' },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, signal ? undefined : 20_000)
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, signal ? undefined : 20_000, sent => { signal = sent ?? undefined })
         if (response.ok) break
         await response.body?.cancel()
         throw new NotionWriteError(response.status, method)
@@ -115,8 +115,13 @@ export class WorkflowContent {
         const transient = error instanceof TypeError || error instanceof NotionWriteError && (error.status === 408 || error.status === 429 || error.status >= 500)
         if (method !== 'GET' || !transient || signal?.aborted || attempt >= 2) throw error
       }
-      await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt))
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); reject(signal?.reason) }
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, 250 * 2 ** attempt)
+        signal?.addEventListener('abort', abort, { once: true })
+      })
     }
+    signal?.throwIfAborted()
     const stream = response.body?.getReader()
     if (!stream) throw new Error('Notion response missing')
     const chunks: Uint8Array[] = []; let bytes = 0
@@ -129,6 +134,7 @@ export class WorkflowContent {
         chunks.push(value)
       }
     } finally { await stream.cancel().catch(() => {}) }
+    signal?.throwIfAborted()
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }
   async notes(id: string, signal?: AbortSignal): Promise<WorkflowNote[]> {

@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { NotionApi } from '../notionApi'
+import { CardLeases } from '../cardLeases'
+import { WorkReader } from '../workReader'
+import { WorkflowContent } from '../workflowContent'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
@@ -155,4 +161,73 @@ it.each([35_000, 121_000])('honors a 120-second Desk deadline through %i ms of s
   await result
   expect(fetcher).toHaveBeenCalledTimes(backoff < 120_000 ? 2 : 1)
   clearTimeout(deadline)
+})
+
+
+it('starts an exact read while interactive prose is still in flight', async () => {
+  vi.useFakeTimers()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const api = new NotionApi(async input => {
+    if (String(input).includes('/blocks')) await gate
+    return new Response('{}')
+  })
+  const prose = api.parallelFetch('https://api.notion.com/v1/blocks/card/children')
+  const exact = api.fetch('https://api.notion.com/v1/pages/card', undefined, 5_000)
+  await vi.advanceTimersByTimeAsync(350)
+  expect((await exact).ok).toBe(true)
+  release()
+  await prose
+})
+
+
+it('releases unsent write reservations and retains transport failures after send', async () => {
+  vi.useFakeTimers()
+  const root = await mkdtemp(join(tmpdir(), 'notion-dispatch-'))
+  try {
+    const leases = new CardLeases(root)
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': '35' } }))
+      .mockRejectedValue(new TypeError('Transport failed after send'))
+    const api = new NotionApi(fetcher)
+    const content = new WorkflowContent(new WorkReader({ token: 'fixture', dataSourceId: 'a'.repeat(32) }, api))
+    await api.fetch('https://api.notion.com/v1/pages/other')
+    const write = () => leases.mutate('card', () => content.request('comments', 'POST', {}), { kind: 'note' })
+    const unsent = expect(write()).rejects.toThrow('Notion queue deadline exceeded')
+    await vi.advanceTimersByTimeAsync(30_000)
+    await unsent
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(leases.pendingWrites()).toEqual([])
+    const sent = expect(write()).rejects.toThrow('Transport failed after send')
+    await vi.advanceTimersByTimeAsync(5_000)
+    await sent
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(leases.pendingWrites()).toHaveLength(1)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('starts the workflow budget at send and shares it across queued retries', async () => {
+  vi.useFakeTimers()
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(new DOMException('HTTP deadline exceeded', 'TimeoutError')), ms)
+    return controller.signal
+  })
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(null, { status: 429, headers: { 'Retry-After': '6' } }))
+    .mockImplementationOnce(async () => {
+      await new Promise(resolve => setTimeout(resolve, 19_000))
+      return new Response(null, { status: 429, headers: { 'Retry-After': '3' } })
+    })
+    .mockResolvedValue(Response.json({}))
+  const api = new NotionApi(fetcher)
+  const content = new WorkflowContent(new WorkReader({ token: 'fixture', dataSourceId: 'a'.repeat(32) }, api))
+  await api.fetch('https://api.notion.com/v1/pages/other')
+  const result = expect(content.request('comments')).rejects.toThrow('HTTP deadline exceeded')
+  await vi.advanceTimersByTimeAsync(26_000)
+  await result
+  await vi.advanceTimersByTimeAsync(3_000)
+  expect(fetcher).toHaveBeenCalledTimes(2)
 })
