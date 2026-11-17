@@ -268,18 +268,26 @@ export class PreparedReviews {
     if (!binding || !this.leases.activeInStorage(row) || row.caller !== caller || row.generation !== binding.generation || row.token_hash !== binding.token_hash || leaseHash(input.lease_token) !== binding.token_hash) throw new CardLeaseError(null)
     return { session_id: session.id, binding, lease: publicLease(row) }
   }
-  continueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string) {
+  claimScopeInStorage(db: DatabaseSync, caller: string, binding: PreparedBinding) {
+    // The original claim receipt already records whether the selection was
+    // restricted to a card. It survives releasing the binding and restarting.
+    const [, , operation] = JSON.parse(binding.claim_operation)
+    const receipt = db.prepare('SELECT signature FROM decision_review_operations WHERE caller = ? AND scope = ? AND operation = ?')
+      .get(caller, this.scope, operation) as { signature: string } | undefined
+    if (receipt && JSON.parse(receipt.signature)[1] === binding.card) return binding.card
+  }
+  continueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string, cardId?: string) {
     const session = db.prepare('SELECT * FROM decision_review_sessions WHERE id = ? AND caller = ? AND scope = ?').get(sessionId, caller, this.scope) as unknown as Session | undefined
     if (!session || session.revoked || session.expires <= this.now()) throw new CardLeaseError(null)
     const token = this.leases.capability(caller, JSON.stringify(['review-session', this.scope, session.operation]))
-    return this.claimInStorage(db, caller, holder, { operation_id: operation, review_session_token: token }, excludeCard)
+    return this.claimInStorage(db, caller, holder, { operation_id: operation, review_session_token: token, card_id: cardId }, excludeCard)
   }
-  tryContinueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string): PreparedClaimResult {
+  tryContinueInStorage(db: DatabaseSync, caller: string, holder: string, sessionId: string, operation: string, excludeCard?: string, cardId?: string): PreparedClaimResult {
     // Next-allocation failures must not undo an already recorded release or
     // research withdrawal. Retry uses the same deterministic claim operation.
     db.exec('SAVEPOINT prepared_next')
     try {
-      const result = this.continueInStorage(db, caller, holder, sessionId, operation, excludeCard)
+      const result = this.continueInStorage(db, caller, holder, sessionId, operation, excludeCard, cardId)
       db.exec('RELEASE prepared_next')
       return result
     } catch {
