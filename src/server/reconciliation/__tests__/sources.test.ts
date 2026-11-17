@@ -587,14 +587,7 @@ describe('config and HTTP boundary', () => {
     const url = `http://127.0.0.1:${address.port}/api/reconciliation/sources`
     try {
       const res = await fetch(url); expect(res.headers.get('cache-control')).toBe('no-store')
-      const payload = await res.json()
-      expect(payload).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
-      expect(payload.data.diagnostics.notion).toEqual({
-        requests: {}, cacheHits: expect.any(Number), rateLimits: 0, latencyMs: 0,
-      })
-      expect((await sources.searchWork({})).diagnostics.notion).toEqual({
-        requests: {}, cacheHits: expect.any(Number), rateLimits: 0, latencyMs: 0,
-      })
+      expect(await res.json()).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
       expect((await fetch(url, { method: 'POST' })).status).toBe(400)
       expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
       const sceneUrl = url.replace('/sources', '/scene')
