@@ -52,12 +52,18 @@ export class NotionCardReadError extends Error {
  * inbox delivery and for closure; cached scene data cannot authorize either.
  * Retry source errors without changing write intent. Each HTTP attempt gets a
  * fresh five-second budget, with one bounded queue wait before reporting congestion. */
-const directFetch: NotionFetch = (input, init, timeoutMs = 5_000) => fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+const directFetch: NotionFetch = (input, init, timeoutMs = 5_000) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) })
 
-export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: NotionFetch = directFetch) {
+export async function readNotionCard(config: ReconciliationConfig['notion'], id: string, fetcher: NotionFetch = directFetch, signal?: AbortSignal) {
   if (!config || notionPageId(id) !== id) throw new Error('Notion card unavailable')
   for (let attempt = 0; ; attempt++) {
-    try { return await readNotionCardOnce(config, id, fetcher) } catch (error) {
+    signal?.throwIfAborted()
+    try {
+      const card = await readNotionCardOnce(config, id, fetcher, signal)
+      signal?.throwIfAborted()
+      return card
+    } catch (error) {
+      signal?.throwIfAborted()
       if (error instanceof NotionQueueTimeoutError) throw error
       const transient = error instanceof NotionCardReadError ? error.transient
         : error instanceof TypeError || error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name)
@@ -67,8 +73,8 @@ export async function readNotionCard(config: ReconciliationConfig['notion'], id:
   }
 }
 
-async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['notion']>, id: string, fetcher: NotionFetch) {
-  const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error',
+async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['notion']>, id: string, fetcher: NotionFetch, signal?: AbortSignal) {
+  const response = await fetcher(`https://api.notion.com/v1/pages/${id}`, { redirect: 'error', signal,
     headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' } }, 5_000)
   if (!response.ok) {
     await response.body?.cancel()

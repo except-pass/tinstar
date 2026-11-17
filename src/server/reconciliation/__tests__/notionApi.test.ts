@@ -105,7 +105,7 @@ it('backs off all queued traffic for Retry-After on a history 429', async () => 
   expect(api.diagnostics.rateLimits).toBe(1)
 })
 
-it('expires queued reads promptly without letting later requests bypass the active request or pacing', async () => {
+it.each(['fetch', 'backgroundFetch'] as const)('expires queued %s reads without bypassing the active request or pacing', async lane => {
   vi.useFakeTimers()
   let release!: (response: Response) => void
   const fetcher = vi.fn<typeof fetch>()
@@ -113,8 +113,9 @@ it('expires queued reads promptly without letting later requests bypass the acti
     .mockResolvedValue(new Response('{}'))
   const api = new NotionApi(fetcher, 350)
   const active = api.fetch('https://api.notion.com/v1/comments')
+  const expired = expect(api[lane]('https://api.notion.com/v1/pages/expired')).rejects.toThrow('Notion queue deadline exceeded')
   const controller = new AbortController()
-  const cancelled = api.fetch('https://api.notion.com/v1/pages/cancelled', { signal: controller.signal })
+  const cancelled = api[lane]('https://api.notion.com/v1/pages/cancelled', { signal: controller.signal })
   let failure: unknown
   void cancelled.catch(error => { failure = error })
   await vi.advanceTimersByTimeAsync(5000)
@@ -122,6 +123,8 @@ it('expires queued reads promptly without letting later requests bypass the acti
   controller.abort(timeout)
   await vi.advanceTimersByTimeAsync(0)
   expect(failure).toBe(timeout)
+  await vi.advanceTimersByTimeAsync(25_000)
+  await expired
   const next = api.fetch('https://api.notion.com/v1/pages/current')
   await vi.advanceTimersByTimeAsync(1000)
   expect(fetcher).toHaveBeenCalledTimes(1)

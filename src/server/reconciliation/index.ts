@@ -124,10 +124,11 @@ export class ReconciliationSources {
     this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), async id => {
       await this.importCommentPackets(id)
       await this.preparation.revalidate(id)
-    }, async id => {
+    }, async (id, signal) => {
       const observedAt = new Date().toISOString(), expiresAt = new Date(Date.now() + 30_000).toISOString()
       try {
-        const card = await this.workReader.card(id, true, true)
+        const card = await this.workReader.card(id, true, true, signal)
+        signal.throwIfAborted()
         this.workReader.confirm(card)
         this.preparationProperties.set(id, { status: 'fresh', coverage: 'complete', observedAt, expiresAt })
       } catch (error) {

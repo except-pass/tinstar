@@ -15,7 +15,7 @@ export class PreparationHistory {
   private queue: string[] = []
   private active = 0
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
-    private readProperties: (id: string) => Promise<void> = async () => {},
+    private readProperties: (id: string, signal: AbortSignal) => Promise<void> = async () => {},
     private propertiesFresh: (id: string, until: number) => boolean = () => true) {}
 
   warm(ids: string[], priority?: string[]) {
@@ -87,14 +87,20 @@ export class PreparationHistory {
   }
 
   private async load(id: string) {
+    const attempt = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       // The publication reader paginates independently of bounded card prose.
       // Also settle display state if a connector fails to settle on abort.
-      await Promise.race([Promise.all([this.readProperties(id), this.reader.decisionDetails(id, true)]), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('History read deadline exceeded.')), decisionHistoryDeadlineMs)
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('History read deadline exceeded.')
+          reject(error)
+          attempt.abort(error)
+        }, decisionHistoryDeadlineMs)
         timer.unref?.()
-      })])
+      })
+      await Promise.race([deadline, Promise.all([this.readProperties(id, attempt.signal), this.reader.decisionDetails(id, true, attempt.signal)])])
       const history = this.reader.cachedDecisionHistory(id)
       if (history?.context.commentsOutcome !== 'available') throw new Error(`Decision comment history is incomplete. ${history?.context.omissions ?? ''}`.trim())
       if (history.context.outcome !== 'available') throw new Error(`Decision body history is incomplete. ${history.context.omissions ?? ''}`.trim())
@@ -110,6 +116,7 @@ export class PreparationHistory {
         message: `${reason} A background retry is scheduled; Prepare now can retry this card.` })
     } finally {
       clearTimeout(timer)
+      attempt.abort()
       this.evidenceHistory(id)
     }
   }
