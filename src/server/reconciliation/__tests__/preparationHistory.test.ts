@@ -12,6 +12,7 @@ import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliatio
 import { preparationHistoryFixture } from '../../../../test-fixtures/reconciliation/preparationHistory'
 import { mainWaitCandidates } from '../waitingOnMain'
 import { validateDecisionPacket } from '../../../shared/decisionPacket'
+import { decisionMarker, receiptMarker } from '../workflowContent'
 
 const roots: string[] = [], servers: Server[] = []
 afterEach(async () => {
@@ -40,6 +41,22 @@ async function loadedSnapshot(sources: Awaited<ReturnType<typeof setup>>['source
   await sources.preparedReviews.snapshot()
   await vi.waitFor(async () => expect((await sources.preparedReviews.snapshot()).history.every(row => row.state !== 'loading')).toBe(true), { timeout: 15_000, interval: 250 })
   return sources.preparedReviews.snapshot()
+}
+
+function structuredAnswerComment(requestId: string, createdAt: string, withReceipt = false) {
+  const answer = 'Defer this request.'
+  const next = { owner: 'Firstmate', status: 'Queued' }
+  const lines = [
+    'Operation: answer_decision',
+    decisionMarker(requestId),
+    `Tin Star answer: ${JSON.stringify(requestId)}`,
+    `Answer: ${answer}`,
+    `Next owner: ${next.owner}`,
+    `Next status: ${next.status}`,
+    `Tin Star answer data: ${JSON.stringify({ request_id: requestId, answer, next })}`,
+  ]
+  if (withReceipt) lines.push(receiptMarker('owner-chatgpt', 'later-owner-answer'))
+  return { id: 'later-owner-answer', created_time: createdAt, rich_text: [{ plain_text: lines.join('\n') }] }
 }
 
 it('loads cold body and comment history for Prepare now without other readers, writes, or reconciliation', async () => {
@@ -121,7 +138,8 @@ it('keeps one preparation across owner prose and First Mate check-ins', async ()
     if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
     const body = await response.json()
     body.results.push(
-      { id: 'owner-prose', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
+      { id: 'owner-prose', created_time: new Date().toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
+      { id: 'owner-edit', created_time: new Date().toISOString(), rich_text: [{ plain_text: `Operation: edit\n${receiptMarker('owner-chatgpt', 'owner-edit')}` }] },
       { id: 'check-in', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'First Mate check-in: still waiting.' }] },
     )
     return Response.json(body)
@@ -514,15 +532,14 @@ it.each(['properties', 'comments', 'body'] as const)('retains Ready through tran
   expect(posts).toHaveLength(1)
 }, 20_000)
 
-it.each(['receipt', 'comment'] as const)('registers a later owner %s from real history reads and never re-offers or re-prepares the request', async kind => {
+it.each(['with receipt', 'without receipt'] as const)('registers a later structured answer (%s) from real history reads and never re-offers or re-prepares the request', async kind => {
   let time = Date.now(), ownerAt: string | undefined
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(time)
   const { sources, cardId, requestId, posts } = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
     if (ownerAt && new URL(String(input)).pathname === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'later-owner-response', created_time: ownerAt, created_by: { id: 'provider-user-id', ...(kind === 'comment' ? { name: 'owner-chatgpt' } : {}) },
-        rich_text: [{ plain_text: kind === 'receipt' ? 'Operation: edit\nTin Star operation: ["owner-chatgpt","owner-edit"]' : 'A response with no decision protocol or keyword.' }] })
+      body.results.push(structuredAnswerComment(requestId, ownerAt, kind === 'with receipt'))
       return Response.json(body)
     }
     return response
@@ -617,7 +634,7 @@ it.each(['answer', 'card'] as const)('drops Ready for a positively observed %s c
     }
     if (failing && kind === 'answer' && path === '/v1/comments') {
       const body = await response.json()
-      body.results.push({ id: 'positive-owner-answer', created_time: new Date(time).toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Defer this request.' }] })
+      body.results.push(structuredAnswerComment(f.requestId, new Date(time).toISOString()))
       return Response.json(body)
     }
     return response
