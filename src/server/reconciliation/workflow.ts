@@ -514,6 +514,15 @@ export class WorkflowOperations {
         if (!entry || typedWaitEntry(entry) || (['dependency', 'unblocks_when', 'follow_up_by'] as const).some(field => entry.fields[field]?.trim() && entry.fields[field] !== value[field])) {
           throw new WorkflowError('wait-repair-conflict', 'Each repair must match exactly one incomplete or legacy wait and preserve its recorded dependency, unblock condition and follow-up owner. Nothing was written.')
         }
+        const legacyType = entry.fields.type?.trim()
+        const legacyId = entry.fields.id?.trim()
+        if (legacyType === 'Person' && legacyId && (value.type !== 'Actor' || id !== legacyId)) {
+          throw new WorkflowError('wait-repair-identity', `Repair legacy Person as Actor with the same ID ${JSON.stringify(legacyId)}. Nothing was written.`)
+        }
+        const legacyWorkId = legacyType === 'Card' && legacyId ? canonicalWorkId(legacyId) : null
+        if (legacyWorkId && (value.type !== 'Work' || id !== legacyWorkId)) {
+          throw new WorkflowError('wait-repair-identity', `Repair legacy Card as Work with the same exact card ID ${JSON.stringify(legacyWorkId)}. Nothing was written.`)
+        }
         editedWaits = entries.map(item => item === entry ? added : item)
         set('Waiting For Type', value.type); set('Waiting For ID', id)
         note += `\nRepaired legacy wait: ${JSON.stringify(replace)}`
@@ -685,7 +694,13 @@ export class WorkflowOperations {
     }
     if (editedWaits) {
       const primary = waitIdentity()
-      set('Waiting For', editedWaits.map(entry => retainedWaitText(entry, primary)).join('\n'))
+      const text = editedWaits.map(entry => retainedWaitText(entry, primary)).join('\n')
+      const implicit = waitEntries(text, primary).find(entry => entry.implicitIdentity)
+      if (implicit && (primary.type || primary.id) && !editedWaits.some(entry => entry.implicitIdentity &&
+        entry.text === implicit.text && entry.fields.type === primary.type && entry.fields.id === primary.id)) {
+        throw new WorkflowError('wait-repair-identity', 'A retained Waiting For description would inherit a different blocker. Repair that exact entry with its own Type and ID first. Nothing was written.')
+      }
+      set('Waiting For', text)
     }
     await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
     for (const name of ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in']) if (name in desired || 'Status' in desired) reads.add(name)

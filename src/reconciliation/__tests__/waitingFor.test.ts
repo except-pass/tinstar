@@ -82,12 +82,33 @@ describe('Waiting For projection', () => {
     const result = waitingForGroups(cards)
     expect(result.count).toBe(7)
     expect(result.unclassified).toHaveLength(6)
-    expect(flat(result)).toMatchObject([{ type: 'Work', id: fixtureId(99) }])
+    expect(flat(result)).toEqual([])
+    expect(result.referenceIssues).toEqual([cards[4]])
     expect(cards.map(card => result.issues.get(card.id)?.[0]?.code)).toEqual([
       'missing-type', 'missing-id', 'invalid-work-id', 'work-self', 'work-unverified', 'legacy-type', 'legacy-type',
     ])
     expect(result.issues.get(fixtureId(6))?.[0]?.reason).toMatch(/Person with Actor/)
     expect(result.issues.get(fixtureId(7))?.[0]?.reason).toMatch(/Card with Work/)
+  })
+  it.each(['unknown', 'done', 'archived', 'trashed'])('keeps %s primary and appended Work references as diagnostics', state => {
+    const blockerId = fixtureId(9)
+    const references = state === 'unknown' ? [] : [{
+      id: blockerId, status: state === 'done' ? 'Done' : 'Queued', archived: state === 'archived', in_trash: state === 'trashed',
+    }]
+    const line = waitLine({ type: 'Work', id: blockerId, dependency: 'Review result', unblocks_when: 'Review closes', follow_up_by: 'Consumer' })
+    const primary = card(1, 'Work', blockerId, { 'Waiting For': line })
+    const appended = card(2, 'Actor', 'Will', { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will', line,
+    ].join('\n') })
+    const result = waitingForGroups([primary, appended], [], references)
+    expect(result.count).toBe(2)
+    expect(flat(result).map(group => group.type)).toEqual(['Actor'])
+    expect(result.referenceIssues).toEqual([primary])
+    for (const waiting of [primary, appended]) {
+      expect(result.issues.get(waiting.id)).toContainEqual(expect.objectContaining({
+        code: state === 'unknown' ? 'work-unverified' : 'work-not-blocking',
+      }))
+    }
   })
   it('moves a card after refresh without duplicating or treating a status change as deletion', () => {
     const one = card(1), changed = structuredClone(one)

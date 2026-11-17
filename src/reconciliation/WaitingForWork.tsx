@@ -32,13 +32,14 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
   }
   const categories = projection.categories.filter(category => type === 'All' || category.type === type || category.groups.some(group => group.cards.some(card => flashed(card.id))))
   const shown = categories.reduce((sum, category) => sum + category.groups.reduce((sum, group) => sum + group.cards.length, 0), 0)
+  const referenceIssues = projection.referenceIssues.filter(card => type === 'All' || type === 'Work' || flashed(card.id))
   const details = [...projection.issues.values()].filter(issues => issues.some(issue => issue.category === 'description')).length
   return <section className="ov-waiting-work" aria-label="Waiting For work">
     <header ref={heading} className="ov-waiting-head"><strong>Work</strong><small>Waiting For · {failed && projection.count === 0 ? 'unavailable' : partial ? `${projection.count} shown` : projection.count}</small><div role="group" aria-label="Waiting For Type">{(['All', ...waitingForTypes] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => onType(value)}>{value}</button>)}</div></header>
     {(failed || partial) && <p className="ov-waiting-notice" role="status">{failed ? 'Could not refresh Waiting For. Showing the last known cards.' : `Partial results · ${projection.count} shown`}{observedAt && <time dateTime={observedAt}> · Last known {new Date(observedAt).toLocaleString()}</time>}</p>}
     <p className="ov-waiting-notice">Needs wait details · {details}</p>
     {categories.map(category => category.groups.length > 0 && <section key={category.type} className="ov-waiting-category" aria-label={`${category.type} dependencies`}>
-      <h3><span>{category.type === 'Work' ? 'Work blockers' : category.type}</span><span>{category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>
+      <h3><span>{category.type === 'Work' ? 'Work blockers' : category.type}</span><span>{category.type === 'Work' ? category.groups.length : category.groups.reduce((sum, group) => sum + group.cards.length, 0)}</span></h3>
       {category.groups.map(group => {
         const expanded = (searchKey ? !searchClosed.has(group.key) : open.has(group.key)) || group.cards.some(card => flashed(card.id))
         const destination = group.target
@@ -54,6 +55,7 @@ export function WaitingForWork({ projection, type, onType, open, onToggle, searc
       })}
     </section>)}
     <section className="ov-waiting-category ov-waiting-unclassified" aria-label="Needs classification"><h3><span>Needs classification</span><span>{projection.unclassified.length}</span></h3>{projection.unclassified.map(card => row(card, 'unclassified'))}</section>
-    {shown === 0 && (type !== 'All' || projection.unclassified.length === 0) && !partial && !failed && <p className="ov-empty">{projection.count || type !== 'All' ? 'No Waiting For cards in this group' : 'Nothing is Waiting For right now'}</p>}
+    {referenceIssues.length > 0 && <section className="ov-waiting-category" aria-label="Work reference issues"><h3>Work reference issues</h3>{referenceIssues.map(card => row(card, 'references'))}</section>}
+    {shown === 0 && referenceIssues.length === 0 && (type !== 'All' || projection.unclassified.length === 0) && !partial && !failed && <p className="ov-empty">{projection.count || type !== 'All' ? 'No Waiting For cards in this group' : 'Nothing is Waiting For right now'}</p>}
   </section>
 }

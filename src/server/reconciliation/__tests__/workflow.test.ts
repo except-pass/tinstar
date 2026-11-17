@@ -2805,6 +2805,58 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('wait', actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware source publication', unblocks_when: 'The firmware source is published', operation_id: 'publication-event' })), 'Consumer')).toMatchObject({ outcome: 'saved' })
   })
 
+  it.each([
+    ['Person', 'Actor', 'Alice', 'Bob'],
+    ['Card', 'Work', 'abcdef12-3456-7890-abcd-ef1234567890', 'd'.repeat(32)],
+  ] as const)('repairs legacy %s only with the original blocker', async (legacy, type, originalId, changedId) => {
+    const f = readyFixture()
+    const savedId = originalId.replaceAll('-', '')
+    if (type === 'Work') {
+      for (const target of [savedId, changedId]) {
+        const page = structuredClone(f.raw)
+        page.id = target
+        f.pages.set(target, page)
+      }
+    }
+    const wait = actor({ type, id: savedId })
+    const current = legacy === 'Person'
+      ? waitLine({ ...wait, type: legacy, id: originalId })
+      : `Dependency: ${wait.dependency}\nUnblocks when: ${wait.unblocks_when}\nFollow-up by: ${wait.follow_up_by}`
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: legacy }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: originalId }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: current }]
+    const expected = { Status: 'Waiting For', 'Waiting For Type': legacy, 'Waiting For ID': originalId, 'Waiting For': current }
+    const before = patches(f)
+    const changed = { ...wait, id: changedId }
+    expect(await f.workflow.update(op('wait', { ...changed, expected, repair_waits: [{ current, replacement: changed }] }), 'Consumer'))
+      .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining(savedId) })
+    expect(patches(f)).toBe(before)
+    expect(await f.workflow.update(op('wait', { ...wait, expected, repair_waits: [{ current, replacement: wait }], operation_id: 'repair-same-blocker' }), 'Consumer'))
+      .toMatchObject({ outcome: 'saved' })
+    const card = await f.reader.card(id, true)
+    expect(card.properties['Waiting For ID']?.value).toBe(savedId)
+    expect(parseWaitLine(String(card.properties['Waiting For']?.value))).toEqual({
+      type, id: savedId, dependency: wait.dependency, unblocks_when: wait.unblocks_when, follow_up_by: wait.follow_up_by,
+    })
+  })
+
+  it('refuses to give another authored wait the identity of the repaired entry', async () => {
+    const f = readyFixture()
+    const replacement = actor({ id: 'Alice' })
+    const current = `Dependency: ${replacement.dependency}\nUnblocks when: ${replacement.unblocks_when}\nFollow-up by: ${replacement.follow_up_by}`
+    const text = current + '\nDependency: Review the tariff\nUnblocks when: The review is posted\nFollow-up by: Consumer'
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: 'Person' }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: 'Alice' }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+    const expected = { Status: 'Waiting For', 'Waiting For Type': 'Person', 'Waiting For ID': 'Alice', 'Waiting For': text }
+    const before = patches(f)
+    expect(await f.workflow.update(op('wait', { ...replacement, expected, repair_waits: [{ current, replacement }] }), 'Consumer'))
+      .toMatchObject({ outcome: 'not-saved', code: 'wait-repair-identity', message: expect.stringContaining('would inherit a different blocker') })
+    expect(patches(f)).toBe(before)
+  })
+
   it('repairs all legacy blockers atomically with exact current-state preconditions', async () => {
     const f = readyFixture(), first = actor({ dependency: 'Security approval' }), second = actor({ type: 'Event', id: 'Firmware source publication', dependency: 'Firmware publication', unblocks_when: 'The firmware source is published' })
     f.raw.properties.Status.status.name = 'Waiting For'

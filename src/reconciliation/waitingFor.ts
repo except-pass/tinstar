@@ -1,5 +1,5 @@
 import { cardSourceUrl } from '../shared/workIdentity'
-import { canonicalWorkId, waitingForIssues, waitingForTypes, waitingForWorkIds, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
+import { canonicalWorkId, closedWorkBlocker, waitingForIssues, waitingForTypes, waitingForWorkIds, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
 import type { SceneCard } from '../server/reconciliation/scene'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
@@ -53,7 +53,7 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
     if (!old || card.source.last_edited_time > old.source.last_edited_time) distinct.set(key, card)
   }
   const active = [...distinct.values()].filter(card => propertyText(card, 'Status') === 'Waiting For' && !card.source.archived && !card.source.in_trash)
-  const groups = new Map<string, WaitingForGroup>(), unclassified: SceneCard[] = []
+  const groups = new Map<string, WaitingForGroup>(), unclassified: SceneCard[] = [], referenceIssues: SceneCard[] = []
   const issues = new Map<string, WaitingForIssue[]>()
   const work = new Map(references.map(target => [canonicalWorkId(target.id) ?? target.id, target]))
   const loaded = new Map(known.map(card => [canonicalWorkId(card.id) ?? card.id, card.id]))
@@ -66,17 +66,24 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
     const primaryType = state.type.trim()
     const primaryId = state.id.trim()
     const primaryWorkId = primaryType === 'Work' ? canonicalWorkId(primaryId) : null
-    const dependencies = waitingForWorkIds(state).map(canonical => ({
-      type: 'Work' as const, canonical, id: canonical === primaryWorkId ? primaryId : canonical,
-    }))
+    const dependencies = waitingForWorkIds(state).flatMap(canonical => {
+      const blocker = work.get(canonical)
+      return blocker && !closedWorkBlocker(blocker)
+        ? [{ type: 'Work' as const, canonical, id: canonical === primaryWorkId ? primaryId : canonical, blocker }]
+        : []
+    })
     const primaryGroup = !unclassifiedCard && (primaryType === 'Actor' || primaryType === 'Event')
       ? [{ type: primaryType, id: primaryId, canonical: normalize(primaryType === 'Event' ? githubTarget(primaryId)?.url ?? primaryId : primaryId) } as const]
       : []
-    for (const { type, id, canonical } of [...primaryGroup, ...dependencies]) {
+    if (!unclassifiedCard && !primaryGroup.length && !dependencies.length && cardIssues.some(issue => issue.category === 'reference')) {
+      referenceIssues.push(card)
+    }
+    for (const dependency of [...primaryGroup, ...dependencies]) {
+      const { type, id, canonical } = dependency
       const key = JSON.stringify([type, canonical])
       let group = groups.get(key)
       if (!group) {
-        const blocker = type === 'Work' ? work.get(canonical) : undefined
+        const blocker = 'blocker' in dependency ? dependency.blocker : undefined
         const loadedId = loaded.get(canonical)
         const target = blocker ? loadedId
           ? { kind: 'card' as const, id: loadedId }
@@ -94,7 +101,7 @@ export function waitingForGroups(scope: readonly SceneCard[], known: readonly Sc
   const categories = waitingForTypes.map(type => ({ type, groups: [...groups.values()].filter(group => group.type === type).sort((a, b) =>
     (type === 'Actor' ? Number(normalize(b.id) === 'will') - Number(normalize(a.id) === 'will') : 0) || b.cards.length - a.cards.length || a.label.localeCompare(b.label) || a.key.localeCompare(b.key)) }))
   const initial = [...groups.values()].sort((a, b) => Number(b.type === 'Actor' && normalize(b.id) === 'will') - Number(a.type === 'Actor' && normalize(a.id) === 'will') || b.cards.length - a.cards.length || a.label.localeCompare(b.label)).slice(0, 3).map(group => group.key)
-  return { categories, unclassified, issues, count: active.length, initial }
+  return { categories, unclassified, referenceIssues, issues, count: active.length, initial }
 }
 
 const expansionKey = 'tinstar.overview.waitingFor.expansion.v1'

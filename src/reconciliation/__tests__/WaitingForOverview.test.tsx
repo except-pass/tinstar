@@ -147,6 +147,19 @@ describe('Waiting For in the native Overview', () => {
     expect(work.getByRole('heading')).toHaveTextContent('Work blockers1')
     expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
   })
+  it('counts a shared open blocker once and shows closed references on their waiting rows', () => {
+    set(1, { 'Waiting For Type': 'Work', 'Waiting For ID': fixtureId(5) })
+    set(6, { 'Waiting For Type': 'Work', 'Waiting For ID': fixtureId(5) })
+    set(5, { Status: 'Queued' })
+    const { rerender } = mount(); select()
+    expect(within(screen.getByRole('region', { name: 'Work dependencies' })).getByRole('heading')).toHaveTextContent('Work blockers1')
+    set(5, { Status: 'Done' })
+    observed.scene = scene = { ...scene, generatedAt: new Date().toISOString() }
+    rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+    expect(screen.queryByRole('region', { name: 'Work dependencies' })).toBeNull()
+    const rows = within(screen.getByRole('region', { name: 'Work reference issues' }))
+    expect(rows.getAllByText(/is completed, archived or deleted/)).toHaveLength(2)
+  })
   it('shows precise missing-field information in Inspector and source failures without a false zero', () => {
     set(1, { 'Waiting For ID': '' })
     localStorage.setItem(preferencesKey, JSON.stringify({ donutFilter: { cards: ['Waiting For'], workers: [] } }))
