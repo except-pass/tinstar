@@ -62,7 +62,7 @@ export class WorkflowContent {
   async reservationReadback(id: string, intent: SourceWriteIntent | null): Promise<'applied' | 'different' | 'unknown'> {
     if (!intent) return 'unknown'
     try {
-      if (intent.kind === 'note') return (await this.notes(id)).some(note => note.text === intent.text) ? 'applied' : 'different'
+      if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id)).some(note => note.text === intent.text) ? 'applied' : 'different'
       if (intent.kind === 'section') return (await this.sections(id, true, true)).some(block => block.text === intent.text) ? 'applied' : 'different'
       if (intent.kind === 'append') {
         const texts = (await this.sections(id, true, true)).map(block => block.text)
@@ -93,11 +93,10 @@ export class WorkflowContent {
       return matches ? 'applied' : 'different'
     } catch { return 'unknown' }
   }
-  async request(path: string, method = 'GET', body?: unknown) {
+  async request(path: string, method = 'GET', body?: unknown, signal = AbortSignal.timeout(20_000)) {
     const config = this.reader.config
     if (!config) throw new Error('Notion is not configured')
     if (method !== 'GET') sourceWriteDispatched()
-    const signal = AbortSignal.timeout(20_000)
     let response: Response
     for (let attempt = 0; ; attempt++) {
       try {
@@ -129,13 +128,13 @@ export class WorkflowContent {
     } finally { await stream.cancel().catch(() => {}) }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }
-  async notes(id: string): Promise<WorkflowNote[]> {
+  async notes(id: string, signal?: AbortSignal): Promise<WorkflowNote[]> {
     const jira = this.jira(id)
     if (jira) return jira.notes(id)
     const result: WorkflowNote[] = []; let cursor: string | undefined
     for (let page = 0; page < 5; page++) {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
-      const body = await this.request(`comments?${query}`)
+      const body = await this.request(`comments?${query}`, 'GET', undefined, signal)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
       for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
       if (!body.has_more) return result

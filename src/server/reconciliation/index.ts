@@ -253,7 +253,7 @@ export class ReconciliationSources {
   /** Eligible-source facts for one preparation pass. Admission itself rechecks leases. */
   private prepCandidates(onlyCard?: string): PrepCandidate[] {
     const snapshot = this.knownSnapshot(), queue = this.decisionQueue()
-    const held = this.leases.readStorage(db => new Set(queue.card_ids.filter(id => this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reservedInStorage(db, id))))
+    const held = this.leases.readStorage(db => new Set(queue.card_ids.filter(id => this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reviewReservedInStorage(db, id))))
     const candidates: PrepCandidate[] = []
     let rank = 0
     for (const cardId of queue.card_ids) {

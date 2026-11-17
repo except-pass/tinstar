@@ -66,7 +66,7 @@ membership, complete current material evidence under the
 Declared material unknowns also block eligibility; ordinary advisory uncertainty
 remains visible. Missing, partial, stale, ambiguous or mismatched evidence supplies reasons rather
 than permission. `DecisionPackets.read(id, evidence)` additionally requires a
-successful persisted validation, the latest packet version and **no active canonical review lease or source-write reservation**.
+successful persisted validation, the latest packet version and **no active canonical review lease or workflow source-write reservation**.
 [P3 submission and recovery](#p3-durable-source-bound-submit-and-recovery) defines
 additional answer/research exclusions. It evaluates leases and evidence expiry at read time; there is no permanent Ready flag. Reading without current
 source evidence never asserts readiness. No counts of pending preparations or
@@ -272,7 +272,8 @@ these events. Owner-authenticated GET `/api/reconciliation/decision-desk/review-
 not end-to-end claim-to-visible measurements.
 
 A timeout, ambiguous response or failed readback retains the reservation across
-restart and lease expiry. A new holder or operation cannot race the old write.
+restart and lease expiry. Workflow reservations block new holders, and every
+reservation blocks competing source writes.
 A definitive provider rejection or a pre-write validation failure releases it.
 The original source operation can still inspect its existing recovery records.
 An immutable unique note/contract marker that fully reads back can reconcile its
@@ -289,7 +290,18 @@ running writes and uses the same complete source readback and audited
 reconciliation as the owner route. `applied` and `different` clear the exact
 reservation; `different` may include partial effects. Unknown or incomplete
 readback retains it for the next pass. Recovery never resends a write, and an
-unresolved reservation affects only its own card's claims and writes.
+unresolved workflow reservation affects only its own card's claims and writes.
+
+Waiting-on-owner reminder comments use `reminder` reservations. They keep the
+same per-card source-write fence, but do not hide Ready packets, block generic or
+prepared review claims, or invalidate workflow snapshots. They never allocate a
+reviewer lease. Their audit events use `reminder-*`, separate from workflow
+`write-*` events. The notifier bounds each POST to five seconds and, on an
+interrupted response, immediately reads back its unique receipt with one shared
+five-second deadline across comment pages. A landed receipt clears the reservation
+without waiting for aged recovery. Missing or incomplete readback keeps the write
+fence for recovery without presenting it as a reviewer hold; no ambiguous POST is
+repeated.
 
 The authenticated owner also has an explicit supported recovery route:
 
@@ -465,8 +477,8 @@ step does not start posting. A later save from Preparation is the switch-on.
 Automatic admission requires ready unleased packets plus in-flight jobs to be
 below the saved target depth and source coverage to be complete. Both automatic
 admission and Prepare now require in-flight jobs below the preparer cap, fresh
-eligible source evidence, an unanswered request, no review lease or source-write
-reservation, a card outside Todo, and no job in flight or Ready packet for that
+eligible source evidence, an unanswered request, no review lease or workflow
+source-write reservation, a card outside Todo, and no job in flight or Ready packet for that
 source revision. Prepare now bypasses the target depth. Each exact request/revision
 has at most one active job. Failed or rejected attempts and explicitly withdrawn
 packets can be prepared again, as can packets whose material dependency revisions

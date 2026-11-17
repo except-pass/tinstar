@@ -10,6 +10,9 @@ import { DecisionPackets } from '../decisionPackets'
 import { PreparedReviews } from '../preparedReviews'
 import type { DecisionEvidence } from '../../../shared/decisionPacket'
 import { preparedDecisionFixture } from '../../../../test-fixtures/reconciliation/preparedDecision'
+import { mainWaitNotifier } from '../waitingOnMain'
+import { NotionApi } from '../notionApi'
+
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -29,6 +32,46 @@ async function setup(count = 5, clock = { now: Date.now() }, transform = (fixtur
   return { root, leases, packets, reviews, fixtures, evidence, queue, clock }
 }
 const session = (reviews: PreparedReviews, operation_id: string, caller = 'owner') => reviews.create(caller, { operation_id, label: operation_id, device: 'desktop' })
+
+it.each(['unclaimed', 'prepared', 'generic'] as const)('keeps a Ready decision claimable through %s while its reminder is writing', async mode => {
+  const { leases, packets, reviews, fixtures, root } = await setup(1)
+  const fixture = fixtures[0]!, packetId = (await packets.ids())[0]!
+  let finish!: () => void, began!: () => void
+  const started = new Promise<void>(resolve => { began = resolve })
+  const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+    if (init?.method !== 'POST') return Response.json({})
+    began()
+    await new Promise<void>(resolve => { finish = resolve })
+    return Response.json({ id: 'reminder' })
+  })
+  const notify = mainWaitNotifier({ token: 'fixture', dataSourceId: 'b'.repeat(32) }, new NotionApi(fetcher, 0), leases)
+  const before = JSON.stringify(fixture), revision = leases.sourceRevision()
+  const writing = notify({ id: 'owner-wait', source: 'board', kind: 'card', key: fixture.cardId, label: 'Choose', text: 'Will: choose',
+    audience: 'owner', since: null, ageBasis: 'at least', url: null, fresh: true }, Date.now())
+  await started
+  try {
+    expect(leases.pendingWrites()).toHaveLength(1)
+    expect(leases.status(fixture.cardId)).toBeNull()
+    expect(await packets.read(packetId, fixture.evidence)).toMatchObject({ ready: true })
+    expect((await reviews.snapshot()).counts).toMatchObject({ ready: 1, leased: 0 })
+    expect(leases.sourceRevision()).toBe(revision)
+    if (mode !== 'unclaimed') {
+      // Independent backend instances must use the durable classification too.
+      const other = new CardLeases(root)
+      const claim = mode === 'prepared'
+        ? await reviews.claim('owner', 'Browser', { operation_id: 'during-reminder', card_id: fixture.cardId })
+        : await other.claim([fixture.cardId], 'owner', 'Browser', 'during-reminder', undefined, true,
+          { sourceRevision: revision, eligible: () => true })
+      expect(claim).toMatchObject({ outcome: 'claimed', lease: { card_id: fixture.cardId } })
+      // Reviewer source writes still wait for the reminder's per-card fence.
+      await expect(withLeaseCaller('owner', claim.lease_token, () => leases.mutate(fixture.cardId, async () => {}))).rejects.toThrow('Source write unresolved')
+    }
+    expect(JSON.stringify(fixture)).toBe(before)
+  } finally { finish(); await writing }
+  expect(leases.pendingWrites()).toEqual([])
+  expect(leases.sourceRevision()).toBe(revision)
+  if (mode === 'unclaimed') expect(await packets.read(packetId, fixture.evidence)).toMatchObject({ ready: true })
+})
 
 it('creates only real authenticated-capability contexts; cloned contexts resume and explicit new contexts allocate independently', async () => {
   const { root, reviews, leases } = await setup()
