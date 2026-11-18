@@ -199,66 +199,64 @@ export class Journal {
       let written = 0
       let complete = false
       const overlapsAcceptedWindow = started_at < (previous.last_success_at ?? '')
-      if (entries || (!overlapsAcceptedWindow && started_at > (previous.last_attempt_started ?? ''))) {
-        let { health, reason = null, counts = null } = observation
-        let snapshotId = null
-        let acceptedFleet = null
-        const fleetWindow = this.db.prepare('SELECT * FROM fleet_windows WHERE home_id = ?').get(source.home_id)
-        if (observed_at < started_at) {
-          health = 'stale'
-          reason = 'read ended before it started'
-          batchObservedAt = previous.last_attempt_at
-        } else if (overlapsAcceptedWindow) {
-          health = 'stale'
-          reason = 'read overlaps the accepted collection window'
-        } else if (generated_at && !freshFleet(observation, fleetWindow, previous.last_generated_at, true)) {
-          health = 'stale'
-          reason = 'fleet watermark did not advance'
-        } else if (entries && (source.type !== 'task' || health === 'ok')) {
-          snapshotId = randomUUID()
-          if (generated_at) acceptedFleet = observation
-          if (source.type === 'task') {
-            const pr = observation.pullRequests
-            const worker = this.db.prepare(`
-              SELECT last_success_at, last_generated_at
-              FROM sources WHERE source_id = ?
-            `)
-              .get(entityId('home', source.home_id, 'worker'))
-            const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
-              pr.started_at >= (worker?.last_success_at ?? '') &&
-              freshFleet(pr, fleetWindow, previous.last_generated_at) &&
-              pr.generated_at > (worker?.last_generated_at ?? '')
-            const projected = withPullRequests(entries, fresh ? pr.links : null)
-            const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-            counts = pr_links_unobserved ? { pr_links_unobserved } : null
-            const contributesPullRequests = fresh && pr_links_unobserved < entries.length
-            if (contributesPullRequests) {
-              acceptedFleet = pr
-              batchObservedAt = pr.observed_at
-            }
-            observation = { ...observation, entries: projected }
+      let { health, reason = null, counts = null } = observation
+      let snapshotId = null
+      let acceptedFleet = null
+      const fleetWindow = this.db.prepare('SELECT * FROM fleet_windows WHERE home_id = ?').get(source.home_id)
+      if (observed_at < started_at) {
+        health = 'stale'
+        reason = 'read ended before it started'
+        batchObservedAt = previous.last_attempt_at
+      } else if (entries && overlapsAcceptedWindow) {
+        health = 'stale'
+        reason = 'read overlaps the accepted collection window'
+      } else if (entries && generated_at && !freshFleet(observation, fleetWindow, previous.last_generated_at, true)) {
+        health = 'stale'
+        reason = 'fleet watermark did not advance'
+      } else if (entries && (source.type !== 'task' || health === 'ok')) {
+        snapshotId = randomUUID()
+        if (generated_at) acceptedFleet = observation
+        if (source.type === 'task') {
+          const pr = observation.pullRequests
+          const worker = this.db.prepare(`
+            SELECT last_success_at, last_generated_at
+            FROM sources WHERE source_id = ?
+          `)
+            .get(entityId('home', source.home_id, 'worker'))
+          const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
+            pr.started_at >= (worker?.last_success_at ?? '') &&
+            freshFleet(pr, fleetWindow, previous.last_generated_at) &&
+            pr.generated_at > (worker?.last_generated_at ?? '')
+          const projected = withPullRequests(entries, fresh ? pr.links : null)
+          const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
+          counts = pr_links_unobserved ? { pr_links_unobserved } : null
+          const contributesPullRequests = fresh && pr_links_unobserved < entries.length
+          if (contributesPullRequests) {
+            acceptedFleet = pr
+            batchObservedAt = pr.observed_at
           }
-          written = this.recordEntries(observation, previous, snapshotId)
-          complete = health === 'ok' && !counts?.pr_links_unobserved
+          observation = { ...observation, entries: projected }
         }
-        if (acceptedFleet) {
-          this.db.prepare(`
-            INSERT INTO fleet_windows (home_id, started_at, observed_at, generated_at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(home_id) DO UPDATE SET started_at = excluded.started_at,
-              observed_at = excluded.observed_at, generated_at = excluded.generated_at
-          `).run(source.home_id, acceptedFleet.started_at, acceptedFleet.observed_at, acceptedFleet.generated_at)
-        }
-        this.db.prepare(`
-          UPDATE sources SET last_attempt_started = ?, last_attempt_at = ?, health = ?, reason = ?,
-            counts = ?, last_snapshot_id = COALESCE(?, last_snapshot_id),
-            last_success_at = COALESCE(?, last_success_at),
-            last_generated_at = COALESCE(?, last_generated_at)
-          WHERE source_id = ?
-        `).run(observed_at < started_at ? previous.last_attempt_started : started_at,
-          batchObservedAt, health, reason, JSON.stringify(counts),
-          snapshotId, snapshotId ? batchObservedAt : null,
-          acceptedFleet?.generated_at ?? null, source.source_id)
+        written = this.recordEntries(observation, previous, snapshotId)
+        complete = health === 'ok' && !counts?.pr_links_unobserved
       }
+      if (acceptedFleet) {
+        this.db.prepare(`
+          INSERT INTO fleet_windows (home_id, started_at, observed_at, generated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(home_id) DO UPDATE SET started_at = excluded.started_at,
+            observed_at = excluded.observed_at, generated_at = excluded.generated_at
+        `).run(source.home_id, acceptedFleet.started_at, acceptedFleet.observed_at, acceptedFleet.generated_at)
+      }
+      this.db.prepare(`
+        UPDATE sources SET last_attempt_started = ?, last_attempt_at = ?, health = ?, reason = ?,
+          counts = ?, last_snapshot_id = COALESCE(?, last_snapshot_id),
+          last_success_at = COALESCE(?, last_success_at),
+          last_generated_at = COALESCE(?, last_generated_at)
+        WHERE source_id = ?
+      `).run(observed_at < started_at ? previous.last_attempt_started : started_at,
+        batchObservedAt, health, reason, JSON.stringify(counts),
+        snapshotId, snapshotId ? batchObservedAt : null,
+        acceptedFleet?.generated_at ?? null, source.source_id)
       this.db.exec('COMMIT')
       return { written, complete }
     } catch (error) {

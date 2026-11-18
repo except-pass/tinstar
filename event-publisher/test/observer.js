@@ -457,6 +457,15 @@ test('an overlapping task inventory cannot support a worker relationship', async
   equal(journal.recordAttempt(taskObservation([], 1)).complete, false)
   equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 3)), 1)
   deepEqual(journal.events()[0].related, [])
+
+  journal.record(taskObservation([task], 4))
+  equal(journal.recordAttempt({
+    source: tasks, started_at: at(3), observed_at: at(4),
+    health: 'partial', reason: 'synthetic malformed inventory',
+  }).complete, false)
+  equal(journal.sources().find(source => source.type === 'task').health, 'partial')
+  equal(journal.record(workerObservation([worker], 5)), 1)
+  deepEqual(journal.events().at(-1).related, [])
 })
 
 test('worker inventory respects accepted PR fleet windows and can share a fresh read', async t => {
@@ -574,7 +583,7 @@ printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HO
   equal(journal.events()[0].evidence.pr_link_coverage, 'unobserved')
 })
 
-test('observe fails when its reads are discarded behind the journal watermark', async t => {
+test('observe reports unavailable reads behind the accepted journal watermark', async t => {
   const path = await temp(t)
   const config = join(path, 'config.json')
   const db = join(path, 'journal.sqlite')
@@ -591,7 +600,12 @@ test('observe fails when its reads are discarded behind the journal watermark', 
   const baseline = journal.sources()
 
   await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
-  deepEqual(journal.sources(), baseline)
+  for (const [index, source] of journal.sources().entries()) {
+    equal(source.health, 'unavailable')
+    for (const field of ['last_success_at', 'last_snapshot_id', 'last_generated_at']) {
+      equal(source[field], baseline[index][field])
+    }
+  }
   equal(journal.tail(), 0)
 })
 
