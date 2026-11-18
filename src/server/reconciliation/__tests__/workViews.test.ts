@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ReconciliationSources } from '../index'
 import { CardContextReader } from '../cardContext'
-import { claimCardReadiness } from '../queue'
 import { CardLeases } from '../cardLeases'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 
@@ -100,7 +99,6 @@ it('refreshes cached request history after another process answers a decision', 
   try {
     const first = await sources.workViews()
     expect(first.needsWill![0]!.requests).toMatchObject([{ id: 'approval', answered: false }])
-    expect(claimCardReadiness(first.needsWill![0]!, card)).not.toBeNull()
     const other = new CardLeases(root)
     await other.mutate(card.id, async () => {
       notes.push({ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "approval"' }] })
@@ -108,9 +106,5 @@ it('refreshes cached request history after another process answers a decision', 
     const second = await sources.workViews()
     expect(second.needsWill![0]!.proposalHistoryComplete).toBe(true)
     expect(second.needsWill![0]!.requests).toEqual([])
-    // Desk exposes open requests; claim admission also retains cached answers.
-    const claims = await sources.claimQueue()
-    expect(claims.needsWill![0]!.requests).toContainEqual(expect.objectContaining({ id: 'approval', answered: true }))
-    expect(claimCardReadiness(claims.needsWill![0]!, card)).toBeNull()
   } finally { await rm(root, { recursive: true, force: true }) }
 })

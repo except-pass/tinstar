@@ -1,63 +1,25 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { refillSize } from '../../shared/decisionDeskQueue'
+import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type DecisionEvidence, type DecisionRequestEvidence } from '../../shared/decisionPacket'
-import { decisionHistoryUnavailable } from './decisionEvidence'
-import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
-import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
-import type { CardContextRead } from './cardContext'
-import { deferredDecisionStatus } from './claimPolicy'
+import { packetContents } from '../../shared/decisionPacket'
+import { redactSourceText } from '../../shared/searchDocuments'
+import { cardSourceUrl } from '../../shared/workIdentity'
+import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
+import type { DecisionCardSource } from './decisionEvidence'
+import type { WorkCard } from './workReader'
 
 const exec = promisify(execFile)
-const attemptMs = 10 * 60 * 1000
-/** One Clavis bundle. `url` and `key` are fields, not separate secret names. */
+const retryAfter = 15 * 60_000
 export const prepSecretName = 'grok/tinstar-decision-prep'
 export const preparerName = 'Tinstar Decision Prep'
-export const webhookMissing = 'The preparer webhook is not configured.'
-const sourceChanged = 'source changed; job superseded'
+const webhookMissing = 'The preparer webhook is not configured.'
 
-export interface PrepCandidate {
-  card_id: string; request_id: string; source_revision: string; card_url: string
-  card_status: string | null; answered: boolean; leased: boolean; reasons: string[]; rank: number
-}
-export interface PreparationJob {
-  id: string; card_id: string; request_id: string; source_revision: string; card_url: string
-  published_at?: string | null; readiness?: { ready: boolean; reasons: string[] }
-  state: string; reason: string; actor: string; mode: string; attempt: number; packet_id: string | null
-}
-export interface RefillPass {
-  at: string; outcome: string; explanation: string; coverage: 'complete' | 'unknown'
-  requests: number | null; candidates: number; cards: number; ready: number; inflight: number
-  target: number; free_slots: number; admitted: number; bot_failures: number; bot_errors: string[]
-  source_failures: Array<{ card_id: string; reasons: string[] }>
-  rejections: Array<{ outcome: string; explanation: string; count: number }>
-}
-export interface PreparationReport {
-  configured: boolean; preparer: string; explanation: string; preparing: number
-  automatic_replenishment: boolean
-  jobs: PreparationJob[]
-  refill_pass?: RefillPass
-}
-export interface PrepareResult { outcome: string; explanation: string; job_id?: string; state?: string }
-
+export const publishPacketInput = z.object({ job_id: z.string().uuid(), packet: packetContents })
+interface Job { id: string; card: string; revision: string; state: 'sending' | 'sent' | 'failed' | 'published'; at: number; packet_id: string | null; message: string | null }
 type Secret = { url: string; key: string }
-type Row = PreparationJob & { scope: string; dependency_revision: string | null; created_at: string; updated_at: string; dispatched_at: string | null }
-
-function jobSource(job: Row, evidence: DecisionEvidence) {
-  const requests = evidence.requests.filter(request => request.binding?.request_id === job.request_id)
-  const source = requests.length === 1 ? requests[0] : undefined
-  const binding = source?.binding
-  // Never publish research against an ambiguous request, a changed revision, or an answer.
-  if (!binding || binding.card_id !== job.card_id || binding.source_revision !== job.source_revision || source.answered) return null
-  return { source, binding, question: source.question ?? binding.source_question }
-}
-
-function dependencyRevision(source: DecisionRequestEvidence) {
-  const revisions = source.dependencies.map(dependency => JSON.stringify([dependencyIdentity(dependency), dependency.revision]))
-  return createHash('sha256').update(JSON.stringify(revisions.sort())).digest('hex')
-}
 
 /** Read one Clavis bundle as JSON. Failures and empty results are absence; stdout is never logged. */
 export async function readClavisValue(name: string): Promise<string | null> {
@@ -86,437 +48,162 @@ function webhookUrl(value: string): string | null {
   } catch { return null }
 }
 
-/** One webhook job per eligible decision. The bot publishes back through the
- * packet store; this class never answers, claims a lease, or changes card status.
- * No token ceiling or spend record is kept. */
+/** One push job per card. The job ID gives the publisher the card context;
+ * packet metadata and option IDs are always assigned here. */
 export class DecisionPreparation {
   private initialized?: Promise<void>
   private secret: Secret | null = null
-  private loadedAt = 0
-  private loading?: Promise<void>
-  private replenishing?: Promise<void>
-  private replenishAgain = false
-  private automatic = false
-  private lastPass?: RefillPass
-  constructor(readonly packets: DecisionPackets, readonly scope: string, private source: { candidates(cardId?: string): PrepCandidate[] | Promise<PrepCandidate[]>; renew?(): Promise<void>; coverage(): 'complete' | 'unknown'; diagnostics?(): { requests: number | null; source_failures: RefillPass['source_failures'] } },
-    private evidence: (cardId: string) => DecisionEvidence, private readSecret: (name: string) => Promise<string | null> = readClavisValue,
-    private now = Date.now, private fetchImpl: typeof fetch = fetch) {}
+  private loadedAt = -Infinity
+  private pending?: Promise<void>
+  private explanation = webhookMissing
+  private refreshCursor = 0
+  private candidateCursor = 0
+
+  constructor(readonly packets: DecisionPackets, private source: {
+    refreshQueue(): Promise<WorkCard[]>
+    read(card: string, background: boolean): Promise<DecisionCardSource>
+  }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
   private initialize() {
-    return this.initialized ??= this.packets.initialize().then(() => this.packets.leases.writeStorage(db => { db.exec(`
-      CREATE TABLE IF NOT EXISTS decision_prep_jobs (
-        id TEXT PRIMARY KEY, scope TEXT NOT NULL, card_id TEXT NOT NULL, request_id TEXT NOT NULL,
-        source_revision TEXT NOT NULL, card_url TEXT NOT NULL, state TEXT NOT NULL, reason TEXT NOT NULL,
-        actor TEXT NOT NULL, mode TEXT NOT NULL, operation_id TEXT NOT NULL, attempt INTEGER NOT NULL,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, dispatched_at TEXT, packet_id TEXT);
-      CREATE UNIQUE INDEX IF NOT EXISTS decision_prep_active
-        ON decision_prep_jobs(scope, card_id, request_id, source_revision)
-        WHERE state IN ('admitted', 'dispatched');
-      CREATE INDEX IF NOT EXISTS decision_prep_revision ON decision_prep_jobs(scope, card_id, request_id, source_revision);`)
-      const columns = db.prepare('PRAGMA table_info(decision_prep_jobs)').all() as Array<{ name: string }>
-      if (!columns.some(column => column.name === 'published_at')) db.exec('ALTER TABLE decision_prep_jobs ADD COLUMN published_at TEXT')
-      if (!columns.some(column => column.name === 'dependency_revision')) db.exec('ALTER TABLE decision_prep_jobs ADD COLUMN dependency_revision TEXT')
-      // Recover successful legacy jobs even if later evidence/lease changes made
-      // their state blocked or failed. Validation events retain the real time.
-      db.exec(`UPDATE decision_prep_jobs SET published_at = (
-        SELECT min(e.at) FROM decision_packet_events e JOIN decision_packet_validations v ON v.sequence = e.sequence
-        WHERE e.packet_id = decision_prep_jobs.packet_id AND v.valid = 1)
-        WHERE published_at IS NULL AND packet_id IS NOT NULL;
-        UPDATE decision_prep_jobs SET reason = CASE WHEN state != 'published' THEN 'Packet published successfully; see current readiness for validation or lease restrictions.' ELSE reason END, state = 'published' WHERE published_at IS NOT NULL AND state != 'superseded';`)
-    }))
+    return this.initialized ??= this.packets.initialize().then(() => this.packets.leases.writeStorage(db => db.exec(`
+      CREATE TABLE IF NOT EXISTS decision_card_prep (
+        id TEXT PRIMARY KEY, scope TEXT NOT NULL, card TEXT NOT NULL, revision TEXT NOT NULL,
+        state TEXT NOT NULL, at INTEGER NOT NULL, packet_id TEXT, message TEXT
+      );
+      CREATE INDEX IF NOT EXISTS decision_card_prep_lookup ON decision_card_prep(scope,state,card,at);`)))
   }
 
-  private async ensureConfig() {
-    if (this.loadedAt && this.now() - this.loadedAt < 30_000) return
-    this.loading ??= this.readConfig().finally(() => { this.loading = undefined })
-    await this.loading
-  }
+  private get scope() { return this.packets.scope }
 
-  private async readConfig() {
-    try {
-      this.secret = prepSecret(await this.readSecret(prepSecretName))
-    } catch { this.secret = null }
-    this.loadedAt = this.now()
-  }
-
-  private rows(db: DatabaseSync) {
-    return db.prepare('SELECT * FROM decision_prep_jobs WHERE scope = ? ORDER BY created_at DESC, attempt DESC, id DESC').all(this.scope) as unknown as Row[]
-  }
-
-  private inflight(db: DatabaseSync) {
-    return Number((db.prepare("SELECT count(*) AS n FROM decision_prep_jobs WHERE scope = ? AND state IN ('admitted','dispatched')").get(this.scope) as { n: number }).n)
-  }
-
-  private readyCount(db: DatabaseSync) {
-    const rows = db.prepare('SELECT id FROM decision_packets p WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)').all() as Array<{ id: string }>
-    let ready = 0
-    for (const row of rows) {
-      const preview = this.packets.readInStorage(db, row.id)
-      if (!preview) continue
-      if (this.packets.readInStorage(db, row.id, this.evidence(preview.packet.binding.card_id))?.ready) ready += 1
-    }
-    return ready
-  }
-
-  private readyRevision(db: DatabaseSync, candidate: PrepCandidate) {
-    const rows = db.prepare('SELECT id FROM decision_packets p WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)').all() as Array<{ id: string }>
-    return rows.some(row => {
-      const preview = this.packets.readInStorage(db, row.id)
-      if (!preview || preview.packet.binding.card_id !== candidate.card_id || preview.packet.binding.request_id !== candidate.request_id || preview.packet.binding.source_revision !== candidate.source_revision) return false
-      return !!this.packets.readInStorage(db, row.id, this.evidence(candidate.card_id))?.ready
-    })
-  }
-
-  private expire(db: DatabaseSync) {
-    const cutoff = new Date(this.now() - attemptMs).toISOString()
-    db.prepare("UPDATE decision_prep_jobs SET state = 'failed', reason = ?, updated_at = ? WHERE scope = ? AND state IN ('admitted','dispatched','blocked') AND published_at IS NULL AND coalesce(dispatched_at, created_at) < ?")
-      .run('Preparer did not publish a valid packet before the attempt expired. A late publication can still complete this job.', new Date(this.now()).toISOString(), this.scope, cutoff)
-  }
-
-  private held(db: DatabaseSync, card: string) {
-    return this.packets.leases.activeInStorage(this.packets.leases.rowInStorage(db, card)) || this.packets.leases.reviewReservedInStorage(db, card)
-  }
-
-  private refusal(candidate: PrepCandidate): string | null {
-    if (candidate.answered) return 'This source request already has an answer.'
-    if (candidate.leased) return 'A reviewer holds this card. Preparation does not claim or replace that lease.'
-    if (deferredDecisionStatus(candidate.card_status)) return `Preparation is deferred while the source card is ${candidate.card_status}.`
-    if (!candidate.request_id || !candidate.source_revision) return 'This decision has no exact source request to prepare.'
-    if (candidate.reasons.length) return candidate.reasons[0]!
-    return null
-  }
-
-  private admit(db: DatabaseSync, candidate: PrepCandidate, mode: 'automatic' | 'prepare-now', actor: string, reason: string): PrepareResult & { job?: Row } {
-    this.expire(db)
-    const blocked = this.refusal(candidate)
-    if (blocked) return { outcome: 'ineligible', explanation: blocked }
-    if (this.held(db, candidate.card_id)) return { outcome: 'ineligible', explanation: 'A reviewer holds this card. Preparation does not claim or replace that lease.' }
-    if (this.readyRevision(db, candidate)) return { outcome: 'already-ready', explanation: 'This decision revision is already ready for review.' }
-    const prior = db.prepare(`SELECT * FROM decision_prep_jobs WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?
-      ORDER BY created_at DESC, attempt DESC, id DESC LIMIT 1`).get(this.scope, candidate.card_id, candidate.request_id, candidate.source_revision) as Row | undefined
-    if (prior && ['admitted', 'dispatched'].includes(prior.state)) return { outcome: 'already-preparing',
-      explanation: 'This decision revision is already being prepared.', job_id: prior.id, state: prior.state }
-    const stored = db.prepare(`SELECT p.id, p.body, p.prepared_by FROM decision_packets p
-      WHERE json_extract(body,'$.binding.card_id') = ? AND json_extract(body,'$.binding.request_id') = ?
-      AND json_extract(body,'$.binding.source_revision') = ?
-      AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
-      AND EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1)
-      AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type = 'research-requested')`)
-      .all(candidate.card_id, candidate.request_id, candidate.source_revision) as Array<{ id: string; body: string; prepared_by: string }>
-    const sources = this.evidence(candidate.card_id).requests.filter(request => request.binding?.request_id === candidate.request_id)
-    const source = sources.length === 1 ? sources[0] : undefined
-    const unchanged = stored.some(row => {
-      const packet = decisionPacketSchema.parse(JSON.parse(row.body))
-      if (!this.packets.hasPublicationJob(db, { ...row, packet })) return false
-      if (!source?.binding || bindingMeaning(source.binding) !== bindingMeaning(packet.binding) || source.question !== packet.question) return false
-      const current = new Map(source.dependencies.map(dependency => [dependencyIdentity(dependency), dependency.revision]))
-      return current.size === packet.dependencies.length && packet.dependencies.every(dependency =>
-        !!dependency.revision && current.get(dependencyIdentity(dependency)) === dependency.revision)
-    })
-    if (unchanged) return { outcome: 'already-prepared', explanation: 'This unchanged revision has a published packet; refresh source evidence to revalidate it.' }
-    const policy = this.packets.policyInStorage(db, this.scope)
-    const inflight = this.inflight(db)
-    if (inflight >= policy.values.max_preparers) return { outcome: 'at-capacity', explanation: 'All preparer slots are in use. Wait for a job to finish or raise the maximum parallel preparers.' }
-    if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
-    const id = randomUUID(), at = new Date(this.now()).toISOString()
-    const job: Row = { id, scope: this.scope, dependency_revision: null, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
-      state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: (prior?.attempt ?? 0) + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
-    db.prepare("UPDATE decision_prep_jobs SET state = 'superseded', reason = 'Replaced by a newer preparation attempt.', updated_at = ? WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?")
-      .run(at, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision)
-    db.prepare('INSERT INTO decision_prep_jobs (id,scope,card_id,request_id,source_revision,card_url,state,reason,actor,mode,operation_id,attempt,created_at,updated_at,dispatched_at,packet_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision, candidate.card_url, 'admitted', job.reason, actor, mode, `prep-${id}`, job.attempt, at, at, null, null)
-    db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(null, mode === 'prepare-now' ? 'prepare-now' : 'prep-admit', actor, at, JSON.stringify({ job_id: id, card_id: candidate.card_id, request_id: candidate.request_id, reason }))
-    return { outcome: 'admitted', explanation: job.reason, job_id: id, state: 'admitted', job }
-  }
-
-  private async mark(id: string, state: string, reason: string) {
+  async status() {
     await this.initialize()
-    await this.packets.leases.writeStorage(db => db.prepare(`UPDATE decision_prep_jobs SET state = ?, reason = ?, updated_at = ?,
-      dispatched_at = CASE WHEN ? = 'dispatched' THEN ? ELSE dispatched_at END WHERE id = ? AND (state = 'admitted' OR (state = 'dispatched' AND ? != 'dispatched'))`).run(state, reason, new Date(this.now()).toISOString(), state, new Date(this.now()).toISOString(), id, state))
-  }
-
-  private async dispatch(job: Row) {
-    const secret = this.secret
-    if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
-    const evidence = this.evidence(job.card_id)
-    if (evidence.deferred) {
-      await this.mark(job.id, 'cancelled', 'Preparation is deferred while the source card is inactive.')
-      return
-    }
-    const match = jobSource(job, evidence)
-    if (!match) { await this.mark(job.id, 'superseded', sourceChanged); return }
-    const revision = dependencyRevision(match.source)
-    const pinned = await this.packets.leases.writeStorage(db => db.prepare(
-      "UPDATE decision_prep_jobs SET dependency_revision = ? WHERE id = ? AND state = 'admitted' AND dependency_revision IS NULL",
-    ).run(revision, job.id).changes)
-    if (!pinned) return
-    const payload = { card_url: job.card_url, source_question: match.question,
-      source_revision: createHash('sha256').update(job.source_revision).digest('hex'),
-      options: match.binding.options.map(({ id, label }) => ({ id, label })), publish: { tool: 'publish_prepared_packet', job_id: job.id } }
-    try {
-      const response = await this.fetchImpl(secret.url, {
-        method: 'POST', redirect: 'error',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret.key}` },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
-      })
-      await response.arrayBuffer().catch(() => undefined)
-      if (!response.ok) { await this.mark(job.id, 'failed', `Preparer webhook rejected the job (HTTP ${response.status}).`); return }
-      await this.mark(job.id, 'dispatched', 'Sent to the Tinstar Decision Prep bot.')
-    } catch { await this.mark(job.id, 'failed', 'Preparer webhook could not be reached.') }
-  }
-
-  async status(cachedOnly = false): Promise<PreparationReport> {
-    if (cachedOnly) void this.ensureConfig().catch(() => {})
-    else await this.ensureConfig()
-    await this.initialize()
-    const policy = await this.packets.readPolicy(this.scope)
-    this.automatic = policy.values.automatic_replenishment
-    const jobs = this.packets.leases.readStorage(db => this.rows(db))
-    const preparing = jobs.filter(job => job.state === 'admitted' || job.state === 'dispatched').length
-    const problem = jobs.find(job => job.state === 'failed' || job.state === 'blocked')
-    let explanation = !this.loadedAt && this.loading ? 'Checking preparer configuration.' : webhookMissing
-    if (this.secret) explanation = policy.values.automatic_replenishment
-      ? `${preparerName} is the preparer. Automatic replenishment is on.`
-      : `${preparerName} is the preparer. Automatic replenishment is off until you turn it on.`
-    if (this.secret && problem && !this.lastPass) explanation += ` Latest problem: ${problem.reason}`
-    if (this.secret && this.lastPass) explanation += ` Last refill: ${this.lastPass.explanation}`
-    return { configured: !!this.secret, preparer: preparerName, explanation, preparing, automatic_replenishment: policy.values.automatic_replenishment,
-      refill_pass: this.lastPass,
-      jobs: jobs.map(({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id, published_at }) => ({ id, card_id, request_id, source_revision, card_url, state, reason, actor, mode, attempt, packet_id, published_at,
-        readiness: packet_id ? this.packets.leases.readStorage(db => {
-          const current = this.packets.readInStorage(db, packet_id, this.evidence(card_id))
-          return { ready: !!current?.ready, reasons: current?.reasons ?? ['Packet is unavailable'] }
-        }) : undefined })) }
-  }
-
-  /** Automatic fill only. Explicit Prepare now is separate and works while this is off. */
-  historyLoaded() {
-    // A display-only read with replenishment off must not start a SQLite
-    // writer pass for every card in the board.
-    if (this.automatic) void this.replenish()
+    const jobs = this.packets.leases.readStorage(db => db.prepare(
+      'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? ORDER BY at DESC LIMIT 100',
+    ).all(this.scope) as unknown as Job[])
+    return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
+      preparing: jobs.filter(job => job.state === 'sending' || job.state === 'sent').length }
   }
 
   replenish(): Promise<void> {
-    if (this.replenishing) { this.replenishAgain = true; return this.replenishing }
-    this.replenishing = (async () => {
-      do {
-        this.replenishAgain = false
-        await this.replenishOnce()
-      } while (this.replenishAgain)
-    })().finally(() => { this.replenishing = undefined })
-    return this.replenishing
+    return this.pending ??= this.refill().catch(() => {
+      this.explanation = 'Could not refresh the decision queue. The next pass will retry.'
+    }).finally(() => { this.pending = undefined })
   }
 
-  private async replenishOnce() {
-    const pass: RefillPass = { at: new Date(this.now()).toISOString(), outcome: 'source-failure', explanation: 'Source observation could not be read; the next pass will retry.',
-      coverage: 'unknown', requests: null, candidates: 0, cards: 0, ready: 0, inflight: 0, target: 0, free_slots: 0, admitted: 0, bot_failures: 0, bot_errors: [], source_failures: [], rejections: [] }
+  private canDispatch(db: DatabaseSync, card: string, cutoff: number) {
+    return !this.packets.currentInStorage(db, card) && !this.packets.savingInStorage(db, card) &&
+      !this.packets.leases.activeInStorage(this.packets.leases.rowInStorage(db, card)) &&
+      !db.prepare("SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? AND state != 'published' AND at > ?")
+        .get(this.scope, card, cutoff)
+  }
+
+  private refillCapacity(db: DatabaseSync, queue: WorkCard[], cutoff: number) {
+    const { count } = db.prepare("SELECT count(*) AS count FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent') AND at > ?")
+      .get(this.scope, cutoff) as { count: number }
+    if (count >= refillSize || queue.filter(card => this.packets.claimableInStorage(db, card)).length >= refillSize) return 0
+    return refillSize - count
+  }
+
+  private async refill() {
+    await this.initialize()
+    if (this.now() - this.loadedAt >= 30_000) {
+      this.loadedAt = this.now()
+      this.secret = prepSecret(await this.readSecret(prepSecretName))
+    }
+    const queue = await this.source.refreshQueue()
+    const cutoff = this.now() - retryAfter
+    const { candidates, prepared } = await this.packets.leases.writeStorage(db => {
+      db.prepare("UPDATE decision_card_prep SET state = 'failed', message = 'No packet received; retrying preparation' WHERE scope = ? AND state IN ('sending','sent') AND at <= ?")
+        .run(this.scope, cutoff)
+      const prepared = queue.filter(card => this.packets.currentInStorage(db, card.id))
+      const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
+      const candidates = capacity ? queue.filter(card => this.canDispatch(db, card.id, cutoff)) : []
+      const first = candidates.length ? this.candidateCursor % candidates.length : 0
+      const selected = [...candidates.slice(first), ...candidates.slice(0, first)].slice(0, capacity)
+      return { candidates: selected, prepared }
+    })
+    if (prepared.length) {
+      const index = this.refreshCursor % prepared.length
+      this.refreshCursor += Math.min(4, prepared.length)
+      // Read a rotating subset of published cards so discussion changes are
+      // discovered even in the absence of a claim. Failed reads keep the packet.
+      const refresh = [...prepared.slice(index), ...prepared.slice(0, index)].slice(0, 4)
+      await Promise.allSettled(refresh.map(card => this.source.read(card.id, true)))
+    }
+    const secret = this.secret
+    if (!secret) { this.explanation = webhookMissing; return }
+    const sources = await Promise.allSettled(candidates.map(card => this.source.read(card.id, true)))
+    const jobs = await this.packets.leases.writeStorage(db => {
+      const cutoff = this.now() - retryAfter
+      const capacity = this.refillCapacity(db, queue, cutoff)
+      if (!capacity) return []
+      const eligible = sources.flatMap(result => {
+        if (result.status !== 'fulfilled') return []
+        const source = result.value, card = source.card.id
+        if (!source.actionable || !this.canDispatch(db, card, cutoff) ||
+          this.packets.answeredInStorage(db, card, source.revision)) return []
+        return [source]
+      })
+      const insert = db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'sending',?)")
+      return eligible.slice(0, capacity).map(source => {
+        const id = randomUUID()
+        insert.run(id, this.scope, source.card.id, source.revision, this.now())
+        return { id, source }
+      })
+    })
+    if (jobs.length < candidates.length) this.candidateCursor += candidates.length - jobs.length
+    const results = await Promise.all(jobs.map(job => this.push(secret, job.id, job.source)))
+    const failures = results.filter(Boolean)
+    this.explanation = failures.length ? `${failures.length} of ${jobs.length} jobs could not be sent. ${failures[0]}` :
+      jobs.length ? `Sent ${jobs.length} cards to the preparer.` :
+      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
+  }
+
+  private async push(secret: Secret, id: string, source: DecisionCardSource) {
+    const payload = {
+      card_url: cardSourceUrl(source.card.id),
+      source_question: redactSourceText(source.question),
+      source_revision: source.revision,
+      publish: { tool: 'publish_prepared_packet', job_id: id },
+    }
+    let message: string | null = null
     try {
-      await this.ensureConfig()
-      await this.initialize()
-      const policy = await this.packets.readPolicy(this.scope)
-      this.automatic = policy.values.automatic_replenishment
-      await this.packets.leases.writeStorage(db => this.expire(db))
-      pass.target = policy.values.target_ready
-      await this.source.renew?.()
-      pass.coverage = this.source.coverage()
-      // Warm exact evidence even when collection coverage is temporarily unknown.
-      // No source read or network dispatch occurs inside the storage transaction.
-      const candidates = this.secret && this.automatic ? await this.source.candidates() : []
-      pass.coverage = this.source.coverage()
-      const diagnostics = this.source.diagnostics?.()
-      pass.requests = diagnostics?.requests ?? null
-      pass.source_failures = diagnostics?.source_failures ?? []
-      pass.candidates = candidates.length
-      pass.cards = new Set(candidates.map(candidate => candidate.card_id)).size
-      const admitted: Row[] = []
-      if (!this.secret) { pass.outcome = 'not-configured'; pass.explanation = webhookMissing }
-      else if (!this.automatic) { pass.outcome = 'off'; pass.explanation = 'Automatic replenishment is off.' }
-      else if (pass.coverage !== 'complete') { pass.outcome = 'coverage-unknown'; pass.explanation = 'Source coverage is incomplete; demand is unknown.' }
-      else {
-        for (const candidate of [...candidates].sort((a, b) => a.rank - b.rank)) {
-          const result = await this.packets.leases.writeStorage(db => this.admit(db, candidate, 'automatic', 'decision-desk', 'Automatic replenishment'))
-          if (result.job && result.outcome === 'admitted') admitted.push(result.job)
-          else {
-            const prior = pass.rejections.find(row => row.outcome === result.outcome && row.explanation === result.explanation)
-            if (prior) prior.count++
-            else pass.rejections.push({ outcome: result.outcome, explanation: result.explanation, count: 1 })
-          }
-        }
-        for (const job of admitted) await this.dispatch(job)
-        pass.admitted = admitted.length
-        const failures = this.packets.leases.readStorage(db => this.rows(db).filter(job => admitted.some(row => row.id === job.id) && job.state === 'failed'))
-        pass.bot_failures = failures.length
-        pass.bot_errors = [...new Set(failures.map(job => job.reason))]
-        pass.outcome = pass.bot_failures ? 'bot-failure' : admitted.length ? 'dispatched' : 'no-admissible-work'
-        pass.explanation = `${admitted.length} admitted from ${pass.candidates} exact source requests on ${pass.cards} cards. `
-          + (pass.requests === null ? 'Total demand is unknown. ' : '')
-          + pass.rejections.map(row => `${row.count}: ${row.explanation}`).join(' ')
-          + (pass.source_failures.length ? ` Source evidence unavailable for ${pass.source_failures.length} cards.` : '')
-          + (pass.bot_failures ? ` ${pass.bot_failures} webhook failures: ${pass.bot_errors.join(' ')}` : '')
-          + (!candidates.length && pass.requests !== null && !pass.source_failures.length ? ' Exact sources are exhausted.' : '')
-      }
-      this.packets.leases.readStorage(db => {
-        pass.ready = this.readyCount(db); pass.inflight = this.inflight(db)
-        pass.free_slots = Math.max(0, policy.values.max_preparers - pass.inflight)
-      })
-      pass.explanation += ` Ready ${pass.ready}, in flight ${pass.inflight}, free slots ${pass.free_slots}, target ${pass.target}.`
-    } catch {
-      pass.explanation = 'Source observation could not be read; the next pass will retry.'
-      // Source failures are distinct from a bot rejecting an admitted dispatch.
-      pass.outcome = 'source-failure'
-    }
-    this.lastPass = pass
+      const response = await this.fetcher(secret.url, { method: 'POST', redirect: 'error',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${secret.key}` },
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000) })
+      await response.body?.cancel().catch(() => {})
+      if (!response.ok) message = `Preparer webhook returned HTTP ${response.status}.`
+    } catch { message = 'Preparer webhook could not be reached.' }
+    await this.packets.leases.writeStorage(db => db.prepare(
+      "UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ? AND state = 'sending'",
+    ).run(message ? 'failed' : 'sent', message, id))
+    return message
   }
 
-  /** Revalidate stored packets using real freshly read evidence; never prepare anew. */
-  async revalidate(cardId: string) {
-    await this.initialize()
-    const evidence = this.evidence(cardId)
-    const answered = evidence.requests.filter(request => request.answered && request.binding)
-    if (answered.length) await this.packets.leases.writeStorage(db => {
-      for (const request of answered) {
-        db.prepare(`UPDATE decision_prep_jobs SET state = 'cancelled', reason = 'Source request answered; preparation suppressed.', updated_at = ?
-          WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND published_at IS NULL AND state IN ('admitted','dispatched','blocked')`)
-          .run(new Date(this.now()).toISOString(), this.scope, cardId, request.binding!.request_id, request.binding!.source_revision)
-      }
-    })
-    const ids = this.packets.leases.readStorage(db => (db.prepare(`SELECT id FROM decision_packets p
-      WHERE json_extract(body,'$.binding.card_id') = ? AND version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)`)
-      .all(cardId) as Array<{ id: string }>).map(row => row.id))
-    for (const id of ids) {
-      const validation = await this.packets.validate(id, evidence, 'decision-desk')
-      if (validation.valid) await this.packets.leases.writeStorage(db => {
-        db.prepare(`UPDATE decision_prep_jobs SET state = 'published', published_at = coalesce(published_at, ?),
-          reason = CASE WHEN published_at IS NULL THEN 'Published packet validated against refreshed source evidence.' ELSE reason END
-          WHERE scope = ? AND packet_id = ? AND state != 'superseded'`).run(new Date(this.now()).toISOString(), this.scope, id)
-      })
-    }
-  }
-
-  /** Bounded priority set: in-flight exact jobs, then current reviewable packets. */
-  async priorityCards() {
-    await this.initialize()
-    return this.packets.leases.readStorage(db => {
-      const policy = this.packets.policyInStorage(db, this.scope)
-      const jobs = this.rows(db).filter(job => ['admitted', 'dispatched'].includes(job.state) && !this.evidence(job.card_id).deferred).map(job => job.card_id)
-      const packets = db.prepare(`SELECT json_extract(body,'$.binding.card_id') AS card FROM decision_packets p
-        WHERE version = (SELECT max(version) FROM decision_packets WHERE source_key = p.source_key)
-        AND NOT EXISTS (SELECT 1 FROM decision_packet_events WHERE packet_id = p.id AND type IN ('research-requested','answer-confirmed'))
-        ORDER BY EXISTS (SELECT 1 FROM decision_packet_validations WHERE packet_id = p.id AND valid = 1) DESC, published_at DESC`).all() as Array<{ card: string }>
-      const reviewable = packets.map(row => row.card).filter(card => {
-        const evidence = this.evidence(card)
-        return !evidence.deferred && (!evidence.requests.length || evidence.requests.some(request => !request.answered))
-      })
-      return [...new Set([...jobs, ...reviewable])].slice(0, policy.values.target_ready + policy.values.max_preparers)
-    })
-  }
-
-  async prepareNow(actor: string, input: unknown): Promise<PrepareResult> {
-    const request = z.object({ card_id: z.string().min(1).max(256), request_id: z.string().min(1).max(128), reason: z.string().trim().min(1).max(1000) }).strict().parse(input)
-    z.string().trim().min(1).max(200).parse(actor)
-    await this.ensureConfig()
-    await this.initialize()
-    if (!this.secret) {
-      await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'not-configured', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
-      return { outcome: 'not-configured', explanation: webhookMissing }
-    }
-    const candidate = (await this.source.candidates(request.card_id)).find(row => row.card_id === request.card_id && row.request_id === request.request_id)
-    if (!candidate) {
-      await this.packets.recordEvent(actor, 'prepare-now', { outcome: 'ineligible', card_id: request.card_id, request_id: request.request_id, reason: request.reason })
-      return { outcome: 'ineligible', explanation: 'That decision is not in the current source observation.' }
-    }
-    const admitted = await this.packets.leases.writeStorage(db => this.admit(db, candidate, 'prepare-now', actor, request.reason))
-    if (!admitted.job || admitted.outcome !== 'admitted') {
-      if (admitted.outcome !== 'already-preparing') await this.packets.recordEvent(actor, 'prepare-now', { outcome: admitted.outcome, card_id: request.card_id, request_id: request.request_id, reason: request.reason, explanation: admitted.explanation })
-      return { outcome: admitted.outcome, explanation: admitted.explanation, job_id: admitted.job_id, state: admitted.state }
-    }
-    await this.dispatch(admitted.job)
-    const job = await this.packets.leases.readStorage(db => db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ?').get(admitted.job!.id) as unknown as Row)
-    return { outcome: job.state, explanation: job.reason, job_id: job.id, state: job.state }
-  }
-
-  /** Import advisory packets already delivered on the card, including expired
-   * webhook attempts. Publication still uses the normal schema and evidence
-   * validator; this does not answer, claim, dispatch, or change the source. */
-  async importComments(cardId: string, blocks: CardContextRead['blocks']) {
-    const evidence = this.evidence(cardId)
-    if (evidence.reasons.length) return
-    const comments = newestCommentPackets(blocks, evidence)
-    if (!comments.length) return
-    await this.initialize()
-    const imported = await this.packets.leases.writeStorage(db => comments.flatMap(comment => {
-      const job = comment.job_id ? db.prepare('SELECT id, card_id, request_id, source_revision, state FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(comment.job_id, this.scope) as Row | undefined : undefined
-      const binding = comment.packet.binding
-      if (!job || job.state === 'superseded' || job.card_id !== binding.card_id || job.request_id !== binding.request_id || job.source_revision !== binding.source_revision) return []
-      const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
-      const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
-      let packet = comment.packet, publication = operation
-      const prior = previous && this.packets.readInStorage(db, previous.id, evidence)
-      if (prior) {
-        if (!this.packets.hasPublicationJob(db, prior)) return []
-        // Correct only the two mapper defects in an existing current import.
-        // Retain its original binding/dependencies; an older comment must not
-        // replace newer preparation or borrow a changed source revision.
-        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return [{ id: prior.id, comment, jobId: job.id }]
-        const questionChanged = prior.packet.question !== packet.question
-        const reversibilityMissing = prior.packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
-        const reversibilityRecovered = reversibilityMissing && !packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
-        if (!questionChanged && !reversibilityRecovered) return [{ id: prior.id, comment, jobId: job.id }]
-        packet = { ...prior.packet, question: packet.question,
-          ...(questionChanged ? { background: packet.background } : {}),
-          ...(reversibilityRecovered ? { reversibility: packet.reversibility, material_unknowns: prior.packet.material_unknowns.filter(reason => !/^Missing required field: reversibility(?:\.|$)/.test(reason)) } : {}) }
-        publication = createHash('sha256').update(JSON.stringify([operation, 'mapping-correction', packetContentHash(packet)])).digest('hex')
-      }
-      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication)
-      if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: job.id, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
-      return [{ id: stored.id, comment, jobId: job.id }]
-    }))
-    // A restart or a later source refresh renews evidence even when publication
-    // was idempotent. Validation failures never become a permanent Ready bit.
-    for (const { id, comment, jobId } of imported) {
-      await this.packets.validate(id, evidence, commentPacketActor)
-      await this.packets.leases.writeStorage(db => {
-        const current = this.packets.readInStorage(db, id, evidence)
-        db.prepare('UPDATE decision_prep_jobs SET state = CASE WHEN published_at IS NOT NULL OR ? THEN \'published\' ELSE ? END, published_at = CASE WHEN ? THEN coalesce(published_at, ?) ELSE published_at END, reason = CASE WHEN published_at IS NOT NULL THEN reason ELSE ? END, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state != \'superseded\' AND (packet_id IS NULL OR packet_id = ? OR state IN (\'failed\',\'blocked\'))')
-          .run(Number(!!current?.validation.valid), 'blocked', Number(!!current?.validation.valid), new Date(this.now()).toISOString(), current?.ready ? 'Packet imported from card comment and ready for review.' : current?.reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), id, jobId, this.scope, cardId, comment.packet.binding.request_id, comment.packet.binding.source_revision, id)
-      })
-    }
-  }
-
-  /** Store a bot packet for one open job. Ready is the existing validation result, never a status or lease change. */
   async publish(input: unknown) {
-    const parsed = z.object({ job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: z.object({}).passthrough() }).strict().parse(input)
+    const { job_id, packet } = publishPacketInput.parse(input)
     await this.initialize()
-    await this.packets.leases.writeStorage(db => this.expire(db))
-    const publication = await this.packets.leases.writeStorage(db => {
-      const job = db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(parsed.job_id, this.scope) as Row | undefined
-      if (!job) throw new DecisionDeskConflict('Preparation job is unavailable')
-      if (job.state === 'superseded') throw new DecisionDeskConflict(job.reason === sourceChanged ? sourceChanged : 'This preparation attempt has been replaced')
-      const evidence = this.evidence(job.card_id)
-      const match = jobSource(job, evidence)
-      // A cold or unavailable history can recover while the same job is still open.
-      if (!match && evidence.reasons.includes(decisionHistoryUnavailable)) throw new DecisionDeskConflict('Current preparation source evidence is unavailable; retry this job')
-      if (!match || (job.dependency_revision !== null || job.state !== 'published') && job.dependency_revision !== dependencyRevision(match.source)) {
-        db.prepare("UPDATE decision_prep_jobs SET state = 'superseded', reason = ?, updated_at = ? WHERE id = ? AND published_at IS NULL")
-          .run(sourceChanged, new Date(this.now()).toISOString(), job.id)
-        return null
-      }
-      const { title = match.question, question = match.question } = parsed.packet
-      const dependencies = match.source.dependencies.flatMap(({ kind, key, revision }) => revision ? [{ kind, key, revision }] : [])
-      const packet = decisionPacketSchema.parse({ ...parsed.packet, title, question, binding: match.binding, dependencies })
-      if (job.state === 'published' && job.packet_id) {
-        const current = this.packets.readInStorage(db, job.packet_id, evidence)
-        return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
-      }
-      if (!['admitted', 'dispatched', 'blocked', 'failed'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
-      const stored = this.packets.publishInStorage(db, packet, evidence, preparerName, parsed.operation_id)
-      const current = this.packets.readInStorage(db, stored.id, evidence)
-      const ready = !!current?.ready
-      const reasons = current?.reasons ?? stored.validation?.reasons ?? []
-      db.prepare('UPDATE decision_prep_jobs SET state = CASE WHEN published_at IS NOT NULL OR ? THEN \'published\' ELSE ? END, published_at = CASE WHEN ? THEN coalesce(published_at, ?) ELSE published_at END, reason = CASE WHEN published_at IS NOT NULL THEN reason ELSE ? END, updated_at = ?, packet_id = ? WHERE id = ?')
-        .run(Number(!!current?.validation.valid), 'blocked', Number(!!current?.validation.valid), new Date(this.now()).toISOString(), ready ? 'Packet is ready for review.' : reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), stored.id, job.id)
-      return { outcome: ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: stored.id, ready, reasons, replayed: stored.replayed }
+    const lookup = () => this.packets.leases.readStorage(db => db.prepare(
+      'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? AND id = ?',
+    ).get(this.scope, job_id) as unknown as Job | undefined)
+    const job = lookup()
+    if (!job) throw new DecisionDeskConflict('job_id is unavailable')
+    if (job.packet_id) return { outcome: 'published', job_id, packet_id: job.packet_id }
+    const source = await this.source.read(job.card, false)
+    if (!source.actionable || source.revision !== job.revision) {
+      await this.packets.leases.writeStorage(db => {
+        db.prepare("UPDATE decision_card_prep SET state = 'failed', message = 'Card changed while preparing' WHERE id = ? AND packet_id IS NULL")
+          .run(job_id)
+      })
+      throw new DecisionDeskConflict('The card changed while preparing it')
+    }
+    return this.packets.leases.writeStorage(db => {
+      const current = db.prepare('SELECT packet_id,at FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at'>
+      if (current.packet_id) return { outcome: 'published', job_id, packet_id: current.packet_id }
+      if (current.at <= this.now() - retryAfter) throw new DecisionDeskConflict('The preparation job expired')
+      const stored = this.packets.publishInStorage(db, source, packet)
+      db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
+      return { outcome: 'published', job_id, packet_id: stored.id }
     })
-    if (!publication) throw new DecisionDeskConflict(sourceChanged)
-    return publication
   }
 }

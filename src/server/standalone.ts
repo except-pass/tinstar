@@ -110,8 +110,8 @@ export function startServer(opts: ServerOptions) {
   productionWaitTimer.unref()
   sweepProductionWaits()
   const pulls = new PullsApi(reconciliation, releases.store)
-  const decisionBoard = reconciliation.mainWaitNotionConfig()?.dataSourceId.replace(/-/g, '').toLowerCase() ?? 'configured-board'
-  const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, decisionBoard, id => reconciliation.preparationEvidence(id), req => pulls.authorized(req), reconciliation.preparedReviews, reconciliation.sourceWriteRecovery(), reconciliation.preparedSubmissions, reconciliation.preparation)
+  const decisionDesk = new DecisionDeskApi(reconciliation.decisionPackets, req => pulls.authorized(req),
+    reconciliation.preparedReviews, reconciliation.preparedSubmissions, reconciliation.sourceWriteRecovery())
   const prepTimer = setInterval(() => { void reconciliation.preparation.replenish() }, 5_000)
   prepTimer.unref()
   void reconciliation.preparation.replenish()

@@ -512,8 +512,8 @@ test('formal decisions remain in Decisions and never enter conversation tab coun
   prepared.invalidate()
   await page.reload()
   await openDecisionDesk(page)
-  await expect(page.getByText('Packet invalidated — source revision changed. Refresh research before deciding.')).toBeVisible()
-  await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
+  await expect(page.getByText('The card changed and will be prepared again if it still needs Will.')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Your answer' })).toHaveCount(0)
 })
 
 test('delivered questions offer waiting copy while genuine failures alone expose retry', async ({ page }, testInfo) => {
@@ -673,36 +673,25 @@ test('a new reply anchors only when the reader is already at the latest exchange
   await expect(page.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
 })
 
-test('phone source conversation return preserves the exact leased request and one visible composer', async ({ page }) => {
-  const item = fixtureQueue().items[0]!
-  const record = askItemSchema.parse({ request_id: '00000000-0000-4000-8000-000000000010', conversation_id: '10000000-0000-4000-8000-000000000010',
-    question: 'Explain this request', input_mode: 'text', context: {
-      anchor: { kind: 'decision', page_id: item.cardIds[0]!, label: 'Fixture decision', url: null, observed_at: null },
-      target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: '' },
-      return_to: { section: 'decisions', target: { kind: 'decision', id: item.id }, view: { scene: 'decisions', request_key: item.id, query: '' } },
-    }, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), status: 'answered',
-    reply: { summary: 'Evidence for this exact request', detail: '', references: [], suggested_actions: [] }, error: null, read_at: null, dismissed_at: null,
-  })
-  await page.route('**/api/ask/requests', route => route.fulfill({ json: { ok: true, data: [record] } }))
+test('phone Decision Desk reopens the same leased card after reload', async ({ page }) => {
+  const cardId = fixtureQueue().items[0]!.cardIds[0]!
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${base}/?view=decisions`)
+  const firstClaim = page.waitForResponse('**/api/reconciliation/decision-desk/claim')
   await openDecisionDesk(page)
   const identity = page.locator('.dd-identifiers')
-  await expect(identity).toHaveAttribute('data-decision-id', item.id)
-  await page.locator('.dd-inline-evidence>summary').click()
-  await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
-  await page.getByRole('button', { name: 'Open source conversation in Discuss' }).click()
-  const desk = page.getByRole('dialog', { name: 'Discuss' })
-  await expect(desk.getByRole('textbox', { name: 'Reply to First Mate' })).toBeVisible()
-  await expect(page.locator('.dd-source-context .ask-composer')).toHaveCount(0)
-  await desk.getByRole('button', { name: 'Return to source' }).click()
-  await expect(desk).toBeHidden()
-  await expect(identity).toHaveAttribute('data-decision-id', item.id)
-  await expect(page.locator('.dd-source-context .ask-composer')).toHaveCount(1)
+  await expect(identity).toHaveAttribute('data-semantic-id', `card:${cardId}`)
+  const claimed = await firstClaim
+  const { data: { lease_token } } = await claimed.json()
   await page.reload()
   await expect(page.getByRole('navigation', { name: 'Decisions mode' }).getByRole('button', { name: 'Workbench', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const resumedClaim = page.waitForRequest('**/api/reconciliation/decision-desk/claim')
   await openDecisionDesk(page)
-  await expect(identity).toHaveAttribute('data-decision-id', item.id)
+  expect((await resumedClaim).postDataJSON()).toMatchObject({
+    review_session_token: claimed.request().postDataJSON().review_session_token,
+    lease_token,
+  })
+  await expect(identity).toHaveAttribute('data-semantic-id', `card:${cardId}`)
   await expect(page.getByRole('radio')).toHaveCount(2)
 })
 
@@ -758,10 +747,9 @@ test('phone Discuss return to a card held elsewhere offers untargeted next witho
   const claims: Record<string, unknown>[] = []
   await page.route('**/api/reconciliation/decision-desk/claim', async route => {
     const input = route.request().postDataJSON(); claims.push(input)
-    const fixture = preparedDecisionFixture().packet
-    fixture.binding.card_id = b; fixture.binding.request_key = 'next-request'
+    const fixture = preparedDecisionFixture(b).packet
     const data = input.card_id === a ? { outcome: 'not-saved', code: 'card-held', lease: { holder: 'Other fixture context' } } : {
-      outcome: 'held', lease_token: 'next-fixture-lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() },
+      outcome: 'held', lease_token: 'next-fixture-lease', lease: { card_id: b, expires_at: new Date(Date.now() + 3600000).toISOString() },
       packet: { id: '00000000-0000-4000-8000-000000000002', version: 1, packet: fixture, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() },
     }
     await route.fulfill({ json: { ok: true, data } })

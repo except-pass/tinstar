@@ -28,11 +28,11 @@ function inputSchema(input: Input, root?: { branch: string; fields: readonly str
 export function createToolCatalog(server: McpServer) {
   const tools: Tool[] = []
   return {
-    registerTool<Args extends Input>(name: string, config: Pick<Tool, 'description' | 'annotations'> & { inputSchema: Args }, handler: ToolCallback<Args>, root?: { branch: string; fields: readonly string[] }) {
+    registerTool<Args extends Input>(name: string, config: Pick<Tool, 'description' | 'annotations'> & { inputSchema: Args; discoverySchema?: Input }, handler: ToolCallback<Args>, root?: { branch: string; fields: readonly string[] }) {
       const registered = server.registerTool(name, config, handler)
       // No tool supports task execution. Omission also keeps the catalog valid
       // for 2026-07-28, whose Tool shape removed the legacy execution field.
-      tools.push({ name, description: config.description, inputSchema: inputSchema(config.inputSchema, root), annotations: config.annotations })
+      tools.push({ name, description: config.description, inputSchema: inputSchema(config.discoverySchema ?? config.inputSchema, root), annotations: config.annotations })
       return registered
     },
     publish() {

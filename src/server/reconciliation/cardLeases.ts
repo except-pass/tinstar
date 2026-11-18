@@ -288,6 +288,17 @@ export class CardLeases {
     }
     return { outcome: 'no-unclaimed-card', message: 'No currently unclaimed actionable card in the covered queue; inspect source coverage and waiting requests' }
   }
+  resumeDeskWriteInStorage(db: SqliteDatabase, caller: string, binding: { card: string; generation: number; token_hash: string }) {
+    const row = this.rowInStorage(db, binding.card)
+    if (!row || row.generation !== binding.generation || row.token_hash !== binding.token_hash || row.caller !== caller) {
+      return false
+    }
+    if (!this.activeInStorage(row)) {
+      db.prepare('UPDATE leases SET expires = ? WHERE card = ? AND generation = ?').run(this.now() + leaseDuration, row.card, row.generation)
+      this.auditInStorage(db, row.card, 'desk-answer-resumed', { generation: row.generation })
+    }
+    return true
+  }
   async release(caller: string, token: string, reason: string) {
     return this.transaction(db => {
       const row = db.prepare('SELECT * FROM leases WHERE token_hash = ? AND caller = ?').get(leaseHash(token), caller) as unknown as LeaseRow | undefined

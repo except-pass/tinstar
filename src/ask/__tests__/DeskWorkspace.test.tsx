@@ -32,14 +32,12 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : null
     if (url.includes('/decision-desk/')) {
       const value = preparedDecisionFixture().packet
-      const cardId = body?.card_id ?? sessionStorage.getItem('test-held-card') ?? value.binding.card_id
+      const cardId = body?.card_id ?? sessionStorage.getItem('test-held-card') ?? value.card_id
       sessionStorage.setItem('test-held-card', cardId)
-      const request = (source.queue?.needsWill ?? source.queue?.items ?? []).find(item => item.cardIds.includes(cardId))
-      value.binding.card_id = cardId
-      value.binding.request_key = request?.id ?? value.binding.request_key
+      value.card_id = cardId
       const packet = { id: 'fixture-packet', version: 1, packet: value, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() }
       const data = url.endsWith('/sessions') ? body ? { session: { id: 'browser' }, review_session_token: 'session' } : { sessions: [{ id: 'browser', label: 'Browser', expires_at: new Date(Date.now() + 86400000).toISOString() }] }
-        : url.endsWith('/claim') ? { outcome: 'held', packet, lease_token: 'lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } }
+        : url.endsWith('/claim') ? { outcome: 'held', packet, lease_token: 'lease', lease: { card_id: cardId, expires_at: new Date(Date.now() + 3600000).toISOString() } }
         : url.endsWith('/submission-state') ? { submissions: [] } : {}
       return new Response(JSON.stringify({ ok: true, data }))
     }
@@ -564,13 +562,13 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   delivered.context.view = { scene: 'decisions', request_key: request.id }
   delivered.context.return_to = { section: 'decisions', target: { kind: 'decision', id: request.id }, view: delivered.context.view }
   items = [delivered]
-  const makePacket = (card: string, key: string) => {
+  const makePacket = (card: string) => {
     const value = preparedDecisionFixture().packet
-    value.binding.card_id = card; value.binding.request_key = key
+    value.card_id = card
     return { id: card, version: 1, packet: value, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() }
   }
-  const a = makePacket(request.cardIds[0]!, request.id)
-  const b = makePacket(fixtureId(2), 'request-b')
+  const a = makePacket(request.cardIds[0]!)
+  const b = makePacket(fixtureId(2))
   let skipped = false
   const claims: Record<string, unknown>[] = [], releases: Record<string, unknown>[] = []
   const fallback = read.getMockImplementation()!
@@ -578,11 +576,11 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     if (url.endsWith('/decision-desk/claim')) {
       claims.push(body)
-      return new Response(JSON.stringify({ ok: true, data: { outcome: skipped ? 'already-holding' : 'held', packet: skipped ? b : a, lease_token: skipped ? 'lease-b' : 'lease-a', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } } }))
+      return new Response(JSON.stringify({ ok: true, data: { outcome: skipped && body?.card_id !== undefined && body.card_id !== b.packet.card_id ? 'already-holding' : 'held', packet: skipped ? b : a, lease_token: skipped ? 'lease-b' : 'lease-a', lease: { card_id: (skipped ? b : a).packet.card_id, expires_at: new Date(Date.now() + 3600000).toISOString() } } }))
     }
     if (url.endsWith('/decision-desk/release')) {
       releases.push(body); skipped = true
-      return new Response(JSON.stringify({ ok: true, data: { outcome: 'skipped', next: { outcome: 'held', packet: b, lease_token: 'lease-b', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() } } } }))
+      return new Response(JSON.stringify({ ok: true, data: { outcome: 'skipped', next: { outcome: 'held', packet: b, lease_token: 'lease-b', lease: { card_id: (skipped ? b : a).packet.card_id, expires_at: new Date(Date.now() + 3600000).toISOString() } } } }))
     }
     return fallback(url, init)
   })
@@ -604,7 +602,7 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   await act(async () => {})
   expect(claims).toHaveLength(2) // The App-style cloned origin is the same explicit return.
   fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
-  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`))
+  await waitFor(() => expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.card_id}`))
   fireEvent.click(screen.getByRole('button', { name: 'Toggle mode' }))
   fireEvent.click(screen.getByRole('button', { name: 'Toggle mode' }))
   await screen.findByRole('radio', { name: /Authorize preview only/ })
@@ -612,8 +610,8 @@ it('re-arms an identical explicit Discuss return while retaining the next held l
   const before = claims.length
   fireEvent.click(screen.getByRole('button', { name: 'Explicit source return' }))
   await waitFor(() => expect(claims.length).toBeGreaterThan(before))
-  expect(claims.at(-1)).toMatchObject({ card_id: a.packet.binding.card_id, lease_token: 'lease-b' })
+  expect(claims.at(-1)).toMatchObject({ card_id: a.packet.card_id, lease_token: 'lease-b' })
   await screen.findByText('This session already holds a different decision. Finish or skip it before switching.', { selector: '.dd-notice' })
-  expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.binding.card_id}`)
+  expect(document.querySelector('.dd-identifiers')).toHaveAttribute('data-semantic-id', `card:${b.packet.card_id}`)
   expect(releases).toHaveLength(1)
 })

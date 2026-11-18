@@ -63,10 +63,11 @@ const mergeCard = (values = {}) => card({ Owner: 'Will', 'Will action': ['Merge'
 afterEach(() => { vi.useRealTimers(); resetOriginAllowlistForTests() })
 
 describe('desk queue correctness', () => {
-  it('does not turn a title mention, tag, owner or checkpoint alone into immediate work', () => {
+  it('does not offer a source action when a title, owner or checkpoint lacks a request', () => {
     const result = build(snapshot([card(), card({ 'Will action': ['Merge'] }, b), card({ Owner: 'Will', 'Next check-in': { start: '2026-11-01' } }, 'a'.repeat(32))]))
     expect(result.items).toHaveLength(2)
-    expect(result.items.every(item => item.readiness === 'needs-readiness-verification' && !item.oneTouch)).toBe(true)
+    expect(result.items.every(item => !item.oneTouch)).toBe(true)
+    expect(result.items.find(item => item.kind === 'merge')?.readiness).toBe('needs-readiness-verification')
   })
 
   it('accepts an explicit owner next action; checkpoint changes only ordering', () => {
@@ -520,7 +521,7 @@ describe('desk queue correctness', () => {
   it('orders ready, verification, future, then checkpoint and stable ID; reads do not mutate input', () => {
     const refs = [{ pageId: 'c'.repeat(32), basis: 'explicit' as const, source: 'notion_page_id' }]
     const worker = task(); worker.cardReferences = refs
-    const s = snapshot([mergeCard({ 'Start Date': { start: '2026-12-01' } }), card({ Owner: 'Will' }, b), card({}, 'c'.repeat(32))],
+    const s = snapshot([mergeCard({ 'Start Date': { start: '2026-12-01' } }), card({ Owner: 'Will', 'Will action': ['Merge'] }, b), card({}, 'c'.repeat(32))],
       [worker], [hold({ id: 'choose', cardReferences: refs })])
     const before = structuredClone(s)
     const first = build(s); const next = build(s)
