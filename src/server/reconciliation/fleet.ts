@@ -168,7 +168,13 @@ export function fleetObservation(source: FleetSource) {
     }
     if (coverage === 'partial') {
       for (const [id, prior] of previous?.[acceptedMateCloses] ?? []) {
-        if (!ids.has(id) && !homes.has(prior.home)) accepted.set(id, prior)
+        if (accepted.has(id)) continue
+        const compatible = current.tasks.every(task => {
+          const sameHome = task.kind === 'secondmate' && task.paths.home === prior.home
+          return (task.id !== id && !sameHome) ||
+            (task.id === id && sameHome && task.identity.spawn_gen === prior.generation)
+        })
+        if (compatible) accepted.set(id, prior)
       }
     }
     return { ...current, [acceptedMateCloses]: accepted }

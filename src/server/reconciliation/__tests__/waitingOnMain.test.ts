@@ -368,8 +368,8 @@ describe('Waiting on main', () => {
     const directory = await root(), value = snapshot()
     const child = value.fleet[1]!.observation.data!
     const text = 'corr=8940e5f6dad58120 Card needs a publication route'
-    child.parent_asks!.items = ['legacy', 'explicit-null'].map(key => ({
-      key, corr: null, at: askAt, state: 'blocked', text,
+    child.parent_asks!.items = ['legacy', 'explicit-null', 'reopened'].map(key => ({
+      key, corr: null, at: key === 'reopened' ? askAt + 2 : askAt, state: 'blocked', text,
     }))
     const create = () => new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => false, () => now)
     await create().sweep()
@@ -380,11 +380,11 @@ describe('Waiting on main', () => {
     const asks = child.parent_asks!
     delete child.parent_asks
     await publishResolutions(value, [], { corrs: [{ corr: '8940e5f6dad58120', at: askAt + 1 }] })
-    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['legacy', 'explicit-null'])
-    child.parent_asks = { ...asks, items: asks.items.map(ask => ({
-      ...ask, corr: ask.key === 'legacy' ? '8940e5f6dad58120' : 'overriding-header',
+    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['legacy', 'explicit-null', 'reopened'])
+    child.parent_asks = { ...asks, status: 'unknown', items: asks.items.map(ask => ({
+      ...ask, at: askAt, corr: ask.key === 'explicit-null' ? 'overriding-header' : '8940e5f6dad58120',
     })) }
-    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['explicit-null'])
+    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['explicit-null', 'reopened'])
   })
   it.each(['unknown', 'stale', 'failed', 'missing'] as const)('closes saved resolved asks with %s child coverage', async coverage => {
     const directory = await root(), value = snapshot()
@@ -453,7 +453,12 @@ describe('Waiting on main', () => {
     const hasAsk = async () => (await service.sweep()).items.some(row => row.key === 'approve-api')
     await read('hulk', unknown)
     expect(await hasAsk()).toBe(true)
+    const mate = { id: 'hulk', kind: 'secondmate', spawn_gen: 'first', paths: { home: { path: child!.source.home } } }
+    await read('hulk', close, [mate, mate], false)
+    expect(await hasAsk()).toBe(true)
     await read('hulk', close)
+    expect(await hasAsk()).toBe(false)
+    await read('hulk', { status: 'known', keys: [] }, [mate, mate], false)
     expect(await hasAsk()).toBe(false)
     await read('hulk', unknown, [], false)
     expect(await hasAsk()).toBe(false)

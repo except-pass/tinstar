@@ -44,6 +44,7 @@ function mainResolutions(snapshot: SourceSnapshot, parentHome: string, childHome
 export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
   const items: (MainWaitItem & { corr?: string | null })[] = [], unknown: string[] = [], complete = new Set<string>()
   const resolutionsBySource = new Map<string, ParentMateResolutions>()
+  const closedOccurrences = new Set<string>()
   const board = ageObservation(snapshot.intentions, now)
   const boardFresh = ['fresh', 'partial'].includes(board.status) && !!board.data
   if (board.status === 'fresh' && board.coverage === 'complete' && board.data && !board.data.hasMore) complete.add('board')
@@ -90,14 +91,18 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
     const resolutions = mainResolutions(snapshot, row.source.parentHome, row.source.home)
     if (resolutions) resolutionsBySource.set(source, resolutions)
     for (const ask of asks?.items ?? []) {
-      if (parentAskClosed(ask, resolutions)) continue
-      items.push({ id: JSON.stringify([source, ask.key]), source, kind: 'mate', label,
+      const id = JSON.stringify([source, ask.key])
+      if (parentAskClosed(ask, resolutions)) {
+        closedOccurrences.add(JSON.stringify([id, ask.at]))
+        continue
+      }
+      items.push({ id, source, kind: 'mate', label,
       key: ask.key, corr: ask.corr, text: ask.text, since: ask.at === null ? null : new Date(ask.at * 1000).toJSON(), ageBasis: 'status timestamp', url: null,
       fresh: fresh && asks?.status === 'known' })
     }
   }
   if (!snapshot.fleet.length) unknown.push('Fleet parent asks unknown; no homes configured')
-  return { items, unknown: [...new Set(unknown)], complete, resolutionsBySource }
+  return { items, unknown: [...new Set(unknown)], complete, resolutionsBySource, closedOccurrences }
 }
 
 export function mainWaitComment(item: MainWaitItem | MainWaitItem[], mention: boolean, now = Date.now()) {
@@ -324,8 +329,11 @@ export class WaitingOnMain implements MainWaitBridge {
       const saved = new Map(state.rows.map(row => [row.item.id, row]))
       const seen = new Set(projection.items.map(item => item.id))
       for (const [id, row] of saved) {
-        const resolved = row.item.kind === 'mate' && parentAskClosed({ key: row.item.key, corr: row.corr,
-          at: row.item.since === null ? null : Date.parse(row.item.since) / 1000 }, projection.resolutionsBySource.get(row.item.source))
+        const at = row.item.since === null ? null : Date.parse(row.item.since) / 1000
+        const resolved = row.item.kind === 'mate' && (
+          projection.closedOccurrences.has(JSON.stringify([id, at])) ||
+          parentAskClosed({ key: row.item.key, corr: row.corr, at }, projection.resolutionsBySource.get(row.item.source))
+        )
         if (resolved || (!seen.has(id) && projection.complete.has(row.item.source))) saved.delete(id)
         else row.item.fresh = false
       }
