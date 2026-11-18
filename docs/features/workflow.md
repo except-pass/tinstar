@@ -65,6 +65,29 @@ and work-read diagnostics. There is no persistent mirror or offline write queue.
 Worker close-out and release wait recording are described in the
 [close-out and release-wait contract](worker-closeout-release-waits.md).
 
+### Jev classification dry run
+
+Run the server-side evaluation from the checkout with the configured board and
+an isolated ledger directory:
+
+```sh
+npx tsx scripts/jev-classifier-dry-run.ts --config-home /path/to/tinstar-config \
+  --ledger-home /path/to/private-proof --output /path/to/dry-run.md
+```
+
+The CLI reads the board through the foreground Notion scheduler and uses the
+existing Clavis bundle `openrouter/api-key`. It examines every active card
+missing Initiative and replays closed cards whose Initiative and Epic are set.
+Use `--historical-limit 0` to run just the unassigned cohort. Candidates and
+abstentions go to the report and the local `classification_jobs` table in
+`card-leases.sqlite`. The dry run performs no Notion writes or dispatch.
+
+Optional `--taxonomy-notes FILE` supplies JSON arrays named `initiatives` and
+`pairs`. Entries identify the exact Initiative or Initiative/Epic names and
+can add a `scope` and `aliases`. An initiative entry can explicitly set
+`initiativeOnly: true` for initiative-wide work. The open board assignments
+and select schema determine the eligible initiatives and pairs.
+
 ## Start contract and enforced rules
 
 `start_work({card_id, operation_id, worker, expected?})` requires an existing

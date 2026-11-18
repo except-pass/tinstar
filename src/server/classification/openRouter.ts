@@ -50,7 +50,7 @@ export class OpenRouterJev {
   private retryAt = 0
 
   constructor(private fetcher: typeof fetch = fetch, private keyLoader = loadKey,
-    private timeoutMs = 8_000, private wait = delay) {}
+    private timeoutMs = 8_000, private wait: (ms: number) => Promise<void> = delay) {}
 
   async open() {
     const key = await this.keyLoader()

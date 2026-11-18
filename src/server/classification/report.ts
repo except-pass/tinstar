@@ -107,8 +107,10 @@ export function dryRunReport(report: DryRun, notion: { requests: Record<string, 
     '## Historical confusion matrix (nonzero cells)',
     table(['Notion reference pair', 'Jev candidate or abstention', 'Count'], confusion),
     '## False positive audit queue',
-    table(['Card ID', 'Reference pair', 'Incorrect candidate'], [...policy.calibration.errors, ...policy.holdout.errors]
-      .map(error => [error.cardId, display(error.truth), display(error.proposed)])),
+    table(['Profile', 'Cohort', 'Card ID', 'Reference pair', 'Incorrect candidate'], evaluations.flatMap(value =>
+      [value.calibration, value.holdout].flatMap(({ errors }, index) => errors.map(error => [
+        value.name, index ? 'Holdout' : 'Calibration', error.cardId, display(error.truth), display(error.proposed),
+      ])))),
     '## Unassigned cards',
     table(['Card ID', 'Proposed pair', 'Outcome', 'Initiative fit', 'Epic fit', 'Ambiguity', 'Parents'], unassigned.map(({ result }) => {
       const value = assess(result, policy.threshold)

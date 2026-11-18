@@ -106,6 +106,19 @@ describe('classifier catalog and policy', () => {
       outcome: 'candidate', destination: { initiative: 'Platform', epic: null },
     })
   })
+
+  it('uses parent evidence without letting it override ambiguous, conflicting choices', async () => {
+    const [initiative, pair] = candidates(catalog, 'Platform')
+    const child = notionCard(card(4, 'Rotation', null, null, 'In Progress', 1))
+    const agrees = await classifyCard(child, catalog, source, async request => modelDecision(request, initiative, pair))
+    expect(assess(agrees, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
+    const ambiguous = await classifyCard(child, catalog, source,
+      async request => modelDecision(request, initiative, pair, { ambiguous: 0.62 }))
+    expect(assess(ambiguous, thresholds.conservative)).toMatchObject({ reason: 'ambiguous' })
+    const newInitiative = await classifyCard(child, catalog, source,
+      async request => modelDecision(request, 'none', 'none', { initiative_fit: 0.06 }))
+    expect(assess(newInitiative, thresholds.conservative)).toMatchObject({ reason: 'initiative-no-fit' })
+  })
 })
 
 describe('OpenRouter Decisions transport', () => {
