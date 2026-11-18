@@ -406,7 +406,7 @@ export class CockpitFleet {
   }
 }
 
-export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse, authorizePulls: (req: IncomingMessage) => Promise<boolean>): Promise<boolean> {
+export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse, authorizePulls?: (req: IncomingMessage) => Promise<boolean>): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0]
   const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
   const leaveMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal\/leave$/)
@@ -422,7 +422,7 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
     return true
   }
   if (path === '/api/fleet' && req.method === 'GET') {
-    const includePullStatus = (!req.headers.origin || allowedOrigins.includes(req.headers.origin)) && await authorizePulls(req)
+    const includePullStatus = (!req.headers.origin || allowedOrigins.includes(req.headers.origin)) && (await authorizePulls?.(req)) === true
     return ok(res, fleet.list(includePullStatus), {
       headers: { ...headers, 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' },
     })

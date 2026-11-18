@@ -27,9 +27,10 @@ const task = (id: string) => ({ id, hints: { open_decisions: [{ key: 'choose', v
 beforeEach(() => { fixtures.get.mockReset(); fixtures.submit.mockReset().mockResolvedValue({ saved: true }); fixtures.dismiss.mockReset().mockResolvedValue({ dismissed: true }) })
 
 it.each([
-  { login: 'owner@example.test', allowed: true },
-  { login: undefined, allowed: false },
-])('projects finished PR status on fleet reads with owner access $allowed', async ({ login, allowed }) => {
+  { scenario: 'with owner access', login: 'owner@example.test', hasAuthorizer: true, allowed: true },
+  { scenario: 'without an owner login', login: undefined, hasAuthorizer: true, allowed: false },
+  { scenario: 'without an authorizer', login: 'owner@example.test', hasAuthorizer: false, allowed: false },
+])('projects fleet data $scenario', async ({ login, hasAuthorizer, allowed }) => {
   const url = 'https://github.com/owner/repo/pull/1'
   fixtures.snapshot = { schema: 'fm-fleet-snapshot.v1', tasks: [{ id: 'alpha', pr: { url } }] }
   const fleet = new CockpitFleet()
@@ -39,7 +40,9 @@ it.each([
   try {
     await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
     const pulls = new PullsApi({ scene: vi.fn() }, new AssociationStore(root), root)
-    const server = createServer((req, res) => { void handleCockpitRequest(fleet, req, res, request => pulls.authorized(request)) })
+    const server = createServer((req, res) => {
+      void handleCockpitRequest(fleet, req, res, hasAuthorizer ? request => pulls.authorized(request) : undefined)
+    })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
     try {
