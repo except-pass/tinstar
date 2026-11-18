@@ -61,7 +61,12 @@ function normalizedDependencies(value, home) {
 }
 
 export function canonicalPullRequests(urls) {
-  return [...new Set(urls.map(url => url.replace(/\/$/, '').toLowerCase()))].sort(compare)
+  const locators = new Set()
+  for (const url of urls) {
+    const match = /^(https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)\/?(?:[?#][^\s]*)?$/u.exec(url)
+    if (match && url === url.trim()) locators.add(match[1].toLowerCase())
+  }
+  return [...locators].sort(compare)
 }
 
 export function fleetPullRequests(text, homePath, startedAt, observedAt) {
@@ -88,9 +93,7 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     if (urls.some(url => typeof url !== 'string' || !url.trim()) ||
         row.pr_url != null && (typeof row.pr_url !== 'string' || !row.pr_url.trim())) continue
     if (row.pr_url != null) urls.push(row.pr_url)
-    const exact = urls.filter(url => url === url.trim() &&
-      /^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(url))
-    links.set(row.id, canonicalPullRequests(exact))
+    links.set(row.id, canonicalPullRequests(urls))
   }
   return { links, generated_at: new Date(generated).toISOString() }
 }

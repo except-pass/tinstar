@@ -145,12 +145,14 @@ export class Journal {
 
   register({ home_path, ...source }) {
     const binding = home_path === null ? null : this.db.prepare(`
-      INSERT INTO homes (home_id, path) VALUES (?, ?)
+      INSERT INTO homes (home_id, path)
+      SELECT ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM homes WHERE path = ? AND home_id <> ?)
       ON CONFLICT(home_id) DO UPDATE SET path = excluded.path
       WHERE homes.path = excluded.path
-    `).run(source.home_id, home_path)
+    `).run(source.home_id, home_path, home_path, source.home_id)
     if (binding && !binding.changes) {
-      throw new JournalConfigurationError(`home id ${source.home_id} is already bound to a different FM_HOME path`)
+      throw new JournalConfigurationError('home ID or FM_HOME path is already bound to a different pairing')
     }
     const result = this.db.prepare(`
       INSERT INTO sources (source_id, description) VALUES (?, ?)

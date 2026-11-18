@@ -137,11 +137,21 @@ test('home binding survives restart and is shared by task and worker sources', a
     await rejects(exec(cli, [command, '--config', config, '--db', db]),
       error => error.code === 1 && /already bound/.test(error.stderr))
   }
+  const renamed = { ...original, id: 'example:renamed' }
+  await writeFile(config, JSON.stringify({ homes: [renamed] }))
+  for (const command of ['serve', 'observe']) {
+    await rejects(exec(cli, [command, '--config', config, '--db', db]),
+      error => error.code === 1 && /already bound/.test(error.stderr))
+  }
   deepEqual(journal.sources().map(source => source.source_id), [tasks.source_id])
   journal.register(sourcesFor({ ...added, path: rebound.path })[0])
   journal.register(originalTasks)
   journal.register(originalWorkers)
   equal(journal.tail(), 0)
+  const fresh = new Journal(join(path, 'new-journal.sqlite'))
+  fresh.registerSources(sourcesFor(renamed))
+  equal(fresh.sources().length, 2)
+  fresh.close()
 })
 
 test('CLI rejects oversized intervals and JSON source health output', async () => {
@@ -371,7 +381,7 @@ test('journal rolls back events and watermark if writing fails after the first a
 test('missing, failed, partial and out-of-order task polls preserve the last witnessed state', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())
-  const moved = sourcesFor({ ...home, id: 'example:east' })[0]
+  const moved = sourcesFor({ ...home, id: 'example:east', path: '/example/east' })[0]
   journal.register(tasks)
   journal.register(moved)
   journal.record(taskObservation([row('sample-a')], 0))
@@ -634,11 +644,14 @@ test('PR link casing is canonical across both structured inputs', async t => {
   const canonical = 'https://github.com/owner/repo/pull/12'
   journal.record(taskObservation([], 0))
   equal(journal.record(taskObservation([task], 1, tasks, [{
-    id: task.id, links: [{ url: 'https://github.com/Owner/Repo/pull/12' }], pr_url: canonical,
+    id: task.id, links: [
+      { url: 'https://github.com/Owner/Repo/pull/12?diff=split#files' },
+      { url: 'https://user:secret@github.com/owner/repo/pull/99' },
+    ], pr_url: canonical,
   }])), 1)
   deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
   equal(journal.record(taskObservation([task], 2, tasks, [{
-    id: task.id, pr_url: 'https://github.com/OWNER/REPO/pull/12/',
+    id: task.id, pr_url: 'https://github.com/OWNER/REPO/pull/12/?diff=split#files',
   }])), 0)
 })
 

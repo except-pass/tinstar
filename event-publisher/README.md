@@ -41,8 +41,8 @@ disabled. Use a path with no directory symlinks and with parent directories
 protected from replacement by other users. This prevents another account from replacing the
 checked journal or planting SQLite sidecars before SQLite opens them.
 The journal binds each home ID to its resolved path on first registration.
-Existing journals retain that binding. Start a new journal to use the same ID
-with a different path. The collector retries unresolved homes on subsequent
+Existing journals retain that one-to-one binding. Start a new journal to
+change the ID or path in a binding. The collector retries unresolved homes on subsequent
 passes and checks the journal binding before reading them.
 
 ```sh
@@ -138,7 +138,8 @@ incarnation was previously seen with unknown state. The historical status verb i
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR links
 come from the fleet snapshot's structured backlog records and require exact
-GitHub pull URLs without credentials, query strings or fragments. When the
+GitHub pull URLs without credentials. Query strings and fragments are removed
+from the canonical locator. When the
 backlog link data is unavailable, the journal keeps the last verified links.
 The next verified read establishes a new PR baseline without a link-change
 event. Task events from those reads include the PR coverage in their evidence.
