@@ -546,9 +546,13 @@ test('an overlapping task inventory cannot support a worker relationship', async
   const worker = { id: task.id, gen: 'gen-1', state: 'working' }
   journal.record({ ...taskObservation([task], 0), observed_at: at(3) })
   journal.record(workerObservation([worker], 0))
-  equal(journal.recordAttempt(taskObservation([], 1)).complete, false)
-  equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 3)), 1)
+  equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 1)), 1)
+  deepEqual(journal.events()[0].change, { field: 'current_state', before: 'working', after: 'parked' })
   deepEqual(journal.events()[0].related, [])
+
+  equal(journal.recordAttempt(taskObservation([], 1)).complete, false)
+  equal(journal.record(workerObservation([worker], 3)), 1)
+  deepEqual(journal.events().at(-1).related, [])
 
   journal.record(taskObservation([task], 4))
   equal(journal.recordAttempt({
@@ -556,7 +560,7 @@ test('an overlapping task inventory cannot support a worker relationship', async
     health: 'partial', reason: 'synthetic malformed inventory',
   }).complete, false)
   equal(journal.sources().find(source => source.type === 'task').health, 'partial')
-  equal(journal.record(workerObservation([worker], 5, at(5))), 1)
+  equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 5, at(5))), 1)
   deepEqual(journal.events().at(-1).related, [])
 })
 

@@ -324,7 +324,7 @@ export class Journal {
       saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
         entry.sample.current_state, entry.sample.reason, JSON.stringify(evidence))
       if (previousSnapshot && fields && fields !== prior?.fields) {
-        const related = this.relationships(source, entry)
+        const related = this.relationships(source, entry, started_at)
         for (const difference of eventChanges(source.type, before, entry.fields)) {
           const pullRequestChange = difference.change.field === 'pull_requests'
           if (pullRequestChange && rebaselinePullRequests) continue
@@ -374,7 +374,7 @@ export class Journal {
     return count
   }
 
-  relationships(source, entry) {
+  relationships(source, entry, startedAt) {
     if (source.type !== 'worker') return entry.related
     const taskSource = entityId('home', source.home_id, 'task')
     const taskId = entityId('task', source.home_id, entry.evidence.task_id)
@@ -382,7 +382,8 @@ export class Journal {
       SELECT 1 FROM entities e JOIN sources s USING (source_id)
       WHERE e.source_id = ? AND e.entity_id = ? AND e.last_seen_snapshot = s.last_snapshot_id
         AND s.health = 'ok' AND json_extract(s.description, '$.mode') = ?
-    `).get(taskSource, taskId, source.mode)
+        AND s.last_success_at <= ?
+    `).get(taskSource, taskId, source.mode, startedAt)
     return task ? [{ relation: 'executes', subject: { type: 'task', id: taskId } }] : []
   }
 
