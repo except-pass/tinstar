@@ -21,6 +21,11 @@ export interface CardContextRead {
   omissions?: string
 }
 
+const originalCommentText = new WeakMap<CardContextRead['blocks'][number], string>()
+export function requestHistory(blocks: CardContextRead['blocks']) {
+  return blocks.map(block => ({ ...block, text: originalCommentText.get(block) ?? block.text }))
+}
+
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
@@ -158,13 +163,15 @@ export class CardContextReader {
           const author = record(comment.created_by).id
           const text = comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('')
           const workflowWriter = isDecisionRetraction(text) ? author === await notionWorkflowWriter(this.config, fetcher) : undefined
-          context.blocks.push({ id: String(comment.id), type: 'comment', workflowWriter,
+          const block = { id: String(comment.id), type: 'comment', workflowWriter,
             authorName: typeof record(comment.created_by).name === 'string' ? String(record(comment.created_by).name) : null,
             author: typeof author === 'string' ? author : null,
             createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,
             created_time: typeof comment.created_time === 'string' ? comment.created_time : undefined,
             last_edited_time: typeof comment.last_edited_time === 'string' ? comment.last_edited_time : undefined,
-            text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+            text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') }
+          if (text !== block.text) originalCommentText.set(block, text)
+          context.blocks.push(block)
         }
         if (body.has_more !== true) return context
         const next = typeof body.next_cursor === 'string' ? body.next_cursor : undefined

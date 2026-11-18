@@ -91,10 +91,12 @@ it('refreshes cached request history after another process answers a decision', 
   for (const [name, value] of Object.entries({ 'Waiting For': 'Will: Approve the exception', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) card.properties[name] = { id: name, type: 'rich_text', value, hasMore: false }
   card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
   card.properties['Next action'] = { id: 'next', type: 'rich_text', value: '', hasMore: false }
-  const notes = [{ id: 'request', rich_text: [{
+  const notes: Array<{ id: string; created_by?: { id: string }; rich_text: Array<{ plain_text: string }> }> = [{ id: 'request', rich_text: [{
     plain_text: 'Tin Star request: {"id":"approval","action":"Decision","requested_from":"Other","question":"Different question"}\nRequested from: Will\nQuestion: Approve the exception?',
   }] }]
-  const fetcher = vi.fn(async () => new Response(JSON.stringify({ results: notes, has_more: false })))
+  const fetcher = vi.fn<typeof fetch>(async url => new URL(String(url)).pathname === '/v1/users/me'
+    ? Response.json({ type: 'bot', id: 'fixture-writer' })
+    : Response.json({ results: notes, has_more: false }))
   const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { token: 'fixture-token', dataSourceId: 'a'.repeat(32) } }, fetcher, undefined, root)
   vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
   vi.spyOn(sources.workflow, 'reconcileReviews').mockImplementation(() => new Promise(() => {}))
@@ -110,5 +112,21 @@ it('refreshes cached request history after another process answers a decision', 
     const second = await sources.workViews()
     expect(second.needsWill![0]!.proposalHistoryComplete).toBe(true)
     expect(second.needsWill![0]!.requests).toEqual([])
+    const prod = 'secret_rotation_approval_prod'
+    const stage = 'secret_rotation_approval_stage'
+    await other.mutate(card.id, async () => {
+      for (const [id, question] of [[prod, 'Approve production?'], [stage, 'Approve staging?']] as const) {
+        notes.push({ id: question, rich_text: [{
+          plain_text: `Tin Star request: ${JSON.stringify({ id, action: 'Decision' })}\nRequested from: Will\nQuestion: ${question}`,
+        }] })
+      }
+      notes.push({ id: 'withdrawal', created_by: { id: 'fixture-writer' }, rich_text: [{
+        plain_text: `Date: 2025-01-01T00:00:00.000Z\nBy: Will\nOperation: withdraw_decision\nReason: Correct scope\nTin Star withdrawal: ${JSON.stringify({ id: prod })}\nTin Star operation: ["Will","scope-correction"]`,
+      }] })
+    })
+    const third = await sources.workViews()
+    expect(third.needsWill![0]!.requests).toMatchObject([{ id: '[credential omitted]', question: 'Approve staging?' }])
+    expect(JSON.stringify(third)).not.toContain(stage)
+    expect(JSON.stringify(third)).not.toContain(prod)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

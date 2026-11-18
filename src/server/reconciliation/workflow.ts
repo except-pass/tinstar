@@ -714,10 +714,11 @@ export class WorkflowOperations {
           throw new WorkflowError('decision-conflict', 'The replacement request ID already exists on this card. Supply a new ID.')
         }
         if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select to publish the replacement.')
-        if (!tags.includes(request.action)) set('Will action', [...tags, request.action])
+        const hasTag = tags.includes(request.action)
+        if (!hasTag) set('Will action', [...tags, request.action])
         note += `\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
           id: input.request_id,
-          replacement: { id: request_id, action: request.action, preserve_action: request.preserveAction, requested_from, question, options },
+          replacement: { id: request_id, action: request.action, preserve_action: hasTag && request.preserveAction, requested_from, question, options },
         })}`
       } else {
         const shared = open.some(row => row.id !== input.request_id && row.action === request.action)

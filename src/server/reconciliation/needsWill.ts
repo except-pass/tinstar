@@ -3,7 +3,7 @@ import { proposalAnswerId } from '../ask/decision'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueItem, buildQueue } from './queue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
-import type { CardContextRead } from './cardContext'
+import { requestHistory, type CardContextRead } from './cardContext'
 import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
 import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
@@ -36,7 +36,7 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const actionTags = item.sources.find(source => (source.kind === 'notion' || source.kind === 'jira') && source.request?.home === null && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id)
-      const open = currentWillRequests(context?.blocks ?? [], actionTags).filter(request => !request.answered)
+      const open = currentWillRequests(requestHistory(context?.blocks ?? []), actionTags).filter(request => !request.answered)
       requests.push(...open.map(request => ({ ...request, cardId: id })))
       if (/\bWill\b/.test(wait) || actionTags.length) real = true
     }

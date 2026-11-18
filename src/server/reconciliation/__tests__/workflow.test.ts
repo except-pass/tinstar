@@ -1020,6 +1020,25 @@ describe('remaining shared workflow operations', () => {
         .toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
     }
   })
+  it.each(['withdraw_decision', 'answer_decision'] as const)('clears the tag restored by supersession on %s', async kind => {
+    const f = fixture()
+    f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+    expect(await f.workflow.update(input('request_decision', {
+      request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    f.raw.properties['Will action'].multi_select = []
+    expect(await f.workflow.update(input('supersede_decision', {
+      request_id: 'original', reason: 'Corrected scope',
+      replacement: { request_id: 'replacement', requested_from: 'Will', question: 'Approve the replacement?' },
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+    expect(await f.workflow.update(input(kind, {
+      request_id: 'replacement',
+      ...(kind === 'withdraw_decision' ? { reason: 'No longer needed' } : { answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } }),
+    }), 'Owner')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual([])
+  })
+
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {
     const f = fixture()
     await f.workflow.update(input('request_decision', { request_id: 'ask', question: 'Continue?', requested_from: 'Will' }), 'Consumer')
