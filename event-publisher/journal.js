@@ -193,7 +193,8 @@ export class Journal {
   recordAttempts(observations) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const results = observations.map(observation => this.#recordAttempt(observation))
+      const batchId = randomUUID()
+      const results = observations.map(observation => this.#recordAttempt(observation, batchId))
       this.db.exec('COMMIT')
       return results
     } catch (error) {
@@ -202,7 +203,7 @@ export class Journal {
     }
   }
 
-  #recordAttempt(observation) {
+  #recordAttempt(observation, batchId) {
     const { source, started_at, observed_at, entries, generated_at } = observation
     let batchObservedAt = observed_at
     const previous = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(source.source_id)
@@ -246,7 +247,7 @@ export class Journal {
         if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
-      written = this.recordEntries(observation, previous, snapshotId)
+      written = this.recordEntries(observation, previous, snapshotId, batchId)
       complete = health === 'ok' && !counts?.pr_links_unobserved
     }
     if (acceptedFleet) {
@@ -268,7 +269,7 @@ export class Journal {
     return { written, complete }
   }
 
-  recordEntries(observation, previous, snapshotId) {
+  recordEntries(observation, previous, snapshotId, batchId) {
     const previousSnapshot = previous.last_snapshot_id
     const { source, started_at, observed_at } = observation
     const select = this.db.prepare('SELECT * FROM entities WHERE source_id = ? AND entity_id = ?')
@@ -329,7 +330,7 @@ export class Journal {
               method: 'snapshot-diff',
               read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
               coverage: source.coverage,
-              batch_id: snapshotId,
+              batch_id: batchId,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
               current_snapshot: snapshotId,
               observed_between: { after: prior?.started_at ?? null, by: eventObservedAt },

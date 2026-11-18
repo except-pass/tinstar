@@ -720,7 +720,10 @@ test('a crash between fleet projections leaves neither projection committed', as
     { written: 1, complete: true },
     { written: 1, complete: true },
   ])
-  deepEqual(restarted.events().map(event => event.change.field), ['pull_requests', 'current_state'])
+  const events = restarted.events()
+  deepEqual(events.map(event => event.change.field), ['pull_requests', 'current_state'])
+  equal(new Set(events.map(event => event.observation.batch_id)).size, 1)
+  equal(new Set(events.map(event => event.observation.current_snapshot)).size, 2)
 })
 
 test('missing, failed, partial and out-of-order task polls preserve the last witnessed state', async t => {
