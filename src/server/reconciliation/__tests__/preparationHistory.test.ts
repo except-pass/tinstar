@@ -418,6 +418,51 @@ it('reads only the Prepare now card and shares concurrent requests for it', asyn
   expect(reads.filter(read => read.path === '/v1/comments')).toHaveLength(1)
 }, 20_000)
 
+it('completes 22 paged histories despite recurring priority renewals and background contention', async () => {
+  const background = 'https://api.notion.com/v1/fixture-background'
+  const foreground = 'https://api.notion.com/v1/fixture-foreground'
+  let foregroundSentAt = 0
+  let initialized = false
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  const fixture = setup({ cards: 22, cardNative: true, commentCount: 201, intervalMs: 350,
+    wrapFetch: transport => async (input, init) => {
+      if (String(input) === background) return Response.json({})
+      if (String(input) === foreground) {
+        foregroundSentAt = Date.now()
+        return Response.json({})
+      }
+      return transport(input, init)
+    },
+  }).finally(() => { initialized = true })
+  const [f] = await Promise.all([fixture, vi.waitFor(() => expect(initialized).toBe(true), { timeout: 5000 })])
+  // Model an existing Ready cohort competing with the rest of a cold board.
+  vi.spyOn(f.sources.preparation, 'priorityCards').mockResolvedValue(f.cardIds.slice(0, 8))
+  let snapshot = await f.sources.preparedReviews.snapshot()
+  expect(snapshot.history).toHaveLength(22)
+  expect(snapshot.coverage).toBe('unknown')
+  for (let cycle = 0; cycle < 36; cycle++) {
+    const sources = f.sources.snapshot(false, {}, true)
+    const backgroundReads = Promise.all(Array.from({ length: 7 }, () => f.sources.notionApi.backgroundFetch(background)))
+    const queuedAt = Date.now()
+    const interactive = f.sources.notionApi.parallelFetch(foreground)
+    await vi.advanceTimersByTimeAsync(350)
+    expect(foregroundSentAt).toBeGreaterThanOrEqual(queuedAt)
+    expect(foregroundSentAt - queuedAt).toBeLessThanOrEqual(350)
+    await interactive
+    await vi.advanceTimersByTimeAsync(4650)
+    await Promise.all([sources, backgroundReads])
+    snapshot = await f.sources.preparedReviews.snapshot()
+  }
+  expect(snapshot.history.filter(row => row.observed_at === null)).toEqual([])
+  expect(snapshot.source_failures).toEqual([])
+  expect(snapshot.coverage).toBe('complete')
+  await f.sources.decisionPackets.updatePolicy('f'.repeat(32), { expected_version: 0,
+    values: { target_ready: 20, max_preparers: 4, automatic_replenishment: true },
+  }, 'fixture-owner')
+  await f.sources.preparation.replenish()
+  expect(f.posts).toHaveLength(4)
+}, 15_000)
+
 it.each(['comments', 'body'] as const)('loads a late %s request on a 13-page contract without treating code or nested specs as missing history', async historySurface => {
   const { sources, cardId, requestId, reads, posts } = await setup({ largeContract: true, historySurface, commentCount: 601 })
   const snapshot = await loadedSnapshot(sources)

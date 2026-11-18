@@ -82,15 +82,13 @@ coverage. The Desk snapshot and automatic admission enqueue missing/expired
 history and immediately project known evidence.
 Each completed read, when automatic replenishment is enabled, schedules a coalesced
 replenishment pass, so an eligible decision can be admitted before its history
-expires. Prepare now waits only for the selected card, prioritizing it ahead of
-queued background reads and reusing an in-flight read. Snapshots expose per-card
-history loading/available/unavailable states; while the page is visible, the Desk
-refreshes its snapshot every two seconds, including through history retry
+expires. Snapshots expose per-card history loading/available/unavailable states.
+While the page is visible, the Desk refreshes its snapshot every two seconds,
+including through history retry
 deadlines and pending configuration lookup with automatic replenishment off.
-History deadlines and coverage are defined in [loading history](#publishing-a-source-request-and-loading-history);
-failures include a reason and retry time, with backoff from 30 seconds to five
-minutes. Prepare now can explicitly retry one failed card. Secret lookup also refreshes in the background
-for snapshots. Generic MCP claim reads and admission follow the
+[Loading history](#publishing-a-source-request-and-loading-history) defines
+history deadlines, coverage, and retries. Secret lookup also refreshes in the
+background for snapshots. Generic MCP claim reads and admission follow the
 [session-scoped card lease contract](reconciliation-mcp.md#session-scoped-card-leases).
 The [P4 renewal contract](#p4--preparation-jobs) owns priority-source retention
 and readiness deadlines. Other source readers can also populate caches;
@@ -577,21 +575,21 @@ reasons/counts, Ready/in-flight depth, free slots and dispatch failures. Source
 read failures are reported separately from webhook failures in `runner.refill_pass`.
 The runner explanation includes the most recent pass, including exhausted sources.
 
-Current packet cards and in-flight jobs take priority over queued board history
-reads, bounded by the saved target plus maximum preparers. Their canonical card
-properties and complete body/comment history are re-read when either has less
-than fifteen seconds of evidence remaining. The five-second runner renews these
-sources even with automatic admission off and the Desk closed. Other queued cards refresh expired
-properties as well as history, including explicit retries outside the priority
-set. Two readers remain the concurrency bound. During renewal or transient
+Current packet cards and in-flight jobs get early renewals, bounded by the saved
+target plus maximum preparers. Their canonical card properties and complete
+body/comment history are re-read when either has less than fifteen seconds of
+evidence remaining. The five-second runner renews these sources even with
+automatic admission off and the Desk closed. Other queued cards refresh expired
+properties as well as history. See [loading history](#publishing-a-source-request-and-loading-history)
+for how the shared queue schedules reads. During renewal or transient
 failures, a previously complete observation can keep the same packet Ready for
 at most three minutes beyond its original thirty-second horizon. Observed and
 expiry timestamps remain unchanged; dependencies disclose `renewal_until`.
 This covers paced reads and the 30/60-second failure retry backoff. Continued
 failure past that bound blocks Ready with the actual source reason and a retry
-time; Prepare now can retry immediately. Explicit recorded source changes clear
-retained history. A successful renewal replaces the old observation, and a
-changed request, card, option or answer blocks the old packet immediately.
+time. Explicit recorded source changes clear retained history. A successful
+renewal replaces the old observation. A changed request, card, option or answer
+blocks the old packet immediately.
 Positive records from successive partial renewals, including legacy answer
 paragraphs read before a later body page fails, accumulate in retained history.
 An observed answer still blocks review when another history surface fails;
@@ -677,18 +675,22 @@ contract content are not workflow publication surfaces. These omissions do not
 make the decision history partial. General `get_work` prose remains explicitly
 bounded and does not claim to contain the full implementation contract.
 
-The Desk queues at most two card-history reads and never makes snapshots or
-claims wait for that queue. Desk source work uses the background priority in
-the [shared request policy](workflow.md#read-contracts). Each active history
-attempt shares a 120-second cancellation deadline across properties, comments
+The Desk runs at most two card-history reads at a time and never makes snapshots
+or claims wait for the queue. Prepare now waits for the selected card's history
+read, shares a read already in flight, and can bypass retry backoff for that card.
+If its read is still queued, it goes ahead of background reads. The queue
+otherwise alternates starts between priority cards and other board cards while
+both are queued, so recurring renewals leave room for cold histories. Desk source
+work uses the background priority in the [shared request policy](workflow.md#read-contracts).
+Each active history attempt shares a 120-second cancellation deadline across properties, comments
 and body reads, including their queue waits. Notion history reads retry
-transient 429s within that deadline. Missing permissions, failed
-pages and invalid pagination still leave history unavailable with a visible
-retry. Reading the cache never extends its timestamps; see the
+transient 429s within that deadline. Missing permissions, failed pages and
+invalid pagination leave history unavailable with a reason and retry time.
+Background retries back off from 30 seconds to five minutes.
+Reading the cache never extends its timestamps; see the
 [P4 renewal contract](#p4--preparation-jobs) for freshness and bounded retention.
-A sweep can outlive ordinary freshness. **Prepare now** prioritizes and
-refreshes the selected card plus expired source observations, so it does not
-require the whole sweep to be simultaneously fresh. It works with automatic
+A sweep can outlive ordinary freshness. **Prepare now** refreshes expired source
+observations and can proceed before the sweep finishes. It works with automatic
 replenishment off and does not change that switch.
 
 An isolated round-trip harness can publish through `update_work`, call the real
