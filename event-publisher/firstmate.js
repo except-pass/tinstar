@@ -74,7 +74,7 @@ function canonicalPullRequests(urls) {
   return [...locators].sort(compare)
 }
 
-export function fleetPullRequests(text, homePath, startedAt, observedAt) {
+export function fleetPullRequests(text, homePath, startedAt, observedAt, includeLinks = true) {
   const links = new Map()
   let data
   try {
@@ -89,7 +89,7 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
       generated > Date.parse(observedAt)) return null
   const window = { links, generated_at: new Date(generated).toISOString(), started_at: startedAt, observed_at: observedAt }
   if (data.backlog?.present === false) return { ...window, backlogAbsent: true }
-  if (data.backlog?.present !== true) return null
+  if (!includeLinks || data.backlog?.present !== true) return null
   if (data.main_inventory?.valid !== true || !Array.isArray(data.backlog.records)) return null
 
   const ids = new Set()
@@ -370,7 +370,7 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
     }
   })
   if (text !== undefined) {
-    tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
+    tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt, Boolean(tasks.entries?.length))
   }
   return [tasks, workers]
 }

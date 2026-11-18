@@ -477,8 +477,16 @@ test('confirmed backlog absence survives both inventory failures', async t => {
   await mkdir(bin)
   const generation = at(2)
   const fleet = { schema: 'fm-fleet-snapshot.v1', fm_home: path, generated: generation, backlog: { present: false } }
-  await writeFile(join(bin, 'fm-fleet-snapshot.sh'),
-    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(fleet)}'\n`, { mode: 0o700 })
+  const writeFleet = snapshot => writeFile(join(bin, 'fm-fleet-snapshot.sh'),
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(snapshot)}'\n`, { mode: 0o700 })
+  await writeFleet({
+    ...fleet, main_inventory: { valid: true },
+    backlog: { present: true, records: [{ id: 'sample-task', links: ['https://github.com/example/repo/pull/12'] }] },
+  })
+  const [unavailable] = await observeHome(fixture, path, { now: () => new Date(generation) })
+  equal(unavailable.health, 'unavailable')
+  equal(unavailable.pullRequests, null)
+  await writeFleet(fleet)
   const journal = new Journal(join(path, 'journal.sqlite'))
   t.after(() => journal.close())
   journal.registerSources(sourcesFor(fixture))
