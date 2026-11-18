@@ -146,7 +146,6 @@ it('keeps preparation across Tin Star housekeeping, then invalidates a substanti
     if (changed) body.results.push({ id: 'owner-prose', created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Date: 2026-11-17T23:00:00Z\nBy: Firstmate\nProgress: Checked the new preview.\nEvidence: The preview would now write production data. Defer it.\nBlocker/owner: none\nNext action: Recheck production isolation.\nNext check-in: 2026-11-18T23:00:00Z\nAppointment: provisional' }] })
     return Response.json(body)
   } })
-  f.sources.checkInRequestIds = async id => new Set(id === f.cardId ? [checkInId] : [])
   const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
   const first = await prepare()
   const packet = preparedDecisionFixture().packet, before = f.sources.preparationEvidence(f.cardId).requests[0]!
@@ -232,7 +231,29 @@ it('resolves an explicitly named wait with multiple open requests and retains th
   expect(card.properties['Waiting For ID']?.value).toBe('upgrade')
 })
 
-it('preserves inactive legacy prose when the normal wait transition rejects it', async () => {
+it('records a Desk answer without changing a shared wait or its status', async () => {
+  const { sources, cardId, requestId } = await setup({ independentRequest: true })
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
+  expect(job.outcome).toBe('dispatched')
+  const packet = preparedDecisionFixture().packet
+  const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'shared-wait-packet', packet })).toMatchObject({ ready: true })
+  const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'shared-wait-claim', card_id: cardId })
+  expect(claim.wait_to_resolve).toBeUndefined()
+  expect(await sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', {
+    operation_id: 'shared-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id,
+    packet_version: claim.packet!.version, request_id: requestId, option_id: packet.recommended_option_id,
+    next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
+  })).toMatchObject({ outcome: 'recorded-empty' })
+  const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
+  expect(card.properties.Status?.value).toBe('Waiting For')
+  expect(card.properties['Waiting For']?.value).toBe('Will: Choose the bounded preview route?')
+  expect(card.properties['Waiting For ID']?.value).toBe('Will')
+})
+
+it('preserves inactive legacy prose when a prepared answer has no pinned wait', async () => {
   const { sources, cardId, requestId } = await setup({ independentRequest: true, cardStatus: 'Queued', inactiveWait: 'An old dependency note' })
   const saved = await sources.workflow.answerPrepared({
     kind: 'answer_decision', card_id: cardId, request_id: requestId, operation_id: 'new-prepared-wait',
@@ -240,7 +261,7 @@ it('preserves inactive legacy prose when the normal wait transition rejects it',
     next: { owner: 'Firstmate', status: 'Waiting For', wait: { type: 'Actor', id: 'Will', dependency: 'Approve the current preview',
       unblocks_when: 'Owner approval arrives', follow_up_by: 'Firstmate', next_check_in: new Date(Date.now() + 30 * 60_000).toISOString() } },
   }, 'Fixture owner')
-  expect(saved).toMatchObject({ outcome: 'not-saved', code: 'wait-invalid' })
+  expect(saved).toMatchObject({ outcome: 'saved', code: 'saved' })
   const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
   expect(card.properties.Status?.value).toBe('Queued')
   expect(card.properties['Waiting For']?.value).toBe('An old dependency note')

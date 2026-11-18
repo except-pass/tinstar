@@ -97,7 +97,6 @@ export function startServer(opts: ServerOptions) {
   reconciliation.onWorkRefresh = async cards => { for (const card of cards) await workUpdates.refreshComments(card) }
   reconciliation.workflow.onChange = change => workUpdates.confirmed(change)
   reconciliation.workflow.deliveryStatus = (id, operationId) => workUpdates.deliveryStatus(id, operationId)
-  reconciliation.checkInRequestIds = id => checkIns.requestIds(id)
   reconciliation.checkInIndicators = () => checkIns.indicators()
   const fleet = new CockpitFleet(() => { void reconciliation.reconcileReviewHandoffs?.().catch(() => log.warn('review', 'Review handoff reconciliation unavailable; retained audit exceptions remain unresolved')); void workUpdates.sweep().catch(() => log.warn('workflow', 'Firstmate pickup/update scan unavailable; current-state reconciliation will retry')); void checkIns.sweep().catch(() => log.warn('check-in', 'Check-in sweep unavailable; retained requests will retry on the next source refresh')) })
   const releases = new ReleasesApi(reconciliation)

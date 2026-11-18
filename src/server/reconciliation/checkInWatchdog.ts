@@ -74,7 +74,6 @@ const deliverySchema = z.object({
   error: z.enum(['capture-failed', 'wake-failed']).nullable(),
   // Legacy rows wait for the next sweep to reserve an offer.
   pending: z.boolean().optional(),
-  issued: z.boolean().optional(),
 })
 type Delivery = z.infer<typeof deliverySchema>
 const rowSchema = z.object({
@@ -116,22 +115,17 @@ function labeledFields(body: string) {
   return { fields, requestIds, issue }
 }
 
-export function checkInReplyRequestId(body: string) {
-  const { requestIds } = labeledFields(body)
-  return requestIds.length === 1 ? requestIds[0] : undefined
-}
-
 /** A small labeled checkpoint is both readable on Notion and verifiable without
  * a model. The request correlation prevents unrelated edits from closing it. */
-function readReport(body: string, requestId: string): { report?: Report; issue?: string } {
+function readReport(body: string, requestId?: string): { report?: Report; issue?: string } {
   const parsed = labeledFields(body)
   const { fields } = parsed
   let { issue } = parsed
-  if (!parsed.requestIds.includes(requestId)) return {}
+  if (requestId !== undefined && !parsed.requestIds.includes(requestId)) return {}
   for (const label of labels) {
     if (!fields[label] || /^<.*>$/.test(fields[label]!)) issue ??= `${label}: missing value or placeholder`
   }
-  if (fields['Check-in request'] !== requestId) issue ??= 'Check-in request: does not match original request ID'
+  if (requestId !== undefined && fields['Check-in request'] !== requestId) issue ??= 'Check-in request: does not match original request ID'
   if (!Number.isFinite(Date.parse(fields.Date ?? ''))) issue ??= 'Date: unparseable timestamp'
   if ((fields.Progress?.length ?? 0) < 12 ||
     /^(?:still (?:working|running)|none|pending|n\/a|no evidence)[.! ]*$/i.test(fields.Progress ?? '')) issue ??= 'Progress: substantive update required'
@@ -139,7 +133,7 @@ function readReport(body: string, requestId: string): { report?: Report; issue?:
     /^(?:none|pending|n\/a|still working|no evidence)[.! ]*$/i.test(fields.Evidence ?? '')) issue ??= 'Evidence: substantive evidence required'
   return issue ? { issue } : { report: fields as Report }
 }
-export function checkInReport(body: string, requestId: string): Report | null {
+export function checkInReport(body: string, requestId?: string): Report | null {
   return readReport(body, requestId).report ?? null
 }
 
@@ -311,16 +305,15 @@ export class CheckInWatchdog {
   }
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
-    return this.change(rows => ({
+    const rows = await this.load()
+    return {
       pending: rows.filter(row => !['resolved', 'superseded', 'answered-needs-correction'].includes(row.state))
-        .flatMap(row => [row.request, row.followUp].flatMap(item => {
-          if (!item?.pending || item.reply || item.noteId && item.announced !== false && !item.error) return []
-          item.issued = true
-          return [{ request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }]
-        })),
+        .flatMap(row => [row.request, row.followUp].flatMap(item => item?.pending && !item.reply &&
+          (!item.noteId || item.announced === false || !!item.error)
+          ? [{ request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }] : [])),
       tracked: rows.flatMap(row => [row.request, row.followUp].flatMap(item => item?.noteId && !item.reply
         ? [{ request_id: item.requestId, note_id: item.noteId }] : [])),
-    }))
+    }
   }
   /** Reserve offers during the periodic sweep. External reads stay outside the
    * writer; the last persisted offers remain available while a read is in flight. */
@@ -379,10 +372,6 @@ export class CheckInWatchdog {
         pending.push(entry)
       }
     })
-  }
-  async requestIds(cardId: string) {
-    return new Set((await this.rows()).filter(row => row.cardId === cardId)
-      .flatMap(row => [row.request, row.followUp].flatMap(item => (item?.issued || item?.noteId) ? [item.requestId] : [])))
   }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }
   ingest(input: BridgeUpdate) {

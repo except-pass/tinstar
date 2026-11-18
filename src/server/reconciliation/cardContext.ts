@@ -4,7 +4,6 @@ import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
 import type { JiraAdapter } from './jira'
 import { workReadback } from './workReadback'
-import { checkInReplyRequestId } from './checkInWatchdog'
 import type { CachedDecisionHistory } from './decisionEvidence'
 
 export const decisionHistoryDeadlineMs = 120_000
@@ -14,7 +13,7 @@ export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
-  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string; watchdogReply?: boolean }>
+  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
   omissions?: string
 }
@@ -136,24 +135,7 @@ export class CardContextReader {
       init.signal?.throwIfAborted()
     }
   }
-  checkInRequestIds?: (cardId: string) => Promise<Set<string>>
-  async markWatchdogReplies(id: string, blocks: CardContextRead['blocks']) {
-    const replies = blocks.flatMap(block => {
-      const requestId = block.type === 'comment' && checkInReplyRequestId(block.text)
-      return requestId ? [{ block, requestId }] : []
-    })
-    if (!replies.length || !this.checkInRequestIds) return
-    const ids = await this.checkInRequestIds(id)
-    for (const { block, requestId } of replies) if (ids.has(requestId)) block.watchdogReply = true
-  }
-
   private async readComments(id: string, historySignal?: AbortSignal, fetcher = this.fetcher): Promise<CardContextRead> {
-    const context = await this.fetchComments(id, historySignal, fetcher)
-    await this.markWatchdogReplies(id, context.blocks)
-    return context
-  }
-
-  private async fetchComments(id: string, historySignal?: AbortSignal, fetcher = this.fetcher): Promise<CardContextRead> {
     const context: CardContextRead = { outcome: 'available', blocks: [] }
     if (isJiraCard(id)) {
       try {

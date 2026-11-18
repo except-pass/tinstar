@@ -5,6 +5,9 @@ import { bindingMeaning, decisionMeaning, decisionPacketSchema, decisionPacketRe
   decisionPolicyValuesSchema, type DecisionPacket, type DecisionEvidence, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
 import { requestAnchor } from '../../shared/deskSource'
 import { CardLeases } from './cardLeases'
+import { commentPacketActor } from './commentPacket'
+
+export const commentJobRequired = 'Comment packet requires a matching preparation job'
 
 export class DecisionDeskConflict extends Error {}
 export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string | null; packet: DecisionPacket }
@@ -55,8 +58,9 @@ export class DecisionPackets {
   private event(db: DatabaseSync, packetId: string | null, type: string, actor: string, detail: unknown) {
     return Number(db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?) RETURNING sequence').get(packetId, type, actor, new Date(this.now()).toISOString(), JSON.stringify(detail))!.sequence)
   }
-  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string) {
+  private attest(db: DatabaseSync, id: string, packet: DecisionPacket, evidence: DecisionEvidence, actor: string, hasJob = true) {
     const validation = validateDecisionPacket(packet, evidence, this.now())
+    if (!hasJob) validation.reasons.push(commentJobRequired)
     // A cache read predating a known semantic change cannot resurrect the old
     // packet. Expired evidence may be re-observed with unchanged meaning.
     for (const dependency of packet.dependencies) {
@@ -102,7 +106,8 @@ export class DecisionPackets {
     return this.leases.writeStorage(db => {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) throw new DecisionDeskConflict('Packet is unavailable')
-      return this.attest(db, id, unpack(row).packet, evidence, actor)
+      const stored = unpack(row)
+      return this.attest(db, id, stored.packet, evidence, actor, this.hasPublicationJob(db, stored))
     })
   }
   private latestValidation(db: DatabaseSync, id: string): DecisionPacketValidation | null {
@@ -127,6 +132,14 @@ export class DecisionPackets {
     await this.initialize()
     return this.leases.readStorage(db => this.readInStorage(db, id, evidence))
   }
+  hasPublicationJob(db: DatabaseSync, stored: Pick<StoredDecisionPacket, 'id' | 'prepared_by' | 'packet'>): boolean {
+    if (stored.prepared_by !== commentPacketActor) return true
+    const event = db.prepare("SELECT json_extract(detail,'$.job_id') AS job FROM decision_packet_events WHERE packet_id = ? AND type = 'comment-import' ORDER BY sequence DESC LIMIT 1").get(stored.id) as { job: string | null } | undefined
+    if (!event?.job || !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_prep_jobs'").get()) return false
+    const binding = stored.packet.binding
+    return !!db.prepare('SELECT 1 FROM decision_prep_jobs WHERE id = ? AND card_id = ? AND request_id = ? AND source_revision = ?')
+      .get(event.job, binding.card_id, binding.request_id, binding.source_revision)
+  }
   readInStorage(db: DatabaseSync, id: string, evidence?: DecisionEvidence) {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) return null
@@ -137,8 +150,9 @@ export class DecisionPackets {
       const lease = db.prepare('SELECT caller,expires FROM leases WHERE card = ?').get(stored.packet.binding.card_id) as { caller: string | null; expires: number } | undefined
       const current = evidence ? validateDecisionPacket(stored.packet, evidence, this.now()) : { valid: false, reasons: ['Current source evidence not supplied'], valid_until: null }
       const withdrawn = !!db.prepare("SELECT 1 FROM decision_packet_events WHERE packet_id = ? AND type IN ('research-requested','answer-confirmed') LIMIT 1").get(id)
-      const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
-        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
+      const hasJob = this.hasPublicationJob(db, stored)
+      const validation: DecisionPacketValidation = { valid: hasJob && !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
+        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(hasJob ? [] : [commentJobRequired]), ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
         // Attestation fixes packet meaning; current observations own freshness.
         // Its old deadline must not expire an unchanged, renewed dependency.
         valid_until: attestation?.valid ? current.valid_until : null }

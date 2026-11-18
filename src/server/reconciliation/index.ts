@@ -68,7 +68,6 @@ export class ReconciliationSources {
   readPulls?: (req?: IncomingMessage) => Promise<PullsRead | null>
   readPullReadiness?: (urls: string[]) => Promise<Map<string, PullReadiness>>
   onWorkRefresh?: (cards: WorkCard[]) => Promise<void>
-  checkInRequestIds?: (cardId: string) => Promise<Set<string>>
   checkInIndicators?: () => Promise<Map<string, NonNullable<SceneCard['checkInRequest']>>>
   private associations: AssociationStore
   private fleet
@@ -111,7 +110,6 @@ export class ReconciliationSources {
         // Forced exact history and source observation on every submit, without
         // queue()/get_work reconciliation or research in the critical path.
         const [snapshot, blocks] = await Promise.all([this.snapshot(true, {}, false), this.workflow.preparedHistory(stored.packet.binding.card_id)])
-        await this.context.markWatchdogReplies(stored.packet.binding.card_id, blocks)
         return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks.filter(block => block.id !== ownIntentId), original, desired)
       },
       write: (input, actor) => this.workflow.answerPrepared(input, actor),
@@ -124,7 +122,6 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.context = new CardContextReader(config.notion, this.notionApi.backgroundFetch, this.workReader.jira)
-    this.context.checkInRequestIds = id => this.checkInRequestIds?.(id) ?? Promise.resolve(new Set<string>())
     this.preparationHistory = new PreparationHistory(this.context, () => this.preparation.historyLoaded(), async id => {
       await this.importCommentPackets(id)
       await this.preparation.revalidate(id)

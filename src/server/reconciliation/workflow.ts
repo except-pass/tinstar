@@ -109,7 +109,7 @@ export class WorkflowOperations {
       const card = await this.reader.card(input.card_id, true)
       const planning = { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([key, property]) => [key,
         key in own.original ? { ...property, value: own.original[key] } : property])) }
-      desired = (await this.updatePlan(planning, input, actor, notes)).desired
+      desired = (await this.updatePlan(planning, input, actor, notes, own.preserveWaitState === true)).desired
     }
     return { state: conflict ? 'conflict' as const : answers.length ? 'confirmed' as const : own ? 'pending' as const : 'absent' as const,
       original: own?.original as Record<string, unknown> | undefined, desired, ownIntentId: own?.noteId }
@@ -483,7 +483,7 @@ export class WorkflowOperations {
       throw new WorkflowError(code, `${issue.field}: ${issue.reason} Repair the active wait fields before this transition. Nothing was written.`)
     }
   }
-  private async updatePlan(card: WorkCard, input: UpdateWorkInput, actor: string, notes: Awaited<ReturnType<WorkflowContent['notes']>>) {
+  private async updatePlan(card: WorkCard, input: UpdateWorkInput, actor: string, notes: Awaited<ReturnType<WorkflowContent['notes']>>, preserveWaitState = false) {
     const desired: Record<string, unknown> = {}, properties: Record<string, unknown> = {}, sections: Record<string, string> = {}
     const reads = new Set<string>(), at = new Date().toISOString()
     let answerBinding: Record<string, unknown> | undefined
@@ -689,26 +689,32 @@ export class WorkflowOperations {
             note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.request} ${JSON.stringify(answerBinding)}`
           }
         }
-        transition(input.next.owner, input.next.status)
-        resolveWait(input.resolve_wait, input.next.status)
-        if (input.next.status === 'Waiting For') {
-          if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
-          await wait(input.next.wait)
-        }
-        if (input.next.status === 'In Progress' && !heldWait) {
-          if (!input.next.worker) throw new WorkflowError('worker-required', 'Returning to In Progress requires current tracked worker evidence; Queued is available without a worker')
-          const start = await this.startPlan(card, { card_id: card.id, operation_id: input.operation_id, worker: input.next.worker }, actor)
-          Object.assign(desired, start.desired); Object.assign(properties, start.properties)
-          reads.add(input.next.worker.kind === 'firstmate' ? FIRST_MATE_TASKS : 'Delegated To')
-        }
-        if (['Done', 'Archived'].includes(input.next.status) && !heldWait) {
-          if (!input.next.disposition || !input.next.evidence) throw new WorkflowError('disposition-required', 'Closing through a decision answer requires explicit supported disposition and evidence')
-          note += `\nDisposition: ${input.next.disposition}\nEvidence: ${input.next.evidence}`
+        if (preserveWaitState) {
+          this.required(card, input.next.owner)
+          reads.add('Area')
+          set('Owner', input.next.owner)
+        } else {
+          transition(input.next.owner, input.next.status)
+          resolveWait(input.resolve_wait, input.next.status)
+          if (input.next.status === 'Waiting For') {
+            if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
+            await wait(input.next.wait)
+          }
+          if (input.next.status === 'In Progress' && !heldWait) {
+            if (!input.next.worker) throw new WorkflowError('worker-required', 'Returning to In Progress requires current tracked worker evidence; Queued is available without a worker')
+            const start = await this.startPlan(card, { card_id: card.id, operation_id: input.operation_id, worker: input.next.worker }, actor)
+            Object.assign(desired, start.desired); Object.assign(properties, start.properties)
+            reads.add(input.next.worker.kind === 'firstmate' ? FIRST_MATE_TASKS : 'Delegated To')
+          }
+          if (['Done', 'Archived'].includes(input.next.status) && !heldWait) {
+            if (!input.next.disposition || !input.next.evidence) throw new WorkflowError('disposition-required', 'Closing through a decision answer requires explicit supported disposition and evidence')
+            note += `\nDisposition: ${input.next.disposition}\nEvidence: ${input.next.evidence}`
+          }
         }
         const action = request.action
         const others = requests.some(row => row.id !== input.request_id && row.action === action && !answered.has(row.id))
         set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== request.action))
-        note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
+        note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${preserveWaitState ? card.properties.Status?.value : input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
       }
     } else if (input.kind === 'complete' || input.kind === 'park') {
       // Closing/corrective transitions remain possible on an imperfect old card.
@@ -837,7 +843,8 @@ export class WorkflowOperations {
         // Rebuild policy from validated input; a human-editable note never
         // supplies a raw PATCH plan or bypasses tracked-worker requirements.
         stage = `plan ${input.kind}`
-        const plan = await this.updatePlan(planningCard, input, actor, notes)
+        const preserveWaitState = pending ? pending.preserveWaitState === true : prepared && input.kind === 'answer_decision' && !input.resolve_wait
+        const plan = await this.updatePlan(planningCard, input, actor, notes, preserveWaitState)
         heldWait = plan.heldWait
         if (card.source?.provider === 'jira') this.reader.jira?.validateProperties(plan.properties)
         this.reader.leases?.assertWritable(card.id)
@@ -850,7 +857,7 @@ export class WorkflowOperations {
         card = current
         if (!pending && input.kind === 'answer_decision' && (input.source_request || notes.some(note => note.text.includes('"source_request":')))) {
           attempted = true
-          await this.content.note(card.id, `${workflowMarkers.decisionIntent} ${JSON.stringify({ actor, input, original: plan.original })}`, pendingMarker)
+          await this.content.note(card.id, `${workflowMarkers.decisionIntent} ${JSON.stringify({ actor, input, original: plan.original, ...(preserveWaitState ? { preserveWaitState: true } : {}) })}`, pendingMarker)
           saved.push('decision-answer')
         }
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))

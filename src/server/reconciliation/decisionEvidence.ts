@@ -12,12 +12,13 @@ import type { CardContextRead } from './cardContext'
 import { bindDecision, decisionProposals } from './decisionResolution'
 import { buildQueue } from './queue'
 import { deferredDecisionCard } from './claimPolicy'
+import { checkInReport } from './checkInWatchdog'
 import { isPreparedPacketComment } from './commentPacket'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
 
 function sourceComment(note: CardContextRead['blocks'][number]) {
-  return note.type === 'comment' && !note.watchdogReply && !isPreparedPacketComment(note)
+  return note.type === 'comment' && !checkInReport(note.text) && !isPreparedPacketComment(note)
     && !workflowReceipt(note)?.startsWith(`${workflowMarkers.operation} ["waiting-on-main",`)
 }
 
