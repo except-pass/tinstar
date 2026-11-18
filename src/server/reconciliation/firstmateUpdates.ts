@@ -142,9 +142,9 @@ export class FirstmateUpdates {
           }
         }
         const externalChanges = diff(baseline.properties, external)
-        const ownNote = (text: string) => own.notes?.some(note => noteMatches(text, note))
+        const ownNote = (block: CardContextRead['blocks'][number]) => own.notes?.some(note => noteMatches(block, note))
         const ownSection = (text: string) => own.sectionTexts?.some(section => text === contextText(section))
-        const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block.text) &&
+        const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block) &&
           (baseline.comments ? !baseline.comments.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !operationSeen
@@ -172,7 +172,7 @@ export class FirstmateUpdates {
         this.add(state, actor, bounded)
       }
       const details = body ? context?.outcome === 'available' ? body : [...new Map([...(baseline?.details ?? []), ...body].map(block => [block.id, block])).values()] : baseline?.details
-      const confirmedComments = (context?.blocks ?? []).filter(block => block.type === 'comment' && own?.notes?.some(note => noteMatches(block.text, note)))
+      const confirmedComments = (context?.blocks ?? []).filter(block => block.type === 'comment' && own?.notes?.some(note => noteMatches(block, note)))
       const comments = context && (context.commentsOutcome ?? context.outcome) === 'available' ? context.blocks.filter(block => block.type === 'comment')
         : confirmedComments.length ? [...new Map([...(baseline?.comments ?? []), ...confirmedComments].map(block => [block.id, block])).values()] : baseline?.comments
       const bodyComplete = body ? context?.outcome === 'available' : baseline?.bodyComplete ?? false
