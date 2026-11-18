@@ -289,11 +289,11 @@ export function DecisionCardContext({ id, showLink = true, readOnly = false }: {
   const [context, setContext] = useState<{ outcome?: string; blocks?: Array<{ id: string; text: string }>; answerSources?: RetractionAnswerSources } | null>(null)
   useEffect(() => {
     const controller = new AbortController()
-    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}${readOnly ? '' : '&answerSources=1'}`, { signal: controller.signal }).then(res => res.json()).then(body => {
+    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(id)}`, { signal: controller.signal }).then(res => res.json()).then(body => {
       if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' })
     }).catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()
-  }, [id, readOnly])
+  }, [id])
   return <section className="decisions-evidence" aria-label={card ? cardTitle(card) : 'Supporting card'}>
     {!readOnly && <CardLeaseStatus key={id} cardId={id} />}
     {showLink && <a href={cardSourceUrl(id)} target="_blank" rel="noreferrer">Read {isJiraCard(id) ? 'Jira' : 'Notion'} card ↗{card ? ` · ${cardTitle(card)}` : ''}</a>}

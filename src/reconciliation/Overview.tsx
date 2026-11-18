@@ -290,7 +290,7 @@ function Inspector({ view, workers }: { view: View; workers: Worker[] }) {
     setContext(null)
     if (!selectedCardId) return
     const controller = new AbortController()
-    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(selectedCardId)}&answerSources=1`, { signal: controller.signal })
+    void apiFetch(`/api/reconciliation/card-context?id=${encodeURIComponent(selectedCardId)}`, { signal: controller.signal })
       .then(res => res.json()).then(body => { if (!controller.signal.aborted) setContext(body.ok ? body.data : { outcome: 'unavailable' }) })
       .catch(() => { if (!controller.signal.aborted) setContext({ outcome: 'unavailable' }) })
     return () => controller.abort()

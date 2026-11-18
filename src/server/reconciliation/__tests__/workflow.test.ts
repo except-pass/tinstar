@@ -1092,6 +1092,8 @@ describe('remaining shared workflow operations', () => {
     const sources = f.sources()
     const context = await sources.card(id)
     expect(context.outcome).toBe('available')
+    expect(context.answerSources?.replacements).toEqual([])
+    expect(identityLookup).toHaveBeenCalledOnce()
     const audit = context.blocks.find(block => block.text.includes('Operation: supersede_decision'))!
     expect(audit.text).not.toContain(questionToken)
     expect(audit.text).not.toContain(recipientToken)
@@ -1102,10 +1104,10 @@ describe('remaining shared workflow operations', () => {
       options: [{ id: 'approve', label: 'Approve\n[credential omitted]' }],
     })
     expect(await sources.workflow.update(input('edit', { note: 'Ordinary progress' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    expect(identityLookup).not.toHaveBeenCalled()
+    expect(identityLookup).toHaveBeenCalledOnce()
     expect(await sources.workflow.update(input('withdraw_decision', { request_id: 'replacement', reason: 'No longer needed' }), 'Consumer'))
       .toMatchObject({ outcome: 'not-saved' })
-    expect(identityLookup).toHaveBeenCalledOnce()
+    expect(identityLookup).toHaveBeenCalledTimes(2)
   })
 
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {

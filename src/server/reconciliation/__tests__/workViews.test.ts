@@ -128,7 +128,7 @@ it('refreshes cached request history after another process answers a decision', 
     expect(third.needsWill![0]!.requests).toMatchObject([{ id: '[credential omitted]', question: 'Approve staging?' }])
     expect(JSON.stringify(third)).not.toContain(stage)
     expect(JSON.stringify(third)).not.toContain(prod)
-    expect((await sources.card(card.id, true)).answerSources).toEqual({
+    expect((await sources.card(card.id)).answerSources).toEqual({
       excluded: ['Approve production?', 'withdrawal'],
       replacements: [],
     })

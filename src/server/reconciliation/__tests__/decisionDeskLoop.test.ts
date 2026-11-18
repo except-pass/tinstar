@@ -178,7 +178,7 @@ describe('prepared-card loop', () => {
     expect(await tool('update_work', retraction)).toMatchObject({ outcome: 'saved' })
     expect((await web('snapshot')).data.ready).toEqual([])
     expect(sources.leases.readStorage(db => sources.decisionPackets.currentInStorage(db, card.id))).toBeNull()
-    const context = await sources.card(card.id, true)
+    const context = await sources.card(card.id)
     const auditId = context.blocks.find(block => block.text.includes(`Operation: ${kind}`))!.id
     expect(context.answerSources).toMatchObject({
       excluded: expect.arrayContaining(['comment-0', auditId]),
@@ -215,7 +215,7 @@ describe('prepared-card loop', () => {
       replacement: { request_id: replacementId, requested_from: 'Will', question: 'Review the replacement?' },
     })).toMatchObject({ outcome: 'saved' })
 
-    const context = await sources.card(card.id, true)
+    const context = await sources.card(card.id)
     expect(context.answerSources).toEqual({ excluded: ['comment-0', 'comment-1'], replacements: [] })
     expect(JSON.stringify(context)).not.toContain(replacementId)
     expect(await tool('update_work', { card_id: card.id, operation_id: 'answer-replacement', kind: 'answer_decision',

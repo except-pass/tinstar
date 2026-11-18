@@ -245,9 +245,9 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string, includeAnswerSources = false) {
+  async card(id: string) {
     const context = await this.context.details(id, false, this.notionApi.parallelFetch)
-    const answerSources = includeAnswerSources ? await this.context.retractionAnswerSources(context) : undefined
+    const answerSources = await this.context.retractionAnswerSources(context)
     return { ...workReadback({ ...context, ...(answerSources ? { answerSources } : {}) }), lease: this.leases.status(id) }
   }
 
@@ -574,12 +574,11 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     return ok(res, await sources.reviews(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1'), { headers })
   }
   if (path === '/api/reconciliation/card-context') {
-    const params = new URL(req.url!, 'http://localhost').searchParams
-    const id = params.get('id')
+    const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
     if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
     try { await sources.currentCard(id) }
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
-    return ok(res, await sources.card(id, params.get('answerSources') === '1'), { headers })
+    return ok(res, await sources.card(id), { headers })
   }
   const query = new URL(req.url!, 'http://localhost').searchParams
   const refresh = query.get('refresh') === '1'
