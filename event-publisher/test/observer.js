@@ -236,10 +236,10 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
   equal(journal.events().at(-1).evidence.pr_link_coverage, 'rebaselined')
 
   const newTask = row('new-task')
-  equal(journal.record(taskObservation([newTask], 8, tasks, [{ id: newTask.id, links: [pr] }])), 1)
-  const observed = journal.events().at(-1)
+  equal(journal.record(taskObservation([newTask], 8, tasks, [{ id: newTask.id, links: [pr] }])), 2)
+  const [observed, links] = journal.events().slice(-2)
   equal(observed.evidence.source_reference.interface, tasks.command)
-  equal(observed.evidence.source_reference.pr_link_interface, 'bin/fm-fleet-snapshot.sh --json')
+  equal(links.evidence.source_reference.interface, 'bin/fm-fleet-snapshot.sh --json')
 })
 
 test('an older PR projection with the same fleet generation cannot reverse links after restart', async t => {
@@ -360,10 +360,19 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   const mixed = taskObservation([{ ...task, priority: 2 }, added], 3, tasks, [
     { id: added.id, pr_url: pr },
   ])
-  equal(journal.record({ ...mixed, observed_at: at(3) }), 2)
-  const [addedEvent, priorityEvent] = journal.events().slice(-2)
-  deepEqual(addedEvent.change.after.pull_requests, [pr])
-  equal(addedEvent.observed_at, at(4))
+  equal(journal.record({ ...mixed, observed_at: at(3) }), 3)
+  const [addedEvent, linksEvent, priorityEvent] = journal.events().slice(-3)
+  equal(addedEvent.event_type, 'task.observed')
+  equal(Object.hasOwn(addedEvent.change.after, 'pull_requests'), false)
+  equal(addedEvent.evidence.pr_link_source, undefined)
+  equal(addedEvent.observed_at, at(3))
+  equal(addedEvent.observation.observed_between.by, at(3))
+  equal(addedEvent.observation.batch_id, priorityEvent.observation.batch_id)
+  equal(linksEvent.event_type, 'task.pull_requests.observed')
+  deepEqual(linksEvent.change, { field: 'pull_requests', after: [pr] })
+  equal(linksEvent.observed_at, at(4))
+  equal(linksEvent.observation.observed_between.by, at(4))
+  ok(linksEvent.observation.batch_id !== addedEvent.observation.batch_id)
   equal(priorityEvent.change.field, 'priority')
   equal(priorityEvent.observed_at, at(3))
   equal(priorityEvent.observation.observed_between.by, at(3))
@@ -528,12 +537,12 @@ test('PR projection rejects a fleet generation accepted by workers in a prior pa
   equal(journal.record(taskObservation([initial, next], 2, tasks, [{ id: next.id, pr_url: pr }])), 1)
   const [observed] = journal.events()
   equal(observed.event_type, 'task.observed')
-  equal(observed.evidence.pr_link_coverage, 'unobserved')
+  equal(observed.evidence.pr_link_coverage, undefined)
   equal(Object.hasOwn(observed.change.after, 'pull_requests'), false)
   equal(journal.sources().find(source => source.type === 'task').last_generated_at, null)
 
-  equal(journal.record(taskObservation([initial, next, row('fresh-task')], 3, tasks, [{ id: 'fresh-task', pr_url: pr }])), 1)
-  deepEqual(journal.events().at(-1).change.after.pull_requests, [pr])
+  equal(journal.record(taskObservation([initial, next, row('fresh-task')], 3, tasks, [{ id: 'fresh-task', pr_url: pr }])), 2)
+  deepEqual(journal.events().at(-1).change.after, [pr])
   equal(journal.record(workerObservation([], 3)), 0)
   equal(journal.sources().find(source => source.type === 'worker').last_generated_at, at(3))
 })
@@ -1010,8 +1019,8 @@ test('PR link casing is canonical across both structured inputs', async t => {
   journal.record(taskObservation([], 0))
   equal(journal.record(taskObservation([task], 1, tasks, [{
     id: task.id, links: [{ url: 'HTTPS://GitHub.com/Owner/.GitHub/pull/12' }],
-  }])), 1)
-  deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
+  }])), 2)
+  deepEqual(journal.events()[1].change.after, [canonical])
   equal(journal.record(taskObservation([task], 2, tasks, [{
     id: task.id, pr_url: 'HtTpS://GITHUB.COM/OWNER/.GITHUB/pull/12',
   }])), 0)

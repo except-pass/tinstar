@@ -127,6 +127,8 @@ is observed again. A task appearing after the baseline is `task.observed`,
 with its source creation date when available. This identifies first observation
 in the home. State, dates, priority, structured hold fields, dependencies,
 canonical PR links, and derived blocked, held and ready fields are diffed.
+Verified PR links on a newly observed task appear as a separate
+`task.pull_requests.observed` event in the fleet batch.
 Ready uses the tasks-axi dispatch projection, including its public-followup
 exclusion.
 

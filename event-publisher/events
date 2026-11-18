@@ -177,7 +177,9 @@ function eventText(event, replay, health) {
   const reference = evidence.source_reference
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   const meaning = change.field
-    ? `${change.field} ${valueText(change.before)} → ${valueText(change.after)}`
+    ? Object.hasOwn(change, 'before')
+      ? `${change.field} ${valueText(change.before)} → ${valueText(change.after)}`
+      : `first observed · ${change.field} ${valueText(change.after)}`
     : `first observed · ${change.after.state ?? change.after.current_state}`
   return `${time} [${replay ? 'replay/' : ''}${source.mode}] firstmate/${subject.type} ${source.home_id}/${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
 }

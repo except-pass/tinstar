@@ -121,7 +121,17 @@ function openJournal(path, readOnly) {
 }
 
 function eventChanges(type, before, fields) {
-  if (!before) return [{ event_type: `${type}.observed`, change: { after: fields } }]
+  if (!before) {
+    const { pull_requests, ...after } = fields
+    const events = [{ event_type: `${type}.observed`, change: { after } }]
+    if (pull_requests?.length) {
+      events.push({
+        event_type: 'task.pull_requests.observed',
+        change: { field: 'pull_requests', after: pull_requests },
+      })
+    }
+    return events
+  }
   return Object.keys(fields)
     .filter(field => JSON.stringify(before[field]) !== JSON.stringify(fields[field]))
     .map(field => ({
@@ -316,8 +326,8 @@ export class Journal {
         for (const difference of eventChanges(source.type, before, entry.fields)) {
           const pullRequestChange = difference.change.field === 'pull_requests'
           if (pullRequestChange && rebaselinePullRequests) continue
-          const includesPullRequests = pullRequestChange || Object.hasOwn(difference.change.after ?? {}, 'pull_requests')
-          const eventObservedAt = includesPullRequests ? observation.pullRequests.observed_at : observed_at
+          const taskObserved = difference.event_type === 'task.observed'
+          const eventObservedAt = pullRequestChange ? observation.pullRequests.observed_at : observed_at
           const envelope = {
             schema: 'event-publisher.event.v1',
             event_id: `event:${randomUUID()}`,
@@ -330,7 +340,7 @@ export class Journal {
               method: 'snapshot-diff',
               read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
               coverage: source.coverage,
-              batch_id: includesPullRequests || source.type === 'worker' ? batchIds.fleet : batchIds.task,
+              batch_id: pullRequestChange || source.type === 'worker' ? batchIds.fleet : batchIds.task,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
               current_snapshot: snapshotId,
               observed_between: { after: prior?.started_at ?? null, by: eventObservedAt },
@@ -338,12 +348,11 @@ export class Journal {
             related,
             evidence: {
               source_reference: { interface: pullRequestChange ? fleetCommand : source.command, task_id: entry.evidence.task_id,
-                ...(includesPullRequests && !pullRequestChange ? { pr_link_interface: fleetCommand } : {}),
                 ...(entry.evidence.spawn_gen ? { spawn_gen: entry.evidence.spawn_gen } : {}) },
               state_source: pullRequestChange ? prLinkSource : entry.evidence.state_source,
               ...(previousEvidence ? { previous_state_source: pullRequestChange ? prLinkSource : previousEvidence.state_source } : {}),
-              ...(evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
-              ...(evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
+              ...(!taskObserved && evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
+              ...(!taskObserved && evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
               ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
               confidence_basis: before ? 'field differs across verified observations'
                 : prior ? 'first verified state for a previously seen incarnation'
