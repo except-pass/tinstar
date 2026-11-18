@@ -64,7 +64,7 @@ export function canonicalPullRequests(urls) {
   const locators = new Set()
   for (const value of urls) {
     if (typeof value !== 'string' || /\s/u.test(value)) continue
-    const match = /^([A-Za-z]+:\/\/[A-Za-z.]+)(\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)$/u.exec(value)
+    const match = /^([A-Za-z]+:\/\/[A-Za-z.]+)(\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/(?!\.{1,2}\/)[A-Za-z0-9._-]+\/pull\/[1-9]\d*)$/u.exec(value)
     if (!match) continue
     const origin = URL.parse(match[1])
     if (origin?.protocol === 'https:' && origin.hostname === 'github.com') {

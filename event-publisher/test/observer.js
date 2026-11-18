@@ -641,22 +641,24 @@ test('PR link casing is canonical across both structured inputs', async t => {
   t.after(() => journal.close())
   journal.register(tasks)
   const task = row('sample-task')
-  const canonical = 'https://github.com/owner/repo/pull/12'
+  const canonical = 'https://github.com/owner/.github/pull/12'
   journal.record(taskObservation([], 0))
   equal(journal.record(taskObservation([task], 1, tasks, [{
     id: task.id, links: [
-      { url: 'HTTPS://GitHub.com/Owner/Repo/pull/12' },
+      { url: 'HTTPS://GitHub.com/Owner/.GitHub/pull/12' },
       { url: 'https://user:secret@github.com/owner/repo/pull/99' },
       { url: 'https://github.com/owner/repo/PULL/99' },
       { url: 'https:github.com/owner/repo/pull/99' },
       { url: 'https://github.com/owner/repo/issues/../pull/99' },
+      { url: 'https://github.com/owner/./pull/99' },
+      { url: 'https://github.com/owner/../pull/99' },
       { url: 'https://github.com/owner/repo/pull/99?diff=split' },
       { url: 'https://github.com/owner/repo/pull/99#files' },
     ],
   }])), 1)
   deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
   equal(journal.record(taskObservation([task], 2, tasks, [{
-    id: task.id, pr_url: 'HtTpS://GITHUB.COM/OWNER/REPO/pull/12',
+    id: task.id, pr_url: 'HtTpS://GITHUB.COM/OWNER/.GITHUB/pull/12',
   }])), 0)
 })
 
