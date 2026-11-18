@@ -224,8 +224,8 @@ it('reads the configured board through NotionApi and persists replay results in 
   const page = card(4, 'Follow-up', null, null)
   const unassigned = { ...page, properties: {
     ...page.properties,
-    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication' }] },
-    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies' }] },
+    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication.\n-----BEGIN PRIVATE KEY-----\nU1lOVEhFVElDUEtDUzg=\n-----END PRIVATE KEY-----\nVerify the rollout.' }] },
+    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies.\n-----BEGIN RSA PRIVATE KEY-----\nU1lOVEhFVElDUlNB\n-----END RSA PRIVATE KEY-----\nCheck session expiry.' }] },
   } }
   const closedPage = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
   const historical = { ...closedPage, properties: {
@@ -266,12 +266,12 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(model).toHaveBeenCalledTimes(3)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication', description: 'Rotate session cookies' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail/)
+  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)

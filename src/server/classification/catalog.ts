@@ -59,7 +59,7 @@ const legacyCredentialAssignment = assignmentWithValue(
 
 function redactClassificationText(text: string) {
   return text
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, omittedCredential)
+    .replace(/-----BEGIN (?:[^-\r\n]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[^-\r\n]+ )?PRIVATE KEY-----|$)/g, omittedCredential)
     .replace(credentialAssignment, omittedCredential)
     .replace(legacyCredentialAssignment, omittedCredential)
     .replace(bearerCredential, omittedCredential)
