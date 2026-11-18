@@ -97,10 +97,11 @@ it('shares a hold from the legacy transport with subsequent CLI requests', async
   expect(exec).toHaveBeenCalledTimes(2)
   await vi.advanceTimersByTimeAsync(3_600_000)
   expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0')
 })
 
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {})
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]
   exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
   exec.mockImplementationOnce((_binary, _args, _options, done) => done(null, { stdout: `payload: ${Buffer.from(JSON.stringify(data)).toString('base64')}\n` }))
@@ -108,6 +109,8 @@ it('falls back to gh-axi when gh is missing and decodes the legacy projection', 
   expect(await github.githubCliJson(pulls, '.', limits)).toEqual(data)
   expect(exec.mock.calls.map(call => call[2])).toEqual([limits, limits])
   expect(exec.mock.calls[1]?.slice(0, 2)).toEqual(['gh-axi', ['api', 'GET', pulls, '--jq', '{payload:(.|tojson|@base64)}', '--full']])
+  await vi.advanceTimersByTimeAsync(3_600_000)
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0')
 })
 
 it('reports a missing binary without echoing credential-bearing stderr', async () => {

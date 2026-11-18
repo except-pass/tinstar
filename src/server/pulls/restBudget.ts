@@ -5,7 +5,6 @@ const cacheBudget = 16 * 1024 * 1024
 export interface GithubRestResponse {
   status: number
   data: unknown
-  statusObserved?: false
   headers?: { etag?: string; remaining?: string; reset?: string; retryAfter?: string }
 }
 
@@ -73,7 +72,7 @@ export class GithubRestBudget {
       if (held) throw new Error(rateLimitMessage)
       throw error
     }
-    if (response.statusObserved !== false) received(response)
+    received(response)
     if (!held) hold(response, response.data)
     if (held) throw new Error(rateLimitMessage)
     return response

@@ -52,13 +52,13 @@ async function includedRequest(binary: string, path: string, projection: string,
 async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits): Promise<GithubRestResponse> {
   try {
     const { stdout } = await exec('gh-axi', args, commandOptions)
-    return { status: 200, statusObserved: false, data: decode(stdout) }
+    return { status: 200, data: decode(stdout) }
   } catch (error) {
     const failure = error as CliError
     const diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`
     if (/^code: RATE_LIMITED\r?$/m.test(diagnostics) || /\bHTTP 429\b/.test(diagnostics)) {
       const retryAfter = /secondary rate limit/i.test(diagnostics) ? '60' : '3600'
-      return { status: 429, statusObserved: false, data: null, headers: { retryAfter } }
+      return { status: 429, data: null, headers: { retryAfter } }
     }
     if (failure.code === 'ENOENT') {
       throw Object.assign(new Error('GitHub reader unavailable: gh-axi is missing from the server PATH.'), { code: 'ENOENT' })
@@ -105,8 +105,7 @@ export async function githubCliPost(path: string, input: string, limits: CliLimi
 }
 
 export async function githubCliCreateRelease(args: string[]): Promise<void> {
-  const response = await budget.send(() => legacyRequest(['release', 'create', ...args], () => null, { timeout: 30_000, maxBuffer: 256 * 1024 }))
-  if (response.status !== 200) throw new Error(`GitHub request failed (HTTP ${response.status})`)
+  await budget.send(() => legacyRequest(['release', 'create', ...args], () => null, { timeout: 30_000, maxBuffer: 256 * 1024 }))
 }
 
 /** Live reads stay behind broker custody. */

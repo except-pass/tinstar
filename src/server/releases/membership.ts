@@ -16,6 +16,7 @@ interface Range {
   files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number
 }
 interface RangeProgress extends Range {
+  lastRefreshAt: number
   unresolved: Set<string>
   observations: Map<string, { rows: CommitPull[]; observedAt: string }>
 }
@@ -27,10 +28,14 @@ export class ReleaseMembershipReader {
   private ranges = new Map<string, RangeProgress>()
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
-  async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag, onMain = false) {
+  async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag, onMain = false, historical = false) {
     const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`
     const current = this.ranges.get(key)
-    if (current && current.retryAt > this.now()) return current
+    if (current) {
+      const fullyInspected = current.membership.baselineSha && current.observations.size === current.total && current.commits.length === current.total
+      const retryAt = historical && fullyInspected ? current.lastRefreshAt + 3_600_000 : current.retryAt
+      if (retryAt > this.now()) return current
+    }
     const existing = this.pending.get(key)
     if (existing) return existing
     const work = this.advance(key, repository, source, tag, onMain, current, tags, baseline).finally(() => this.pending.delete(key))
@@ -65,7 +70,7 @@ export class ReleaseMembershipReader {
     return entry.work
   }
   private async advance(key: string, repository: string, source: string | null, tag: string, onMain: boolean, previous?: RangeProgress, tags?: Tag[], baseline?: Tag): Promise<Range> {
-    const range: RangeProgress = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), observations: new Map(), unresolved: new Set(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
+    const range: RangeProgress = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), observations: new Map(), unresolved: new Set(), lastRefreshAt: 0, files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !sha(source)) throw new Error('Release source SHA is missing; Changes cannot be determined')
       if (!range.membership.baselineSha) {
@@ -136,6 +141,7 @@ export class ReleaseMembershipReader {
       }
     }
     range.pulls = pulls
+    range.lastRefreshAt = this.now()
     this.ranges.set(key, range)
     if (this.ranges.size > 32) this.ranges.delete(this.ranges.keys().next().value!)
     return range

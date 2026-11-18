@@ -125,3 +125,30 @@ it('updates siblings and reaches later commits despite a persistently failing lo
   expect(recovered.membership.status).toBe('complete')
   expect(recovered.pulls.get('owner/repo#1')).toMatchObject({ freshness: 'fresh', observedAt: new Date(now).toISOString() })
 })
+
+it('limits completed historical revalidation to one turn per hour while current ranges rotate', async () => {
+  let now = 0
+  const tags = [tag('v1.0.0', base)]
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 1, commits: [{ sha: merge }] }
+    return [pull(1)]
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const get = (historical: boolean) => reader.get('owner/repo', head, 'v2.0.0', tags, undefined, false, historical)
+  expect((await get(false)).membership.status).toBe('complete')
+  now = 15_000
+  await get(false)
+  expect(read).toHaveBeenCalledTimes(3)
+  now += 3_599_999
+  await get(true)
+  expect(read).toHaveBeenCalledTimes(3)
+  now++
+  read.mockRejectedValueOnce(new Error('Lookup failed'))
+  expect((await get(true)).membership.status).toBe('partial')
+  now += 60_000
+  await get(true)
+  expect(read).toHaveBeenCalledTimes(4)
+  now += 3_540_000
+  expect((await get(true)).membership.status).toBe('complete')
+  expect(read).toHaveBeenCalledTimes(5)
+})

@@ -98,7 +98,7 @@ export class ReleaseObjectReader {
     for (const release of releases) {
       const key = `${release.repository}:${release.sourceSha}:${release.version}`
       let range = ranges.get(key)
-      if (!range) { range = await this.memberships.get(release.repository, release.sourceSha, release.version); ranges.set(key, range) }
+      if (!range) { range = await this.memberships.get(release.repository, release.sourceSha, release.version, undefined, undefined, false, true); ranges.set(key, range) }
       release.membership = { ...range.membership }
       const pulls = [...range.pulls.values()].map(pull => ({ ...pull, links: data.pulls.find(existing => existing.id === pull.id)?.links ?? [], exceptions: [] }))
       const memberIds = new Set(pulls.map(pull => pull.id))
