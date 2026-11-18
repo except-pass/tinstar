@@ -1,0 +1,285 @@
+#!/usr/bin/env node
+import { mkdtemp, readFile, rmdir } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { isAbsolute, join, resolve } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { parseArgs } from 'node:util'
+import { observe, sourcesFor } from './firstmate.js'
+import { Journal } from './journal.js'
+
+const usage = `Usage
+  events serve --config <file> [--interval <seconds>]
+  events observe --config <file>
+  events watch [--after <sequence>] [filters] [--json]
+  events replay [--last <count> | --after <sequence>] [filters] [--json]
+  events inspect <event-id>
+  events sources [--json]
+
+Filters
+  --source firstmate|<source-id>    --type task|worker    --entity <entity-id>
+All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
+EVENTS_DB and EVENTS_CONFIG provide defaults for --db and --config.`
+
+const options = {
+  db: { type: 'string' },
+  config: { type: 'string' },
+  interval: { type: 'string' },
+  after: { type: 'string' },
+  last: { type: 'string' },
+  source: { type: 'string' },
+  type: { type: 'string' },
+  entity: { type: 'string' },
+  json: { type: 'boolean' },
+  help: { type: 'boolean', short: 'h' },
+}
+const commandOptions = {
+  serve: ['config', 'interval'],
+  observe: ['config'],
+  watch: ['after', 'source', 'type', 'entity', 'json'],
+  replay: ['after', 'last', 'source', 'type', 'entity', 'json'],
+  inspect: [],
+  sources: ['json'],
+}
+const pageSize = 200
+
+class UsageError extends Error {}
+
+function integer(value, flag, minimum) {
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < minimum) {
+    throw new UsageError(`${flag} must be an integer of at least ${minimum}`)
+  }
+  return Number(value)
+}
+
+async function readConfig(path) {
+  if (!path) throw new UsageError('set --config or EVENTS_CONFIG')
+  let config
+  try {
+    config = JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    throw new UsageError('cannot read the configuration as JSON')
+  }
+  if (!Array.isArray(config?.homes) || config.homes.length === 0) {
+    throw new UsageError('configuration must contain at least one home')
+  }
+  const ids = new Set()
+  const paths = new Set()
+  const safeText = value => typeof value === 'string' && value.trim() === value && value.length > 0 &&
+    !/[\u0000-\u001f\u007f]/u.test(value) && String.prototype.isWellFormed.call(value)
+  return config.homes.map(home => {
+    if (!safeText(home?.id) || !safeText(home.path) || !isAbsolute(home.path) ||
+        home.codeRoot !== undefined && (!safeText(home.codeRoot) || !isAbsolute(home.codeRoot)) ||
+        home.mode !== undefined && !['live', 'fixture'].includes(home.mode) ||
+        home.markdownFastPath !== undefined && typeof home.markdownFastPath !== 'boolean') {
+      throw new UsageError('each home needs a stable id and absolute path; check codeRoot, mode and markdownFastPath if supplied')
+    }
+    const path = resolve(home.path)
+    if (ids.has(home.id) || paths.has(path)) throw new UsageError('home ids and paths must be unique')
+    ids.add(home.id)
+    paths.add(path)
+    return { id: home.id, path, codeRoot: resolve(home.codeRoot ?? path), mode: home.mode ?? 'live',
+      markdownFastPath: home.markdownFastPath ?? false }
+  })
+}
+
+function signalController() {
+  const controller = new AbortController()
+  const stop = () => controller.abort()
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
+  return {
+    signal: controller.signal,
+    close() {
+      process.off('SIGINT', stop)
+      process.off('SIGTERM', stop)
+    },
+  }
+}
+
+async function pause(ms, signal) {
+  try {
+    await sleep(ms, undefined, { signal })
+  } catch (error) {
+    if (error.name !== 'AbortError') throw error
+  }
+}
+
+async function collect(journal, homes, interval) {
+  const controller = signalController()
+  const scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
+  try {
+    const sources = homes.flatMap(home => sourcesFor(home).map(source => ({ source, home, taskCache: {} })))
+    for (const { source } of sources) journal.register(source)
+    if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
+    do {
+      const start = Date.now()
+      for (const { source, home, taskCache } of sources) {
+        if (controller.signal.aborted) break
+        journal.record(await observe(home, source, scratch, { taskCache }))
+      }
+      // Always pause after a slow pass as well. Never overlap collector passes.
+      if (interval) await pause(Math.max(1000 * interval - (Date.now() - start), 5000), controller.signal)
+    } while (interval && !controller.signal.aborted)
+  } finally {
+    controller.close()
+    await rmdir(scratch)
+  }
+}
+
+function sourceMatches(item, filters) {
+  return (!filters.source || filters.source === 'firstmate' || filters.source === item.source_id) &&
+    (!filters.type || filters.type === item.type)
+}
+
+function age(timestamp) {
+  if (!timestamp) return 'never'
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(timestamp)) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`
+}
+
+function healthText(source) {
+  const counts = Object.entries(source.counts ?? {}).filter(([, count]) => count > 0)
+    .map(([name, count]) => `${name}=${count}`)
+  const reason = source.reason ? ` · ${source.reason}` : ''
+  const coverage = counts.length ? ` · ${counts.join(', ')}` : ''
+  return `${source.source_id} [${source.mode}] ${source.health} · ${source.coverage}${reason}${coverage}`
+}
+
+function valueText(value) {
+  if (value === null) return '—'
+  if (Array.isArray(value)) return value.length ? value.map(item => item.id ?? item).join(', ') : '—'
+  return String(value)
+}
+
+function render(event, json, replay, health) {
+  if (json) {
+    console.log(JSON.stringify(event))
+    return
+  }
+  const time = new Date(event.observed_at).toLocaleTimeString()
+  const { source, subject, change, evidence } = event
+  const reference = evidence.source_reference
+  const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
+  const meaning = change.field
+    ? `${change.field} ${valueText(change.before)} → ${valueText(change.after)}`
+    : `${event.event_type === 'worker.current_state.observed' ? 'first verified state' : 'first observed'} · ${change.after.state ?? change.after.current_state}`
+  console.log(`${time} [${replay ? 'replay/' : ''}${source.mode}] firstmate/${subject.type} ${source.home_id}/${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`)
+}
+
+function showThrough(journal, cursor, through, filters, json, replay, statuses) {
+  while (cursor < through) {
+    const rows = journal.events({ after: cursor, through, limit: pageSize, ...filters })
+    for (const event of rows) {
+      render(event, json, replay, statuses.get(event.source.source_id)?.health)
+      cursor = event.sequence
+    }
+    if (rows.length < pageSize) break
+  }
+  return Math.max(cursor, through)
+}
+
+async function watch(journal, after, filters, json) {
+  const controller = signalController()
+  const attach = journal.tail()
+  let cursor = after ?? attach
+  const signatures = new Map()
+  console.error(`Watching from sequence ${cursor}${after !== undefined ? ` (replay through ${attach})` : ''}`)
+  try {
+    while (!controller.signal.aborted) {
+      const statuses = new Map(journal.sources().filter(source => sourceMatches(source, filters))
+        .map(source => [source.source_id, source]))
+      for (const [id, source] of statuses) {
+        const summary = healthText(source)
+        if (signatures.get(id) !== summary) {
+          console.error(summary)
+          signatures.set(id, summary)
+        }
+      }
+      cursor = showThrough(journal, cursor, attach, filters, json, true, statuses)
+      cursor = showThrough(journal, cursor, journal.tail(), filters, json, false, statuses)
+      await pause(1000, controller.signal)
+    }
+  } finally {
+    controller.close()
+  }
+}
+
+async function main() {
+  let args
+  try {
+    args = parseArgs({ options, allowPositionals: true })
+  } catch (error) {
+    throw new UsageError(error.message)
+  }
+  const { values, positionals: [command, detail, ...extra] } = args
+  if (!command || values.help) {
+    console.log(usage)
+    return
+  }
+  if (!Object.hasOwn(commandOptions, command) || extra.length || (command === 'inspect') !== Boolean(detail)) {
+    throw new UsageError('invalid command or arguments')
+  }
+  for (const key of Object.keys(values)) {
+    if (key !== 'db' && !commandOptions[command].includes(key)) {
+      throw new UsageError(`--${key} is unsupported for ${command}`)
+    }
+  }
+  if (values.type && !['task', 'worker'].includes(values.type)) throw new UsageError('--type must be task or worker')
+  if (values.after !== undefined && values.last !== undefined) throw new UsageError('choose --after or --last')
+  const after = values.after === undefined ? undefined : integer(values.after, '--after', 0)
+  const last = integer(values.last ?? '100', '--last', 1)
+  const filters = { source: values.source, type: values.type, entity: values.entity }
+  const path = resolve(values.db ?? process.env.EVENTS_DB ?? join(homedir(), 'srv/event-publisher/journal.sqlite'))
+  const writer = command === 'serve' || command === 'observe'
+  const homes = writer ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
+  const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
+  const journal = new Journal(path, { readOnly: !writer })
+  try {
+    if (writer) {
+      await collect(journal, homes, interval)
+      if (command === 'observe' && journal.sources().some(source => source.health !== 'ok')) process.exitCode = 1
+    } else if (command === 'watch') {
+      await watch(journal, after, filters, values.json)
+    } else if (command === 'inspect') {
+      const event = journal.inspect(detail)
+      if (!event) throw new UsageError('event id not found')
+      console.log(JSON.stringify(event, null, 2))
+    } else if (command === 'sources') {
+      for (const source of journal.sources()) {
+        console.log(values.json ? JSON.stringify(source)
+          : `${healthText(source)} · last attempt ${age(source.last_attempt_at)} · last complete ${age(source.last_success_at)}`)
+      }
+    } else {
+      const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
+      if (values.json) console.error('Replay from the journal')
+      if (after !== undefined) {
+        showThrough(journal, after, journal.tail(), filters, values.json, true, statuses)
+      } else {
+        for (const event of journal.events({ latest: true, limit: last, ...filters })) {
+          render(event, values.json, true, statuses.get(event.source.source_id)?.health)
+        }
+      }
+    }
+  } finally {
+    journal.close()
+  }
+}
+
+process.umask(0o077)
+process.stdout.on('error', error => {
+  if (error.code === 'EPIPE') process.exit(0)
+  throw error
+})
+
+try {
+  await main()
+} catch (error) {
+  const message = error instanceof UsageError ? error.message
+    : error.message === 'use a separate journal for live and fixture baselines' ? error.message
+    : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
+    : 'publisher failed; check the journal path and permissions'
+  console.error(`events: ${message}`)
+  process.exitCode = error instanceof UsageError ? 2 : 1
+}
