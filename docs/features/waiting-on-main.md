@@ -96,6 +96,7 @@ secondmate task on main's snapshot whose home path is the child's fleet home.
 Recorded closures remain valid as the snapshot ages. Closing an ask across
 homes requires a known entry for its mate and timestamps on both events. An ask
 reopened after the resolution stays open.
+An ask whose close was accepted just before a server restart can reappear if the mate ledger is unreadable, until that ledger is readable again.
 
 Unknown/stale reads retain last-known items on the scene. The owner's default
 view does not show an incomplete count. A fresh complete source can remove an

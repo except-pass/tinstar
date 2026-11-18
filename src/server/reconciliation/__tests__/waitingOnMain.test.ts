@@ -50,16 +50,23 @@ function freshen(value: ReturnType<typeof snapshot>, at: number) {
   home.observation.data!.parent_asks!.observed_at = new Date(at).toISOString()
 }
 const mateItems = (value: ReturnType<typeof snapshot>) => mainWaitCandidates(value, now).items.filter(row => row.kind === 'mate')
-function publishResolutions(value: ReturnType<typeof snapshot>, keys: { key: string; at: number }[], status: 'known' | 'unknown' = 'known') {
-  const child = value.fleet[1]!
-  const mate = structuredClone(child.observation.data!.tasks[0]!)
-  mate.id = 'hulk'
-  mate.kind = 'secondmate'
-  mate.paths = { home: child.source.home, worktree: mate.paths.worktree }
-  const main = value.fleet[0]!.observation.data!
-  main.tasks = [mate]
-  main.parent_resolutions = { status: 'known', observed_at: new Date(now).toISOString(), mates: { hulk: { status, keys } } }
-  return value
+async function publishResolutions(value: ReturnType<typeof snapshot>, keys: { key: string; at: number }[], options: {
+  status?: 'known' | 'unknown'; generated?: string; observedAt?: string; corrs?: { corr: string; at: number }[]
+} = {}) {
+  const [parent, child] = value.fleet
+  const home = parent!.source.home
+  const file = join(await root(), 'snapshot.json')
+  const generated = options.generated ?? new Date(now).toISOString()
+  const { status = 'known', observedAt = generated, corrs } = options
+  await writeFile(file, JSON.stringify({
+    schema: 'fm-fleet-snapshot.v1', fm_home: home, generated,
+    tasks: [{ id: 'hulk', kind: 'secondmate', paths: { home: { path: child!.source.home } } }],
+    backlog: { present: true, records: [] }, main_inventory: { valid: true },
+    parent_resolutions: { status, observed_at: observedAt, mates: { hulk: { status, keys, corrs } } },
+  }))
+  const cache = fleetObservation({ home, snapshotFile: file })
+  parent!.observation = await cache.get()
+  return { file, cache }
 }
 
 describe('Waiting on main', () => {
@@ -289,23 +296,26 @@ describe('Waiting on main', () => {
     ]
     expect(mateItems(value).map(row => row.key)).toEqual(['still-open'])
   })
-  it('closes an ask main resolved at or after the ask', () => {
-    const value = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }])
+  it('closes an ask main resolved at or after the ask', async () => {
+    const value = snapshot()
+    await publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     expect(mateItems(value)).toHaveLength(0)
     value.fleet[1]!.observation.data!.parent_asks!.items[0]!.at = null
     expect(mateItems(value)).toHaveLength(1)
   })
-  it('keeps an ask newer than main\'s resolution', () => {
-    const value = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt - 1 }, { key: 'other', at: askAt + 10 }])
+  it('keeps an ask newer than main\'s resolution', async () => {
+    const value = snapshot()
+    await publishResolutions(value, [{ key: 'approve-api', at: askAt - 1 }, { key: 'other', at: askAt + 10 }])
     expect(mateItems(value).map(row => row.key)).toEqual(['approve-api'])
   })
-  it('keeps an ask when main resolution data is missing, future-dated, or unknown', () => {
+  it('keeps an ask when main resolution data is missing, future-dated, or unknown', async () => {
     expect(parentAskClosed({ key: 'approve-api', at: askAt }, undefined)).toBe(false)
     expect(mateItems(snapshot()).map(row => row.key)).toEqual(['approve-api'])
-    const future = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }])
-    future.fleet[0]!.observation.data!.parent_resolutions!.observed_at = new Date(now + 60_001).toISOString()
+    const future = snapshot()
+    await publishResolutions(future, [{ key: 'approve-api', at: askAt }], { observedAt: new Date(Date.now() + 120_000).toISOString() })
     expect(mateItems(future).map(row => row.key)).toEqual(['approve-api'])
-    const unknown = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }], 'unknown')
+    const unknown = snapshot()
+    await publishResolutions(unknown, [{ key: 'approve-api', at: askAt }], { status: 'unknown' })
     expect(mateItems(unknown).map(row => row.key)).toEqual(['approve-api'])
   })
   it.each([
@@ -323,17 +333,17 @@ describe('Waiting on main', () => {
       .some((row: { key: string }) => row.key === key)
     expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(true)
 
-    publishResolutions(value, corr ? [] : [{ key, at: closedAt }])
-    const main = value.fleet[0]!.observation.data!
-    if (corr) main.parent_resolutions!.mates.hulk!.corrs = [{ corr, at: closedAt }]
-    main.generated = '2026-11-18T03:36:08Z'
-    main.parent_resolutions!.observed_at = '2026-11-18T03:38:34.644544Z'
+    const { file, cache } = await publishResolutions(value, corr ? [] : [{ key, at: closedAt }], {
+      generated: '2026-11-18T03:36:08Z',
+      observedAt: '2026-11-18T03:38:34.644544Z',
+      corrs: corr ? [{ corr, at: closedAt }] : undefined,
+    })
     expect((await service.sweep()).items.some(row => row.key === key)).toBe(false)
     expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(false)
 
     // A later refresh of the still-open child channel cannot undo a recorded close.
-    main.parent_resolutions!.observed_at = '2026-11-18T03:35:00Z'
-    value.fleet[0]!.observation.error = 'Latest read failed'
+    await writeFile(file, 'invalid snapshot')
+    value.fleet[0]!.observation = await cache.get(true)
     expect((await service.sweep()).items.some(row => row.key === key)).toBe(false)
     expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(false)
   })
@@ -342,8 +352,7 @@ describe('Waiting on main', () => {
     const service = new WaitingOnMain(async () => value, async () => 'disabled', await root(), async () => true, () => now)
     child.parent_asks!.items.push({ ...child.parent_asks!.items[0]!, key: 'unrelated', corr: '1234567890abcdee' })
     await service.sweep()
-    publishResolutions(value, [])
-    value.fleet[0]!.observation.data!.parent_resolutions!.mates.hulk!.corrs = [{ corr: '1234567890abcdef', at: askAt + 1 }]
+    await publishResolutions(value, [], { corrs: [{ corr: '1234567890abcdef', at: askAt + 1 }] })
     delete child.parent_asks
     expect((await service.sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['unrelated'])
   })
@@ -352,7 +361,7 @@ describe('Waiting on main', () => {
     const value = snapshot()
     const service = new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => false, () => now)
     expect((await service.sweep()).items.some(row => row.key === 'approve-api')).toBe(true)
-    publishResolutions(value, [{ key: 'approve-api', at: askAt }])
+    await publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     expect((await service.refresh(value)).items.some(row => row.key === 'approve-api')).toBe(false)
   })
   it.each(['unknown', 'stale', 'failed', 'missing'] as const)('closes saved resolved asks with %s child coverage', async coverage => {
@@ -366,7 +375,7 @@ describe('Waiting on main', () => {
     )
     const create = () => new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => false, () => now)
     await create().sweep()
-    publishResolutions(value, ['approve-api', 'reopened', 'ageless'].map(key => ({ key, at: askAt })))
+    await publishResolutions(value, ['approve-api', 'reopened', 'ageless'].map(key => ({ key, at: askAt })))
     asks.items = [{ ...original, key: 'new-ageless', at: null }]
     if (coverage === 'unknown') asks.status = 'unknown'
     if (coverage === 'stale') value.fleet[1]!.observation.data!.generated = new Date(now - 300_000).toISOString()
@@ -618,7 +627,7 @@ describe('Waiting on main', () => {
     const card = value.intentions.data!.cards.find(row => row.id === fixtureId(4))!
     if (change === 'closed') card.properties.Status!.value = 'Done'
     if (change === 'owner') asOwner(card, 'name')
-    if (change === 'resolved') publishResolutions(value, [{ key: 'approve-api', at: askAt }])
+    if (change === 'resolved') await publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     await service.sweep()
     const next = (await service.bridgeWork()).pending[0]!
     expect(next.request_id).not.toBe(first.request_id)

@@ -30,20 +30,13 @@ export function parentAskClosed(ask: Pick<ParentAsk, 'key' | 'at'> & { corr?: st
 }
 
 /** A timestamped close is historical evidence even after the snapshot ages. */
-function mainResolutions(snapshot: SourceSnapshot, parentHome: string, childHome: string, now: number): ParentMateResolutions | undefined {
+function mainResolutions(snapshot: SourceSnapshot, parentHome: string, childHome: string): ParentMateResolutions | undefined {
   const data = snapshot.fleet.find(row => row.source.home === parentHome)?.observation.data
   if (!data) return undefined
   const mate = data.tasks.find(task => task.kind === 'secondmate' && task.paths.home === childHome && typeof task.id === 'string')
   if (typeof mate?.id !== 'string') return undefined
-  const accepted = data[acceptedMateCloses]
-  if (accepted) {
-    const entry = accepted.get(mate.id)
-    return entry?.home === childHome ? entry.close : undefined
-  }
-  const resolutions = data.parent_resolutions
-  if (!resolutions || !(Date.parse(resolutions.observed_at) <= now + 60_000)) return undefined
-  const entry = resolutions.mates[mate.id]
-  return entry?.status === 'known' ? entry : undefined
+  const entry = data[acceptedMateCloses]?.get(mate.id)
+  return entry?.home === childHome ? entry.close : undefined
 }
 
 /** Positive records survive incomplete reads. Only a complete fresh source can
@@ -94,7 +87,7 @@ export function mainWaitCandidates(snapshot: SourceSnapshot, now = Date.now()) {
       Number.isFinite(observed) && now - observed < 300_000 && observed <= now + 60_000
     if (fresh && asks?.status === 'known') complete.add(source)
     else unknown.push(`${label}: parent asks unknown or stale`)
-    const resolutions = mainResolutions(snapshot, row.source.parentHome, row.source.home, now)
+    const resolutions = mainResolutions(snapshot, row.source.parentHome, row.source.home)
     if (resolutions) resolutionsBySource.set(source, resolutions)
     for (const ask of asks?.items ?? []) {
       if (parentAskClosed(ask, resolutions)) continue
