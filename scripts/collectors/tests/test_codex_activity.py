@@ -155,6 +155,12 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(bracket['status'], 'known')
         self.assertEqual(bracket['items'][0]['at'], 1794498392)
 
+    def test_note_body_keys_do_not_open_or_close_parent_asks(self):
+        history = ('blocked [key=api] [at=100]: choose\n'
+                   'resolved [at=200]: [key=api] answered\n'
+                   'blocked [at=300]: [key=other] choose\n')
+        self.assertEqual([ask['key'] for ask in collector.fold_parent_asks(history)['items']], ['api'])
+
     def test_hilda_card_note_closes_on_a_later_matching_done_or_resolved(self):
         ask = 'blocked [key=eforce-publication325] [at=1794593070]: corr=8940e5f6dad58120 Card needs a publication route\n'
         unrelated = ('done [key=eforce-publication325]: different work\n'
@@ -335,6 +341,7 @@ class CollectorTests(unittest.TestCase):
             'working [key=other] [at=160]: not a close\n'
             'done [key=other] [at=170]: corr=8940e5f6dad58120 answered\n'
             'resolved [key=api] [at=200]: answered: use REST\n'
+            'resolved [at=250]: [key=api] unrelated note\n'
             'resolved [key=partial] [at=999]: still writing')
         (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')
         (state / 'by-role.status').write_text('resolved [key=role-key] [at=50]: answered\n')

@@ -162,11 +162,7 @@ def parent_event(line):
     prefix = metadata.partition('[')[0]
     if any(not re.fullmatch(r'corr=[0-9A-Fa-f]{16}|at=\d+', word) for word in prefix.split()):
         return None
-    # First Mate accepts a leading key in the note as well as header metadata.
     keys = re.findall(r'\[key=([^\]]+)\]', metadata)
-    if not keys and (key := re.match(r'\s*\[key=([^\]]+)\]', note)):
-        keys = [key[1]]
-        note = note[key.end():]
     return state, metadata, keys, _PARENT_CORR.findall(content), note.lstrip() if separator else content.strip(), bool(separator)
 
 
