@@ -231,7 +231,7 @@ export class Journal {
       SELECT last_success_at, last_generated_at
       FROM sources WHERE source_id = ?
     `).get(entityId('home', source.home_id, 'worker'))
-    const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
+    const fresh = pr && pr.observed_at >= pr.started_at &&
       pr.started_at >= (worker?.last_success_at ?? '') &&
       freshFleet(pr, fleetWindow, previous.last_generated_at) &&
       pr.generated_at > (worker?.last_generated_at ?? '')
@@ -252,10 +252,11 @@ export class Journal {
       snapshotId = randomUUID()
       if (generated_at) acceptedFleet = observation
       if (source.type === 'task') {
-        const projected = withPullRequests(entries, fresh ? pr.links : null)
+        const canJoinLinks = fresh && pr.observed_at >= observed_at
+        const projected = withPullRequests(entries, canJoinLinks ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
         if (pr_links_unobserved) counts = { ...counts, pr_links_unobserved }
-        if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
+        if (canJoinLinks && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
       written = this.recordEntries(observation, previous, snapshotId, batchIds)

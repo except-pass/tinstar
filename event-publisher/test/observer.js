@@ -490,7 +490,11 @@ test('confirmed backlog absence survives both inventory failures', async t => {
   const journal = new Journal(join(path, 'journal.sqlite'))
   t.after(() => journal.close())
   journal.registerSources(sourcesFor(fixture))
-  journal.recordAttempts(await observeHome(fixture, path, { now: () => new Date(generation) }))
+  const taskWindow = [at(3), at(3), at(3), at(3)]
+  const observations = await observeHome(fixture, path, { now: () => new Date(taskWindow.shift() ?? generation) })
+  equal(observations[0].observed_at, at(3))
+  equal(observations[0].pullRequests.observed_at, generation)
+  journal.recordAttempts(observations)
   const [taskStatus, workerStatus] = journal.sources()
   equal(taskStatus.health, 'unavailable')
   equal(taskStatus.reason, 'read command is missing or inaccessible')
