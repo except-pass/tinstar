@@ -370,6 +370,57 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   equal(journal.sources()[0].last_generated_at, at(3))
 })
 
+test('reversed task and worker reads preserve accepted snapshots and events', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  const worker = { id: task.id, gen: 'gen-1', state: 'working' }
+  journal.record(taskObservation([task], 0))
+  journal.record(workerObservation([worker], 0))
+  const baseline = journal.sources()
+  const changedWorker = { ...worker, state: 'parked' }
+  for (const observation of [
+    taskObservation([{ ...task, state: 'done' }], 2),
+    workerObservation([changedWorker], 2),
+  ]) {
+    deepEqual(journal.recordAttempt({ ...observation, observed_at: at(-1) }), { written: 0, complete: false })
+  }
+  for (const [index, source] of journal.sources().entries()) {
+    equal(source.health, 'stale')
+    for (const field of ['last_attempt_at', 'last_success_at', 'last_snapshot_id', 'last_generated_at']) {
+      equal(source[field], baseline[index][field])
+    }
+  }
+  equal(journal.tail(), 0)
+  equal(journal.record(taskObservation([{ ...task, state: 'done' }], 3)), 2)
+  equal(journal.record(workerObservation([changedWorker], 3)), 1)
+})
+
+test('invalid fleet windows leave valid task fields observable', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const task = row('sample-task')
+  const pr = 'https://github.com/example/repo/pull/12'
+  journal.record(taskObservation([task], 0))
+  for (const [minute, window] of [
+    [2, { started_at: at(4), observed_at: at(3) }],
+    [4, { started_at: at(4), observed_at: at(4) }],
+  ]) {
+    const attempt = taskObservation([{ ...task, priority: minute }], minute, tasks, [{ id: task.id, pr_url: pr }])
+    const pullRequests = { ...attempt.pullRequests, ...window }
+    deepEqual(journal.recordAttempt({ ...attempt, pullRequests }), { written: 1, complete: false })
+    const event = journal.events().at(-1)
+    equal(event.change.field, 'priority')
+    equal(event.observed_at, attempt.observed_at)
+    equal(event.evidence.pr_link_coverage, 'unobserved')
+    const [status] = journal.sources()
+    equal(status.last_success_at, attempt.observed_at)
+    equal(status.last_generated_at, at(0))
+  }
+})
+
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const initial = row('initial-task')

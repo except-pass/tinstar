@@ -110,7 +110,7 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     }
     links.set(row.id, canonicalPullRequests(urls))
   }
-  return { links, generated_at: new Date(generated).toISOString(), observed_at: observedAt }
+  return { links, generated_at: new Date(generated).toISOString(), started_at: startedAt, observed_at: observedAt }
 }
 
 export function withPullRequests(entries, links) {

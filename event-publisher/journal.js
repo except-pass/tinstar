@@ -188,7 +188,11 @@ export class Journal {
         let { health, reason = null, counts = null } = observation
         let snapshotId = null
         let acceptedGeneration = null
-        if (entries && previous.last_attempt_at && started_at < previous.last_attempt_at) {
+        if (observed_at < started_at) {
+          health = 'stale'
+          reason = 'read ended before it started'
+          batchObservedAt = previous.last_attempt_at
+        } else if (entries && previous.last_attempt_at && started_at < previous.last_attempt_at) {
           health = 'stale'
           reason = 'read overlaps the previous collection window'
         } else if (generated_at && previous.last_generated_at && generated_at <= previous.last_generated_at) {
@@ -201,7 +205,8 @@ export class Journal {
             const pr = observation.pullRequests
             const worker = this.db.prepare('SELECT last_generated_at FROM sources WHERE source_id = ?')
               .get(entityId('home', source.home_id, 'worker'))
-            const fresh = pr && pr.generated_at > (previous.last_generated_at ?? '') &&
+            const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
+              pr.generated_at > (previous.last_generated_at ?? '') &&
               pr.generated_at > (worker?.last_generated_at ?? '')
             const projected = withPullRequests(entries, fresh ? pr.links : null)
             const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
