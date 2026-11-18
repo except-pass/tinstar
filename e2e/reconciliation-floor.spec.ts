@@ -274,13 +274,15 @@ for (const state of ['queued', 'held']) {
 
 test('stable task-only metadata and independent worker status, freshness and Inspector', async ({ page }) => {
   const now = Date.parse('2026-11-04T17:00:00Z')
-  await page.clock.install({ time: now })
+  await page.clock.install({ time: now - 60_000 })
+  await page.clock.pauseAt(now)
   const scene = fixtureScene({ now })
   const workers = scene.executions.filter(e => e.kind !== 'secondmate')
   // Use source identities: reconcile order is independent of status order.
   const runningWorker = workers.find(worker => worker.identity.task_id === 'linked-worker')!
   const waitingWorker = workers.find(worker => worker.identity.task_id === 'untracked-worker')!
   const unknownWorker = workers.find(worker => worker.identity.task_id === 'candidate-worker')!
+  const blockedWorker = workers.find(worker => worker.identity.task_id === 'blocked-worker')!
   runningWorker.source.current_state.state = 'working'
   waitingWorker.source.current_state.state = 'paused'
   unknownWorker.source.current_state.state = 'unknown'; unknownWorker.source.last_event.state = 'unknown'
@@ -291,10 +293,12 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await page.route('**/api/reconciliation/queue', route => route.fulfill({ json: { ok: true, data: fixtureQueue(now) } }))
   await page.route('**/api/reconciliation/card-context?*', route => route.fulfill({ json: { ok: true, data: { outcome: 'partial', blocks: [{ id: 'full', text: 'Full source card body' }] } } }))
   await page.goto(base)
-  await expect(page.locator('.ov-worker-status').filter({ hasText: /^Running$/ })).not.toHaveCount(0)
-  await expect(page.locator('.ov-worker-status').filter({ hasText: /^Waiting(?: · reported .+)?$/ })).toHaveCount(2)
-  await expect(page.locator('.ov-worker-status').filter({ hasText: /^No update since / })).toHaveCount(1)
-  await expect(page.locator('.ov-worker-status.status-blocked')).toContainText('Waiting')
+  const workerCard = (id: string) => page.locator(`.ov-execution[data-entity-id=${JSON.stringify(id)}]`).first()
+  const running = workerCard(runningWorker.id)
+  await expect(running.locator('.ov-worker-status.status-running')).toHaveText('Running')
+  await expect(workerCard(waitingWorker.id).locator('.ov-worker-status.status-waiting')).toHaveText('Waiting')
+  await expect(workerCard(unknownWorker.id).locator('.ov-worker-status.status-unknown')).toHaveText('Unknown')
+  await expect(workerCard(blockedWorker.id).locator('.ov-worker-status.status-blocked')).toHaveText('Blocked · just now')
   const task = page.locator(`.ov-card[data-entity-id="${card.id}"]`).first()
   const fields = await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()
   await expect(task.locator('.ov-priority')).toHaveText('High')
@@ -311,8 +315,6 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Last touched byWill')
   await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Some content omitted')
   await expect(desk.locator('.ov-queue')).toHaveCount(0)
-  const runningId = await page.locator('.ov-execution').filter({ has: page.locator('.status-running') }).first().getAttribute('data-entity-id')
-  const running = page.locator(`.ov-execution[data-entity-id=${JSON.stringify(runningId)}]`).first()
   await expect(running).toHaveCSS('opacity', '1')
   await page.getByRole('button', { name: 'Close Inspector' }).click()
   await expect(task).toBeFocused()
@@ -320,10 +322,13 @@ test('stable task-only metadata and independent worker status, freshness and Ins
   expect(await task.locator('.ov-record-top,.ov-task-meta,.ov-record-foot,.ov-context-field').allTextContents()).toEqual(fields)
   // Expired observations retain legibility without claiming current activity.
   await page.clock.fastForward(61_001)
-  await expect(running.locator('.ov-worker-status')).toHaveText('Home unreachable')
+  await expect(running.locator('.ov-worker-status.status-unknown')).toHaveText('Unknown')
   await expect(running.locator('.ov-freshness')).toHaveAttribute('aria-label', 'Last known observation')
   await inspectEntity(page, running)
-  await expect(page.getByLabel('Inspector', { exact: true })).toContainText('Latest activity')
+  const inspector = page.getByLabel('Inspector', { exact: true })
+  await expect(inspector.getByText('Unknown', { exact: true })).toBeVisible()
+  await expect(inspector.getByText(/Last known observation/)).toBeVisible()
+  await expect(inspector).toContainText('Latest activity')
   await expect(desk.locator('.ov-queue')).toHaveCount(0)
   await expect(running).toHaveCSS('opacity', '1')
   await page.keyboard.press('Escape')
