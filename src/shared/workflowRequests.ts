@@ -71,27 +71,6 @@ export function workflowNoteHasMarker(note: WorkflowRecordSource, marker: string
 }
 export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
 
-export function requestOwnedRestoredActions(notes: RequestNote[]) {
-  const open = new Map<string, string>()
-  const restored = new Set<string>()
-  for (const note of notes) {
-    const answers = decisionRecordRows([note], 'Tin Star answer: ')
-    if (!answers.length) {
-      for (const row of decisionRecordRows([note], 'Tin Star request: ')) {
-        if (typeof row?.id !== 'string' || typeof row.action !== 'string') continue
-        open.set(row.id, row.action)
-        if (row.restored_action === true && isDecisionRetraction(note.text)) restored.add(row.action)
-      }
-    }
-    for (const id of [...answers, ...withdrawnDecisionIds([note])]) {
-      const action = open.get(id)
-      open.delete(id)
-      if (action !== undefined && ![...open.values()].includes(action)) restored.delete(action)
-    }
-  }
-  return restored
-}
-
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()
   for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)

@@ -69,7 +69,7 @@ export class WorkflowContent {
   async reservationReadback(id: string, intent: SourceWriteIntent | null, signal?: AbortSignal): Promise<'applied' | 'different' | 'unknown'> {
     if (!intent) return 'unknown'
     try {
-      if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id, signal)).some(note =>
+      if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id, signal, isDecisionRetraction(String(intent.text ?? '')))).some(note =>
         // Notion supplies display prose for mentions; only the reminder's
         // unique terminal receipt is invariant under that rendering.
         intent.kind === 'reminder' && intent.marker ? workflowNoteHasMarker(note, intent.marker) : matchesNote(note, intent.text)) ? 'applied' : 'different'
@@ -144,7 +144,7 @@ export class WorkflowContent {
     signal?.throwIfAborted()
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   }
-  async notes(id: string, signal?: AbortSignal): Promise<WorkflowNote[]> {
+  async notes(id: string, signal?: AbortSignal, verifyRetractions = false): Promise<WorkflowNote[]> {
     const jira = this.jira(id)
     if (jira) return jira.notes(id)
     const result: WorkflowNote[] = []; let cursor: string | undefined
@@ -154,7 +154,7 @@ export class WorkflowContent {
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
       for (const item of body.results) result.push({ id: item.id, type: 'comment', text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
       if (!body.has_more) {
-        const retractions = result.filter(note => isDecisionRetraction(note.text))
+        const retractions = verifyRetractions ? result.filter(note => isDecisionRetraction(note.text)) : []
         if (retractions.length) {
           const writer = await this.workflowWriter()
           for (const note of retractions) note.workflowWriter = note.author === writer
@@ -204,11 +204,12 @@ export class WorkflowContent {
   }
   note(id: string, text: string, marker: string) { return this.reader.mutate(id, () => this.performNote(id, text, marker), { kind: 'note', readback_can_settle: true, marker, text: `${text}\n${marker}` }, intent => this.reservationReadback(id, intent)) }
   private async performNote(id: string, text: string, marker: string) {
-    const before = await this.notes(id)
+    const verifyRetractions = isDecisionRetraction(text)
+    const before = await this.notes(id, undefined, verifyRetractions)
     if (before.some(note => workflowNoteHasMarker(note, marker))) return
     const jira = this.jira(id)
     if (jira) await jira.note(id, `${text}\n${marker}`)
     else await this.request('comments', 'POST', { parent: { page_id: id }, ...richText(`${text}\n${marker}`) })
-    if (!(await this.notes(id)).some(note => matchesNote(note, `${text}\n${marker}`))) throw new Error('Note readback differs')
+    if (!(await this.notes(id, undefined, verifyRetractions)).some(note => matchesNote(note, `${text}\n${marker}`))) throw new Error('Note readback differs')
   }
 }

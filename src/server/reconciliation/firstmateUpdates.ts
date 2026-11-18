@@ -97,7 +97,7 @@ export class FirstmateUpdates {
   async confirmed(change: WorkflowChange) {
     this.mutations.set(change.card.id, ++this.version)
     const context = this.baselines.has(change.card.id) && (active(change.card) || !!change.before && active(change.before))
-      ? await this.sources.updateContext(change.card.id).catch(() => undefined) : undefined
+      ? await this.sources.updateContext(change.card.id, change.kind === 'withdraw_decision' || change.kind === 'supersede_decision').catch(() => undefined) : undefined
     return this.observe(change.card, change.actor, context, change)
   }
   async refreshComments(card: WorkCard, force = true) {

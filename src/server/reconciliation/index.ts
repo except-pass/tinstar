@@ -382,7 +382,10 @@ export class ReconciliationSources {
     return this.workReader.query({ owner: 'Firstmate', statuses: ['Queued', 'In Progress', 'Waiting For'] }, force)
   }
   async updateComments(id: string, force = false) { return this.context.commentDetails(id, force) }
-  async updateContext(id: string) { return this.context.details(id, true) }
+  async updateContext(id: string, verifyRetractions = false) {
+    const context = await this.context.details(id, true)
+    return verifyRetractions ? this.context.verifyRetractions(context) : context
+  }
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
@@ -468,7 +471,8 @@ export class ReconciliationSources {
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
         await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-          collectedContexts.set(id, await this.context.commentDetails(id, force))
+          const context = await this.context.commentDetails(id, force)
+          collectedContexts.set(id, await this.context.verifyRetractions(context).catch(() => context))
         }))
       }
     }

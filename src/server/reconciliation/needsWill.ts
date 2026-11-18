@@ -3,7 +3,7 @@ import { proposalAnswerId } from '../ask/decision'
 import { requestAnchor } from '../../shared/deskSource'
 import type { QueueItem, buildQueue } from './queue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
-import { requestHistory, type CardContextRead } from './cardContext'
+import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { queuePulls, type PullsRead, type PullSummary } from '../../shared/pulls'
 import { releasePull } from '../../shared/releases'
 import type { PullReadiness } from './queuePulls'
@@ -36,7 +36,8 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       const actionTags = item.sources.find(source => (source.kind === 'notion' || source.kind === 'jira') && source.request?.home === null && source.id === id)?.actions ?? tags(card.source.properties['Will action']?.value)
       const wait = String(card.source.properties['Waiting For']?.value ?? '')
       const context = contexts.get(id)
-      const open = currentWillRequests(requestHistory(context?.blocks ?? []), actionTags).filter(request => !request.answered)
+      const history = context && !hasUnverifiedRetractions(context) ? requestHistory(context.blocks) : []
+      const open = currentWillRequests(history, actionTags).filter(request => !request.answered)
       requests.push(...open.map(request => ({ ...request, cardId: id })))
       if (/\bWill\b/.test(wait) || actionTags.length) real = true
     }
@@ -52,7 +53,10 @@ export function needsWill(queue: ReturnType<typeof buildQueue>, scene: FloorScen
       .map(request => ({ answer_id: proposalAnswerId(request.proposal!), value: request.proposal! }))
     const current = currentDecisionProposal([...published, ...publications.filter(entry => entry.value.request_key === item.id)])
     const proposal = current?.value
-    const proposalHistoryComplete = item.cardIds.every(id => contexts.get(id)?.outcome === 'available')
+    const proposalHistoryComplete = item.cardIds.every(id => {
+      const context = contexts.get(id)
+      return context?.outcome === 'available' && !hasUnverifiedRetractions(context)
+    })
     const conflictingHead = pulls.some(pull => !pull.readiness && readiness.has(pull.url))
     const requestSince = oldestOpenRequestSince(requests)
     return [{ ...item, requestReadiness: conflictingHead ? 'needs-readiness-verification' as const : item.readiness, currentProposalAnswerId: current?.answer_id ?? null, proposalHistoryComplete, ...(!proposalHistoryComplete ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'Publication history is incomplete; refresh before choosing'] } : {}), proposals: published, ...(proposal?.source.kind === 'firstmate-request' ? { proposal: { answer_id: proposalAnswerId(proposal), value: proposal } } : {}), ...(!authorized ? { prDetails: 'PR details require owner authorization' } : {}), ...(conflictingHead ? { readiness: 'needs-readiness-verification' as const, oneTouch: false, reasons: [...item.reasons, 'PR inventory head differs from the readiness observation; refresh before acting'] } : {}), action: item.action ?? (requests.map(request => request.question).filter(Boolean).join('; ') || null), requests, requestSince, ageBasis: requestSince ? 'request-history' as const : 'unknown' as const, pulls }]

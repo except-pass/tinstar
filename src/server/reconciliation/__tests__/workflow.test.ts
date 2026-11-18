@@ -990,7 +990,7 @@ describe('remaining shared workflow operations', () => {
     expect(await restarted.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
     expect(f.comments).toHaveLength(5)
 
-    const notes = await content.notes(id)
+    const notes = await content.notes(id, undefined, true)
     expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
     expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
     expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([
@@ -1020,13 +1020,16 @@ describe('remaining shared workflow operations', () => {
         .toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
     }
   })
-  it.each(['withdraw_decision', 'answer_decision'] as const)('clears the tag restored by supersession on %s', async kind => {
+  it.each([
+    ['withdraw_decision', false], ['answer_decision', false],
+    ['withdraw_decision', true], ['answer_decision', true],
+  ] as const)('cleans up supersession tags on %s with manual reapplication %s', async (kind, manual) => {
     const f = fixture()
     f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
     expect(await f.workflow.update(input('request_decision', {
       request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    expect(await f.workflow.update(input('request_decision', {
+    if (manual) expect(await f.workflow.update(input('request_decision', {
       operation_id: 'publish-sibling', request_id: 'sibling', requested_from: 'Will', question: 'Approve the sibling?',
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     f.raw.properties['Will action'].multi_select = []
@@ -1035,15 +1038,19 @@ describe('remaining shared workflow operations', () => {
       replacement: { request_id: 'replacement', requested_from: 'Will', question: 'Approve the replacement?' },
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
-    expect(await f.workflow.update(input('withdraw_decision', {
-      operation_id: 'withdraw-replacement', request_id: 'replacement', reason: 'No longer needed',
-    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+    if (manual) {
+      expect(await f.workflow.update(input('withdraw_decision', {
+        operation_id: 'withdraw-replacement', request_id: 'replacement', reason: 'No longer needed',
+      }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+      expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+      f.raw.properties['Will action'].multi_select = []
+      f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+    }
     expect(await f.workflow.update(input(kind, {
-      request_id: 'sibling',
+      request_id: manual ? 'sibling' : 'replacement',
       ...(kind === 'withdraw_decision' ? { reason: 'No longer needed' } : { answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } }),
     }), 'Owner')).toMatchObject({ outcome: 'saved' })
-    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual([])
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(manual ? ['Decision'] : [])
   })
 
   it('redacts decoded supersession audit values in card details', async () => {
@@ -1059,18 +1066,31 @@ describe('remaining shared workflow operations', () => {
       replacement: { request_id: 'replacement', requested_from: `Will\n${recipientToken}`,
         question: `Approve the replacement?\n${questionToken}`, options: [{ id: 'approve', label: `Approve\n${optionToken}` }] },
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
-    expect(decisionRequests(await new WorkflowContent(f.reader).notes(id))).toMatchObject([{
+    expect(decisionRequests(await new WorkflowContent(f.reader).notes(id, undefined, true))).toMatchObject([{
       id: 'replacement', question: `Approve the replacement?\n${questionToken}`,
     }])
-    const context = await f.sources().card(id)
+    const fetch = f.fetcher.getMockImplementation()!
+    const identityLookup = vi.fn(() => new Response(null, { status: 503 }))
+    f.fetcher.mockImplementation((url, init) => new URL(String(url)).pathname === '/v1/users/me'
+      ? Promise.resolve(identityLookup())
+      : fetch(url, init))
+    const sources = f.sources()
+    const context = await sources.card(id)
+    expect(context.outcome).toBe('available')
     const audit = context.blocks.find(block => block.text.includes('Operation: supersede_decision'))!
     expect(audit.text).not.toContain(questionToken)
     expect(audit.text).not.toContain(recipientToken)
     expect(audit.text).not.toContain(optionToken)
-    expect(decisionRequests([audit])).toMatchObject([{
-      id: 'replacement', requestedFrom: 'Will\n[credential omitted]', question: 'Approve the replacement?\n[credential omitted]',
+    const footer = audit.text.split('\n').at(-2)!
+    expect(JSON.parse(footer.slice('Tin Star withdrawal: '.length)).replacement).toMatchObject({
+      id: 'replacement', requested_from: 'Will\n[credential omitted]', question: 'Approve the replacement?\n[credential omitted]',
       options: [{ id: 'approve', label: 'Approve\n[credential omitted]' }],
-    }])
+    })
+    expect(await sources.workflow.update(input('edit', { note: 'Ordinary progress' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(identityLookup).not.toHaveBeenCalled()
+    expect(await sources.workflow.update(input('withdraw_decision', { request_id: 'replacement', reason: 'No longer needed' }), 'Consumer'))
+      .toMatchObject({ outcome: 'not-saved' })
+    expect(identityLookup).toHaveBeenCalledOnce()
   })
 
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {

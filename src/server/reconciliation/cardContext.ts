@@ -1,5 +1,5 @@
 import { readNotionCard } from './notion'
-import { notionWorkflowWriter, type NotionFetch } from './notionApi'
+import { cachedNotionWorkflowWriter, notionWorkflowWriter, type NotionFetch } from './notionApi'
 import { isDecisionRetraction } from '../../shared/workflowRequests'
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
@@ -22,6 +22,9 @@ export interface CardContextRead {
 }
 
 const originalCommentText = new WeakMap<CardContextRead['blocks'][number], string>()
+const unverifiedRetraction = (block: CardContextRead['blocks'][number]) => block.type === 'comment' &&
+  block.workflowWriter === undefined && isDecisionRetraction(originalCommentText.get(block) ?? block.text)
+export const hasUnverifiedRetractions = (context: CardContextRead) => context.blocks.some(unverifiedRetraction)
 export function requestHistory(blocks: CardContextRead['blocks']) {
   return blocks.map(block => ({ ...block, text: originalCommentText.get(block) ?? block.text }))
 }
@@ -41,6 +44,14 @@ export class CardContextReader {
   cachedComments(id: string): CardContextRead | undefined {
     const cached = this.commentCache.get(id)
     return cached && cached.resolvedUntil > Date.now() ? cached.resolved : undefined
+  }
+  async verifyRetractions(context: CardContextRead): Promise<CardContextRead> {
+    const retractions = context.blocks.filter(unverifiedRetraction)
+    if (this.config && retractions.length) {
+      const writer = await notionWorkflowWriter(this.config, this.fetcher)
+      for (const block of retractions) block.workflowWriter = block.author === writer
+    }
+    return context
   }
   /** Read the card text and comments used for the decision revision. */
   decisionDetails(id: string, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher): Promise<CardContextRead> {
@@ -157,13 +168,14 @@ export class CardContextReader {
         signal.throwIfAborted()
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Invalid comments')
+        const writer = cachedNotionWorkflowWriter(this.config)
         for (const item of body.results) {
           const comment = record(item)
           if (!Array.isArray(comment.rich_text)) continue
           const author = record(comment.created_by).id
           const text = comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('')
-          const workflowWriter = isDecisionRetraction(text) ? author === await notionWorkflowWriter(this.config, fetcher) : undefined
-          const block = { id: String(comment.id), type: 'comment', workflowWriter,
+          const block = { id: String(comment.id), type: 'comment',
+            workflowWriter: writer && isDecisionRetraction(text) ? author === writer : undefined,
             authorName: typeof record(comment.created_by).name === 'string' ? String(record(comment.created_by).name) : null,
             author: typeof author === 'string' ? author : null,
             createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,

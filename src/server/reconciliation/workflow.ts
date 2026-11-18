@@ -12,7 +12,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { decisionRequests, requestOwnedRestoredActions, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequests, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -389,7 +389,7 @@ export class WorkflowOperations {
   private async performDecisionReconcile(cardId: string, fleet?: SourceSnapshot['fleet'], repair = false, census = this.decisionCensus()) {
     let card = await this.reader.card(cardId, true)
     if (card.source?.synthetic) return null
-    let notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
+    let notes = [...await this.content.notes(cardId, undefined, true), ...await this.content.sections(cardId)]
     const jsonLines = (prefix: string) => decisionRecordRows(notes, prefix)
     const recordedRequests = decisionHistory(notes, await this.proposals?.read(cardId, notes))
     if (repair) {
@@ -417,7 +417,7 @@ export class WorkflowOperations {
         if (result.outcome !== 'saved') return { state: 'verification-needed' as const, message: `Decision reconciliation needs verification: ${result.message}` }
       }
       card = await this.reader.card(cardId, true)
-      notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
+      notes = [...await this.content.notes(cardId, undefined, true), ...await this.content.sections(cardId)]
     }
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
       async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
@@ -707,7 +707,6 @@ export class WorkflowOperations {
       // A local withdrawal cannot close the authoritative First Mate request.
       if (request.hasSourceBinding) throw new WorkflowError('decision-source-bound', 'Withdraw this First Mate request at its authoritative source.')
       const tags = card.properties['Will action']?.value
-      const preserveAction = request.preserveAction && !requestOwnedRestoredActions(notes).has(request.action)
       note += `\nReason: ${input.reason}`
       if (input.kind === 'supersede_decision') {
         const { request_id, question, requested_from, options } = input.replacement
@@ -719,12 +718,11 @@ export class WorkflowOperations {
         if (!hasTag) set('Will action', [...tags, request.action])
         note += `\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
           id: input.request_id,
-          replacement: { id: request_id, action: request.action, preserve_action: hasTag && preserveAction,
-            ...(!hasTag ? { restored_action: true } : {}), requested_from, question, options },
+          replacement: { id: request_id, action: request.action, preserve_action: hasTag && request.preserveAction, requested_from, question, options },
         })}`
       } else {
         const shared = open.some(row => row.id !== input.request_id && row.action === request.action)
-        if (!preserveAction && !shared && Array.isArray(tags) && tags.includes(request.action)) {
+        if (!request.preserveAction && !shared && Array.isArray(tags) && tags.includes(request.action)) {
           set('Will action', tags.filter(action => action !== request.action))
         }
         note += `\n${workflowMarkers.withdrawal} ${JSON.stringify({ id: input.request_id })}`
@@ -735,7 +733,6 @@ export class WorkflowOperations {
       const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications))
         .filter(row => typeof row.id === 'string' && typeof row.action === 'string' && !withdrawn.has(row.id))
       const answered = new Set(decisionRecordRows(notes, 'Tin Star answer: '))
-      const restoredActions = requestOwnedRestoredActions(notes)
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
       if (input.kind === 'request_decision') {
@@ -744,7 +741,7 @@ export class WorkflowOperations {
         const sourceRequestKey = input.proposal && input.source_request ? queueRequestKey(card, fleet!, input.source_request) : undefined
         if (input.proposal && (!input.source_request || !workProposalMatchesRequest(input.proposal, input.source_request, sourceRequestKey, card.id))) throw new WorkflowError('decision-conflict', 'Published proposal request_key must match its bound First Mate source request and canonical card')
         const related = requests.filter(row => row.action === input.action && !answered.has(row.id))
-        const preserve = !restoredActions.has(input.action) && (related.length ? related.some(row => row.preserve_action) : tags.includes(input.action))
+        const preserve = related.length ? related.some(row => row.preserve_action) : tags.includes(input.action)
         set('Will action', [...new Set([...tags, input.action])])
         const binding = input.source_request ? bindDecision(fleet!, input.source_request, card.id, await this.reader.query({}, true)) : {}
         note += `\n${decisionMarker(input.request_id)}\nRequested from: ${input.requested_from}\nQuestion: ${input.question}\n${workflowMarkers.request} ${JSON.stringify({ id: input.request_id, action: input.action, preserve_action: preserve, ...(input.options ? { options: input.options } : {}), ...(input.proposal ? { proposal: input.proposal, source_request_key: sourceRequestKey } : {}), ...binding })}`
@@ -790,7 +787,7 @@ export class WorkflowOperations {
         }
         const action = request.action
         const others = requests.some(row => row.id !== input.request_id && row.action === action && !answered.has(row.id))
-        set('Will action', others || request.preserve_action && !restoredActions.has(action) ? tags : tags.filter(tag => tag !== action))
+        set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== action))
         note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
       }
     } else if (input.kind === 'complete' || input.kind === 'park') {
@@ -848,7 +845,8 @@ export class WorkflowOperations {
         await this.content.workflowWriter()
       }
       stage = 'read card comments'
-      const notes = await this.content.notes(card.id)
+      const notes = await this.content.notes(card.id, undefined,
+        input.kind === 'request_decision' || input.kind === 'answer_decision' || input.kind === 'withdraw_decision' || input.kind === 'supersede_decision')
       if (input.kind === 'answer_decision' && withdrawnDecisionIds(notes).has(input.request_id)) {
         throw new WorkflowError('decision-not-open', 'This request was withdrawn. No answer was saved.')
       }
