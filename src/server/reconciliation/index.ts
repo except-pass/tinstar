@@ -570,5 +570,17 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     const waitReferences = requestedReferences === '1' ? 'exact' : requestedReferences === 'cached' ? 'cached' : undefined
     return ok(res, await sources.scene(refresh, { history: query.get('history') === '1' }, waitReferences), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, refresh) : await sources.snapshot(), { headers })
+  if (path === '/api/reconciliation/queue') return ok(res, await sources.queueDisplay(req, refresh), { headers })
+  const snapshot = await sources.snapshot()
+  const fleet = snapshot.fleet.map(row => {
+    const { observation } = row
+    const data = observation.data
+    if (!data?.parent_resolutions) return row
+    const { status, observed_at, mates } = data.parent_resolutions
+    const parent_resolutions = { status, observed_at, mates: Object.fromEntries(
+      Object.entries(mates).map(([id, mate]) => [id, { status: mate.status, keys: mate.keys }]),
+    ) }
+    return { ...row, observation: { ...observation, data: { ...data, parent_resolutions } } }
+  })
+  return ok(res, { ...snapshot, fleet }, { headers })
 }

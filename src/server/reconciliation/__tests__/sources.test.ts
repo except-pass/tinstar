@@ -593,6 +593,28 @@ describe('config and HTTP boundary', () => {
     expect(config.warnings).toEqual([])
   })
 
+  it('exposes keyed parent resolutions and keeps close correlations internal', async () => {
+    const home = await temp()
+    const snapshotFile = join(home, 'fleet.json')
+    const parent_resolutions = { status: 'known', observed_at: timestamp, mates: { mate: {
+      status: 'known', keys: [{ key: 'api', at: 200 }], corrs: [{ corr: '8940e5f6dad58120', at: 200 }],
+    } } }
+    await writeFile(snapshotFile, JSON.stringify({ ...snapshot(home), generated: new Date().toISOString(), parent_resolutions }))
+    const sources = new ReconciliationSources({ fleet: [{ home, snapshotFile }], warnings: [] })
+    const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res) })
+    server.listen(0, '127.0.0.1'); await once(server, 'listening')
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('no port')
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/sources`)
+      const body = await res.json()
+      expect(body).toMatchObject({ ok: true, data: { fleet: [{ observation: { data: { fm_home: home } } }] } })
+      expect(body.data.fleet[0].observation.data.parent_resolutions).toEqual({
+        status: 'known', observed_at: timestamp, mates: { mate: { status: 'known', keys: [{ key: 'api', at: 200 }] } },
+      })
+      expect((await sources.snapshot()).fleet[0]?.observation.data?.parent_resolutions).toEqual(parent_resolutions)
+    } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+  })
+
   it('serves the envelope and unknown coverage, rejects writes and foreign origins', async () => {
     const sources = new ReconciliationSources({ fleet: [], warnings: [] })
     const server = createServer((req, res) => { void handleReconciliationRequest(sources, req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })

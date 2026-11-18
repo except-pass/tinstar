@@ -134,11 +134,13 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(task['codex_reason'], 'worker_folder_missing')
 
     def test_parent_asks_fold_by_key_or_corr_only_resolved_closes(self):
-        log = ('needs-decision [corr=1234567890abcdef] [key=api] [at=100]: choose API\n'
+        log = ('needs-decision [corr=older] [corr=shared] [key=api] [at=100]: choose API\n'
                'blocked [key=other] [at=200]: access\n'
                'working [key=api] [at=300]: resumed\n'
                'done [key=api] [at=400]: done elsewhere\n'
-               'resolved [corr=1234567890abcdef] [at=500]: answered\n')
+               'resolved [corr=older] [at=450]: unrelated\n')
+        self.assertEqual(collector.fold_parent_asks(log)['items'][0]['corr'], 'shared')
+        log += 'resolved [corr=shared] [at=500]: answered\n'
         self.assertEqual([row['key'] for row in collector.fold_parent_asks(log)['items']], ['other'])
         result = collector.fold_parent_asks(log + 'resolved [key=other] [at=600]: closed\n'
                                             'blocked [key=api] [at=700]: new request\n')
@@ -154,6 +156,53 @@ class CollectorTests(unittest.TestCase):
         bracket = collector.fold_parent_asks('blocked [key=k] [at=1794498392]: still waiting\n')
         self.assertEqual(bracket['status'], 'known')
         self.assertEqual(bracket['items'][0]['at'], 1794498392)
+
+    def test_note_body_keys_do_not_open_or_close_parent_asks(self):
+        history = ('blocked [key=api] [at=100]: choose\n'
+                   'resolved [at=200]: [key=api] answered\n'
+                   'blocked [at=300]: [key=other] choose\n')
+        self.assertEqual([ask['key'] for ask in collector.fold_parent_asks(history)['items']], ['api'])
+
+    def test_parent_asks_ignore_indented_records_and_bare_header_correlations(self):
+        history = ('blocked [key=api] [corr=8940e5f6dad58120] [at=100]: choose\n'
+                   ' blocked [key=indented] [at=110]: choose\n'
+                   'blocked corr=8940e5f6dad58120 [key=bare-prefix] [at=120]: choose\n'
+                   'blocked [key=bare] corr=8940e5f6dad58120 [at=130]: choose\n'
+                   'done corr=8940e5f6dad58120 [at=200]: answered\n'
+                   'done [at=210] corr=8940e5f6dad58120: answered\n'
+                   '\tresolved [key=api] [at=220]: answered\n')
+        self.assertEqual([(ask['key'], ask['corr']) for ask in collector.fold_parent_asks(history)['items']],
+                         [('api', '8940e5f6dad58120'), ('bare-prefix', None), ('bare', None)])
+        self.assertEqual([ask['key'] for ask in collector.fold_parent_asks(
+            history + 'resolved corr=8940e5f6dad58120 [key=bare-prefix] [at=230]: answered\n')['items']],
+                         ['api', 'bare'])
+
+    def test_hilda_card_note_closes_on_a_later_matching_done_or_resolved(self):
+        ask = 'blocked [key=eforce-publication325] [at=1794593070]: corr=8940e5f6dad58120 Card needs a publication route\n'
+        unrelated = ('done [key=eforce-publication325]: different work\n'
+                     'working [corr=8940e5f6dad58120]: still checking\n'
+                     'done with a different task: corr=8940e5f6dad58120\n'
+                     'done corr=unused [at=1794593700]: corr=8940e5f6dad58120 unrelated\n'
+                     'done [at=200] corr=unused: corr=8940e5f6dad58120 unrelated\n'
+                     'done at=200: corr=8940e5f6dad58120 unrelated\n'
+                     'done [corr=8940e5f6dad58120]\n'
+                     'done: corr=8940e5f6dad58120 unrelated\n'
+                     'done [at=300]: Built the release; corr=8940e5f6dad58120 is still waiting\n'
+                     'done [corr=shared] [at=400]: corr=8940e5f6dad58120 was handled separately\n'
+                     'done [corr=8940e5f6dad58120ff]: different token\n'
+                     'done [corr=8940e5f6dad58121]: other reply\n')
+        for close in ('done [at=1794593720]: corr=8940e5f6dad58120 Card closed\n',
+                      'resolved [corr=8940e5f6dad58120] [at=1794593720]: Card closed\n'):
+            with self.subTest(close=close):
+                self.assertEqual(collector.fold_parent_asks(close + ask + unrelated)['items'][0]['corr'],
+                                 '8940e5f6dad58120')
+                self.assertEqual(collector.fold_parent_asks(ask + unrelated + close)['items'], [])
+
+    def test_parent_ask_with_malformed_bare_timestamp_retains_unknown_age(self):
+        self.assertEqual(collector.fold_parent_asks('blocked at=bad [key=api]: choose\n'), {
+            'status': 'unknown',
+            'items': [{'key': 'api', 'corr': None, 'state': 'blocked', 'at': None, 'text': 'choose'}],
+        })
 
     def test_parent_asks_missing_malformed_and_partial_append_stay_unknown(self):
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
@@ -319,7 +368,14 @@ class CollectorTests(unittest.TestCase):
             'resolved [key=dup] [at=1] [at=2]: ambiguous\n'
             'resolved [key=pad] [at=01]: padded\n'
             'working [key=other] [at=160]: not a close\n'
-            'resolved [key=api] [at=200]: answered: use REST\n'
+            'done [key=other] [at=170]: corr=8940e5f6dad58120 answered\n'
+            'done [corr=older] [corr=shared] [at=180]: corr=8940e5f6dad58120 was handled separately\n'
+            'resolved corr=unused [key=api] [at=200]: answered: use REST\n'
+            'resolved [at=250]: [key=api] unrelated note\n'
+            'done corr=unused [at=260]: corr=8940e5f6dad58120 unrelated header\n'
+            'done [at=270] corr=unused [corr=shared]: corr=8940e5f6dad58120 unrelated\n'
+            'done [at=275]: Built the release; corr=8940e5f6dad58120 is still waiting\n'
+            ' resolved [key=api] [corr=8940e5f6dad58120] [at=280]: indented\n'
             'resolved [key=partial] [at=999]: still writing')
         (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')
         (state / 'by-role.status').write_text('resolved [key=role-key] [at=50]: answered\n')
@@ -342,9 +398,10 @@ class CollectorTests(unittest.TestCase):
         published = collector.parent_resolutions(str(home), snapshot, NOW)
         self.assertEqual(published['status'], 'unknown')
         self.assertEqual(published['observed_at'], collector.iso(NOW.timestamp()))
-        self.assertEqual(published['mates']['remote-mate'], {'status': 'known', 'keys': [
-            {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}]})
-        self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}]})
+        self.assertEqual(published['mates']['remote-mate'], {'status': 'unknown', 'keys': [
+            {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}],
+            'corrs': [{'corr': '8940e5f6dad58120', 'at': 170}, {'corr': 'shared', 'at': 180}]})
+        self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}], 'corrs': []})
         self.assertEqual(published['mates']['from-registry']['keys'], [{'key': 'reg', 'at': 80}])
         self.assertEqual(published['mates']['absent-mate'], {'status': 'known', 'keys': []})
         self.assertEqual(published['mates']['quiet-mate'], {'status': 'unknown', 'keys': []})

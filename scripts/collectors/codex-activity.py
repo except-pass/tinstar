@@ -139,39 +139,55 @@ def augment_open_decisions(task):
                      'open_decisions_source': 'tinstar-status-fold'}
 
 
-def parent_ask_fields(metadata):
+def parent_ask_stamp(metadata):
     """A valid bracket timestamp wins; otherwise accept a bare at=<epoch>."""
-    fields = dict(re.findall(r'\[(key|corr|at)=([^\]]+)\]', metadata))
-    if str(fields.get('at', '')).isdigit():
-        return fields
+    stamps = re.findall(r'\[at=([^\]]+)\]', metadata)
+    if stamps and stamps[-1].isdigit():
+        return stamps[-1]
     bare = re.search(r'(?:^|\s)at=(\d+)(?=\s|$)', metadata)
-    if bare:
-        fields['at'] = bare.group(1)
-    return fields
+    return bare[1] if bare else ''
+
+
+_PARENT_EVENT = re.compile(r'^(blocked|needs-decision|resolved|done)\b(.*)$')
+_PARENT_HEADER_FIELDS = re.compile(r'\[(key|corr|at)=([^\]]+)\]')
+_PARENT_NOTE_CORR = re.compile(r'^\s*corr=([0-9A-Fa-f]{16})(?!\w)')
+
+
+def parent_event(line):
+    match = _PARENT_EVENT.match(line)
+    if not match:
+        return None
+    state, content = match.groups()
+    metadata, separator, note = content.partition(':')
+    if state == 'done' and (not separator or not re.fullmatch(r'\s*(?:\[[^\s=\[\]]+=[^\[\]]+\]\s*)+', metadata)):
+        return None
+    fields = _PARENT_HEADER_FIELDS.findall(metadata)
+    keys = [value for field, value in fields if field == 'key']
+    header_corrs = [value for field, value in fields if field == 'corr']
+    corrs = header_corrs[-1:] or _PARENT_NOTE_CORR.findall(note)
+    return state, metadata, keys, corrs, note.lstrip() if separator else content.strip(), bool(separator)
 
 
 def fold_parent_asks(lines):
-    """Only resolved closes a keyed ask; ordinary working/done lines do not."""
+    """Resolve by key or close with an explicit correlation, in append order."""
     opened = {}
     for line in lines.splitlines():
-        match = re.match(r'^(blocked|needs-decision|resolved)\b(.*)$', line)
-        if not match:
+        event = parent_event(line)
+        if not event:
             continue
-        state, content = match.groups()
-        metadata, separator, text = content.partition(':')
-        fields = parent_ask_fields(metadata)
-        key, corr = fields.get('key'), fields.get('corr')
-        if state == 'resolved':
-            for identity, ask in list(opened.items()):
-                if key and identity == key or corr and ask['corr'] == corr:
-                    del opened[identity]
+        state, metadata, keys, corrs, text, has_note = event
+        key = keys[-1] if keys else None
+        if state in ('resolved', 'done'):
+            if state == 'resolved' and key:
+                opened.pop(key, None)
+            if corrs:
+                opened = {identity: ask for identity, ask in opened.items() if ask['corr'] not in corrs}
         elif key:
-            stamp = fields.get('at', '')
+            stamp = parent_ask_stamp(metadata)
             # Keep ageless/malformed asks so later resolutions can close them.
             # Only unresolved unknown ages make the final coverage unknown.
-            opened[key] = {'key': key, 'corr': corr, 'state': state,
-                           'at': int(stamp) if separator and stamp.isdigit() else None,
-                           'text': text.lstrip() if separator else content.strip()}
+            opened[key] = {'key': key, 'corr': corrs[0] if corrs else None, 'state': state,
+                           'at': int(stamp) if has_note and stamp.isdigit() else None, 'text': text}
     known = all(ask['at'] is not None for ask in opened.values())
     return {'status': 'known' if known else 'unknown', 'items': list(opened.values())}
 
@@ -204,27 +220,31 @@ def mate_status_file(home, mate_id):
     return Path(home) / 'state' / (mate_id + '.status')
 
 
-def resolved_keys(lines):
-    """Last well-formed resolved [key=] [at=] per key. Duplicate or unstamped times are not a time."""
-    if lines and not lines.endswith('\n'):
+def resolved_parent_asks(lines):
+    """Last timestamped close by key or correlation for a mate on the parent."""
+    partial = bool(lines and not lines.endswith('\n'))
+    if partial:
         lines = lines.rsplit('\n', 1)[0] if '\n' in lines else ''
-    found = {}
+    by_key, by_corr = {}, {}
     for line in lines.splitlines():
-        match = re.match(r'^resolved\b(.*)$', line)
-        if not match:
+        event = parent_event(line)
+        if not event:
             continue
-        metadata, separator, _text = match.group(1).partition(':')
-        if not separator:
+        state, metadata, keys, corrs, _, has_note = event
+        if state not in ('resolved', 'done') or not has_note:
             continue
-        keys = re.findall(r'\[key=([^\]]+)\]', metadata)
         stamps = re.findall(r'\[at=([^\]]+)\]', metadata)
-        # One key and one canonical epoch. A duplicate or padded stamp is not a time.
-        if len(keys) != 1 or len(stamps) != 1 or not keys[0]:
+        if len(stamps) != 1:
             continue
         stamp = stamps[0]
         if stamp.isdigit() and len(stamp) <= 12 and stamp == str(int(stamp)):
-            found[keys[0]] = int(stamp)
-    return [{'key': key, 'at': found[key]} for key in sorted(found)]
+            at = int(stamp)
+            if state == 'resolved' and len(keys) == 1:
+                by_key[keys[0]] = at
+            by_corr.update((corr, at) for corr in corrs)
+    return {'status': 'unknown' if partial else 'known',
+            'keys': [{'key': key, 'at': at} for key, at in sorted(by_key.items())],
+            'corrs': [{'corr': corr, 'at': at} for corr, at in sorted(by_corr.items())]}
 
 
 def parent_resolutions(home, snapshot, now):
@@ -248,7 +268,8 @@ def parent_resolutions(home, snapshot, now):
             mates[mate_id] = {'status': 'unknown', 'keys': []}
             known = False
             continue
-        mates[mate_id] = {'status': 'known', 'keys': resolved_keys(text)}
+        mates[mate_id] = resolved_parent_asks(text)
+        known = known and mates[mate_id]['status'] == 'known'
     return {'status': 'known' if known else 'unknown', 'observed_at': iso(now.timestamp()), 'mates': mates}
 
 

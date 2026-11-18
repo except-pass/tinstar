@@ -71,9 +71,12 @@ The Tin Star collector `scripts/collectors/codex-activity.py` adds:
 
 It folds `state/parent-replies.status` in append order. The latest keyed
 `blocked` or `needs-decision` line remains open until a later `resolved` with
-the same key or correlation. `working` and `done` do not close it. A timestamp
-is `[at=<epoch>]`, or a bare ` at=<epoch>` after the bracket metadata
-(`needs-decision [key=k] at=1794498392: ...`). Either form ages the ask. Missing or
+the same key, or a later `done` or `resolved` with the same correlation token.
+The collector reads the correlation from `[corr=…]` in the header or, when
+that field is absent, from `corr=` followed by 16 hexadecimal digits at the
+start of the note. A `done` line must have bracket metadata before the colon.
+An ask timestamp is `[at=<epoch>]` or a bare `at=<epoch>` after the bracket
+metadata (`needs-decision [key=k] at=1794498392: ...`). Either form ages the ask. Missing or
 unreadable channels and incomplete appended lines produce unknown coverage.
 An open keyed ask with a missing/malformed timestamp or malformed line stays
 visible with a null timestamp and unknown age; it makes coverage unknown only
@@ -88,21 +91,26 @@ Main answers a keyed ask with `fm-send --resolve-key`. That appends
 `resolved [key=…] [at=…]` to the mate's `state/<id>.status` in the parent home,
 for a remote secondmate the same as for a local mate, and does not copy the line
 into the mate's `state/parent-replies.status`. When the collected home has
-secondmates, the collector also publishes `parent_resolutions`: each mate id,
-the keys main resolved, and each line's `[at=]` time. The backstop drops an ask
-when that mate's own channel already has a later resolved line for the key, or
-when a fresh `parent_resolutions` entry for the mate shows the key resolved at
-or after the ask's `[at=]`. The mate is the secondmate task on main's snapshot
-whose home path is the child's fleet home. A missing publication, a stale one,
-or an unknown entry for that mate closes nothing. Main's resolution cannot close
-an ask with no timestamp or one reopened after the resolution.
+secondmates, the collector also publishes `parent_resolutions` with each mate's
+resolved keys, closed correlations, and their `[at=]` times. Tin Star accepts
+new close records from a known ledger entry bound to a unique secondmate ID
+and child home. A matching key or correlation closes an ask dated at or before
+the resolution. An ask reopened after the resolution stays open.
+
+An unreadable ledger or unfinished append leaves that mate's coverage unknown.
+Tin Star keeps accepted closes in memory as the snapshot ages or through
+incomplete reads compatible with the same mate ID, home, and spawn generation.
+After a server restart, a resolved ask can reappear until Tin Star reads a
+known entry with its close again. `GET /api/reconciliation/sources` continues
+to expose keyed parent resolutions. Parent close correlations stay internal.
 
 Unknown/stale reads retain last-known items on the scene. The owner's default
 view does not show an incomplete count. A fresh complete source can remove an
-absent item. A matching
-fresh main resolution also removes a saved mate ask, even when the child's
-parent-ask coverage is unknown, stale, failed or missing; unrelated saved asks
-remain. Unknown items are never used to send an overdue notification.
+absent item. A matching main resolution can also remove a saved mate ask with
+unknown, stale, failed, or missing child coverage. Correlation matching uses
+the saved structured token or a child publication that supplies it for the
+same key and timestamp. Note text in older saved rows is insufficient to
+establish a match. Unknown items are never used to send an overdue notification.
 
 ## Owner alerts
 
@@ -152,9 +160,9 @@ scene either way.
 Firstmate owns merge, deployment and live proof. Update the Tin Star collector
 on each publishing machine using the existing [collector install](codex-activity.md),
 then confirm fresh `parent_asks` fields in the transported child snapshots and
-`parent_resolutions` in main's snapshot. Main's publishing machine must also run
-the updated collector before its answers leave the backstop. No First
-Mate repository change is required. Confirm main's fleet label and child parent
+`parent_resolutions` in main's snapshot. During rollout, older child snapshots
+may lack structured note correlations until their collectors are updated and
+republish. No First Mate repository change is required. Confirm main's fleet label and child parent
 links before deploying the backend/client. Preserve alert state outside the
 release/config trees. The first live enabled sweep sends the startup summary
 if owner waits are already overdue and queues fresh First Mate waits for inbox

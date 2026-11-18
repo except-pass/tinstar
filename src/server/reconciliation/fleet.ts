@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ParentAsks, ParentResolutions } from '../../shared/waitingOnMain'
+import type { ParentAsks, ParentMateResolutions, ParentResolutions } from '../../shared/waitingOnMain'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readFleetSnapshot } from '../fleet/snapshot'
@@ -71,9 +71,15 @@ const parentResolutionsSchema = z.object({
   mates: z.record(z.string().min(1), z.object({
     status: z.enum(['known', 'unknown']),
     keys: z.array(z.object({ key: z.string().min(1), at: z.number().int().nonnegative() })),
+    corrs: z.array(z.object({ corr: z.string().min(1), at: z.number().int().nonnegative() })).optional(),
   })),
 })
-function parentResolutionsField(value: unknown): { parent_resolutions?: ParentResolutions } {
+export const acceptedMateCloses = Symbol('acceptedMateCloses')
+type AcceptedMateClose = { id: string; generation: string | null; close: ParentMateResolutions }
+function parentResolutionsField(value: unknown): {
+  parent_resolutions?: ParentResolutions
+  [acceptedMateCloses]?: ReadonlyMap<string, AcceptedMateClose>
+} {
   const parsed = parentResolutionsSchema.safeParse(value)
   return parsed.success ? { parent_resolutions: parsed.data } : {}
 }
@@ -139,5 +145,38 @@ export function fleetObservation(source: FleetSource) {
   }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source', Date.now, (previous, current) => ({ ...current,
     tasks: retainMissing(previous.tasks, current.tasks, task => JSON.stringify(task.identity)),
     backlog: previous.backlog || current.backlog ? retainMissing(previous.backlog ?? [], current.backlog ?? [], entry => String(entry.id)) : null,
-  }))
+  }), (previous, current, coverage) => {
+    const resolutions = current.parent_resolutions
+    const mates = resolutions && Date.parse(resolutions.observed_at) <= Date.now() + 60_000 ? resolutions.mates : undefined
+    const accepted = new Map<string, AcceptedMateClose>()
+    const ids = new Map<string, number>()
+    const homes = new Map<string, number>()
+    for (const task of current.tasks) {
+      if (typeof task.id === 'string') ids.set(task.id, (ids.get(task.id) ?? 0) + 1)
+      const { home } = task.paths
+      if (task.kind === 'secondmate' && home) homes.set(home, (homes.get(home) ?? 0) + 1)
+    }
+    for (const task of current.tasks) {
+      const { id, kind, paths: { home } } = task
+      if (kind !== 'secondmate' || typeof id !== 'string' || !home) continue
+      if (ids.get(id) !== 1 || homes.get(home) !== 1) continue
+      const generation = task.identity.spawn_gen
+      const close = mates?.[id]
+      const prior = previous?.[acceptedMateCloses]?.get(home)
+      if (close?.status === 'known') accepted.set(home, { id, generation, close })
+      else if (prior?.id === id && prior.generation === generation) accepted.set(home, prior)
+    }
+    for (const [home, prior] of previous?.[acceptedMateCloses] ?? []) {
+      if (accepted.has(home) || (coverage === 'complete' && !ids.has(prior.id))) continue
+      const compatible = current.tasks.every(task => {
+        const mate = task.kind === 'secondmate'
+        const taskHome = task.paths.home
+        return task.id !== prior.id
+          ? !mate || taskHome !== home
+          : mate && (!taskHome || taskHome === home) && task.identity.spawn_gen === prior.generation
+      })
+      if (compatible) accepted.set(home, prior)
+    }
+    return { ...current, [acceptedMateCloses]: accepted }
+  })
 }
