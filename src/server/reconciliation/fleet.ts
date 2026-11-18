@@ -71,6 +71,7 @@ const parentResolutionsSchema = z.object({
   mates: z.record(z.string().min(1), z.object({
     status: z.enum(['known', 'unknown']),
     keys: z.array(z.object({ key: z.string().min(1), at: z.number().int().nonnegative() })),
+    corrs: z.array(z.object({ corr: z.string().min(1), at: z.number().int().nonnegative() })).optional(),
   })),
 })
 function parentResolutionsField(value: unknown): { parent_resolutions?: ParentResolutions } {

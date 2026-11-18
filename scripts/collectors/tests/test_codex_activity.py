@@ -155,6 +155,20 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(bracket['status'], 'known')
         self.assertEqual(bracket['items'][0]['at'], 1794498392)
 
+    def test_hilda_card_note_closes_on_a_later_matching_done_or_resolved(self):
+        ask = 'blocked [key=eforce-publication325] [at=1794593070]: corr=8940e5f6dad58120 Card needs a publication route\n'
+        unrelated = ('done [key=eforce-publication325]: different work\n'
+                     'working [corr=8940e5f6dad58120]: still checking\n'
+                     'done with a different task: corr=8940e5f6dad58120\n'
+                     'done [corr=8940e5f6dad58120ff]: different token\n'
+                     'done [corr=8940e5f6dad58121]: other reply\n')
+        for close in ('done [at=1794593720]: corr=8940e5f6dad58120 Card closed\n',
+                      'resolved [corr=8940e5f6dad58120] [at=1794593720]: Card closed\n'):
+            with self.subTest(close=close):
+                self.assertEqual(collector.fold_parent_asks(close + ask + unrelated)['items'][0]['corr'],
+                                 '8940e5f6dad58120')
+                self.assertEqual(collector.fold_parent_asks(ask + unrelated + close)['items'], [])
+
     def test_parent_asks_missing_malformed_and_partial_append_stay_unknown(self):
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
         state = self.root / 'state'
@@ -319,6 +333,7 @@ class CollectorTests(unittest.TestCase):
             'resolved [key=dup] [at=1] [at=2]: ambiguous\n'
             'resolved [key=pad] [at=01]: padded\n'
             'working [key=other] [at=160]: not a close\n'
+            'done [key=other] [at=170]: corr=8940e5f6dad58120 answered\n'
             'resolved [key=api] [at=200]: answered: use REST\n'
             'resolved [key=partial] [at=999]: still writing')
         (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')
@@ -343,8 +358,9 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(published['status'], 'unknown')
         self.assertEqual(published['observed_at'], collector.iso(NOW.timestamp()))
         self.assertEqual(published['mates']['remote-mate'], {'status': 'known', 'keys': [
-            {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}]})
-        self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}]})
+            {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}],
+            'corrs': [{'corr': '8940e5f6dad58120', 'at': 170}]})
+        self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}], 'corrs': []})
         self.assertEqual(published['mates']['from-registry']['keys'], [{'key': 'reg', 'at': 80}])
         self.assertEqual(published['mates']['absent-mate'], {'status': 'known', 'keys': []})
         self.assertEqual(published['mates']['quiet-mate'], {'status': 'unknown', 'keys': []})

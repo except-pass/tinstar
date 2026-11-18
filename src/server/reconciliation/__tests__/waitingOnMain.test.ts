@@ -299,14 +299,52 @@ describe('Waiting on main', () => {
     const value = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt - 1 }, { key: 'other', at: askAt + 10 }])
     expect(mateItems(value).map(row => row.key)).toEqual(['approve-api'])
   })
-  it('keeps an ask when main data is missing, stale, or unknown', () => {
+  it('keeps an ask when main resolution data is missing, future-dated, or unknown', () => {
     expect(parentAskClosed({ key: 'approve-api', at: askAt }, undefined)).toBe(false)
     expect(mateItems(snapshot()).map(row => row.key)).toEqual(['approve-api'])
-    const stale = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }])
-    stale.fleet[0]!.observation.data!.generated = new Date(now - 300_000).toISOString()
-    expect(mateItems(stale).map(row => row.key)).toEqual(['approve-api'])
+    const future = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }])
+    future.fleet[0]!.observation.data!.parent_resolutions!.observed_at = new Date(now + 60_001).toISOString()
+    expect(mateItems(future).map(row => row.key)).toEqual(['approve-api'])
     const unknown = publishResolutions(snapshot(), [{ key: 'approve-api', at: askAt }], 'unknown')
     expect(mateItems(unknown).map(row => row.key)).toEqual(['approve-api'])
+  })
+  it.each([
+    ['fleet', 'cms-3573-merge', 'needs-decision', 1794951758, 1794957772],
+    ['hilda', 'cantools-nav-dev-proof', 'blocked', 1794928507, 1794929133],
+    ['hilda', 'eforce-publication325', 'blocked', 1794593070, 1794593720],
+  ] as const)('drops the Serena %s ask %s while the parent task inventory is older than the resolution read', async (label, key, state, at, closedAt) => {
+    const time = Date.parse('2026-11-18T03:41:20Z'), value = snapshot(time)
+    const child = value.fleet[1]!
+    child.source.label = label
+    child.observation.data!.parent_asks!.items = [{ key, corr: null, state, at, text: 'Awaiting a response' }]
+    const service = new WaitingOnMain(async () => value, async () => 'disabled', await root(), async () => true, () => time)
+    await service.sweep()
+    const hasAsk = (body: string) => JSON.parse(body.split('\n')[1]!).waiting_on_first_mate
+      .some((row: { key: string }) => row.key === key)
+    expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(true)
+
+    publishResolutions(value, [{ key, at: closedAt }])
+    const main = value.fleet[0]!.observation.data!
+    main.generated = '2026-11-18T03:36:08Z'
+    main.parent_resolutions!.observed_at = '2026-11-18T03:38:34.644544Z'
+    expect((await service.sweep()).items.some(row => row.key === key)).toBe(false)
+    expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(false)
+
+    // A later refresh of the still-open child channel cannot undo a recorded close.
+    main.parent_resolutions!.observed_at = '2026-11-18T03:35:00Z'
+    value.fleet[0]!.observation.error = 'Latest read failed'
+    expect((await service.sweep()).items.some(row => row.key === key)).toBe(false)
+    expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(false)
+  })
+  it('closes a saved mate ask by correlation when the child channel is unavailable', async () => {
+    const value = snapshot(), child = value.fleet[1]!.observation.data!
+    const service = new WaitingOnMain(async () => value, async () => 'disabled', await root(), async () => true, () => now)
+    child.parent_asks!.items.push({ ...child.parent_asks!.items[0]!, key: 'unrelated', corr: '1234567890abcdee' })
+    await service.sweep()
+    publishResolutions(value, [])
+    value.fleet[0]!.observation.data!.parent_resolutions!.mates.hulk!.corrs = [{ corr: '1234567890abcdef', at: askAt + 1 }]
+    delete child.parent_asks
+    expect((await service.sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['unrelated'])
   })
   it('drops a retained ask once a fresh main resolution closes it', async () => {
     const directory = await root()
@@ -352,7 +390,8 @@ describe('Waiting on main', () => {
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_asks).toEqual(ageless)
     await writeFile(file, JSON.stringify({ ...raw, parent_asks: { status: 'known' } }))
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_asks).toBeUndefined()
-    const resolutions = { status: 'known', observed_at: raw.generated, mates: { hulk: { status: 'known', keys: [{ key: 'approve-api', at: 200 }] } } }
+    const resolutions = { status: 'known', observed_at: raw.generated, mates: { hulk: { status: 'known', keys: [{ key: 'approve-api', at: 200 }],
+      corrs: [{ corr: '8940e5f6dad58120', at: 300 }] } } }
     await writeFile(file, JSON.stringify({ ...raw, parent_resolutions: resolutions }))
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_resolutions).toEqual(resolutions)
     await writeFile(file, JSON.stringify({ ...raw, parent_resolutions: { status: 'known' } }))

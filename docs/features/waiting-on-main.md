@@ -71,7 +71,8 @@ The Tin Star collector `scripts/collectors/codex-activity.py` adds:
 
 It folds `state/parent-replies.status` in append order. The latest keyed
 `blocked` or `needs-decision` line remains open until a later `resolved` with
-the same key or correlation. `working` and `done` do not close it. A timestamp
+the same key, or a later `done` or `resolved` with the same correlation token.
+A timestamp
 is `[at=<epoch>]`, or a bare ` at=<epoch>` after the bracket metadata
 (`needs-decision [key=k] at=1794498392: ...`). Either form ages the ask. Missing or
 unreadable channels and incomplete appended lines produce unknown coverage.
@@ -88,19 +89,17 @@ Main answers a keyed ask with `fm-send --resolve-key`. That appends
 `resolved [key=…] [at=…]` to the mate's `state/<id>.status` in the parent home,
 for a remote secondmate the same as for a local mate, and does not copy the line
 into the mate's `state/parent-replies.status`. When the collected home has
-secondmates, the collector also publishes `parent_resolutions`: each mate id,
-the keys main resolved, and each line's `[at=]` time. The backstop drops an ask
-when that mate's own channel already has a later resolved line for the key, or
-when a fresh `parent_resolutions` entry for the mate shows the key resolved at
-or after the ask's `[at=]`. The mate is the secondmate task on main's snapshot
-whose home path is the child's fleet home. A missing publication, a stale one,
-or an unknown entry for that mate closes nothing. Main's resolution cannot close
-an ask with no timestamp or one reopened after the resolution.
+secondmates, the collector also publishes `parent_resolutions` with each mate's
+resolved keys, acknowledged correlations, and their `[at=]` times. A matching
+entry closes a mate ask dated at or before that resolution. The mate is the
+secondmate task on main's snapshot whose home path is the child's fleet home.
+Recorded closures remain valid as the snapshot ages. Closing an ask across
+homes requires a known entry for its mate and timestamps on both events. An ask
+reopened after the resolution stays open.
 
 Unknown/stale reads retain last-known items on the scene. The owner's default
 view does not show an incomplete count. A fresh complete source can remove an
-absent item. A matching
-fresh main resolution also removes a saved mate ask, even when the child's
+absent item. A matching main resolution also removes a saved mate ask when the child's
 parent-ask coverage is unknown, stale, failed or missing; unrelated saved asks
 remain. Unknown items are never used to send an overdue notification.
 
