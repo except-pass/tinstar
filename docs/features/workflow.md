@@ -78,8 +78,9 @@ npx tsx scripts/jev-classifier-dry-run.ts --config-home /path/to/tinstar-config 
 The CLI reads the board through the foreground Notion scheduler and uses the
 existing Clavis bundle `openrouter/api-key`. It examines every active card
 missing Initiative and replays closed cards whose Initiative and Epic are set.
-Use `--historical-limit 0` to run just the unassigned cohort. Candidates and
-abstentions go to the report and the local `classification_jobs` table in
+Use `--historical-limit N` to cap the historical sample. The limit must be
+between 1 and 2,000. Candidates and abstentions go to the report and the
+local `classification_jobs` table in
 `card-leases.sqlite`. The dry run performs no Notion writes or dispatch.
 
 Optional `--taxonomy-notes FILE` supplies JSON arrays named `initiatives` and

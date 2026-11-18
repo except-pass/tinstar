@@ -79,7 +79,7 @@ function openingProse(context: CardContextRead) {
   for (const block of context.blocks) {
     // Coordination and generated logs are outside the classification brief.
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
-    const snippet = clean(block.text.replace(/^\s*(?:initiative|epic)\s*:.*$/gim, ''), 450)
+    const snippet = clean(block.text, 450, /^\s*(?:initiative|epic)\s*:.*$/gim)
     if (!snippet) continue
     snippets.push(snippet)
     size += snippet.length
@@ -91,11 +91,6 @@ function openingProse(context: CardContextRead) {
 const noul = (instructions: string, yes: string, no: string): Question => ({
   type: 'noul', instructions, criteria: { true: yes, false: no },
 })
-const fit = (subject: 'initiative' | 'epic') => noul(
-  `Does any ${subject} in the supplied catalog substantively fit this work card?`,
-  subject === 'initiative' ? 'At least one listed initiative clearly owns the actual work.' : 'At least one listed epic clearly covers the work within a substantively fitting initiative.',
-  `The work needs a new ${subject}, is outside the listed scopes, or has too little evidence to substantiate a fit.`,
-)
 const ranks = (answer: ChoiceAnswer) => Object.entries(answer.probabilities)
   .map(([id, probability]) => ({ id, probability }))
   .sort((left, right) => right.probability - left.probability || Number(right.id === answer.choice) - Number(left.id === answer.choice))
@@ -134,19 +129,14 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
     card: { title, description, area, brief },
     existing_classification: { initiative: clean(initiative, 100), epic: clean(epic, 100) },
     ancestors: parentFacts,
-    // Questions are evaluated independently. Share a compact catalog so the
-    // Noul judgments see the same destination names as the Choice questions.
-    catalog: {
-      initiatives: initiatives.map(candidate => clean(candidate.initiative, 100)),
-      epics_by_initiative: Object.fromEntries(initiatives.map(candidate => [clean(candidate.initiative, 100),
-        destinations.filter(pair => pair.initiative === candidate.initiative && pair.epic).map(pair => clean(pair.epic, 100))])),
-    },
+    catalog: { initiatives: initiatives.map(candidate => clean(candidate.initiative, 100)) },
   }
   const questions: Record<string, Question> = {
     initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use the parent chain as supporting context. A child can belong to a different initiative.',
       criteria: { ...initiativeCriteria, [none]: 'No listed initiative is supported by the work.' } },
-    initiative_fit: fit('initiative'),
-    epic_fit: fit('epic'),
+    initiative_fit: noul('Does any initiative in the supplied catalog substantively fit this work card?',
+      'At least one listed initiative clearly owns the actual work.',
+      'The work needs a new initiative, is outside the listed scopes, or has too little evidence to substantiate a fit.'),
     ambiguous: noul('Is the work classification ambiguous even after considering the card and its hierarchy?',
       'The work supports competing destinations, conflicts with its hierarchy, or the available details leave the scope uncertain.',
       'The work gives clear evidence of its scope and has one plausible home, or clearly belongs outside the catalog.'),
@@ -155,11 +145,20 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
     type: 'choice', instructions: 'Choose the existing initiative and epic pair that best covers the work. The same epic name under different initiatives denotes different destinations.',
     criteria: { ...pairCriteria, [none]: 'No listed pair fits, or there is insufficient evidence to choose one.' },
   }
-  if (destinations.some(pair => pair.epic === null)) questions.initiative_only = noul(
-    'Is this initiative-wide work that should remain intentionally outside all epics?',
-    'The work belongs at initiative level and does not require a more specific epic.',
-    'The work is epic-sized, an epic fits it, or an epic may be missing from the taxonomy.',
-  )
+  for (const candidate of initiatives) {
+    const pairs = destinations.filter(pair => pair.initiative === candidate.initiative)
+    const epics = pairs.filter(pair => pair.epic !== null)
+    if (epics.length) questions[`epic_fit_${candidate.id}`] = noul(
+      'Does any of these specific initiative and epic pairs substantively cover the card? Evaluate only these pairs.',
+      epics.map(pair => pairCriteria[pair.id]).join(' | '),
+      'None of these pairs covers the work, or there is too little evidence to establish a fit.',
+    )
+    if (pairs.some(pair => pair.epic === null)) questions[`initiative_only_${candidate.id}`] = noul(
+      `Is this work at initiative level for ${initiativeCriteria[candidate.id]}?`,
+      'The work belongs at initiative level and does not require a more specific epic.',
+      'The work belongs elsewhere, is epic-sized, or may need a new epic.',
+    )
+  }
   const input = fingerprint([card.id, card.last_edited_time, hierarchy.parents.map(parent => [parent.id, parent.last_edited_time]), state, catalog.revision])
   try {
     const { answers, ...telemetry } = await ask({ state, questions })
@@ -177,12 +176,14 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
       const answer = answers[key]
       return answer?.type === 'noul' ? answer.noul : 0
     }
+    const epicFit = chosenInitiative ? probability(`epic_fit_${chosenInitiative.id}`) : 0
+    const initiativeOnlyKey = `initiative_only_${chosenInitiative?.id}`
     return { ...base, ...timing(), fingerprint: input, state: 'examined', telemetry, evidence: {
       initiative: chosenInitiative?.initiative ?? null, destination,
       initiativeRanks: ranks(initiativeAnswer), destinationRanks: destinationAnswer ? ranks(destinationAnswer) : [],
       initiativeConfidence: initiativeAnswer.confidence, destinationConfidence: destinationAnswer?.confidence ?? 0,
-      initiativeFit: probability('initiative_fit'), epicFit: probability('epic_fit'), ambiguous: probability('ambiguous'),
-      initiativeOnly: questions.initiative_only ? probability('initiative_only') : null,
+      initiativeFit: probability('initiative_fit'), epicFit, ambiguous: probability('ambiguous'),
+      initiativeOnly: questions[initiativeOnlyKey] ? probability(initiativeOnlyKey) : null,
       parentConflict, sourceComplete: !!title && !!(brief || description || area || parentFacts.length) && hierarchy.complete && body.outcome === 'available',
       parentCount: hierarchy.parents.length, bodyAvailable: body.outcome === 'available',
     } }

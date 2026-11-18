@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util'
 import { getConfigRoot } from '../src/server/configRoot'
 import { taxonomyNotes } from '../src/server/classification/catalog'
 import { dryRunReport } from '../src/server/classification/report'
-import { ClassificationService } from '../src/server/classification/service'
+import { ClassificationService, maxHistoricalLimit, validHistoricalLimit } from '../src/server/classification/service'
 import { JevError } from '../src/server/classification/openRouter'
 import { CardLeases } from '../src/server/reconciliation/cardLeases'
 import { loadReconciliationConfig } from '../src/server/reconciliation/config'
@@ -13,7 +13,7 @@ async function main() {
   const { values } = parseArgs({ options: {
     'config-home': { type: 'string' },
     'ledger-home': { type: 'string' },
-    'historical-limit': { type: 'string', default: '2000' },
+    'historical-limit': { type: 'string', default: String(maxHistoricalLimit) },
     'taxonomy-notes': { type: 'string' },
     output: { type: 'string' },
     help: { type: 'boolean' },
@@ -23,8 +23,8 @@ async function main() {
     return
   }
   const historicalLimit = Number(values['historical-limit'])
-  if (!Number.isInteger(historicalLimit) || historicalLimit < 0 || historicalLimit > 2000) {
-    console.error('--historical-limit must be an integer from 0 to 2000')
+  if (!validHistoricalLimit(historicalLimit)) {
+    console.error(`--historical-limit must be an integer from 1 to ${maxHistoricalLimit}`)
     process.exitCode = 1
     return
   }

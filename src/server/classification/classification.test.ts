@@ -88,7 +88,7 @@ describe('classifier catalog and policy', () => {
     const result = await classifyCard(notionCard(card(4, 'Rotation', null, null, 'In Progress', 2)), catalog, source, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ reason: 'parent-conflict' })
     const novel = await classifyCard(notionCard(card(4, 'Novel work', null, null)), catalog, source,
-      async request => modelDecision(request, ...candidates(catalog, 'Platform'), { epic_fit: 0.02 }))
+      async request => modelDecision(request, ...candidates(catalog, 'Platform'), { [`epic_fit_${candidates(catalog, 'Platform')[0]}`]: 0.02 }))
     expect(assess(novel, thresholds.conservative)).toMatchObject({ reason: 'epic-no-fit' })
     const incomplete = await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
       ...source, excerpt: async () => ({ outcome: 'unavailable', blocks: [] }),
@@ -99,9 +99,43 @@ describe('classifier catalog and policy', () => {
     expect(ask).toHaveBeenCalledTimes(2)
   })
 
+  it('does not use fit under a different initiative to accept the chosen pair', async () => {
+    const ask = vi.fn(async (request: DecisionRequest) => {
+      const scores = Object.fromEntries(Object.entries(request.questions)
+        .filter(([, question]) => question.type === 'noul' && question.criteria.true.includes(' / Operations'))
+        .map(([key, question]) => [key, question.criteria.true.includes('Cockpit / Operations') ? 0.99 : 0.02]))
+      return modelDecision(request, ...candidates(catalog, 'Platform'), scores)
+    })
+    const result = await classifyCard(notionCard(card(4, 'Panel updates', null, null)), catalog, source, ask)
+    expect(result).toMatchObject({ evidence: { epicFit: 0.02 } })
+    expect(assess(result, thresholds.conservative)).toMatchObject({ reason: 'epic-no-fit' })
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('redacts complete quoted passwords from model titles, body and catalog examples', async () => {
+    const example = notionCard(card(1, `Example password='example secret fragments' confirmed`, 'Platform', 'Operations'))
+    const privateCatalog = cache.get({ ...board, data: { ...board.data, cards: [example, ...board.data.cards.slice(1)] } })
+    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(privateCatalog, 'Platform')))
+    const result = await classifyCard(notionCard(card(4, 'Rotation password="title secret fragments" confirmed', null, null)),
+      privateCatalog, {
+        ...source, excerpt: async () => ({ outcome: 'available', blocks: [{ id: 'brief', type: 'paragraph',
+          text: String.raw`Rotate password="body \"quoted\" secret fragments" today
+Initiative: password="another
+multiline fragment"` }] }),
+      }, ask)
+    expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
+    const request = ask.mock.calls[0]![0]
+    expect(request.state).toMatchObject({ card: {
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today',
+    } })
+    const [, pair] = candidates(privateCatalog, 'Platform')
+    expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment/)
+  })
+
   it('supports an explicitly allowed initiative-only destination', async () => {
     const result = await classifyCard(notionCard(card(4, 'Initiative charter', null, null)), catalog, source,
-      async request => modelDecision(request, ...candidates(catalog, 'Platform', null), { epic_fit: 0.01 }))
+      async request => modelDecision(request, ...candidates(catalog, 'Platform', null), { [`epic_fit_${candidates(catalog, 'Platform')[0]}`]: 0.01 }))
     expect(assess(result, thresholds.strict)).toEqual({
       outcome: 'candidate', destination: { initiative: 'Platform', epic: null },
     })
@@ -184,7 +218,11 @@ it('reads the configured board through NotionApi and persists replay results in 
   const api = new NotionApi(notion, 0)
   const service = new ClassificationService({ token: 'test-notion-token', dataSourceId: id(99) },
     api, new CardLeases(root), new OpenRouterJev(model, async () => 'test-openrouter-credential'))
+  for (const invalid of [0, -1, 1.5, 2001]) expect(() => service.dryRun(invalid)).toThrow(RangeError)
+  expect(notion).not.toHaveBeenCalled()
+  expect(model).not.toHaveBeenCalled()
   const running = service.dryRun(2000)
+  expect(() => service.dryRun(0)).toThrow(RangeError)
   expect(service.dryRun(2000)).toBe(running)
   const report = await running
   expect(model).toHaveBeenCalledTimes(3)

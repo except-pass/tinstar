@@ -70,6 +70,9 @@ class ClassificationLedger {
   }
 }
 
+export const maxHistoricalLimit = 2000
+export const validHistoricalLimit = (limit: number) => Number.isInteger(limit) && limit >= 1 && limit <= maxHistoricalLimit
+
 export class ClassificationService {
   private readonly board
   private readonly history
@@ -95,6 +98,7 @@ export class ClassificationService {
   }
 
   dryRun(historicalLimit: number, onProgress?: (done: number, total: number) => void) {
+    if (!validHistoricalLimit(historicalLimit)) throw new RangeError(`Historical limit must be an integer from 1 to ${maxHistoricalLimit}`)
     // Concurrent invocations in one backend share this read-only job.
     if (!this.running) {
       this.running = this.run(historicalLimit, onProgress).finally(() => { this.running = undefined })
@@ -106,17 +110,17 @@ export class ClassificationService {
     const start = performance.now()
     const ask = await this.jev.open()
     const [boardObservation, historyObservation] = await Promise.all([
-      this.board.get(true), historicalLimit ? this.history.get(true) : Promise.resolve(null),
+      this.board.get(true), this.history.get(true),
     ])
     const board = requireBoard(boardObservation)
-    const history = historyObservation ? requireBoard(historyObservation) : null
+    const history = requireBoard(historyObservation)
     const catalog = this.taxonomy.get(boardObservation)
     const activeCards = board.cards.filter(active)
-    const cards = new Map([...history?.cards ?? [], ...board.cards].map(card => [card.id, card]))
+    const cards = new Map([...history.cards, ...board.cards].map(card => [card.id, card]))
     const activeIds = new Set(activeCards.map(card => card.id))
     // Stable card-ID ordering keeps a bounded sample independent of the model
     // and of Notion's default sorting. Only closed labels enter the calibration.
-    const labeled = (history?.cards ?? []).filter(card => eligible(card) && !activeIds.has(card.id) &&
+    const labeled = history.cards.filter(card => eligible(card) && !activeIds.has(card.id) &&
       label(card, 'Initiative') && label(card, 'Epic')).map(card => ({ card, order: fingerprint(card.id) }))
       .sort((left, right) => left.order.localeCompare(right.order))
     const entries: Entry[] = [

@@ -32,16 +32,17 @@ export const pairKey = (initiative: string, epic: string | null) => JSON.stringi
 export const eligible = (card: WorkCard) => !card.source && !card.archived && !card.in_trash
 export const active = (card: WorkCard) => eligible(card) && !['Done', 'Archived'].includes(label(card, 'Status') ?? '')
 
-export function clean(text: unknown, limit: number) {
+export function clean(text: unknown, limit: number, omitLines?: RegExp) {
   const prose = typeof text === 'string' ? text : ''
-  return redactSourceText(prose
+  const redacted = redactSourceText(prose
+    .replace(/(?:--(?:api[-_]key|token|password|secret)(?:=|\s+)|\b(?:password|passwd|token|api[_-]?key|secret)["']?\s*[:=]\s*)(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))/gi, '[credential omitted]')
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, '[credential omitted]')
     .replace(/```[\s\S]*?(?:```|$)/g, '')
     .replace(/^.*\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)\s*=.*$/gm, '[credential omitted]')
     .replace(/--(?:api[-_]key|token|password|secret)(?:=|\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '[credential omitted]')
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
     .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, '[credential omitted]'))
-    .replace(/\s+/g, ' ').trim().slice(0, limit)
+  return (omitLines ? redacted.replace(omitLines, '') : redacted).replace(/\s+/g, ' ').trim().slice(0, limit)
 }
 
 const unique = (values: string[]) => [...new Set(values)].sort()
