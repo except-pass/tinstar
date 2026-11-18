@@ -216,7 +216,7 @@ describe('prepared-card loop', () => {
     expect((await web('snapshot')).data.counts).toMatchObject({ ready: 0, preparing: 10 })
   })
 
-  it('waits for the last outstanding job to expire before sending a full batch', async () => {
+  it('tops up nine jobs around a stalled callback and reuses its slot at expiry', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const cards = Array.from({ length: 20 }, (_, n) => page(n + 1, { owner: 'Will' }))
@@ -226,13 +226,18 @@ describe('prepared-card loop', () => {
     for (const { publish } of jobs.slice(0, 9)) {
       expect(await tool(publish.tool, { job_id: publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
     }
-    now += 14 * 60_000
+    now += 60_000
     await sources.preparation.replenish()
-    expect(jobs).toHaveLength(10)
+    expect(jobs).toHaveLength(19)
+    expect(new Set(jobs.map(job => job.card_url)).size).toBe(19)
+    expect((await sources.preparation.status()).preparing).toBe(10)
+    now += 13 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(19)
     now += 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(20)
-    expect(jobs.slice(10).map(job => job.card_url)).toContain(jobs[9]!.card_url)
+    expect(jobs[19]!.card_url).toBe(jobs[9]!.card_url)
     expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
@@ -340,6 +345,21 @@ describe('prepared-card loop', () => {
     expect((await web('submit', { ...answer, operation_id: 'second-answer', lease_token: reopened.data.lease_token })).data)
       .toMatchObject({ outcome: 'recorded-empty' })
     expect(card.comments).toHaveLength(2)
+  })
+
+  it('keeps Alice assigned when Will answers a tag-only card waiting on deployment', async () => {
+    const card = page(1, { owner: 'Alice', tag: 'Decision', status: 'Waiting For', waitingId: 'deploy', wait: 'Deployment pending' })
+    card.properties['Waiting For Type'] = select('Event')
+    const { sources, tool } = await setup([card])
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'alice-claim', card_id: card.id })
+    expect(held).toMatchObject({ outcome: 'claimed' })
+    const properties = structuredClone(card.properties)
+    properties['Will action'] = tags('')
+    expect(await tool('submit_prepared_decision', { operation_id: 'alice-answer', lease_token: held.lease_token,
+      option_id: '1', answer: 'Alice should continue after deployment.' })).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.properties).toEqual(properties)
+    expect(card.comments).toHaveLength(1)
   })
 
   it.each(['retry', 'released retry', 'released refill'] as const)('completes a saved answer through %s and retains independent waits', async recovery => {

@@ -5,7 +5,7 @@ import { decisionCardSource, decisionPropertyRevision, deskAnswerMarker } from '
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { actionableWillCard, isWillWait, responsibleMate } from './claimPolicy'
+import { actionableWillCard, cardOwnedByWill, isWillWait, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -107,7 +107,10 @@ export class WorkflowOperations {
       const primaryWill = isWillWait({ text: '', fields: wait })
       const status = remaining.length || (!primaryWill && (wait.type.trim() || wait.id.trim())) ? 'Waiting For' : 'Queued'
       const desired: Record<string, unknown> = {}
-      if (wait.status === 'Waiting For') Object.assign(desired, { Owner: 'Firstmate', Status: status })
+      if (wait.status === 'Waiting For') {
+        desired.Status = status
+        if (cardOwnedByWill(card)) desired.Owner = 'Firstmate'
+      }
       if (card.properties['Will action']) desired['Will action'] = []
       if (wait.status === 'Waiting For' && (remaining.length !== entries.length || primaryWill)) {
         const successor = primaryWill ? remaining.map(typedWaitEntry).find(Boolean) : wait

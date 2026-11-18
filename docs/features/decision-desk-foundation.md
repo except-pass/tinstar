@@ -14,16 +14,17 @@ options, recommendation, and links for the card held by this browser. Select
 an option and enter the words to record. **Record answer & next** saves one card
 comment with the chosen option and the exact answer. Tin Star uses its own
 integration identity and clears the Will action tag. When the card is Waiting
-For, it removes Will’s waits, assigns the card to Firstmate, and keeps it
-Waiting For while an independent blocker remains. It sets the status to Queued
-when all waits are clear. **Skip** releases the card while keeping its packet available.
+For, it removes Will’s waits and keeps it Waiting For while an independent
+blocker remains. If Will owned the card, Tin Star assigns it to Firstmate.
+It sets the status to Queued when all waits are clear. **Skip** releases the
+card while keeping its packet available.
 
 Preparation shows how many cards are ready, being prepared, and leased.
-Tin Star counts claimable cards and outstanding jobs as supply. When supply
-is below ten and no jobs are outstanding, Tin Star sends up to ten eligible
-cards. Jobs expire after
-15 minutes without publication. Published packets have no age limit. Editing the
-decision properties, card text, or substantive discussion invalidates the packet.
+When fewer than ten cards are claimable, Tin Star sends eligible cards up to
+a total of ten outstanding jobs. A card can have only one outstanding job.
+Jobs expire after 15 minutes without publication. Published packets have no
+age limit. Editing decision properties, card text, or substantive discussion
+invalidates the packet.
 
 ## Webhook publication
 

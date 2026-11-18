@@ -8,7 +8,7 @@ export const deferredDecisionStatus = (status: unknown) => ['todo', 'backlog', '
 export const deferredDecisionCard = (card: WorkCard) => card.archived || card.in_trash || deferredDecisionStatus(value(card, 'Status'))
 const isWill = (value: unknown) => typeof value === 'string' && value.trim().toLowerCase() === 'will'
 
-const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
+export const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
 
 function cardHasWillAction(card: WorkCard) {
   const actions = value(card, 'Will action')
