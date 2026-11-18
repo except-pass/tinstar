@@ -160,8 +160,8 @@ def parent_event(line):
     state, content = match.groups()
     metadata, separator, note = content.partition(':')
     if state == 'done':
-        prefix = metadata.partition('[')[0]
-        if any(not re.fullmatch(r'at=\d+', word) for word in prefix.split()):
+        bare_header = re.sub(r'\[[^\]]*\]', ' ', metadata)
+        if any(not re.fullmatch(r'at=\d+', word) for word in bare_header.split()):
             return None
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']
