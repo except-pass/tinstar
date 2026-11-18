@@ -119,7 +119,8 @@ the next scheduled pass.
   alongside the original task failure reason.
   Accepted inventories report remote exclusions and unverifiable local
   current states. A local second mate with a valid task ID and a missing
-  generation makes worker coverage partial. The journal preserves prior
+  generation makes worker coverage partial and is counted as
+  `secondmate_without_generation`. The journal preserves prior
   membership for that task ID and records verified observations for other
   workers. Other invalid or missing local execution identities and unconfirmed
   producer verdicts cause the inventory to be rejected. Rejected, timed-out,
@@ -152,15 +153,16 @@ A worker ID includes the exact task ID and generation. A worker links to a
 task when the same home has a matching row in its latest accepted active
 backlog and the task inventory verdict is healthy. Worker inventory and
 current-state evidence have separate coverage. After initial attach, a newly
-seen incarnation in an accepted complete inventory appears as `worker.observed`.
+identified incarnation in an accepted inventory appears as `worker.observed`.
 It includes the observed state, or `unknown` with the reason. The first later
 verified state appears as `worker.current_state.changed` from `unknown`.
-An incarnation absent from the next complete accepted inventory produces
+An incarnation whose absence is confirmed by the next accepted inventory produces
 `worker.inventory.left`, which records absence within that inventory's coverage.
-The same incarnation returning produces `worker.inventory.entered`. A local
-second-mate row with unresolved generation preserves prior membership for its
-task ID without refreshing incarnation or state evidence.
-Failed, stale, or incomplete inventories preserve the last accepted membership.
+The same incarnation returning produces `worker.inventory.entered`. See
+[troubleshooting](#re-observe-and-troubleshoot) for how worker coverage affects
+membership acceptance. Departures cite the last snapshot that identified the
+incarnation. Appearances and returns omit the prior snapshot and leave the lower
+time bound unknown when the previous inventory cannot establish prior absence.
 The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR links
@@ -180,11 +182,8 @@ gives conservative bounds from the start of the prior saved observation,
 when available, to the end of the read that witnessed the change.
 A replay returns the same event IDs and payloads after a restart.
 
-Slice A covers explicitly configured First Mate homes on the running host.
-Local second mates with a task ID and generation are covered as worker
-incarnations. Second mates without a generation make worker coverage partial
-and are counted as `secondmate_without_generation`. Verified observations for
-other workers are still recorded.
+Slice A covers explicitly configured First Mate homes on the running host,
+including local second mates with a task ID and generation.
 Remote endpoints, archive inventories and GitHub, Jira and deployment event
 sources remain outside its coverage.
 
