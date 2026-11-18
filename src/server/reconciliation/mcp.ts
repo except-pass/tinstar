@@ -143,7 +143,7 @@ export class ReconciliationMcp {
       try { return result(await this.readers.preparedSubmissions.recover(caller, input)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    catalog.registerTool('submit_prepared_decision', { description: 'Record Will’s exact answer and selected option on the held card, clear Will’s tag, complete any Waiting For handoff, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
+    catalog.registerTool('submit_prepared_decision', { description: 'Record the exact answer and selected option on the held card, clear Will’s tag, complete any Waiting For handoff, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
       const answerer = actor === 'owner-chatgpt' ? 'Will' : actor === 'Firstmate' ? 'Firstmate' : 'other'
       try { return result(await this.readers.preparedSubmissions.submit(caller, actor, input, answerer)) }
