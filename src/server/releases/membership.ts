@@ -91,13 +91,18 @@ export class ReleaseMembershipReader {
       }
       for (const [key, entry] of this.commitPulls) if (entry.until <= this.now()) this.commitPulls.delete(key)
       if (range.cursor >= range.commits.length) range.cursor = 0
+      let failure: { reason: unknown } | undefined
       for (let batch = 0; batch < 2 && range.cursor < range.commits.length; batch++) {
         const commits = range.commits.slice(range.cursor, range.cursor + 4)
-        const responses = await Promise.all(commits.map(commit => this.readCommitPulls(repository, commit, onMain)))
+        const responses = await Promise.allSettled(commits.map(async commit => this.readCommitPulls(repository, commit, onMain)))
         const observedAt = new Date(this.now()).toISOString()
-        commits.forEach((commit, index) => range.observations.set(commit, { rows: responses[index]!, observedAt }))
+        responses.forEach((response, index) => {
+          if (response.status === 'fulfilled') range.observations.set(commits[index]!, { rows: response.value, observedAt })
+          else failure ??= response
+        })
         range.cursor += commits.length
       }
+      if (failure) throw failure.reason
       const inspected = range.observations.size
       const complete = inspected === range.total && range.commits.length === range.total
       range.membership.status = complete ? 'complete' : 'partial'

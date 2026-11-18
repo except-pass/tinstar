@@ -38,15 +38,15 @@ describe('Git release membership', () => {
     expect(failed.membership.status).toBe('partial'); expect(failed.pulls.size).toBe(1)
     pullNumber = 2
     now = 90_000
-    const resumed = await reader.get('owner/repo', head, 'v2.0.0')
-    expect(resumed.membership.status).toBe('complete')
-    expect([...resumed.pulls.values()].map(row => row.number)).toEqual([1])
-    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(12)
+    const rotated = await reader.get('owner/repo', head, 'v2.0.0')
+    expect(rotated.membership.status).toBe('partial')
+    expect([...rotated.pulls.values()].map(row => row.number)).toEqual([2])
+    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(18)
 
     now = 110_000
-    const rotated = await reader.get('owner/repo', head, 'v2.0.0')
-    expect(rotated.membership.status).toBe('complete')
-    expect([...rotated.pulls.values()].map(row => row.number)).toEqual([2])
+    const resumed = await reader.get('owner/repo', head, 'v2.0.0')
+    expect(resumed.membership.status).toBe('complete')
+    expect([...resumed.pulls.values()].map(row => row.number)).toEqual([2])
     expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(20)
   })
   it('does not guess a baseline from unrelated or newer tags', async () => {
@@ -78,4 +78,36 @@ it('reopens an unchanged tag with the current commit associations', async () => 
   const reopened = await reader.get('owner/repo', head, 'v2.0.0', tags)
   expect(reopened.membership.status).toBe('complete')
   expect([...reopened.pulls.values()].map(row => row.number)).toEqual([2])
+})
+
+it('updates siblings and reaches later commits despite a persistently failing lookup', async () => {
+  let now = 0
+  let refreshing = false
+  const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: commits.length, commits: commits.map(sha => ({ sha })) }
+    const commit = path.split('/commits/')[1]?.split('/')[0]
+    if (commit === commits[0]) {
+      if (refreshing) throw new Error('Read unavailable')
+      return [pull(1, commits[0])]
+    }
+    if (commit === commits[1]) return [pull(refreshing ? 3 : 2, commits[1])]
+    if (commit === commits[9]) return [pull(refreshing ? 5 : 4, commits[9])]
+    return []
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const get = () => reader.get('owner/repo', head, 'v2.0.0', [tag('v1.0.0', base)])
+  const numbers = (range: Awaited<ReturnType<typeof get>>) => [...range.pulls.values()].map(row => row.number)
+  await get()
+  now = 15_000
+  expect(numbers(await get())).toEqual([1, 2, 4])
+
+  refreshing = true
+  now = 30_000
+  expect(numbers(await get())).toEqual([1, 3, 4])
+  now = 90_000
+  expect(numbers(await get())).toEqual([1, 3, 5])
+  now = 105_000
+  expect(numbers(await get())).toEqual([1, 3, 5])
+  expect(read.mock.calls.filter(([path]) => path.includes(`/commits/${commits[0]}/`))).toHaveLength(3)
 })
