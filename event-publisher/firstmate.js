@@ -60,6 +60,10 @@ function normalizedDependencies(value, home) {
   })
 }
 
+export function canonicalPullRequests(urls) {
+  return [...new Set(urls.map(url => url.replace(/\/$/, '').toLowerCase()))].sort(compare)
+}
+
 export function fleetPullRequests(text, homePath, startedAt, observedAt) {
   const links = new Map()
   let data
@@ -86,7 +90,7 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     if (row.pr_url != null) urls.push(row.pr_url)
     const exact = urls.filter(url => url === url.trim() &&
       /^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(url))
-    links.set(row.id, [...new Set(exact.map(url => url.replace(/\/$/, '')))].sort(compare))
+    links.set(row.id, canonicalPullRequests(exact))
   }
   return { links, generated_at: new Date(generated).toISOString() }
 }

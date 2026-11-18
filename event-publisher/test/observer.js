@@ -581,6 +581,42 @@ test('replay preserves ascending order and filters across multiple pages', async
   deepEqual(await replay(['--after', '5']), expected)
 })
 
+test('watch exits on SIGTERM while stdout is blocked', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  journal.register(tasks)
+  journal.record(taskObservation([], 0))
+  journal.record(taskObservation(Array.from({ length: 2000 }, (_, i) => row(`task-${i}`)), 1))
+  journal.close()
+
+  const child = spawn(process.execPath, [cli, 'watch', '--db', path, '--after', '0', '--json'])
+  const done = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
+  t.after(() => {
+    child.kill('SIGKILL')
+    return done
+  })
+  await new Promise(resolve => child.stdout.once('readable', resolve))
+  await sleep(200)
+  child.kill('SIGTERM')
+  deepEqual(await Promise.race([done, sleep(1500, 'still blocked', { ref: false })]), { code: 0, signal: null })
+})
+
+test('PR link casing is canonical across both structured inputs', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const task = row('sample-task')
+  const canonical = 'https://github.com/owner/repo/pull/12'
+  journal.record(taskObservation([], 0))
+  equal(journal.record(taskObservation([task], 1, tasks, [{
+    id: task.id, links: [{ url: 'https://github.com/Owner/Repo/pull/12' }], pr_url: canonical,
+  }])), 1)
+  deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
+  equal(journal.record(taskObservation([task], 2, tasks, [{
+    id: task.id, pr_url: 'https://github.com/OWNER/REPO/pull/12/',
+  }])), 0)
+})
+
 test('watch resumes after a cursor and prints each event once across multiple passes', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const journal = new Journal(path)

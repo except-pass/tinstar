@@ -284,6 +284,7 @@ async function main() {
   } finally {
     journal.close()
   }
+  if (command === 'watch') process.exit(0)
 }
 
 process.umask(0o077)
