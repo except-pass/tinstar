@@ -55,6 +55,7 @@ export class WorkflowOperations {
   validateReview?: (input: Extract<ReviewOperation, { kind: 'submit_for_review' }>) => Promise<void>
   decisionDelivery?: DecisionDelivery
   onChange?: (change: WorkflowChange) => Promise<void>
+  onDecisionRetracted?: (card: string) => Promise<void>
   onRecordedChange?: (cardId: string) => void
   deliveryStatus?: (cardId: string, operationId?: string) => Promise<unknown>
   private content: WorkflowContent
@@ -65,7 +66,7 @@ export class WorkflowOperations {
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
   constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource) { if (receiptRoot) reader.leases ??= new CardLeases(receiptRoot); this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
-  private exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
+  exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
     const result = (this.locks.get(key) ?? Promise.resolve()).catch(() => {}).then(perform)
     this.locks.set(key, result)
     void result.finally(() => { if (this.locks.get(key) === result) this.locks.delete(key) }).catch(() => {})
@@ -214,10 +215,7 @@ export class WorkflowOperations {
     const previous = this.receipts.get(key)
     if (previous && previous.input !== signature) return Promise.resolve({ ...failed('operation-conflict', 'operation_id was used with different input'), requires_new_operation_id: true })
     if (previous && !this.noteRepairs.has(key)) return previous.result
-    const prior = this.locks.get(cardId) ?? Promise.resolve()
-    const result = prior.catch(() => {}).then(perform)
-    this.locks.set(cardId, result)
-    void result.finally(() => { if (this.locks.get(cardId) === result) this.locks.delete(cardId) }).catch(() => {})
+    const result = this.exclusive(cardId, perform)
     if (this.receipts.size >= 1000) { const oldest = this.receipts.keys().next().value!; this.receipts.delete(oldest); this.noteRepairs.delete(oldest) }
     this.receipts.set(key, { input: signature, until: Date.now() + 600_000, result })
     void result.then(value => { if (value.code === 'firstmate-pending' || value.outcome === 'not-saved' || value.outcome === 'partially-saved' && (!('kind' in input) || input.kind === 'not_for_me')) this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
@@ -338,6 +336,9 @@ export class WorkflowOperations {
     this.decisionRefreshes.delete(parsed.data.card_id)
     return this.serialize(parsed.data.card_id, parsed.data, actor, async () => {
       const result = await this.performUpdate(parsed.data, actor)
+      if (result.outcome === 'saved' && (parsed.data.kind === 'withdraw_decision' || parsed.data.kind === 'supersede_decision')) {
+        await this.onDecisionRetracted?.(parsed.data.card_id)
+      }
       if (parsed.data.kind !== 'answer_decision' || result.outcome !== 'saved') return result
       const answeredId = parsed.data.request_id
       const summary = await this.performDecisionReconcile(parsed.data.card_id).catch(() => ({ state: 'pending' as const, message: 'Decision recorded · First Mate not yet updated' }))
@@ -807,7 +808,7 @@ export class WorkflowOperations {
       await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
     }
     for (const name of ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in']) if (name in desired || 'Status' in desired) reads.add(name)
-    set('Last touched by', actor)
+    if (input.kind !== 'withdraw_decision' && input.kind !== 'supersede_decision') set('Last touched by', actor)
     const sectionOriginal: Record<string, string> = {}
     if (Object.keys(sections).length) {
       const blocks = await this.content.sections(card.id)

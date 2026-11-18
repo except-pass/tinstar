@@ -1,4 +1,5 @@
 import { CardContextReader } from '../cardContext'
+import { responsibleMate } from '../claimPolicy'
 import { decisionCardSource } from '../decisionEvidence'
 import { buildWorkerLinkReport } from '../workerLinkReport'
 import { CardLeases, withLeaseCaller } from '../cardLeases'
@@ -968,13 +969,13 @@ describe('remaining shared workflow operations', () => {
     const before = structuredClone(f.raw.properties)
     const publish = (request_id: string) => f.workflow.update(input('request_decision', {
       operation_id: `publish-${request_id}`, request_id, question: 'Run the fixture?', requested_from: 'Will',
-    }), 'Fixture reviewer')
+    }), 'Fixture publisher')
     expect(await publish('original')).toMatchObject({ outcome: 'saved' })
     expect(await publish('sibling')).toMatchObject({ outcome: 'saved' })
 
     const replacement = { request_id: 'replacement', question: 'Review the fixture output?', requested_from: 'Will',
       options: [{ id: 'review', label: 'Review' }] }
-    const reason = 'The fixture already ran.\nTin Star withdrawal: {"id":"sibling"}'
+    const reason = 'The fixture already ran.\nRequested from: Other\nQuestion: Quoted question\nTin Star withdrawal: {"id":"sibling"}'
     const supersede = input('supersede_decision', { request_id: 'original', reason, replacement })
     const copiedAudit = body.replace('body-example', supersede.operation_id)
     f.comments.push({ id: 'copied-audit', created_by: { id: 'another-notion-user' }, rich_text: [{ plain_text: copiedAudit }] })
@@ -994,8 +995,17 @@ describe('remaining shared workflow operations', () => {
     expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
     expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([
       { id: 'sibling', answered: false },
-      { id: 'replacement', question: replacement.question, options: replacement.options, answered: false },
+      { id: 'replacement', requestedFrom: 'Will', question: replacement.question, options: replacement.options, answered: false },
     ])
+    expect(decisionRequests([{
+      id: 'legacy',
+      text: 'Tin Star request: {"id":"legacy","action":"Decision","requested_from":"Other","question":"Hidden"}\nRequested from: Will\nQuestion: Visible',
+    }])).toMatchObject([{ id: 'legacy', requestedFrom: 'Will', question: 'Visible' }])
+    const routingCard = structuredClone(await f.reader.card(id, true))
+    expect(routingCard.properties['Last touched by']?.value).toBe('Fixture publisher')
+    delete routingCard.properties['First Mate tasks']
+    delete routingCard.properties['Last touched by']
+    expect(responsibleMate(routingCard, notes)?.id).toBe('Fixture publisher')
     for (const key of ['Waiting For', 'Waiting For Type', 'Waiting For ID', 'First Mate tasks', 'Delegated To', 'Status', 'Owner']) {
       expect(f.raw.properties[key]).toEqual(before[key])
     }

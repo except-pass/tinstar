@@ -322,6 +322,7 @@ describe('prepared-card loop', () => {
     const prep = new DecisionPreparation(sources.decisionPackets, {
       refreshQueue: async () => [jira],
       read: async () => decisionCardSource(jira, []),
+      exclusive: (card, perform) => sources.workflow.exclusive(card, perform),
     }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
     await prep.replenish()
     expect(push).not.toHaveBeenCalled()

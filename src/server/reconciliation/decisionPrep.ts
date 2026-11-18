@@ -62,6 +62,7 @@ export class DecisionPreparation {
   constructor(readonly packets: DecisionPackets, private source: {
     refreshQueue(): Promise<WorkCard[]>
     read(card: string, background: boolean): Promise<DecisionCardSource>
+    exclusive<T>(card: string, perform: () => Promise<T>): Promise<T>
   }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
   private initialize() {
@@ -188,22 +189,25 @@ export class DecisionPreparation {
     ).get(this.scope, job_id) as unknown as Job | undefined)
     const job = lookup()
     if (!job) throw new DecisionDeskConflict('job_id is unavailable')
-    if (job.packet_id) return { outcome: 'published', job_id, packet_id: job.packet_id }
-    const source = await this.source.read(job.card, false)
-    if (!source.actionable || source.revision !== job.revision) {
-      await this.packets.leases.writeStorage(db => {
-        db.prepare("UPDATE decision_card_prep SET state = 'failed', message = 'Card changed while preparing' WHERE id = ? AND packet_id IS NULL")
-          .run(job_id)
-      })
-      throw new DecisionDeskConflict('The card changed while preparing it')
-    }
-    return this.packets.leases.writeStorage(db => {
-      const current = db.prepare('SELECT packet_id,at FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at'>
+    return this.source.exclusive(job.card, async () => {
+      const current = lookup()!
       if (current.packet_id) return { outcome: 'published', job_id, packet_id: current.packet_id }
-      if (current.at <= this.now() - retryAfter) throw new DecisionDeskConflict('The preparation job expired')
-      const stored = this.packets.publishInStorage(db, source, packet)
-      db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
-      return { outcome: 'published', job_id, packet_id: stored.id }
+      const source = await this.source.read(current.card, false)
+      if (!source.actionable || source.revision !== current.revision) {
+        await this.packets.leases.writeStorage(db => {
+          db.prepare("UPDATE decision_card_prep SET state = 'failed', message = 'Card changed while preparing' WHERE id = ? AND packet_id IS NULL")
+            .run(job_id)
+        })
+        throw new DecisionDeskConflict('The card changed while preparing it')
+      }
+      return this.packets.leases.writeStorage(db => {
+        const latest = db.prepare('SELECT packet_id,at FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at'>
+        if (latest.packet_id) return { outcome: 'published', job_id, packet_id: latest.packet_id }
+        if (latest.at <= this.now() - retryAfter) throw new DecisionDeskConflict('The preparation job expired')
+        const stored = this.packets.publishInStorage(db, source, packet)
+        db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
+        return { outcome: 'published', job_id, packet_id: stored.id }
+      })
     })
   }
 }
