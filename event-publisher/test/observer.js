@@ -645,13 +645,14 @@ test('PR link casing is canonical across both structured inputs', async t => {
   journal.record(taskObservation([], 0))
   equal(journal.record(taskObservation([task], 1, tasks, [{
     id: task.id, links: [
-      { url: 'https://github.com/Owner/Repo/pull/12?diff=split#files' },
+      { url: 'HTTPS://GitHub.com/Owner/Repo/pull/12?diff=split#files' },
       { url: 'https://user:secret@github.com/owner/repo/pull/99' },
-    ], pr_url: canonical,
+      { url: 'https://github.com/owner/repo/PULL/99' },
+    ],
   }])), 1)
   deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
   equal(journal.record(taskObservation([task], 2, tasks, [{
-    id: task.id, pr_url: 'https://github.com/OWNER/REPO/pull/12/?diff=split#files',
+    id: task.id, pr_url: 'HtTpS://GITHUB.COM/OWNER/REPO/pull/12/?diff=split#files',
   }])), 0)
 })
 

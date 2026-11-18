@@ -62,9 +62,12 @@ function normalizedDependencies(value, home) {
 
 export function canonicalPullRequests(urls) {
   const locators = new Set()
-  for (const url of urls) {
-    const match = /^(https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)\/?(?:[?#][^\s]*)?$/u.exec(url)
-    if (match && url === url.trim()) locators.add(match[1].toLowerCase())
+  for (const value of urls) {
+    if (typeof value !== 'string' || /\s/u.test(value)) continue
+    const url = URL.parse(value)
+    if (url?.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password) continue
+    const match = /^(\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)\/?$/u.exec(url.pathname)
+    if (match) locators.add(url.origin + match[1].toLowerCase())
   }
   return [...locators].sort(compare)
 }
