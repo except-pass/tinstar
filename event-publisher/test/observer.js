@@ -163,7 +163,10 @@ test('full configuration registration deconfigures removed sources without losin
   const [eastTasks] = eastSources
   journal.registerSources([tasks, workers, ...eastSources], { reconcile: true })
   journal.record(taskObservation([], 0, eastTasks))
-  journal.record(taskObservation([row('sample-task')], 1, eastTasks))
+  const task = row('sample-task')
+  const first = 'https://github.com/example/repo/pull/12'
+  const second = 'https://github.com/example/repo/pull/13'
+  journal.record(taskObservation([task], 1, eastTasks, [{ id: task.id, pr_url: first }]))
   const before = journal.sources().find(source => source.source_id === eastTasks.source_id)
   const events = journal.events()
 
@@ -177,9 +180,10 @@ test('full configuration registration deconfigures removed sources without losin
   throws(() => journal.registerSources(sourcesFor({ ...east, id: 'renamed' })), /already bound/)
 
   journal.registerSources(eastSources)
-  equal(journal.sources().find(source => source.source_id === eastTasks.source_id).health, 'pending')
+  equal(journal.sources().find(source => source.source_id === eastTasks.source_id).health, 'ok')
   equal(journal.sources().find(source => source.source_id === tasks.source_id).health, 'pending')
-  equal(journal.record(taskObservation([row('sample-task', { priority: 1 })], 2, eastTasks)), 1)
+  equal(journal.record(taskObservation([task], 2, eastTasks, [{ id: task.id, pr_url: second }])), 1)
+  deepEqual(journal.events().at(-1).change, { field: 'pull_requests', before: [first], after: [second] })
   equal(journal.events().at(-1).sequence, events.at(-1).sequence + 1)
 })
 

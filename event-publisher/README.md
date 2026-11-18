@@ -64,7 +64,8 @@ events watch --entity 'firstmate:task:example-west:sample-a'
 
 First attach captures a baseline. The tail shows changes as later polls commit
 them, with one line per changed field. It also reports health changes to
-stderr. Select a sequence or event ID from the tail for replay or inspection.
+stderr. Use the sequence number as a replay cursor. Pass the `event:…` ID
+shown on the same line to `events inspect`.
 
 ```sh
 events replay --last 100

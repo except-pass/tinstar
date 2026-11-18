@@ -138,7 +138,7 @@ export class Journal {
       for (const source of sources) this.register(source)
       if (reconcile) {
         this.db.prepare(`
-          UPDATE sources SET health = 'deconfigured', reason = NULL, counts = NULL
+          UPDATE sources SET description = json_set(description, '$.configured', 0)
           WHERE source_id NOT IN (SELECT value FROM json_each(?))
         `).run(JSON.stringify(sources.map(source => source.source_id)))
       }
@@ -162,8 +162,7 @@ export class Journal {
     }
     const result = this.db.prepare(`
       INSERT INTO sources (source_id, description) VALUES (?, ?)
-      ON CONFLICT(source_id) DO UPDATE SET description = excluded.description,
-        health = CASE WHEN sources.health = 'deconfigured' THEN 'pending' ELSE sources.health END
+      ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
       WHERE json_extract(sources.description, '$.mode') = json_extract(excluded.description, '$.mode')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
@@ -335,7 +334,10 @@ export class Journal {
   sources() {
     return this.db.prepare('SELECT * FROM sources ORDER BY source_id').all().map(row => {
       const { description, counts, source_id, ...health } = row
-      return { ...JSON.parse(description), ...health, counts: counts ? JSON.parse(counts) : null }
+      const { configured = 1, ...source } = JSON.parse(description)
+      return configured
+        ? { ...source, ...health, counts: counts ? JSON.parse(counts) : null }
+        : { ...source, ...health, health: 'deconfigured', reason: null, counts: null }
     })
   }
 
