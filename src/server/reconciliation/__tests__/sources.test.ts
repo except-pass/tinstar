@@ -624,8 +624,9 @@ describe('config and HTTP boundary', () => {
     const url = `http://127.0.0.1:${address.port}/api/reconciliation/sources`
     try {
       const res = await fetch(url); expect(res.headers.get('cache-control')).toBe('no-store')
-      expect(await res.json()).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)],
-        githubRestLastHour: { requests: expect.any(Number), notModified: expect.any(Number), complete: expect.any(Boolean) } } })
+      const payload = await res.json()
+      expect(payload.data).not.toHaveProperty('githubRestLastHour')
+      expect(payload).toMatchObject({ ok: true, data: { scope: 'configured-homes-only', intentions: { status: 'unknown', data: null }, warnings: [expect.any(String)] } })
       expect((await fetch(url, { method: 'POST' })).status).toBe(400)
       expect((await fetch(url, { headers: { origin: 'https://untrusted.example' } })).status).toBe(403)
       const sceneUrl = url.replace('/sources', '/scene')

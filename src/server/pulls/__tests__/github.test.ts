@@ -12,7 +12,7 @@ beforeEach(async () => {
   github = await import('../github')
   exec.mockReset()
 })
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 function answer(status: number, body: unknown = null, headers = '') {
   const stdout = `HTTP/2.0 ${status} Example\n${headers}\r\n${body === null ? '' : JSON.stringify(body)}`
@@ -22,17 +22,20 @@ function answer(status: number, body: unknown = null, headers = '') {
   })
 }
 
-it('sends an ETag on a repeat GET, reuses the cached body on 304 and expires hourly counts', async () => {
+it('sends an ETag on a repeat GET, reuses the cached body on 304 and logs after a full hour', async () => {
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {})
   answer(200, { payload: data }, 'Etag: W/"abc"\n')
   expect(await github.githubJson(pulls)).toEqual(data)
   answer(304)
   expect(await github.githubJson(pulls)).toEqual(data)
   expect(exec.mock.calls[0]?.slice(0, 2)).toEqual(['gh', ['api', pulls, '--method', 'GET', '--include', '--jq', '{payload:(.)}']])
   expect(exec.mock.calls[1]?.[1].slice(-2)).toEqual(['--header', 'If-None-Match:W/"abc"'])
-  expect(github.githubCliStats()).toEqual({ requests: 2, notModified: 1, blockedUntil: null })
-  vi.setSystemTime(clock + 3_600_000)
-  expect(github.githubCliStats()).toEqual({ requests: 0, notModified: 0, blockedUntil: null })
+  await vi.advanceTimersByTimeAsync(3_599_999)
+  expect(log).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1)
+  expect(log).toHaveBeenCalledTimes(1)
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=2 notModified=1 holds=0')
 })
 
 it('suppresses other GitHub GETs until a primary reset and resumes without a fallback request', async () => {
@@ -42,11 +45,9 @@ it('suppresses other GitHub GETs until a primary reset and resumes without a fal
   vi.setSystemTime(reset - 1)
   await expect(github.githubCliJson(`${pulls}/2`, '{state}')).rejects.toThrow('GitHub REST rate limited until')
   expect(exec).toHaveBeenCalledTimes(1)
-  expect(github.githubCliStats()).toEqual({ requests: 1, notModified: 0, blockedUntil: new Date(reset).toISOString() })
   vi.setSystemTime(reset)
   answer(200, { payload: { state: 'open' } })
   expect(await github.githubCliJson(`${pulls}/2`, '{state}')).toEqual({ state: 'open' })
-  expect(github.githubCliStats()).toEqual({ requests: 2, notModified: 0, blockedUntil: null })
 })
 
 it.each([
@@ -58,21 +59,35 @@ it.each([
   expect(exec).toHaveBeenCalledTimes(1)
 })
 
-it('backs off ordinary errors per resource without holding other callers', async () => {
+it('allows the next read of a resource after an ordinary failure', async () => {
   answer(403, { message: 'private repository error' })
   await expect(github.githubJson(pulls)).rejects.toThrow('HTTP 403')
-  await expect(github.githubJson(pulls)).rejects.toThrow('HTTP 403')
-  answer(200, { payload: [] })
-  expect(await github.githubJson(`${pulls}?page=2`)).toEqual([])
-  vi.setSystemTime(clock + 30_000)
   answer(500)
   await expect(github.githubJson(pulls)).rejects.toThrow('HTTP 500')
-  vi.setSystemTime(clock + 89_999)
-  await expect(github.githubJson(pulls)).rejects.toThrow('HTTP 500')
-  expect(exec).toHaveBeenCalledTimes(3)
-  vi.setSystemTime(clock + 90_000)
   answer(200, { payload: [] })
   expect(await github.githubJson(pulls)).toEqual([])
+  expect(exec).toHaveBeenCalledTimes(3)
+})
+
+it('keeps timeout and decoding failures from sending a second request', async () => {
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(new Error('private timeout diagnostic')))
+  await expect(github.githubJson(pulls)).rejects.toThrow('GitHub request failed')
+  answer(200, { unexpected: [] })
+  await expect(github.githubJson(pulls)).rejects.toThrow('GitHub request failed')
+  expect(exec.mock.calls.map(call => call[0])).toEqual(['gh', 'gh'])
+})
+
+it('shares a hold from the legacy transport with subsequent CLI requests', async () => {
+  const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('private CLI diagnostics'), { stdout: 'error: GitHub API rate limit exceeded\ncode: RATE_LIMITED\n' })))
+  await expect(github.githubJson(pulls)).rejects.toThrow('GitHub REST rate limited until')
+  await expect(github.githubCliJson('/repos/owner/repo/actions/runs/5')).rejects.toThrow('GitHub REST rate limited until')
+  await expect(github.githubCliPost('/repos/owner/repo/actions/workflows/smoke.yml/dispatches', 'input.json')).rejects.toThrow('GitHub REST rate limited until')
+  expect(exec).toHaveBeenCalledTimes(2)
+  await vi.advanceTimersByTimeAsync(3_600_000)
+  expect(log).toHaveBeenCalledTimes(1)
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0 holds=1')
 })
 
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
@@ -81,11 +96,9 @@ it('falls back to gh-axi when gh is missing and decodes the legacy projection', 
   exec.mockImplementationOnce((_binary, _args, _options, done) => done(null, { stdout: `payload: ${Buffer.from(JSON.stringify(data)).toString('base64')}\n` }))
   expect(await github.githubJson(pulls)).toEqual(data)
   expect(exec.mock.calls[1]?.slice(0, 2)).toEqual(['gh-axi', ['api', 'GET', pulls, '--jq', '{payload:(.|tojson|@base64)}', '--full']])
-  expect(github.githubCliStats().requests).toBe(1)
 })
 
 it('reports a missing binary without echoing credential-bearing stderr', async () => {
   exec.mockImplementation((_binary, _args, _options, done) => done(Object.assign(new Error('secret stderr'), { code: 'ENOENT' })))
   await expect(github.githubJson('/user')).rejects.toThrow('gh-axi is missing from the server PATH')
-  expect(github.githubCliStats().requests).toBe(0)
 })

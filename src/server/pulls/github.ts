@@ -1,12 +1,11 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
-import { GithubRestBudget, type GithubRestResponse } from './restBudget'
+import { GithubRestBudget, isGithubRateLimit, type GithubRestResponse } from './restBudget'
 
 const exec = promisify(execFile)
-const budget = new GithubRestBudget()
+const budget = new GithubRestBudget('cli')
 const options = { timeout: 12_000, maxBuffer: 4 * 1024 * 1024 }
-export const githubCliStats = () => budget.stats()
 
 function includedResponse(stdout: string): GithubRestResponse | undefined {
   const end = /\r?\n\r?\n/.exec(stdout)
@@ -22,58 +21,86 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
   let data: unknown = null
   if (body.trim()) {
     try { data = JSON.parse(body) }
-    catch {
-      if (status >= 200 && status < 300) throw new Error('Unsupported GitHub response')
-    }
+    catch { data = null }
   }
   return { status, data, headers: { etag: headers.get('etag'), remaining: headers.get('x-ratelimit-remaining'),
     reset: headers.get('x-ratelimit-reset'), retryAfter: headers.get('retry-after') } }
 }
 
-async function includedGet(path: string, projection: string, etag?: string) {
-  const args = ['api', path, '--method', 'GET', '--include', '--jq', `{payload:(${projection})}`]
-  if (etag) args.push('--header', `If-None-Match:${etag}`)
+type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string }
+type CliMethod = 'GET' | 'POST'
+
+async function includedRequest(method: CliMethod, path: string, projection: string, flags: string[]) {
+  const args = ['api', path, '--method', method, '--include', '--jq', `{payload:(${projection})}`, ...flags]
   let stdout: string
   try { ({ stdout } = await exec('gh', args, options)) }
   catch (error) {
     // gh exits nonzero for 304, 403 and 429, but keeps HTTP metadata on stdout.
-    const failure = error as NodeJS.ErrnoException & { stdout?: string }
+    const failure = error as CliError
     if (!failure.stdout) throw error
     stdout = failure.stdout
   }
   const response = includedResponse(stdout)
   if (!response) throw new Error('GitHub response metadata unavailable')
-  if (response.status >= 200 && response.status < 300) {
-    if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new Error('Unsupported GitHub response')
-    response.data = response.data.payload
-  }
   return response
 }
 
-export function githubCliJson(path: string, projection = '.'): Promise<unknown> {
-  return budget.get(JSON.stringify([path, projection]), async etag => {
-    try { return await budget.send(() => includedGet(path, projection, etag)) }
-    catch (error) {
-      // A confirmed throttle must never reach the legacy transport.
-      budget.assertAvailable()
-      try {
-        return await budget.send(async () => {
-          const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full'], options)
-          const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
-          const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
-          if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new Error('Unsupported GitHub response')
-          return { status: 200, data: JSON.parse(Buffer.from(payload, 'base64').toString('utf8')) }
-        })
-      } catch (fallbackError) {
-        budget.assertAvailable()
-        // CLI diagnostics may contain private request data. Preserve only ENOENT.
-        if ((fallbackError as NodeJS.ErrnoException).code === 'ENOENT') {
-          throw Object.assign(new Error('GitHub reader unavailable: gh-axi is missing from the server PATH.'), { code: 'ENOENT' })
-        }
-        throw new Error('GitHub read failed: check CLI authentication, repository access and rate budget.')
-      }
+async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions = options): Promise<GithubRestResponse> {
+  try {
+    const { stdout } = await exec('gh-axi', args, commandOptions)
+    return { status: 200, data: decode(stdout) }
+  } catch (error) {
+    const failure = error as CliError
+    const diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`
+    if (/\bHTTP 304\b/.test(diagnostics)) return { status: 304, data: null }
+    if (/^code: RATE_LIMITED\r?$/m.test(diagnostics) || /\bHTTP 429\b/.test(diagnostics)) {
+      const retryAfter = /secondary rate limit/i.test(diagnostics) ? '60' : '3600'
+      return { status: 429, data: null, headers: { retryAfter } }
     }
-  })
+    if (failure.code === 'ENOENT') {
+      throw Object.assign(new Error('GitHub reader unavailable: gh-axi is missing from the server PATH.'), { code: 'ENOENT' })
+    }
+    throw new Error('GitHub request failed: check CLI authentication, repository access and rate budget.')
+  }
+}
+
+async function cliRequest(method: CliMethod, path: string, projection: string, flags: string[]) {
+  try {
+    const response = await budget.send(() => includedRequest(method, path, projection, flags))
+    if (response.status >= 200 && response.status < 300) {
+      if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new Error('Unsupported GitHub response')
+      response.data = response.data.payload
+    }
+    return response
+  }
+  catch (error) {
+    if ((error as CliError).code !== 'ENOENT') {
+      if (isGithubRateLimit(error)) throw error
+      throw new Error('GitHub request failed: check CLI authentication, repository access and rate budget.')
+    }
+    return budget.send(() => legacyRequest(['api', method, path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full', ...flags], stdout => {
+      const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
+      const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
+      if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new Error('Unsupported GitHub response')
+      return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+    }))
+  }
+}
+
+export function githubCliJson(path: string, projection = '.'): Promise<unknown> {
+  return budget.get(JSON.stringify([path, projection]), etag =>
+    cliRequest('GET', path, projection, etag ? ['--header', `If-None-Match:${etag}`] : []))
+}
+
+export async function githubCliPost(path: string, input: string): Promise<unknown> {
+  const response = await cliRequest('POST', path, '.', ['--input', input])
+  if (response.status < 200 || response.status >= 300) throw new Error(`GitHub request failed (HTTP ${response.status})`)
+  return response.data
+}
+
+export async function githubCliCreateRelease(args: string[]): Promise<void> {
+  const response = await budget.send(() => legacyRequest(['release', 'create', ...args], () => null, { timeout: 30_000, maxBuffer: 256 * 1024 }))
+  if (response.status !== 200) throw new Error(`GitHub request failed (HTTP ${response.status})`)
 }
 
 /** Live reads stay behind broker custody. */

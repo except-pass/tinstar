@@ -10,6 +10,7 @@ import { draftReleaseNotes, type NoteAudience } from '../../shared/releaseNotes'
 import type { ReleasesRead } from '../../shared/releases'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { CreationReceipts } from '../reconciliation/workflowReceipts'
+import { githubCliCreateRelease } from '../pulls/github'
 
 const settingsSchema = z.object({ version: z.literal(1), enabled: z.boolean().default(false) }).strict()
 export async function readPublicationSettings(root: string) {
@@ -55,7 +56,7 @@ export const publicationGithub: PublicationGithub = {
     try {
       const file = join(temporary, 'notes.md')
       await writeFile(file, body, { mode: 0o600 })
-      await exec('gh-axi', ['release', 'create', tag, '--repo', repository, '--verify-tag', '--latest=false', '--title', title, '--notes-file', file], { timeout: 30_000, maxBuffer: 256 * 1024 })
+      await githubCliCreateRelease([tag, '--repo', repository, '--verify-tag', '--latest=false', '--title', title, '--notes-file', file])
     } finally { await rm(temporary, { recursive: true, force: true }) }
   },
 }

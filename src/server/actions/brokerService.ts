@@ -41,7 +41,6 @@ export function brokerServer(config: BrokerConfig, provider = new LiveProvider(c
           const { path } = z.object({ path: z.string().max(2048) }).strict().parse(await actionBody(req))
           return ok(res, await provider.read(path))
         }
-        if (req.url === '/reader/stats' && req.method === 'GET') return ok(res, provider.restStats())
         if (req.url === '/identity' && req.method === 'GET') return ok(res, await provider.identity())
         if (req.url === '/receipt' && req.method === 'POST') {
           const { id } = z.object({ id: z.string().max(100) }).strict().parse(await actionBody(req))

@@ -82,8 +82,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
 }
 
 export class LiveProvider {
-  private rest = new GithubRestBudget()
-  restStats = () => this.rest.stats()
+  private rest = new GithubRestBudget('broker')
   #tokens = new Map<string, { token: string; until: number }>()
   #secrets = new Set<string>()
   constructor(readonly config: BrokerConfig, private transport: ProviderTransport = githubTransport, private enabled = process.env.TINSTAR_ACTIONS_LIVE === 'reader-repair') {
