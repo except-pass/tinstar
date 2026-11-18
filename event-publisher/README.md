@@ -15,6 +15,7 @@ npm ci
 export PATH="$PWD:$PATH"
 export EVENTS_CONFIG="$HOME/srv/event-publisher/config.json"
 export EVENTS_DB="$HOME/srv/event-publisher/journal.sqlite"
+mkdir -p -m 700 "$HOME/srv/event-publisher"
 ```
 
 Create the configuration at `$EVENTS_CONFIG`. Use one stable ID for each
@@ -54,8 +55,9 @@ events serve --interval 20
 The polling interval defaults to 20 seconds and accepts whole seconds from
 15 through 3600.
 
-Leave one publisher running per journal. Use the same `EVENTS_DB` in a second
-terminal and start the tail. Ctrl-C stops either process. The collector finishes
+Leave one publisher running per journal. In a second terminal, add the
+`event-publisher` directory to `PATH` and export the same `EVENTS_DB` before
+starting the tail. Ctrl-C stops either process. The collector finishes
 an in-progress bounded read before exiting.
 
 ```sh
@@ -107,12 +109,14 @@ the next scheduled pass.
   remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
 - `events sources` reports the last attempt and the last accepted inventory.
-  The task verdict reflects the tasks-axi inventory. The
-  `pr_links_unobserved` count reports missing PR coverage even when no event
-  is emitted. An absent fleet backlog is displayed as partial task source
-  coverage while a complete tasks-axi read can still advance task fields.
-  Each home uses one fleet snapshot per pass for worker state
-  and PR link coverage.
+  The `pr_links_unobserved` count reports missing PR coverage for accepted
+  task rows even when no event is emitted. Each home uses one fleet snapshot
+  per pass for worker state and PR link coverage. A fresh fleet response
+  that explicitly reports an absent backlog records `fleet_backlog_absent=1`
+  and advances the fleet watermark independently of either inventory verdict.
+  With a healthy tasks-axi read, the display shows partial task coverage and
+  task fields can still advance. If tasks-axi fails, the absence count appears
+  alongside the original task failure reason.
   Accepted inventories report remote exclusions and unverifiable local
   current states. An inventory with a missing local execution identity or
   an unconfirmed producer verdict is rejected. A timed-out, stale, or
