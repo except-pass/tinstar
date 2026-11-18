@@ -394,9 +394,11 @@ worker membership; finished tasks and declared links with no observed execution
 are excluded. Card worker facts read home unreachable for a stale or missing home.
 Worker badges use First Mate's current state and Tin Star's existing forge status.
 A wait badge shows age when the latest structured event declared that same wait.
-A blocked worker with a single explicit First Mate task dependency shows **Stalled**
-when the snapshot confirms the blocker is done. After 45 minutes a wait with
-unavailable wake evidence shows **wake unknown**.
+A waiting worker shows **Stalled** when the snapshot records at least one
+wait target and confirms that all targets are finished. Tin Star checks task
+dependencies against the unresolved blocker list and an explicit
+`current_state.wait_pr_url` against available forge status. After 45 minutes a
+wait with unavailable wake evidence shows **wake unknown**.
 No worker requires a supported per-card execution-gap finding and fresh source
 coverage. Fresh configured homes alone do not establish absence on an unknown
 home; when absence remains unknown, the card omits that fact.

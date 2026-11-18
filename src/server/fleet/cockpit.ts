@@ -13,7 +13,7 @@ import { FirstmateViews } from '../firstmate/views'
 import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
-import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
+import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type FinishedPullStatus, type ReviewStatus } from './attention'
 import { sourceRequests } from './requests'
 import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
@@ -51,7 +51,7 @@ export interface CockpitWorker {
   worktree: string
   branch: string
   prUrl: string | null
-  prStatus?: ReviewStatus
+  prStatus?: FinishedPullStatus
   terminalAvailable: boolean
   direct: boolean
 }
@@ -110,10 +110,13 @@ export class CockpitFleet {
   }
 
   list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: Array<AttentionCard & { home: string | null }>; errors: string[] } {
-    const workers = this.workers.map(worker => ({
-      ...worker, terminalPid: this.views.pidOf(worker.key),
-      prStatus: worker.prUrl ? this.reviews.get(worker.prUrl)?.status ?? 'unknown' as const : undefined,
-    }))
+    const workers = this.workers.map(worker => {
+      const prStatus = worker.prUrl ? this.reviews.get(worker.prUrl)?.status : undefined
+      return {
+        ...worker, terminalPid: this.views.pidOf(worker.key),
+        ...((prStatus === 'merged' || prStatus === 'closed') && { prStatus }),
+      }
+    })
     return { ready: this.ready, workers, attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 

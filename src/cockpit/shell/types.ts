@@ -1,10 +1,10 @@
-import type { AttentionCard as FleetAttentionCard, ReviewStatus } from '../../server/fleet/attention'
+import type { AttentionCard as FleetAttentionCard, FinishedPullStatus } from '../../server/fleet/attention'
 
 export interface Worker {
   key: string; id: string; home: string; kind: string; state: string; detail: string
   observedAt: string | null; freshness: string; objective: string; project: string; direct: boolean
   worktree: string; branch: string; prUrl: string | null; terminalAvailable: boolean; terminalPid: number | null
-  prStatus?: ReviewStatus
+  prStatus?: FinishedPullStatus
 }
 
 export type AttentionCard = FleetAttentionCard & { home: string | null }

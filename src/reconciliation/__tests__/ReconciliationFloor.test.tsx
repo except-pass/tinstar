@@ -81,7 +81,14 @@ it('places finished and absent records in history rather than the current worker
   expect(container.querySelector('.ov-history')?.textContent).toContain('Done')
 })
 
-it('renders structured wait age, unknown wake evidence, finished blockers and forge pull state', () => {
+const finishedPullUrl = 'https://github.com/fixture/tinstar/pull/9'
+
+it.each([
+  ['working', undefined, 'PR merged'],
+  ['paused', finishedPullUrl, 'Stalled · 1m'],
+  ['paused', undefined, 'Waiting · 1m'],
+  ['paused', 'https://github.com/fixture/tinstar/pull/10', 'Waiting · 1m'],
+] as const)('renders structured waits and %s worker status with PR wait target %s', (state, waitUrl, expected) => {
   const now = Date.now(), sources = fixtureSources({ now })
   const tasks = sources.fleet[1]!.observation.data!.tasks
   const [waiting, decision, stalled, running] = tasks
@@ -91,12 +98,14 @@ it('renders structured wait age, unknown wake evidence, finished blockers and fo
   Object.assign(decision!.last_event, { state: 'needs-decision', age_seconds: 60 })
   Object.assign(stalled!.current_state, { state: 'blocked' })
   Object.assign(stalled!.last_event, { state: 'blocked', age_seconds: 60 })
-  Object.assign(stalled!.backlog, { id: stalled!.id, blocked_by_ids: ['fixture-blocker'], unresolved_blocker_ids: [] })
+  Object.assign(stalled!.backlog, { id: stalled!.id, blocked_by_ids: ['fixture-blocker', 'second-blocker'], unresolved_blocker_ids: [] })
   Object.assign(running!.current_state, { state: 'working', source: 'pane' })
   Object.assign(running!.last_event, { state: 'paused', age_seconds: 60 * 60 })
-  const url = 'https://github.com/fixture/tinstar/pull/9'
+  const url = finishedPullUrl
   const helper = sources.fleet[2]!.observation.data!.tasks[0]!
   helper.pr.url = url
+  Object.assign(helper.current_state, { state, wait_pr_url: waitUrl })
+  Object.assign(helper.last_event, { state, age_seconds: 60 })
   const scene = new SceneReconciler().reconcile(sources, now)
   observed.scene = scene
   const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[{
@@ -114,7 +123,7 @@ it('renders structured wait age, unknown wake evidence, finished blockers and fo
   expect(stateFor(stalled!.id)).toHaveTextContent('Stalled · 1m')
   expect(stateFor(stalled!.id)).toHaveClass('status-stalled')
   expect(stateFor(running!.id)).toHaveTextContent('Running')
-  expect(stateFor(helper.id)).toHaveTextContent('PR merged')
+  expect(stateFor(helper.id)).toHaveTextContent(expected)
 })
 
 const groupings = [
