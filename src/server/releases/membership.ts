@@ -1,6 +1,7 @@
 import type { ReleaseObject } from '../../shared/releaseObjects'
 import { releasePull, type ReleasePull } from '../../shared/releases'
 import { githubJson } from '../pulls/github'
+import { githubReadRetryDelay } from '../pulls/restBudget'
 
 /** Same broker/CLI JSON transport as the PR screen. */
 export const readReleaseRows = githubJson
@@ -11,7 +12,7 @@ const version = (value: string) => /^v(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1
 const compareVersions = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!
 interface Range {
   membership: ReleaseObject['membership']; pulls: Map<string, ReleasePull>
-  files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number
+  files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number; failures: number
 }
 /** Incremental history read: eight commits per range/refresh, four concurrent GETs.
  * Commit-associated PRs must have their effective merge in the exact Git range.
@@ -32,7 +33,7 @@ export class ReleaseMembershipReader {
   }
   since(repository: string, source: string, baseline: Tag) { return this.get(repository, source, 'main', [baseline], baseline) }
   private async advance(repository: string, source: string | null, tag: string, previous?: Range, tags?: Tag[], baseline?: Tag) {
-    const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
+    const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0, failures: 0 }
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !sha(source)) throw new Error('Release source SHA is missing; Changes cannot be determined')
       if (!range.membership.baselineSha) {
@@ -77,11 +78,13 @@ export class ReleaseMembershipReader {
       const complete = range.cursor === range.total && range.commits.length === range.total
       range.membership.status = complete ? 'complete' : 'partial'
       range.membership.reason = complete ? null : `Reading Git membership: ${range.cursor} of ${range.total} commits inspected; counts are partial`
-      range.membership.observedAt = new Date(this.now()).toISOString(); range.retryAt = this.now() + (complete ? 600_000 : 15_000)
+      range.membership.observedAt = new Date(this.now()).toISOString(); range.retryAt = this.now() + 15_000
+      range.failures = 0
     } catch (error) {
       range.membership.status = range.pulls.size ? 'partial' : 'unknown'
       range.membership.reason = error instanceof Error ? error.message : 'Git release membership unavailable'
-      range.retryAt = this.now() + 60_000
+      range.failures = Math.min(range.failures + 1, 5)
+      range.retryAt = this.now() + githubReadRetryDelay(range.failures)
     }
     this.ranges.set(`${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`, range)
     // Retain only recently used immutable ranges, without a new on-disk release ledger.

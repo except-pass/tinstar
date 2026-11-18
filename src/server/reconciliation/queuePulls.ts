@@ -1,7 +1,6 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { parsePullUrl } from '../fleet/attention'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
+import { githubCliJson } from '../pulls/github'
 
 export interface PullReadiness {
   status: 'fresh' | 'stale' | 'unknown'
@@ -13,7 +12,6 @@ export interface PullReadiness {
   checks: 'passed' | 'pending' | 'failed' | 'unknown'
   mergeability: 'ready' | 'blocked' | 'unknown'
 }
-const exec = promisify(execFile)
 
 /** CLI scalar projections avoid retrieving bodies/reviews/transcripts; live mode
  * normalizes broker JSON to the Queue and Releases scalar contracts.
@@ -45,15 +43,7 @@ export async function readGithubScalars(path: string, projection: string): Promi
     }
     throw new Error('Scalar Reader operation outside PR evidence scope')
   }
-  // Full scalar strings are required for serialized release-history rows; the
-  // CLI's display truncation can otherwise cut valid JSON in the middle.
-  const { stdout } = await exec('gh-axi', ['api', 'GET', path, '--jq', projection, '--full'], { timeout: 5_000, maxBuffer: 64 * 1024 })
-  return Object.fromEntries(stdout.trim().split('\n').map(line => {
-    const match = /^([a-z_]+): (.*)$/.exec(line)
-    if (!match) throw new Error('Unsupported GitHub response')
-    const value = match[2]!
-    return [match[1]!, /^(?:true|false|null|\d+)$/.test(value) || value.startsWith('"') ? JSON.parse(value) : value]
-  }))
+  return await githubCliJson(path, projection) as Record<string, unknown>
 }
 
 async function readPull(url: string, read = readGithubScalars): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {

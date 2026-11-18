@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ReleaseObject, NativeReleaseEvidence, ReleaseContainment } from '../../shared/releaseObjects'
 import { activeReleaseLinks, type ReleasesRead } from '../../shared/releases'
 import { githubJson } from '../pulls/github'
+import { isGithubRateLimit } from '../pulls/restBudget'
 import { ReleaseMembershipReader } from './membership'
 
 const repository = 'fortresspower/cmsandbox'
@@ -140,8 +141,10 @@ export class GithubReleaseReader {
   private async refresh(selectedTag?: string): Promise<GithubReleaseRead> {
     const observedAt = new Date(this.now()).toISOString(), warnings: string[] = []
     const [tagRead, recordRead, mainRead] = await Promise.allSettled([this.list(`/repos/${repository}/tags`), this.list(`/repos/${repository}/releases`), this.read(`/repos/${repository}/branches/main`)])
-    if (tagRead.status === 'rejected') {
-      return { status: 'unknown', observedAt: this.cached?.observedAt ?? null, warnings: ['GitHub version tags unavailable; release history is unknown.'], releases: (this.cached?.releases ?? []).map(release => ({ ...release, state: 'Unknown', github: release.github ? { ...release.github, runsStatus: 'unknown' as const } : undefined, provenance: { ...release.provenance, historical: true }, gaps: [...release.gaps, 'GitHub version tags unavailable; this is a last-known observation.'] })) }
+    const throttled = [tagRead, recordRead, mainRead].find(result => result.status === 'rejected' && isGithubRateLimit(result.reason))
+    if (tagRead.status === 'rejected' || throttled) {
+      const warning = throttled?.status === 'rejected' ? `${throttled.reason.message}; serving last-known GitHub observations.` : 'GitHub version tags unavailable; release history is unknown.'
+      return { status: 'unknown', observedAt: this.cached?.observedAt ?? null, warnings: [warning], releases: (this.cached?.releases ?? []).map(release => ({ ...release, state: 'Unknown', github: release.github ? { ...release.github, runsStatus: 'unknown' as const } : undefined, provenance: { ...release.provenance, historical: true }, gaps: [...new Set([...release.gaps, warning])] })) }
     }
     let tags: z.infer<typeof tagSchema>[]
     try { tags = z.array(tagSchema).parse(tagRead.value.rows).filter(tag => version(tag.name)).sort(compareTags) }

@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { ok, fail } from '../api/envelope'
 import { readBody } from '../api/readBody'
@@ -11,6 +9,7 @@ import { loadFleetConfig, firstmatePortWindow } from './config'
 import { LedgerWatcher } from '../firstmate/ledger-watcher'
 import { FirstmateViews } from '../firstmate/views'
 import { log } from '../logger'
+import { githubCliJson } from '../pulls/github'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
 import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type FinishedPullStatus, type ReviewStatus } from './attention'
@@ -22,8 +21,6 @@ import { deliverKeys, deliverPrompt, PromptDeliveryError } from './promptInput'
 import { displayedWorkerState, secondmateActivityById, type MateSnapshot } from './workerState'
 import { readFleetSnapshot } from './snapshot'
 import { loadReviewHomes, resolveReviewHome } from './reviewHomes.mjs'
-
-const execFileAsync = promisify(execFile)
 
 interface SnapshotTask extends AttentionTask {
   id?: unknown
@@ -391,8 +388,7 @@ export class CockpitFleet {
     let status: ReviewStatus = 'unknown'
     try {
       // GitHub is authoritative for merge state; First Mate's PR URL can outlive a merge.
-      const { stdout } = await execFileAsync('gh', ['api', parsed.apiPath], { timeout: 8_000, maxBuffer: 1024 * 1024 })
-      const pull = JSON.parse(stdout) as { state?: unknown; merged_at?: unknown }
+      const pull = await githubCliJson(parsed.apiPath, '{state,merged_at}') as { state?: unknown; merged_at?: unknown }
       if (pull.merged_at) status = 'merged'
       else if (pull.state === 'open' || pull.state === 'closed') status = pull.state
     } catch (err) {

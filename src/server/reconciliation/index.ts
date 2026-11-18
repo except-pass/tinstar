@@ -1,3 +1,5 @@
+import { githubCliStats } from '../pulls/github'
+import { liveActionsEnabled, liveReaderStats } from '../actions/liveClient'
 import { CardLeases, CardLeaseError } from './cardLeases'
 import { deferredDecisionCard } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
@@ -582,5 +584,11 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     ) }
     return { ...row, observation: { ...observation, data: { ...data, parent_resolutions } } }
   })
-  return ok(res, { ...snapshot, fleet }, { headers })
+  const cli = githubCliStats()
+  const live = liveActionsEnabled()
+  const broker = live ? await liveReaderStats() : null
+  const githubRestLastHour = { requests: cli.requests + (broker?.requests ?? 0), notModified: cli.notModified + (broker?.notModified ?? 0),
+    blockedUntil: [cli.blockedUntil, broker?.blockedUntil].filter(Boolean).sort().at(-1) ?? null,
+    complete: !live || !!broker }
+  return ok(res, { ...snapshot, fleet, githubRestLastHour }, { headers })
 }
