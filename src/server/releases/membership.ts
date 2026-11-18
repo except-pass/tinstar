@@ -16,6 +16,7 @@ interface Range {
   files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number
 }
 interface RangeProgress extends Range {
+  unresolved: Set<string>
   observations: Map<string, { rows: CommitPull[]; observedAt: string }>
 }
 /** Incremental history read: eight commits per range/refresh, four concurrent GETs.
@@ -64,7 +65,7 @@ export class ReleaseMembershipReader {
     return entry.work
   }
   private async advance(key: string, repository: string, source: string | null, tag: string, onMain: boolean, previous?: RangeProgress, tags?: Tag[], baseline?: Tag): Promise<Range> {
-    const range: RangeProgress = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), observations: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
+    const range: RangeProgress = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), observations: new Map(), unresolved: new Set(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !sha(source)) throw new Error('Release source SHA is missing; Changes cannot be determined')
       if (!range.membership.baselineSha) {
@@ -97,16 +98,22 @@ export class ReleaseMembershipReader {
         const responses = await Promise.allSettled(commits.map(async commit => this.readCommitPulls(repository, commit, onMain)))
         const observedAt = new Date(this.now()).toISOString()
         responses.forEach((response, index) => {
-          if (response.status === 'fulfilled') range.observations.set(commits[index]!, { rows: response.value, observedAt })
-          else failure ??= response
+          const commit = commits[index]!
+          if (response.status === 'fulfilled') {
+            range.observations.set(commit, { rows: response.value, observedAt })
+            range.unresolved.delete(commit)
+          } else {
+            range.unresolved.add(commit)
+            failure ??= response
+          }
         })
         range.cursor += commits.length
       }
       if (failure) throw failure.reason
       const inspected = range.observations.size
-      const complete = inspected === range.total && range.commits.length === range.total
+      const complete = range.unresolved.size === 0 && inspected === range.total && range.commits.length === range.total
       range.membership.status = complete ? 'complete' : 'partial'
-      range.membership.reason = complete ? null : `Reading Git membership: ${inspected} of ${range.total} commits inspected; counts are partial`
+      range.membership.reason = complete ? null : range.unresolved.size ? 'Git release membership has unresolved commit reads; counts are partial' : `Reading Git membership: ${inspected} of ${range.total} commits inspected; counts are partial`
       range.membership.observedAt = new Date(this.now()).toISOString(); range.retryAt = this.now() + 15_000
     } catch (error) {
       range.membership.status = range.observations.size ? 'partial' : 'unknown'
@@ -115,15 +122,17 @@ export class ReleaseMembershipReader {
     }
     const commitSet = new Set(range.commits)
     const pulls = new Map<string, ReleasePull>()
-    for (const { rows, observedAt } of range.observations.values()) {
+    for (const [commit, { rows, observedAt }] of range.observations) {
+      const freshness = range.unresolved.has(commit) ? 'stale' : 'fresh'
       for (const raw of rows) {
         const identity = releasePull(raw.html_url)
         if (!identity || identity.repository !== repository || !commitSet.has(raw.merge_commit_sha)) continue
         const previousPull = pulls.get(identity.id)
-        if (previousPull?.observedAt && previousPull.observedAt > observedAt) continue
+        if (previousPull?.observedAt && (previousPull.observedAt > observedAt ||
+            (previousPull.observedAt === observedAt && previousPull.freshness === 'fresh' && freshness === 'stale'))) continue
         pulls.set(identity.id, { ...identity, title: typeof raw.title === 'string' ? raw.title : null, state: 'merged', mergedAt: raw.merged_at,
           mergeSha: raw.merge_commit_sha, head: sha(raw.head?.sha) ? raw.head.sha : null, base: raw.base?.ref ?? null,
-          observedAt, freshness: 'fresh', links: [], exceptions: [] })
+          observedAt, freshness, links: [], exceptions: [] })
       }
     }
     range.pulls = pulls

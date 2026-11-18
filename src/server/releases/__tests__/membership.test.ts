@@ -83,12 +83,13 @@ it('reopens an unchanged tag with the current commit associations', async () => 
 it('updates siblings and reaches later commits despite a persistently failing lookup', async () => {
   let now = 0
   let refreshing = false
+  let failing = false
   const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
   const read = vi.fn(async (path: string) => {
     if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: commits.length, commits: commits.map(sha => ({ sha })) }
     const commit = path.split('/commits/')[1]?.split('/')[0]
     if (commit === commits[0]) {
-      if (refreshing) throw new Error('Read unavailable')
+      if (failing) throw new Error('Read unavailable')
       return [pull(1, commits[0])]
     }
     if (commit === commits[1]) return [pull(refreshing ? 3 : 2, commits[1])]
@@ -103,11 +104,24 @@ it('updates siblings and reaches later commits despite a persistently failing lo
   expect(numbers(await get())).toEqual([1, 2, 4])
 
   refreshing = true
+  failing = true
   now = 30_000
   expect(numbers(await get())).toEqual([1, 3, 4])
   now = 90_000
-  expect(numbers(await get())).toEqual([1, 3, 5])
+  const later = await get()
+  expect(numbers(later)).toEqual([1, 3, 5])
+  expect(later.membership.status).toBe('partial')
+  expect(later.pulls.get('owner/repo#1')).toMatchObject({ freshness: 'stale', observedAt: new Date(0).toISOString() })
+  expect(later.pulls.get('owner/repo#5')).toMatchObject({ freshness: 'fresh', observedAt: new Date(now).toISOString() })
   now = 105_000
   expect(numbers(await get())).toEqual([1, 3, 5])
   expect(read.mock.calls.filter(([path]) => path.includes(`/commits/${commits[0]}/`))).toHaveLength(3)
+
+  failing = false
+  now = 165_000
+  expect((await get()).membership.status).toBe('partial')
+  now = 180_000
+  const recovered = await get()
+  expect(recovered.membership.status).toBe('complete')
+  expect(recovered.pulls.get('owner/repo#1')).toMatchObject({ freshness: 'fresh', observedAt: new Date(now).toISOString() })
 })
