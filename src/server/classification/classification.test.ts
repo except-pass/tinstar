@@ -135,13 +135,13 @@ Initiative: password="another
 multiline fragment"` }, {
           id: 'start', type: 'paragraph', text: 'Then password="first half',
         }, {
-          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg== then Basic dXNlcjpwYXNzd29yZA==',
+          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg== then [Basic dXNlcjpwYXNzd29yZA==] and (Bearer opaqueCredential12345)',
         }] }),
       }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and [credential omitted] then [credential omitted]',
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and [credential omitted] then [[credential omitted]] and ([credential omitted])',
     } })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
@@ -232,7 +232,7 @@ it('reads the configured board through NotionApi and persists replay results in 
       return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned], has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({ has_more: true, next_cursor: 'ignored', results: [{
-      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail' }] },
+      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail. Then sk-abcdefghijklmnop.' }] },
     }] })
     return Response.json({ object: 'data_source', properties: Object.fromEntries(Object.entries(schema).map(([name, value]) =>
       [name, { type: value.type, id: value.id, select: { options: value.options.map(name => ({ name })) } }])) })
@@ -242,7 +242,7 @@ it('reads the configured board through NotionApi and persists replay results in 
     expect(JSON.stringify(request.state)).not.toContain('Prior panel update / Operations')
     expect(request.state).toMatchObject({
       existing_classification: { initiative: '', epic: '' },
-      card: { brief: 'Work on panel status support [credential omitted]' },
+      card: { brief: 'Work on panel status support [credential omitted]. Then [credential omitted].' },
     })
     return Response.json(modelDecision(request, 'initiative_1', 'pair_1'))
   })
