@@ -47,13 +47,7 @@ export class DecisionPackets {
         CREATE TABLE IF NOT EXISTS decision_desk_policy (
           scope TEXT PRIMARY KEY, version INTEGER NOT NULL, body TEXT NOT NULL, updated_by TEXT, updated_at TEXT);
       `)
-      if (!(db.prepare('PRAGMA table_info(decision_packets)').all() as Array<{ name: string }>).some(column => column.name === 'owner_wait')) {
-        db.exec('ALTER TABLE decision_packets ADD COLUMN owner_wait TEXT')
-      }
     })
-  }
-  waitInStorage(db: DatabaseSync, id: string): string | null {
-    return (db.prepare('SELECT owner_wait FROM decision_packets WHERE id = ?').get(id) as { owner_wait: string | null } | undefined)?.owner_wait ?? null
   }
   private event(db: DatabaseSync, packetId: string | null, type: string, actor: string, detail: unknown) {
     return Number(db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?) RETURNING sequence').get(packetId, type, actor, new Date(this.now()).toISOString(), JSON.stringify(detail))!.sequence)
@@ -79,7 +73,7 @@ export class DecisionPackets {
     await this.initialize()
     return this.leases.writeStorage(db => this.publishInStorage(db, input, evidence, actor, operationId))
   }
-  publishInStorage(db: DatabaseSync, input: unknown, evidence: DecisionEvidence, actor: string, operationId: string, ownerWait = evidence.owner_wait ?? null) {
+  publishInStorage(db: DatabaseSync, input: unknown, evidence: DecisionEvidence, actor: string, operationId: string) {
     const packet = decisionPacketSchema.parse(input)
     z.string().trim().min(1).max(200).parse(actor); z.string().trim().min(1).max(128).parse(operationId)
     const publicationKey = JSON.stringify([actor, operationId]), contentHash = packetContentHash(packet)
@@ -94,7 +88,7 @@ export class DecisionPackets {
     // Keep the legacy SQLite deadline column readable by older binaries. It is
     // no longer an eligibility gate; the wire reports no packet expiry.
     const id = randomUUID(), publishedAt = new Date(this.now()).toISOString(), expiresAt = new Date(this.now() + packet.review_within_ms).toISOString()
-    db.prepare('INSERT INTO decision_packets VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey, ownerWait)
+    db.prepare('INSERT INTO decision_packets(id,source_key,version,content_hash,prepared_by,published_at,expires_at,body,publication_key) VALUES(?,?,?,?,?,?,?,?,?)').run(id, sourceKey, version, contentHash, actor, publishedAt, expiresAt, JSON.stringify(packet), publicationKey)
     for (const dependency of packet.dependencies) db.prepare('INSERT INTO decision_packet_dependencies VALUES(?,?,?,?)').run(id, dependency.kind, dependency.key, dependency.revision)
     this.event(db, id, 'publication', actor, { version, content_hash: contentHash, source_revision: packet.binding.source_revision })
     const validation = this.attest(db, id, packet, evidence, actor)

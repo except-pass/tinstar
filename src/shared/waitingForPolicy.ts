@@ -216,10 +216,6 @@ export function waitingForWorkIds(input: WaitState): string[] {
   }))]
 }
 
-export function hasActiveWait(input: Parameters<typeof hasActiveTypedWait>[0] & { status: string }): boolean {
-  return input.status === 'Waiting For' || hasActiveTypedWait(input)
-}
-
 export function hasActiveTypedWait(input: { type: string; id: string; waitingFor: string }): boolean {
   return !!input.type.trim() || !!input.id.trim() || waitEntries(input.waitingFor, input).some(entry => typedWaitEntry(entry) !== null)
 }

@@ -439,8 +439,7 @@ export class DecisionPreparation {
           ...(reversibilityRecovered ? { reversibility: packet.reversibility, material_unknowns: prior.packet.material_unknowns.filter(reason => !/^Missing required field: reversibility(?:\.|$)/.test(reason)) } : {}) }
         publication = createHash('sha256').update(JSON.stringify([operation, 'mapping-correction', packetContentHash(packet)])).digest('hex')
       }
-      const wait = prior ? this.packets.waitInStorage(db, prior.id) : evidence.owner_wait ?? null
-      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication, wait)
+      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication)
       if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: job.id, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
       return [{ id: stored.id, comment, jobId: job.id }]
     }))

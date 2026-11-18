@@ -21,7 +21,7 @@ it('serves isolated evidence/storage APIs through existing owner authentication 
   await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['preview-owner@example.test'], bridgeToken: 'fixture-only-not-a-live-credential-123456789' } }))
   const fixture = preparedDecisionFixture(), leases = new CardLeases(root), packets = new DecisionPackets(leases)
   const published = await packets.publish(fixture.packet, fixture.evidence, 'fixture', 'publication')
-  const evidence = vi.fn(() => ({ ...fixture.evidence, wait_lines: ['One blocker', 'Other blocker'], owner_wait: 'One blocker' })), auth = new PullsApi({ scene: async () => {
+  const evidence = vi.fn(() => fixture.evidence), auth = new PullsApi({ scene: async () => {
     const scene = fixtureScene()
     return { ...scene, searchIndex: boundSearchDocuments(sceneSearchDocuments(scene)) }
   } }, new AssociationStore(root), root)
@@ -43,8 +43,7 @@ it('serves isolated evidence/storage APIs through existing owner authentication 
   expect((await fetch(`${base}/policy`, { method: 'PUT', headers, body: JSON.stringify({ ...update, expected_version: 1, values: { ...update.values, max_preparers: 9 } }) })).status).toBe(400)
   expect((await (await fetch(`${base}/policy`, { headers })).json()).data.version).toBe(1)
   expect((await fetch(`${base}/evidence?card_id=invalid`, { headers })).status).toBe(400)
-  const { wait_lines: _waitLines, owner_wait: _ownerWait, ...publicEvidence } = fixture.evidence
-  expect((await (await fetch(`${base}/evidence?card_id=${fixture.cardId}&refresh=1`, { headers })).json()).data).toEqual(JSON.parse(JSON.stringify(publicEvidence)))
+  expect((await (await fetch(`${base}/evidence?card_id=${fixture.cardId}&refresh=1`, { headers })).json()).data).toEqual(fixture.evidence)
   expect((await (await fetch(`${base}/packet?id=${published.id}`, { headers })).json()).data).toMatchObject({ id: published.id, ready: true })
   const inventory = (await (await fetch(`${base}/packets`, { headers })).json()).data
   expect(inventory.packets).toHaveLength(1); expect(inventory).not.toHaveProperty('ready_count')

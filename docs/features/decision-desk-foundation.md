@@ -355,11 +355,8 @@ capabilities in request bodies/tool arguments only. The server derives the exact
 answer label and source tuple from the held immutable packet; callers cannot
 supply an alternate answer or infer subrequest IDs. `next` uses the existing
 workflow vocabulary and must match the packet's bounded next owner/status.
-When a packet pins an unambiguous owner wait, the server resolves its exact
-stored line. Without a wait to resolve, the answer leaves the status and
-wait fields unchanged. The Desk shows a redacted description and submits only the
-selection and authorized next state. Explicit workflow wait effects and
-`next.wait` still use the existing workflow rules.
+Decision Desk submissions do not resolve waits. Use the work workflow for
+explicit `resolve_wait` effects. Existing `next.wait` semantics remain explicit.
 
 The server durably retains selection/operation/context before source I/O. It
 requires the matching active canonical generation before writing, forces exact

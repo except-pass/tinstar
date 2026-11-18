@@ -5,7 +5,6 @@ import { requestAnchor } from '../../shared/deskSource'
 import { decisionRequests, decisionRecordRows, workflowReceipt } from '../../shared/workflowRequests'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { redactSourceText } from '../../shared/searchDocuments'
-import { parseWaitLine } from '../../shared/waitingForPolicy'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
@@ -28,10 +27,6 @@ function discussionText(note: CardContextRead['blocks'][number]) {
   if (!Array.isArray(request?.options)) return text
   const sorted = [...request.options].sort((a, b) => decisionMeaning(a).localeCompare(decisionMeaning(b)))
   return text.replace(/^Tin Star request: .*$/m, `Tin Star request: ${decisionMeaning({ ...request, options: sorted })}`)
-}
-
-function openDecisionCount(requests: Array<{ id: string }>, answered: Set<string>) {
-  return new Set(requests.filter(request => !answered.has(request.id)).map(request => request.id)).size
 }
 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
@@ -119,18 +114,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
     for (const url of new Set(item?.evidence.filter(reference => reference.kind === 'pull-request').map(reference => reference.url) ?? [])) dependencies.push({ ...base('pr-head', url, null), status: 'unknown', coverage: 'unknown', observed_at: null, expires_at: null })
     return { binding: binding.success ? binding.data : null, question: row.question, dependencies, reasons: issues, answered: row.answered }
   })
-  const waitingFor = String(card?.properties['Waiting For']?.value ?? '')
-  const waitId = String(card?.properties['Waiting For ID']?.value ?? '').trim()
-  const waitLines = waitingFor.split('\n')
-  const waits = waitLines.filter(line => {
-    const wait = parseWaitLine(line.trimEnd())
-    return wait?.type === 'Actor' && wait.id === 'Will'
-      || !wait && line.startsWith('Will:') && waitId === 'Will'
-  })
-  const openCount = openDecisionCount(currentRequests.map(id => ({ id })), new Set(rows.filter(row => row.answered).map(row => row.id)))
-  return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),
-    ...(card ? { wait_lines: waitLines } : {}),
-    ...(openCount === 1 && waits.length === 1 ? { owner_wait: waits[0] } : {}), observed_at: observation.observedAt,
+  return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 

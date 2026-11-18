@@ -8,11 +8,7 @@ interface ReviewContext {
 }
 const fresh = (): ReviewContext => ({ create: crypto.randomUUID(), selections: {}, attempts: {} })
 function load(): ReviewContext {
-  try {
-    const loaded: ReviewContext = JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh()
-    for (const attempt of Object.values(loaded.attempts)) delete attempt.resolve_wait
-    return loaded
-  } catch { return fresh() }
+  try { return JSON.parse(sessionStorage.getItem(storageKey) ?? 'null') ?? fresh() } catch { return fresh() }
 }
 const requestKey = (packet: DeskPacket) => `${packet.packet.binding.card_id}:${packet.packet.binding.request_id}`
 export interface DecisionTarget { id: string; cardId?: string; requestKey?: string; packetId?: string }
@@ -90,7 +86,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
     context.current.token = response.review_session_token; context.current.id = response.session.id; persist()
   }, [persist])
   const recover = useCallback(async (pending?: DeskSubmit) => {
-    type Recovery = { submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; binding_matches_original_lease?: boolean }> }
+    type Recovery = { submissions: Array<{ operation_id: string; selection: DeskResult['selection']; state: string; next: DeskSubmit['next']; resolve_wait?: string; binding_matches_original_lease?: boolean }> }
     const capabilities = [...new Set([pending?.lease_token ?? context.current.recoveryLease ?? context.current.lease, pending?.original_lease_token].filter((value): value is string => !!value))]
     let recovered: Recovery = { submissions: [] }
     for (const capability of capabilities.length ? capabilities : [undefined]) {
@@ -230,7 +226,7 @@ export function useDecisionDesk(target?: DecisionTarget, onTargetConsumed?: (id:
           }
           context.current.selections[key] = attempt.selection.option_id
           context.current.attempts[key] ??= { ...attempt.selection, operation_id: attempt.operation_id, lease_token: recoveryLease ?? held.lease_token,
-            review_session_token: context.current.token, next: attempt.next }
+            review_session_token: context.current.token, next: attempt.next, ...(attempt.resolve_wait ? { resolve_wait: attempt.resolve_wait } : {}) }
           setResult({ outcome: attempt.state, operation_id: attempt.operation_id, selection: attempt.selection, message: 'Retained answer recovered. Retry the same operation without advancing.' })
         }
       }

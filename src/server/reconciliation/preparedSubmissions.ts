@@ -12,7 +12,7 @@ const answerSchema = answerDecisionSchema
 export const preparedSubmitInput = z.object({
   operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256),
   packet_id: z.string().uuid(), packet_version: z.number().int().positive(), request_id: z.string().min(1).max(128), option_id: z.string().min(1).max(128),
-  next: answerSchema.shape.next, resolve_wait: answerSchema.shape.resolve_wait.unwrap().max(12000).optional(),
+  next: answerSchema.shape.next,
   original_lease_token: z.string().min(1).max(256).optional(),
   confirmation: z.object({ option_id: z.string(), scope: z.string() }).strict().optional(),
 }).strict()
@@ -90,9 +90,7 @@ export class PreparedSubmissions {
     try {
       attempt = await this.leases.writeStorage(db => {
         const prior = this.read(db, caller, input.operation_id)
-        const signature = this.signature(input)
-        if (prior && (prior.actor !== actor || prior.signature !== signature &&
-          (input.resolve_wait !== undefined || prior.signature !== this.signature({ ...input, resolve_wait: (JSON.parse(prior.answer) as Answer).resolve_wait })))) throw new DecisionDeskConflict('Submit operation already used with different input')
+        if (prior && (prior.signature !== this.signature(input) || prior.actor !== actor)) throw new DecisionDeskConflict('Submit operation already used with different input')
         // Completed operation replay is authorized by its original capability,
         // even after advance/expiry; it cannot release or write a newer card.
         if (prior) {
@@ -105,9 +103,8 @@ export class PreparedSubmissions {
             // never a changed question/options/request revision or broader scope.
             const oldPacket = this.reviews.packets.readInStorage(db, oldBinding.packet_id)
             const fresh = this.reviews.packets.readInStorage(db, held.binding.packet_id)
-            const sameWait = this.reviews.packets.waitInStorage(db, oldBinding.packet_id) === this.reviews.packets.waitInStorage(db, held.binding.packet_id)
             const sameContext = held.session_id === prior.session_id || input.original_lease_token && leaseHash(input.original_lease_token) === oldBinding.token_hash
-            if (!sameContext || !sameWait || held.binding.packet_id !== input.packet_id || held.binding.packet_version !== input.packet_version || !oldPacket || !fresh ||
+            if (!sameContext || held.binding.packet_id !== input.packet_id || held.binding.packet_version !== input.packet_version || !oldPacket || !fresh ||
               bindingMeaning(oldPacket.packet.binding) !== bindingMeaning(fresh.packet.binding) || decisionMeaning(oldPacket.packet.authorization) !== decisionMeaning(fresh.packet.authorization)) throw new CardLeaseError(null)
             const nextCardScope = oldBinding.next_card_scope === undefined ? this.reviews.claimScopeInStorage(db, caller, oldBinding) ?? null : oldBinding.next_card_scope
             prior.binding = JSON.stringify({ ...held.binding, next_card_scope: nextCardScope }); prior.session_id = held.session_id; prior.selection = JSON.stringify(this.selection(input))
@@ -123,17 +120,14 @@ export class PreparedSubmissions {
         const option = stored.packet.binding.options.find(option => option.id === input.option_id)
         if (!option) throw new DecisionDeskConflict('Selection must use this source request option vocabulary')
         if (input.next.owner !== stored.packet.authorization.next_owner || input.next.status !== stored.packet.authorization.next_status) throw new DecisionDeskConflict('Next owner and status must match the prepared authorization scope')
-        const pinnedWait = this.reviews.packets.waitInStorage(db, stored.id)
-        if (pinnedWait && input.resolve_wait && input.resolve_wait !== pinnedWait) throw new DecisionDeskConflict('Explicit wait does not match the prepared wait')
-        const resolveWait = pinnedWait ?? input.resolve_wait
         const answer = answerSchema.parse({ kind: 'answer_decision', card_id: held.binding.card, operation_id: input.operation_id,
           request_id: input.request_id, option_id: input.option_id, answer: option.label, ...(stored.packet.binding.source_request ? { source_request: stored.packet.binding.source_request } : {}),
-          next: input.next, ...(resolveWait ? { resolve_wait: resolveWait } : {}) })
+          next: input.next })
         const other = db.prepare(`SELECT operation,state,caller FROM decision_desk_submissions WHERE scope = ? AND json_extract(answer,'$.card_id') = ?
           AND json_extract(answer,'$.request_id') = ? AND state NOT IN ('not-saved','packet-invalidated','answer-conflict','superseded') LIMIT 1`).get(this.reviews.scope, answer.card_id, answer.request_id) as { operation: string; state: string; caller: string } | undefined
         if (other?.state === 'selected') db.prepare("UPDATE decision_desk_submissions SET state = 'superseded' WHERE caller = ? AND scope = ? AND operation = ?").run(other.caller, this.reviews.scope, other.operation)
         else if (other) throw new DecisionDeskConflict('This source request has a retained submission; reconcile the original operation ID before selecting another answer')
-        const row: Attempt = { caller, scope: this.reviews.scope, operation: input.operation_id, signature, session_id: held.session_id,
+        const row: Attempt = { caller, scope: this.reviews.scope, operation: input.operation_id, signature: this.signature(input), session_id: held.session_id,
           binding: JSON.stringify({ ...held.binding, next_card_scope: this.reviews.claimScopeInStorage(db, caller, held.binding) ?? null }),
           selection: JSON.stringify(this.selection(input)), answer: JSON.stringify(answer), actor,
           state: 'selected', detail: '{}', created: this.now(), confirmed: null, finished: null }
@@ -170,11 +164,6 @@ export class PreparedSubmissions {
           return this.response(attempt, 'confirmation-required', 'Confirm the selected option and its explicit authorization scope before saving.', { confirmation: workReadback(confirmation) })
         }
         const evidence = await this.source.evidence(stored, observation.original, observation.desired, observation.ownIntentId)
-        if (observation.state === 'absent' && answer.resolve_wait && evidence.wait_lines && !evidence.reasons.length &&
-          evidence.wait_lines.filter(line => line === answer.resolve_wait).length !== 1) {
-          await this.state(attempt, 'not-saved', { code: 'wait-conflict' })
-          return this.response(attempt, 'not-saved', 'The prepared wait no longer matches exactly one current wait.', { source_state: 'wait-conflict' })
-        }
         const current = await this.reviews.packets.read(stored.id, evidence)
         if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now()) {
           const request = evidence.requests.find(request => request.binding?.request_id === input.request_id)

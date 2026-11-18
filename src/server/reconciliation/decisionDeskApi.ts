@@ -80,10 +80,7 @@ export class DecisionDeskApi {
         if (req.method === 'GET') return ok(res, await this.packets.readPolicy(this.scope), { headers })
         if (req.method === 'PUT') return ok(res, await this.packets.updatePolicy(this.scope, await policyBody(req), req.headers['tailscale-user-login']), { headers })
       } else if (req.method === 'GET') {
-        if (url.pathname.endsWith('/evidence')) {
-          const { wait_lines: _waitLines, owner_wait: _ownerWait, ...evidence } = this.evidence(cardIdSchema.parse(url.searchParams.get('card_id')))
-          return ok(res, workReadback(evidence), { headers })
-        }
+        if (url.pathname.endsWith('/evidence')) return ok(res, workReadback(this.evidence(cardIdSchema.parse(url.searchParams.get('card_id')))), { headers })
         if (url.pathname.endsWith('/events')) {
           const after = z.coerce.number().int().nonnegative().safeParse(url.searchParams.get('after') ?? 0)
           if (!after.success) throw after.error
