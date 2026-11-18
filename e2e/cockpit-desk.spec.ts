@@ -1,4 +1,3 @@
-import { installDecisionDesk, openDecisionDesk } from './fixtures/decisionDesk'
 import { stopServer, serverBase } from './serverProcess'
 import { installDeskAttention } from '../test-fixtures/reconciliation/deskAttention'
 import { test, expect, type APIRequestContext } from '@playwright/test'
@@ -123,27 +122,6 @@ if name == 'fm-captain-hold.sh' and (state / 'fail-hold').exists():
     throw error
   }
 }
-
-for (const kind of ['keyed', 'held-work'] as const) test(`Decision Desk keeps ${kind} source discussion controls`, async ({ page, request }) => {
-  const { base, notes, calls, stop } = await startCockpit(request, ['firstmate'], kind)
-  try {
-    await installDeskAttention(page, base)
-    await installDecisionDesk(page)
-    await page.goto(base)
-    await page.getByRole('navigation', { name: 'Activity' }).getByRole('button', { name: 'Decisions', exact: true }).click()
-  await openDecisionDesk(page)
-    await expect(page.locator('.dd-identifiers')).toBeVisible()
-    await page.getByRole('button', { name: 'Source request & discussion', exact: true }).click()
-    const desk = page.locator('.dd-source-context')
-    await expect(desk).toContainText('Discussion is bound to source request preview-question')
-    await expect(desk.getByRole('textbox')).toHaveCount(1)
-    await expect(desk.getByRole('button', { name: 'Record voice question' })).toHaveCount(1)
-    await expect(desk.getByRole('slider')).toHaveCount(0)
-    await expect(desk.getByRole('button', { name: /Answer|Dismiss|Send to First Mate/i })).toHaveCount(0)
-    expect(notes()).toHaveLength(0)
-    expect(calls()).toHaveLength(0)
-  } finally { await stop() }
-})
 
 for (const kind of ['keyed', 'held-work'] as const) test(`Decisions keeps ${kind} source controls and adds the shared Ask composer`, async ({ page, request }) => {
   const { base, notes, calls, stop } = await startCockpit(request, ['firstmate'], kind)
