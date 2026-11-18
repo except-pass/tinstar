@@ -174,6 +174,35 @@ it('keeps preparation across Tin Star housekeeping, then invalidates a substanti
   expect(f.posts).toHaveLength(2)
 }, 20_000)
 
+it('recovers and replays an explicitly submitted wait effect', async () => {
+  const { sources, cardId, requestId } = await setup()
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
+  const packet = preparedDecisionFixture().packet
+  const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  packet.risk.rating = 'High'
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'explicit-wait-packet', packet })).toMatchObject({ ready: true })
+  const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'explicit-wait-claim', card_id: cardId })
+  const input = {
+    operation_id: 'explicit-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id, packet_version: claim.packet!.version,
+    request_id: requestId, option_id: packet.recommended_option_id, next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
+    resolve_wait: 'Will: Choose the bounded preview route?',
+  }
+  const submit = (value: unknown) => sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', value)
+  expect(await submit(input)).toMatchObject({ outcome: 'confirmation-required' })
+  const retained = await sources.preparedSubmissions.recover('fixture-owner', { lease_token: claim.lease_token })
+  expect(retained.submissions).toMatchObject([{ operation_id: input.operation_id, resolve_wait: input.resolve_wait }])
+  const retry = { ...input, resolve_wait: retained.submissions[0]!.resolve_wait,
+    confirmation: { option_id: input.option_id, scope: packet.authorization.scope } }
+  const saved = await submit(retry)
+  expect(saved).toMatchObject({ outcome: 'recorded-empty' })
+  expect(await submit(retry)).toEqual(saved)
+  const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
+  expect(card.properties.Status?.value).toBe('Queued')
+  expect(card.properties['Waiting For']?.value).toBe('')
+})
+
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {
   const { sources, reads, posts, reconcile } = await setup()
   const before = reads.length
