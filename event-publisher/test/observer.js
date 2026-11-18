@@ -32,23 +32,23 @@ function row(id, fields = {}) {
   }
 }
 
-function taskObservation(rows, minute, source = tasks, records = rows.map(({ id }) => ({ id, links: [] })), generated = at(minute)) {
+function taskObservation(rows, minute, source = tasks, records = rows.map(({ id }) => ({ id, links: [] })), generated = at(minute + 1)) {
   const text = encode({ count: rows.length, tasks: rows })
   const fleet = JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated,
     main_inventory: { valid: true }, backlog: { present: true, records } })
   return {
     source, started_at: at(minute), observed_at: at(minute + 1), health: 'ok',
     entries: parseTasks(text, source.home_id),
-    pullRequests: fleetPullRequests(fleet, home.path, at(minute), at(minute + 1)),
+    pullRequests: fleetPullRequests(fleet, home.path, at(minute + 1), at(minute + 1)),
   }
 }
 
-function workerObservation(samples, minute) {
+function workerObservation(samples, minute, observedAt = at(minute + 1)) {
   const generated = at(minute)
   const text = encodeFleet(generated, samples)
-  const payload = parseWorkers(text, home, generated, at(minute + 1))
+  const payload = parseWorkers(text, home, generated, observedAt)
   return {
-    source: workers, started_at: generated, observed_at: at(minute + 1),
+    source: workers, started_at: generated, observed_at: observedAt,
     health: payload.counts.current_state_unavailable > 0 ? 'partial' : 'ok',
     ...payload,
   }
@@ -254,8 +254,8 @@ test('an older PR projection with the same fleet generation cannot reverse links
 
   const journal = new Journal(path)
   t.after(() => journal.close())
-  const retry = taskObservation([{ ...task, priority: 2 }], 1, tasks, [{ id: task.id, pr_url: older }])
-  equal(journal.record({ ...retry, observed_at: at(1) }), 1)
+  const retry = taskObservation([{ ...task, priority: 2 }], 0, tasks, [{ id: task.id, pr_url: older }])
+  equal(journal.record({ ...retry, started_at: at(1) }), 1)
   const [event] = journal.events()
   equal(event.change.field, 'priority')
   equal(event.evidence.pr_link_coverage, 'unobserved')
@@ -291,7 +291,7 @@ test('a rejected explicit PR URL leaves coverage unobserved', async t => {
     const event = journal.events().at(-1)
     equal(event.change.field, 'priority')
     equal(event.evidence.pr_link_coverage, 'unobserved')
-    equal(journal.sources()[0].last_generated_at, at(0))
+    equal(journal.sources()[0].last_generated_at, at(1))
   }
   const reader = new DatabaseSync(path, { readOnly: true })
   try {
@@ -330,7 +330,7 @@ test('rejected structured PR candidates leave coverage unobserved', async t => {
     ])), 1)
     equal(journal.events().at(-1).change.field, 'priority')
     equal(journal.events().at(-1).evidence.pr_link_coverage, 'unobserved')
-    equal(journal.sources()[0].last_generated_at, at(0))
+    equal(journal.sources()[0].last_generated_at, at(1))
   }
 })
 
@@ -354,7 +354,7 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   equal(changed.observed_at, at(2))
   equal(changed.evidence.pr_link_coverage, 'unobserved')
   equal(journal.sources()[0].last_attempt_at, at(2))
-  equal(journal.sources()[0].last_generated_at, at(1))
+  equal(journal.sources()[0].last_generated_at, at(2))
 
   const added = row('new-task')
   const mixed = taskObservation([{ ...task, priority: 2 }, added], 3, tasks, [
@@ -376,7 +376,7 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   equal(priorityEvent.change.field, 'priority')
   equal(priorityEvent.observed_at, at(3))
   equal(priorityEvent.observation.observed_between.by, at(3))
-  equal(journal.sources()[0].last_generated_at, at(3))
+  equal(journal.sources()[0].last_generated_at, at(4))
 })
 
 test('reversed task and worker reads preserve accepted snapshots and events', async t => {
@@ -386,7 +386,7 @@ test('reversed task and worker reads preserve accepted snapshots and events', as
   const task = row('sample-task')
   const worker = { id: task.id, gen: 'gen-1', state: 'working' }
   journal.record(taskObservation([task], 0))
-  journal.record(workerObservation([worker], 0))
+  journal.record(workerObservation([worker], 1, at(1)))
   const baseline = journal.sources()
   const changedWorker = { ...worker, state: 'parked' }
   for (const observation of [
@@ -403,7 +403,7 @@ test('reversed task and worker reads preserve accepted snapshots and events', as
   }
   equal(journal.tail(), 0)
   equal(journal.record(taskObservation([{ ...task, state: 'done' }], 3)), 2)
-  equal(journal.record(workerObservation([changedWorker], 3)), 1)
+  equal(journal.record(workerObservation([changedWorker], 4, at(4))), 1)
 })
 
 test('invalid fleet windows leave valid task fields observable', async t => {
@@ -415,8 +415,8 @@ test('invalid fleet windows leave valid task fields observable', async t => {
   journal.record(taskObservation([task], 0))
   for (const [minute, window] of [
     [2, { started_at: at(4), observed_at: at(3) }],
-    [4, { started_at: at(4), observed_at: at(4) }],
-    [6, { generated_at: at(0), links: new Map(), backlogAbsent: true }],
+    [4, { started_at: at(4), observed_at: at(6), generated_at: at(4) }],
+    [6, { generated_at: at(1), links: new Map(), backlogAbsent: true }],
   ]) {
     const attempt = taskObservation([{ ...task, priority: minute / 2 }], minute, tasks, [{ id: task.id, pr_url: pr }])
     const pullRequests = { ...attempt.pullRequests, ...window }
@@ -427,7 +427,7 @@ test('invalid fleet windows leave valid task fields observable', async t => {
     equal(event.evidence.pr_link_coverage, 'unobserved')
     const [status] = journal.sources()
     equal(status.last_success_at, attempt.observed_at)
-    equal(status.last_generated_at, at(0))
+    equal(status.last_generated_at, at(1))
     deepEqual(status.counts, { pr_links_unobserved: 1 })
   }
 })
@@ -556,7 +556,7 @@ test('an overlapping task inventory cannot support a worker relationship', async
     health: 'partial', reason: 'synthetic malformed inventory',
   }).complete, false)
   equal(journal.sources().find(source => source.type === 'task').health, 'partial')
-  equal(journal.record(workerObservation([worker], 5)), 1)
+  equal(journal.record(workerObservation([worker], 5, at(5))), 1)
   deepEqual(journal.events().at(-1).related, [])
 })
 
@@ -582,8 +582,8 @@ test('worker inventory respects accepted PR fleet windows and can share a fresh 
 
   const fresh = taskObservation([changedTask], 5, tasks, [{ id: task.id, pr_url: pr }])
   deepEqual(journal.recordAttempt(fresh), { written: 0, complete: true })
-  equal(journal.recordAttempt(workerObservation([], 5)).complete, true)
-  equal(journal.recordAttempt(workerObservation([], 5)).complete, false)
+  equal(journal.recordAttempt(workerObservation([], 6, at(6))).complete, true)
+  equal(journal.recordAttempt(workerObservation([], 6, at(6))).complete, false)
 })
 
 test('a fleet window overlapping accepted worker evidence cannot advance PR links', async t => {
@@ -592,7 +592,7 @@ test('a fleet window overlapping accepted worker evidence cannot advance PR link
   journal.registerSources([tasks, workers])
   const task = row('sample-task')
   journal.record(taskObservation([task], 0))
-  journal.record({ ...workerObservation([], 1), observed_at: at(5) })
+  journal.record(workerObservation([], 2, at(5)))
   const pr = 'https://github.com/example/repo/pull/13'
   const attempt = taskObservation([{ ...task, priority: 2 }], 2, tasks, [{ id: task.id, pr_url: pr }])
   deepEqual(journal.recordAttempt(attempt), { written: 1, complete: false })
@@ -600,7 +600,7 @@ test('a fleet window overlapping accepted worker evidence cannot advance PR link
   const [event] = journal.events()
   equal(event.change.field, 'priority')
   equal(event.evidence.pr_link_coverage, 'unobserved')
-  equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(0))
+  equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(1))
 })
 
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
@@ -612,7 +612,7 @@ test('PR projection rejects a fleet generation accepted by workers in a prior pa
   baseline.registerSources([tasks, workers])
   baseline.record(taskObservation([initial], 0, tasks, []))
   baseline.record({ source: tasks, started_at: at(1), observed_at: at(2), health: 'unavailable' })
-  baseline.record(workerObservation([], 2))
+  baseline.record(workerObservation([], 3, at(3)))
   baseline.close()
 
   const journal = new Journal(path)
@@ -626,8 +626,8 @@ test('PR projection rejects a fleet generation accepted by workers in a prior pa
 
   equal(journal.record(taskObservation([initial, next, row('fresh-task')], 3, tasks, [{ id: 'fresh-task', pr_url: pr }])), 2)
   deepEqual(journal.events().at(-1).change.after, [pr])
-  equal(journal.record(workerObservation([], 3)), 0)
-  equal(journal.sources().find(source => source.type === 'worker').last_generated_at, at(3))
+  equal(journal.record(workerObservation([], 4, at(4))), 0)
+  equal(journal.sources().find(source => source.type === 'worker').last_generated_at, at(4))
 })
 
 test('task readiness requires a valid kind', () => {
@@ -811,14 +811,14 @@ test('a crash between fleet projections leaves neither projection committed', as
   const worker = { id: task.id, gen: 'gen-1', state: 'working' }
   const baseline = new Journal(path)
   baseline.registerSources([tasks, workers])
-  baseline.recordAttempts([taskObservation([task], 0), workerObservation([worker], 0)])
+  baseline.recordAttempts([taskObservation([task], 0), workerObservation([worker], 1, at(1))])
   const before = baseline.sources()
   baseline.close()
 
   const taskRead = taskObservation([{ ...task, priority: 1 }], 2, tasks, [{
     id: task.id, pr_url: 'https://github.com/example/repo/pull/13',
   }])
-  const workerRead = workerObservation([{ ...worker, state: 'parked' }], 2)
+  const workerRead = workerObservation([{ ...worker, state: 'parked' }], 3, at(3))
   const encoded = JSON.stringify([
     { ...taskRead, pullRequests: { ...taskRead.pullRequests, links: [...taskRead.pullRequests.links] } },
     workerRead,
@@ -882,7 +882,7 @@ test('worker reconciliation preserves provenance and keeps incarnations separate
   t.after(() => journal.close())
   journal.register(tasks)
   journal.register(workers)
-  journal.record(taskObservation([row('sample-worker')], 0))
+  journal.record(taskObservation([row('sample-worker')], 0, tasks, []))
   const sample = { id: 'sample-worker', gen: 'gen-1', last: 'paused' }
   journal.record(workerObservation([{ ...sample, state: 'parked' }], 0))
   equal(journal.record(workerObservation([{ ...sample, state: 'done', source: 'status-log' }], 1)), 0)

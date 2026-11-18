@@ -252,7 +252,7 @@ export class Journal {
       snapshotId = randomUUID()
       if (generated_at) acceptedFleet = observation
       if (source.type === 'task') {
-        const canJoinLinks = fresh && pr.observed_at >= observed_at
+        const canJoinLinks = fresh && pr.started_at >= observed_at
         const projected = withPullRequests(entries, canJoinLinks ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
         if (pr_links_unobserved) counts = { ...counts, pr_links_unobserved }
