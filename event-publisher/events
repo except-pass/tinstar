@@ -120,6 +120,7 @@ async function collect(journal, homes, interval) {
       const start = Date.now()
       for (const home of homes) {
         if (home.path || controller.signal.aborted) continue
+        home.unavailableReason = null
         const path = await realpath(home.configuredPath).catch(() => null)
         if (!path || homes.some(other => other.path === path)) continue
         try {
@@ -127,6 +128,7 @@ async function collect(journal, homes, interval) {
           home.path = path
         } catch (error) {
           if (!(error instanceof JournalConfigurationError)) throw error
+          home.unavailableReason = 'resolved FM_HOME conflicts with the journal binding'
         }
       }
       for (const home of homes) {

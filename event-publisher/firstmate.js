@@ -6,7 +6,9 @@ import { promisify } from 'node:util'
 import { decode } from '@toon-format/toon'
 
 const run = promisify(execFile)
-const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,priority'
+const taskFields = 'kind,blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,priority'
+export const fleetCommand = 'bin/fm-fleet-snapshot.sh --json'
+export const prLinkSource = 'fleet-snapshot backlog'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
 const workerStates = new Set(['working', 'idle', 'parked', 'done', 'blocked', 'paused', 'failed'])
 const workerSources = new Set(['run-step', 'pane'])
@@ -25,7 +27,7 @@ export function entityId(type, ...parts) {
 export function sourcesFor(home) {
   return [
     { type: 'task', coverage: 'active-backlog', command: 'bin/fm-tasks-axi.sh list' },
-    { type: 'worker', coverage: 'local-worker-incarnations', command: 'bin/fm-fleet-snapshot.sh --json' },
+    { type: 'worker', coverage: 'local-worker-incarnations', command: fleetCommand },
   ].map(source => ({
     ...source,
     home_id: home.id,
@@ -78,8 +80,11 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id)) return new Map()
     ids.add(row.id)
     if (!Array.isArray(row.links) && (row.links !== undefined || typeof row.pr_url !== 'string')) continue
-    const urls = [...(row.links ?? []).map(link => typeof link === 'string' ? link : link?.url), row.pr_url]
-    const exact = urls.filter(url => typeof url === 'string' && url === url.trim() &&
+    const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
+    if (urls.some(url => typeof url !== 'string' || !url.trim()) ||
+        row.pr_url != null && (typeof row.pr_url !== 'string' || !row.pr_url.trim())) continue
+    if (row.pr_url != null) urls.push(row.pr_url)
+    const exact = urls.filter(url => url === url.trim() &&
       /^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(url))
     links.set(row.id, [...new Set(exact.map(url => url.replace(/\/$/, '')))].sort(compare))
   }
@@ -92,7 +97,7 @@ export function withPullRequests(entries, links) {
     return urls === undefined
       ? { ...entry, evidence: { ...entry.evidence, pr_link_coverage: 'unobserved' } }
       : { ...entry, fields: { ...entry.fields, pull_requests: urls },
-          evidence: { ...entry.evidence, pr_link_source: 'fleet-snapshot backlog' } }
+          evidence: { ...entry.evidence, pr_link_source: prLinkSource } }
   })
 }
 
@@ -120,7 +125,8 @@ export function parseTasks(text, homeId) {
   const ids = new Set()
   return (data.count === 0 ? [] : data.tasks).map(row => {
     if (!row || typeof row.id !== 'string' || !identifier.test(row.id) || ids.has(row.id) ||
-        !taskStates.has(row.state) || !['yes', 'no'].includes(row.blocked) ||
+        !taskStates.has(row.state) || typeof row.kind !== 'string' || !identifier.test(row.kind) ||
+        !['yes', 'no'].includes(row.blocked) ||
         !['yes', 'no'].includes(row.held) || typeof row.hold_reason !== 'string' ||
         typeof row.hold_kind !== 'string' ||
         !(row.priority === '-' || Number.isInteger(row.priority) && row.priority >= 0 && row.priority <= 4)) {
@@ -310,7 +316,7 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
   if (!home.path || await realpath(home.path).catch(() => null) !== home.path) {
     return [task, worker].map(source => ({
       source, started_at, observed_at: now().toISOString(),
-      health: 'unavailable', reason: 'configured FM_HOME could not be verified',
+      health: 'unavailable', reason: home.unavailableReason ?? 'configured FM_HOME could not be verified',
     }))
   }
 

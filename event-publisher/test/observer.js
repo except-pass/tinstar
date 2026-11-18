@@ -119,7 +119,9 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
   const pr = 'https://github.com/example/repo/pull/12'
   const next = 'https://github.com/example/repo/pull/13'
   journal.record(taskObservation([first], 0, tasks, [{ id: first.id, pr_url: pr }]))
-  equal(journal.record(taskObservation([{ ...first, priority: 1 }], 1, tasks, [])), 1)
+  equal(journal.record(taskObservation([{ ...first, priority: 1 }], 1, tasks, [{
+    id: first.id, links: [{}], pr_url: null,
+  }])), 1)
   equal(journal.events().at(-1).evidence.pr_link_coverage, 'unobserved')
   equal(journal.record(taskObservation([{ ...first, priority: 2 }], 2, tasks, [{ id: first.id, links: [] }])), 1)
   equal(journal.events().at(-1).evidence.pr_link_coverage, 'rebaselined')
@@ -131,11 +133,34 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
     field: 'pull_requests', before: [], after: [next],
   })
   equal(changed.observation.observed_between.after, at(2))
+  equal(changed.evidence.source_reference.interface, 'bin/fm-fleet-snapshot.sh --json')
+  equal(changed.evidence.state_source, 'fleet-snapshot backlog')
   equal(journal.record(taskObservation([], 4)), 0)
   equal(journal.record(taskObservation([{ ...first, priority: 3 }], 5, tasks, [{ id: first.id, pr_url: pr }])), 1)
   const returned = journal.events().at(-1)
   equal(returned.change.field, 'priority')
   equal(returned.evidence.pr_link_coverage, 'rebaselined')
+
+  equal(journal.record({ source: tasks, started_at: at(6), observed_at: at(7), health: 'unavailable' }), 0)
+  equal(journal.record(taskObservation([{ ...first, priority: 4 }], 7, tasks, [{ id: first.id, pr_url: next }])), 1)
+  equal(journal.events().at(-1).change.field, 'priority')
+  equal(journal.events().at(-1).evidence.pr_link_coverage, 'rebaselined')
+
+  const newTask = row('new-task')
+  equal(journal.record(taskObservation([newTask], 8, tasks, [{ id: newTask.id, links: [pr] }])), 1)
+  const observed = journal.events().at(-1)
+  equal(observed.evidence.source_reference.interface, tasks.command)
+  equal(observed.evidence.source_reference.pr_link_interface, 'bin/fm-fleet-snapshot.sh --json')
+})
+
+test('task readiness requires a valid kind', () => {
+  const task = row('sample-task')
+  const { kind, ...missingKind } = task
+  for (const invalid of [missingKind, { ...task, kind: '-' }, { ...task, kind: 1 }]) {
+    throws(() => parseTasks(encode({ count: 1, tasks: [invalid] }), home.id), /invalid or duplicate tasks-axi row/)
+  }
+  equal(parseTasks(encode({ count: 1, tasks: [{ ...task, kind: 'public-followup' }] }), home.id)[0].fields.ready, false)
+  equal(parseTasks(encode({ count: 1, tasks: [{ ...task, kind }] }), home.id)[0].fields.ready, true)
 })
 
 test('a PR coverage outage preserves task inventory acceptance across passes', async t => {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { entityId } from './firstmate.js'
+import { entityId, fleetCommand, prLinkSource } from './firstmate.js'
 
 const schema = `
 CREATE TABLE IF NOT EXISTS homes (
@@ -145,7 +145,7 @@ export class Journal {
           reason = 'fleet watermark did not advance'
         } else if (entries && (source.type !== 'task' || health === 'ok')) {
           snapshotId = randomUUID()
-          written = this.recordEntries(observation, previous.last_snapshot_id, snapshotId)
+          written = this.recordEntries(observation, previous, snapshotId)
         }
         this.db.prepare(`
           UPDATE sources SET last_attempt_started = ?, last_attempt_at = ?, health = ?, reason = ?,
@@ -165,7 +165,8 @@ export class Journal {
     }
   }
 
-  recordEntries(observation, previousSnapshot, snapshotId) {
+  recordEntries(observation, previous, snapshotId) {
+    const previousSnapshot = previous.last_snapshot_id
     const { source, started_at, observed_at } = observation
     const select = this.db.prepare('SELECT * FROM entities WHERE source_id = ? AND entity_id = ?')
     const save = this.db.prepare(`
@@ -195,8 +196,9 @@ export class Journal {
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
       const rebaselinePullRequests = source.type === 'task' && before && Object.hasOwn(entry.fields, 'pull_requests') &&
-        (prior.last_seen_snapshot !== previousSnapshot || !Object.hasOwn(before, 'pull_requests') ||
-          previousEvidence?.pr_link_source !== 'fleet-snapshot backlog')
+        (previous.health !== 'ok' || previous.last_attempt_at !== previous.last_success_at ||
+          prior.last_seen_snapshot !== previousSnapshot || !Object.hasOwn(before, 'pull_requests') ||
+          previousEvidence?.pr_link_source !== prLinkSource)
       const evidence = {
         ...entry.evidence,
         ...(rebaselinePullRequests ? { pr_link_coverage: 'rebaselined' } : {}),
@@ -208,7 +210,9 @@ export class Journal {
       if (previousSnapshot && fields && fields !== prior?.fields) {
         const related = this.relationships(source, entry)
         for (const difference of eventChanges(source.type, before, entry.fields)) {
-          if (rebaselinePullRequests && difference.change.field === 'pull_requests') continue
+          const pullRequestChange = difference.change.field === 'pull_requests'
+          if (pullRequestChange && rebaselinePullRequests) continue
+          const includesPullRequests = pullRequestChange || Object.hasOwn(difference.change.after ?? {}, 'pull_requests')
           const envelope = {
             schema: 'event-publisher.event.v1',
             event_id: `event:${randomUUID()}`,
@@ -219,7 +223,7 @@ export class Journal {
             occurred_at: null,
             observation: {
               method: 'snapshot-diff',
-              read_method: observation.method ?? 'fleet-snapshot',
+              read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
               coverage: source.coverage,
               batch_id: snapshotId,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
@@ -228,10 +232,11 @@ export class Journal {
             },
             related,
             evidence: {
-              source_reference: { interface: source.command, task_id: entry.evidence.task_id,
+              source_reference: { interface: pullRequestChange ? fleetCommand : source.command, task_id: entry.evidence.task_id,
+                ...(includesPullRequests && !pullRequestChange ? { pr_link_interface: fleetCommand } : {}),
                 ...(entry.evidence.spawn_gen ? { spawn_gen: entry.evidence.spawn_gen } : {}) },
-              state_source: entry.evidence.state_source,
-              ...(previousEvidence ? { previous_state_source: previousEvidence.state_source } : {}),
+              state_source: pullRequestChange ? prLinkSource : entry.evidence.state_source,
+              ...(previousEvidence ? { previous_state_source: pullRequestChange ? prLinkSource : previousEvidence.state_source } : {}),
               ...(evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
               ...(evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
               ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
