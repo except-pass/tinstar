@@ -1,3 +1,4 @@
+import { strict as assert } from 'node:assert'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -28,7 +29,7 @@ function card(n: number, title: string, initiative: string | null, epic: string 
 }
 
 const examples = [card(1, 'Rotate service sessions', 'Platform', 'Operations'),
-  card(2, 'Update panel status', 'Cockpit', 'Operations'), card(3, 'Retired work', 'Retired', 'Old epic', 'Done')]
+  card(2, 'Update panel status', 'Cockpit', 'Operations'), card(3, 'Retired work', 'Retired', 'Old epic', 'Done')] as const
 const options = (names: string[]) => ({ id: 'test', type: 'select', options: names,
   relation: null })
 const schema = { Name: options([]), Owner: options([]), Status: options([]),
@@ -123,9 +124,11 @@ describe('classifier catalog and policy', () => {
     expect(result).toMatchObject({ evidence: { epicFit: 0.02 } })
     expect(assess(result, thresholds.conservative)).toMatchObject({ reason: 'epic-no-fit' })
     const request = ask.mock.calls[0]![0]
+    const destination = request.questions.destination
+    assert(destination?.type === 'choice')
     for (const [initiativeId, pairId] of [[cockpit, cockpitPair], [platform, platformPair]] as const) {
       expect(request.questions[`epic_fit_${initiativeId}`]?.instructions.match(/\bpair_\d+\b/g)).toEqual([pairId])
-      expect(JSON.stringify(request.questions[`epic_fit_${initiativeId}`])).not.toContain(request.questions.destination!.criteria[pairId])
+      expect(JSON.stringify(request.questions[`epic_fit_${initiativeId}`])).not.toContain(destination.criteria[pairId])
     }
     expect(ask).toHaveBeenCalledTimes(1)
   })
@@ -144,8 +147,10 @@ describe('classifier catalog and policy', () => {
 
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: { title } })
-    for (const [question, id] of [['initiative', initiative], ['destination', pair]] as const) {
-      const criteria = request.questions[question]?.criteria[id]
+    for (const [questionKey, id] of [['initiative', initiative], ['destination', pair]] as const) {
+      const question = request.questions[questionKey]
+      assert(question?.type === 'choice')
+      const criteria = question.criteria[id]
       expect(criteria).toContain('Rotate service sessions')
       expect(criteria).not.toContain('Long title for the follow-up')
     }
@@ -178,7 +183,9 @@ describe('classifier catalog and policy', () => {
       ancestors: ['Example [credential omitted] confirmed'],
     })
     const [, pair] = candidates(privateCatalog, 'Platform')
-    expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
+    const destination = request.questions.destination
+    assert(destination?.type === 'choice')
+    expect(destination.criteria[pair]).toContain('Example [credential omitted] confirmed')
     expect(JSON.stringify(request)).not.toMatch(/secret fragments|rotate this phrase|privateabcdefghijkl|opaqueCredential12345|dXNlcjpwYXNzd29yZA|opaque multiline brief value|Owner instructions/)
   })
 
