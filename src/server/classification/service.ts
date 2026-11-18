@@ -124,7 +124,7 @@ export class ClassificationService {
     const batchId = randomUUID()
     await this.ledger.start(batchId, board.dataSourceId, catalog.revision, entries)
     const source = {
-      excerpt: (id: string) => this.context.classificationExcerpt(id),
+      excerpt: (id: string, expectedVersion: string) => this.context.classificationExcerpt(id, expectedVersion),
       parent: async (id: string) => cards.get(id) ?? this.reader.card(id),
     }
     const rows: DryRunRow[] = new Array(entries.length)

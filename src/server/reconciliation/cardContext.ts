@@ -1,3 +1,4 @@
+import { readNotionCard } from './notion'
 import type { NotionFetch } from './notionApi'
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
@@ -190,9 +191,15 @@ export class CardContextReader {
     return value
   }
   /** Classification uses the opening brief only and never reads comments, files or nested blocks. */
-  async classificationExcerpt(id: string): Promise<CardContextRead> {
-    try { return await this.read(id, undefined, this.fetcher, true) }
-    catch { return { outcome: 'unavailable', blocks: [] } }
+  async classificationExcerpt(id: string, expectedVersion: string): Promise<CardContextRead> {
+    try {
+      const excerpt = await this.read(id, undefined, this.fetcher, true)
+      const card = await readNotionCard(this.config, id, this.fetcher)
+      if (card.archived || card.in_trash || card.last_edited_time !== expectedVersion) return { outcome: 'unavailable', blocks: [] }
+      return excerpt
+    } catch {
+      return { outcome: 'unavailable', blocks: [] }
+    }
   }
   async read(id: string, historySignal?: AbortSignal, fetcher = this.fetcher, excerpt = false): Promise<CardContextRead> {
     if (isJiraCard(id)) {

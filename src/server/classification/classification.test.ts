@@ -246,6 +246,8 @@ it('reads the configured board through NotionApi and persists replay results in 
   roots.push(root)
   const page = card(4, 'Check authentication', null, null)
   const followUp = card(6, 'Follow-up', null, null)
+  const moved = card(7, 'Moved card', null, null)
+  const changed = card(8, 'Changed card', 'Cockpit', 'Operations', 'Done')
   const unassigned = { ...page, properties: {
     ...page.properties,
     Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication.\n-----BEGIN PRIVATE KEY-----\nU1lOVEhFVElDUEtDUzg=\n-----END PRIVATE KEY-----\nVerify the rollout.' }] },
@@ -260,7 +262,14 @@ it('reads the configured board through NotionApi and persists replay results in 
     const url = new URL(String(input))
     if (url.pathname.endsWith('/query')) {
       const filter = JSON.parse(String(init?.body)).filter.and[0]
-      return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned, followUp], has_more: false })
+      return Response.json({ results: filter.or ? [historical, examples[2], changed] : [...examples.slice(0, 2), unassigned, followUp, moved], has_more: false })
+    }
+    if (url.pathname.includes('/pages/')) {
+      const current = [unassigned, followUp, historical, examples[2], moved, changed].find(page => url.pathname.endsWith(page.id))!
+      return Response.json({
+        ...current, parent: { data_source_id: current === moved ? id(100) : id(99) },
+        last_edited_time: current === changed ? '2026-11-18T00:00:00.000Z' : current.last_edited_time,
+      })
     }
     if (url.pathname.endsWith('/children')) {
       const texts = url.pathname.includes(id(6)) ? [
@@ -270,7 +279,9 @@ it('reads the configured board through NotionApi and persists replay results in 
         'token:',
         'opaque continuation fragment',
         'Excluded sixth block',
-      ] : []
+      ] : url.pathname.includes(id(5)) ? [
+        'Initiative: Cockpit\nEpic: Operations\nVerify panel recovery.',
+      ] : url.pathname.includes(id(7)) || url.pathname.includes(id(8)) ? ['Unverified body text'] : []
       return Response.json({ has_more: true, next_cursor: 'ignored', results: texts.map((plain_text, index) => ({
         id: String(index), type: 'paragraph', paragraph: { rich_text: [{ plain_text }] },
       })) })
@@ -297,13 +308,13 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(notion).not.toHaveBeenCalled()
   expect(model).not.toHaveBeenCalled()
   const report = await service.dryRun(2000)
-  expect(model).toHaveBeenCalledTimes(4)
+  expect(model).toHaveBeenCalledTimes(6)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Check authentication', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status', body: 'Verify panel recovery.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({
@@ -311,15 +322,19 @@ it('reads the configured board through NotionApi and persists replay results in 
       body: 'Restore billing exports. [credential omitted] Verify recovery. [credential omitted]',
     }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(JSON.stringify(transmitted)).not.toMatch(/Unverified body text|Initiative: Cockpit|Epic: Operations|cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   const blockRequests = notion.mock.calls.map(([url]) => new URL(String(url))).filter(url => url.pathname.includes('/blocks/'))
-  expect(blockRequests).toHaveLength(4)
+  expect(blockRequests).toHaveLength(6)
   expect(blockRequests.every(url => url.searchParams.get('page_size') === '12' && !url.searchParams.has('start_cursor'))).toBe(true)
   const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT card_id, state, result, write_receipt FROM classification_jobs').all())
-  expect(rows).toHaveLength(4)
+  expect(rows).toHaveLength(6)
   expect(rows.every(row => row.state === 'examined' && row.write_receipt === null)).toBe(true)
+  for (const page of [moved, changed]) {
+    const result = report.rows.find(row => row.result.cardId === page.id)!.result
+    expect(assess(result, thresholds.conservative)).toEqual({ outcome: 'needs-review', reason: 'incomplete-source' })
+  }
   for (const row of report.rows) {
     const stored = rows.find(record => record.card_id === row.result.cardId)
     const payload = JSON.parse(String(stored?.result))

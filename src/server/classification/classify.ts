@@ -5,7 +5,7 @@ import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, ty
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
 export type ClassifierSource = {
-  excerpt(id: string): Promise<CardContextRead>
+  excerpt(id: string, expectedVersion: string): Promise<CardContextRead>
   parent(id: string): Promise<WorkCard | undefined>
 }
 type Rank = { id: string; probability: number }
@@ -73,13 +73,14 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
   return { parents, complete }
 }
 
-function openingProse(context: CardContextRead) {
+function openingProse(context: CardContextRead, historical: boolean) {
   const blocks: string[] = []
   for (const block of context.blocks.slice(0, 5)) {
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
     blocks.push(block.text)
   }
-  return clean(blocks.join('\n'), 1_100)
+  const text = blocks.join('\n')
+  return clean(historical ? text.replace(/^[^\S\r\n]*(?:initiative|epic)[^\S\r\n]*:.*$/gim, '') : text, 1_100)
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({
@@ -108,8 +109,8 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
   if (!initiatives.length) return { ...base, ...timing(), state: 'needs-review', reason: 'no-existing-initiative' }
 
   const title = clean(property(card, 'Name'), 250)
-  const [hierarchy, excerpt] = await Promise.all([readParents(card, source), source.excerpt(card.id)])
-  const body = openingProse(excerpt)
+  const [hierarchy, excerpt] = await Promise.all([readParents(card, source), source.excerpt(card.id, card.last_edited_time)])
+  const body = openingProse(excerpt, mode === 'historical')
   const area = clean(property(card, 'Area'), 100)
   const brief = clean(property(card, 'Brief'), 500)
   const description = clean(property(card, 'Description'), 500)
