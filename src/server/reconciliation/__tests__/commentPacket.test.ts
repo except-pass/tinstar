@@ -83,7 +83,7 @@ it('uses the exact request question despite bot paraphrasing and refuses an unre
 })
 
 it('imports the stub Notion sample into a Ready Desk exactly once, without source writes or claims', async () => {
-  const { sources, cardId, requestId, reads } = await setup()
+  const { sources, cardId, requestId, reads, jobIds } = await setup()
   const reconcile = vi.spyOn(sources.workflow, 'reconcileDecisions')
   const snapshot = await loaded(sources)
   expect(snapshot.counts.ready).toBe(1)
@@ -94,9 +94,9 @@ it('imports the stub Notion sample into a Ready Desk exactly once, without sourc
   expect(stored).toMatchObject({ ready: true, prepared_by: expect.stringContaining(commentPacketSource) })
   const imports = (await sources.decisionPackets.events(0, 100)).filter(event => event.type === 'comment-import')
   expect(imports).toHaveLength(1)
-  expect(JSON.parse(String(imports[0]!.detail))).toMatchObject({ source: commentPacketSource, job_id: '74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', comment_id: 'sample-packet-comment' })
+  expect(JSON.parse(String(imports[0]!.detail))).toMatchObject({ source: commentPacketSource, job_id: jobIds.get(cardId), comment_id: 'sample-packet-comment' })
   await sources.preparedReviews.snapshot()
-  await sources.preparation.importComments(cardId, [{ id: 'sample-packet-comment', type: 'comment', text: sampleCommentPacket }])
+  await sources.preparation.importComments(cardId, [{ id: 'sample-packet-comment', type: 'comment', text: sampleCommentPacket.replace('74fe96a2-8e5b-4045-8e27-1bbabf7d86f0', jobIds.get(cardId)!) }])
   expect(await sources.decisionPackets.ids()).toEqual(ids)
   expect(reads.every(read => read.method === 'GET' || read.path.endsWith('/query'))).toBe(true)
   expect(sources.leases.status(cardId)).toBeNull()
@@ -136,6 +136,31 @@ it('lets a newer comment supersede the old packet and renews evidence without re
   expect(changed.ready).toEqual([])
   expect(await sources.decisionPackets.ids()).toHaveLength(2)
   expect(changed.pending[0]!.reasons).toContain('Source request, revision or exact options changed')
+})
+
+it.each([false, true])('requires a normal job for jobless or unknown-job comments: unknown=%s', async unknown => {
+  const packet = unknown ? sampleCommentPacket : sampleCommentPacket.replace(/ · Prep job [a-f0-9-]+/i, '')
+  const { sources, cardId, requestId, prepare } = await setup({ packet, prepare: false })
+  expect(await loaded(sources)).toMatchObject({ ready: [], pending: [{ request_id: requestId, state: 'Queued' }] })
+  expect(await sources.decisionPackets.ids()).toEqual([])
+  const evidence = sources.preparationEvidence(cardId)
+  const mapped = mapCommentPacket({ id: 'retained-comment', type: 'comment', text: packet }, evidence)!
+  const job = await prepare(cardId)
+  expect(job.outcome).toBe('dispatched')
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'prepared-replacement', packet: mapped.packet })).toMatchObject({ ready: true })
+})
+
+it('queues retained jobless packets for regular preparation', async () => {
+  const { sources, cardId, requestId, prepare } = await setup({ prepare: false, packet: '' })
+  await loaded(sources)
+  const evidence = sources.preparationEvidence(cardId)
+  const { packet } = mapCommentPacket({ id: 'retained-comment', type: 'comment', text: sampleCommentPacket }, evidence)!
+  const previous = await sources.decisionPackets.publish(packet, evidence, commentPacketActor, 'retained-comment')
+  await sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', {}, previous.id)
+  expect(await loaded(sources)).toMatchObject({ ready: [], pending: [{ request_id: requestId, state: 'Queued' }] })
+  const job = await prepare(cardId)
+  expect(job.outcome).toBe('dispatched')
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'replace-jobless-packet', packet })).toMatchObject({ ready: true })
 })
 
 it('shows a missing packet field as Blocked on the Desk', async () => {
@@ -244,7 +269,7 @@ it('keeps missing undo evidence blocked with the exact field', () => {
   expect(packet.material_unknowns).toContain('Missing required field: reversibility.rating')
 })
 
-it('automatically corrects legacy imported prose questions and undo ratings after restart', async () => {
+it('automatically corrects legacy imported prose questions and undo ratings after restart when a matching job exists', async () => {
   const f = await setup()
   f.setComments([])
   await loaded(f.sources)
@@ -256,9 +281,9 @@ it('automatically corrects legacy imported prose questions and undo ratings afte
   packet.material_unknowns = ['Missing required field: reversibility', 'Missing required field: reversibility.rating']
   const operation = createHash('sha256').update(JSON.stringify([f.cardId, 'sample-packet-comment'])).digest('hex')
   const legacy = await f.sources.decisionPackets.publish(packet, evidence, commentPacketActor, operation)
-  await f.sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { source: commentPacketSource, card_id: f.cardId, comment_id: 'sample-packet-comment' }, legacy.id)
+  await f.sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { source: commentPacketSource, card_id: f.cardId, comment_id: 'sample-packet-comment', job_id: f.jobIds.get(f.cardId) }, legacy.id)
   await f.sources.decisionPackets.validate(legacy.id, { ...evidence, reasons: ['Complete cached decision history is unavailable'] }, commentPacketActor)
-  const restarted = await commentPacketHistoryFixture(f.root, { packet: text })
+  const restarted = await commentPacketHistoryFixture(f.root, { packet: text, jobIds: f.jobIds })
   expect(restarted.sources.preparationEvidence(f.cardId).reasons).toContain('Complete cached decision history is unavailable')
   const recovered = await loaded(restarted.sources)
   expect(recovered.counts.ready).toBe(1)

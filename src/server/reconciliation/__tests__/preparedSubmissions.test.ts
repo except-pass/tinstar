@@ -14,11 +14,12 @@ import { plainText } from '../workflowContent'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function setup(count = 3) {
+async function setup(count = 3, scoped = false) {
   const root = await mkdtemp(join(tmpdir(), 'desk-submit-')); roots.push(root)
   const fixture = decisionSubmitFixture(count), backend = await fixture.build(root)
   const session = await backend.reviews.create('owner', { operation_id: 'open', label: 'Independent review' })
-  const claim = await backend.reviews.claim('owner', 'Reviewer', { operation_id: 'claim', review_session_token: session.review_session_token })
+  const claim = await backend.reviews.claim('owner', 'Reviewer', { operation_id: 'claim', review_session_token: session.review_session_token,
+    ...(scoped ? { card_id: fixture.fixtures[0]!.cardId } : {}) })
   const input = { operation_id: 'submit', review_session_token: session.review_session_token, lease_token: claim.lease_token!,
     packet_id: claim.packet!.id, packet_version: claim.packet!.version, request_id: claim.packet!.packet.binding.request_id,
     option_id: 'preview', next: { owner: 'Firstmate', status: 'Queued' as const } }
@@ -40,6 +41,19 @@ it('records one exact source answer, releases and claims next without waiting fo
   expect(f.fixture.writes).toHaveLength(writes)
   expect((await restarted.submissions.metrics()).reviewed_today_utc).toBe(1)
   expect(acknowledgment).toHaveBeenCalledOnce()
+})
+
+it('keeps automatic advancement within the exact claimed card, including after a restart', async () => {
+  const f = await setup(2, true)
+  const unrelated = f.fixture.fixtures[1]!.cardId
+  const result = await f.submit()
+  expect(result).toMatchObject({ outcome: 'recorded-empty', next: { outcome: 'no-ready-packet' } })
+  expect(f.backend.leases.status(f.claim.lease!.card_id)).toBeNull()
+  expect(f.backend.leases.status(unrelated)).toBeNull()
+  const restarted = await f.fixture.build(f.root)
+  expect(await restarted.submissions.submit('owner', 'Reviewer', 'owner-actor', f.input)).toMatchObject(result)
+  const next = await restarted.reviews.claim('owner', 'Reviewer', { operation_id: 'explicit-global-next' })
+  expect(next.lease?.card_id).toBe(unrelated)
 })
 
 it('rejects invented request/option ids, wrong packet versions and unauthorized next effects before source writes', async () => {

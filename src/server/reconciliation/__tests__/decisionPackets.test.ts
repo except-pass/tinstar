@@ -324,7 +324,7 @@ it('keeps unchanged research Ready beyond its former review deadline only with n
   expect(await packets.read(first.id, evidence)).toMatchObject({ ready: false })
 })
 
-it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('keeps preparation evidence unchanged after a non-request owner %s', kind => {
+it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name'] as const)('keeps the structured ask open after a non-request owner %s', kind => {
   const f = cardNativeFixture(), request = f.history.context.blocks[0]!
   request.createdAt = new Date(now - 20_000).toISOString()
   const owner = { id: 'owner-response', type: 'comment', createdAt: new Date(now - 10_000).toISOString(),
@@ -332,7 +332,10 @@ it.each(['edit', 'assign', 'park', 'answer_decision', 'comment', 'comment-name']
     ...(kind === 'comment' ? { author: 'owner-chatgpt' } : kind === 'comment-name' ? { author: 'notion-owner-id', authorName: 'owner-chatgpt' } : {}) }
   const before = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
   f.history.context.blocks.push(owner)
-  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).requests).toEqual(before.requests)
+  const after = projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)
+  expect(after.requests[0]!.answered).toBe(false)
+  expect(after.requests[0]!.binding?.source_revision).not.toBe(before.requests[0]!.binding?.source_revision)
+  expect(validateDecisionPacket(f.packet, after, now).valid).toBe(false)
 })
 
 it.each(['earlier', 'same-time', 'other-author', 'unreceipted-wording', 'last-edited-only'] as const)('does not guess an owner answer from %s evidence', kind => {

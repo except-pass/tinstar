@@ -99,26 +99,33 @@ export async function checkInSettings(root = getConfigRoot()): Promise<Settings>
 
 const labels = ['Check-in request', 'Date', 'By', 'Progress', 'Evidence', 'Blocker/owner', 'Next action', 'Next check-in'] as const
 type Report = Record<typeof labels[number], string>
-/** A small labeled checkpoint is both readable on Notion and verifiable without
- * a model. The request correlation prevents unrelated edits from closing it. */
-function readReport(body: string, requestId: string): { report?: Report; issue?: string } {
+function labeledFields(body: string) {
   const fields: Partial<Report> = {}
+  const requestIds: string[] = []
   let issue: string | undefined
-  let correlated = false
   for (const line of body.split(/\r?\n/)) {
     const colon = line.indexOf(':')
     const label = line.slice(0, colon).trim() as typeof labels[number]
     if (colon < 0 || !labels.includes(label)) continue
     const value = line.slice(colon + 1).trim()
-    if (label === 'Check-in request' && value === requestId) correlated = true
+    if (label === 'Check-in request') requestIds.push(value)
     if (fields[label] !== undefined) issue ??= `${label}: duplicate field`
     fields[label] = value
   }
-  if (!correlated) return {}
+  return { fields, requestIds, issue }
+}
+
+/** A small labeled checkpoint is both readable on Notion and verifiable without
+ * a model. The request correlation prevents unrelated edits from closing it. */
+function readReport(body: string, requestId?: string): { report?: Report; issue?: string } {
+  const parsed = labeledFields(body)
+  const { fields } = parsed
+  let { issue } = parsed
+  if (requestId !== undefined && !parsed.requestIds.includes(requestId)) return {}
   for (const label of labels) {
     if (!fields[label] || /^<.*>$/.test(fields[label]!)) issue ??= `${label}: missing value or placeholder`
   }
-  if (fields['Check-in request'] !== requestId) issue ??= 'Check-in request: does not match original request ID'
+  if (requestId !== undefined && fields['Check-in request'] !== requestId) issue ??= 'Check-in request: does not match original request ID'
   if (!Number.isFinite(Date.parse(fields.Date ?? ''))) issue ??= 'Date: unparseable timestamp'
   if ((fields.Progress?.length ?? 0) < 12 ||
     /^(?:still (?:working|running)|none|pending|n\/a|no evidence)[.! ]*$/i.test(fields.Progress ?? '')) issue ??= 'Progress: substantive update required'
@@ -126,7 +133,7 @@ function readReport(body: string, requestId: string): { report?: Report; issue?:
     /^(?:none|pending|n\/a|still working|no evidence)[.! ]*$/i.test(fields.Evidence ?? '')) issue ??= 'Evidence: substantive evidence required'
   return issue ? { issue } : { report: fields as Report }
 }
-export function checkInReport(body: string, requestId: string): Report | null {
+export function checkInReport(body: string, requestId?: string): Report | null {
   return readReport(body, requestId).report ?? null
 }
 
@@ -296,7 +303,6 @@ export class CheckInWatchdog {
       return correction
     } catch { /* Failed read never closes an appointment; retry on next sweep. */ }
   }
-  /** The bridge reads the last completed sweep, never sources or the writer queue. */
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
     const rows = await this.load()

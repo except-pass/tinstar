@@ -131,17 +131,19 @@ it.each(['Todo', 'Backlog', 'Archived', 'Done'])('defers open requests on %s car
   } finally { await client.close() }
 }, 20_000)
 
-it('keeps one preparation across owner prose and First Mate check-ins', async () => {
-  let added = false
+it('keeps preparation across Tin Star housekeeping, then invalidates a substantive comment without recording an answer', async () => {
+  let added = false, changed = false
+  const checkInId = 'appointment'
   const f = await setup({ wrapFetch: transport => async (input, init) => {
     const response = await transport(input, init)
     if (!added || new URL(String(input)).pathname !== '/v1/comments') return response
     const body = await response.json()
     body.results.push(
-      { id: 'owner-prose', created_time: new Date().toISOString(), created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'OWNER DECISION — 2026-11-17: Defer.' }] },
-      { id: 'owner-edit', created_time: new Date().toISOString(), rich_text: [{ plain_text: `Operation: edit\n${receiptMarker('owner-chatgpt', 'owner-edit')}` }] },
-      { id: 'check-in', created_time: new Date().toISOString(), rich_text: [{ plain_text: 'First Mate check-in: still waiting.' }] },
+      { id: 'check-in', rich_text: [{ plain_text: `Date: ${new Date().toISOString()}\n  Check-in request :  ${checkInId}  \nBy: Firstmate\nProgress: Still collecting the prepared evidence.\nEvidence: Verified the local log.\nBlocker/owner: none\nNext action: Read the current source.\nNext check-in: ${new Date().toISOString()}\nAppointment: provisional\n${receiptMarker('Firstmate', 'check-in')}` }] },
+      { id: 'reminder', rich_text: [{ plain_text: `Waiting on you for 4h: existing decision.\n${receiptMarker('waiting-on-main', 'reminder')}` }] },
+      { id: 'packet-note', rich_text: [{ plain_text: 'Prepared packet (Tinstar Decision Prep)\nBackground: Advisory preview only.' }] },
     )
+    if (changed) body.results.push({ id: 'owner-prose', created_by: { name: 'owner-chatgpt' }, rich_text: [{ plain_text: 'Date: 2026-11-17T23:00:00Z\nBy: Firstmate\nProgress: Checked the new preview.\nEvidence: The preview would now write production data. Defer it.\nBlocker/owner: none\nNext action: Recheck production isolation.\nNext check-in: 2026-11-18T23:00:00Z\nAppointment: provisional' }] })
     return Response.json(body)
   } })
   const prepare = () => f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare decision once' })
@@ -158,7 +160,48 @@ it('keeps one preparation across owner prose and First Mate check-ins', async ()
   expect(after.binding?.source_revision).toBe(before.binding?.source_revision)
   expect((await prepare()).outcome).toBe('already-ready')
   expect(f.posts).toHaveLength(1)
+  changed = true
+  await f.sources.updateContext(f.cardId)
+  expect((await loadedSnapshot(f.sources)).ready).toEqual([])
+  const current = f.sources.preparationEvidence(f.cardId).requests[0]!
+  expect(current.answered).toBe(false)
+  expect(current.binding?.source_revision).not.toBe(before.binding?.source_revision)
+  const existingPackets = await f.sources.decisionPackets.ids()
+  await f.sources.preparation.importComments(f.cardId, [{ id: 'late-packet', type: 'comment',
+    text: `Prepared packet (Tinstar Decision Prep)\nDecision: ${f.requestId} · Prep job ${first.job_id}\nBackground: Previous assumptions.` }])
+  expect(await f.sources.decisionPackets.ids()).toEqual(existingPackets)
+  expect(await prepare()).toMatchObject({ outcome: 'dispatched' })
+  expect(f.posts).toHaveLength(2)
 }, 20_000)
+
+it('recovers and replays an explicitly submitted wait effect', async () => {
+  const { sources, cardId, requestId } = await setup()
+  const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
+  const packet = preparedDecisionFixture().packet
+  const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
+  packet.binding = request.binding!
+  packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  packet.risk.rating = 'High'
+  expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'explicit-wait-packet', packet })).toMatchObject({ ready: true })
+  const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'explicit-wait-claim', card_id: cardId })
+  const input = {
+    operation_id: 'explicit-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id, packet_version: claim.packet!.version,
+    request_id: requestId, option_id: packet.recommended_option_id, next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
+    resolve_wait: 'Will: Choose the bounded preview route?',
+  }
+  const submit = (value: unknown) => sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', value)
+  expect(await submit(input)).toMatchObject({ outcome: 'confirmation-required' })
+  const retained = await sources.preparedSubmissions.recover('fixture-owner', { lease_token: claim.lease_token })
+  expect(retained.submissions).toMatchObject([{ operation_id: input.operation_id, resolve_wait: input.resolve_wait }])
+  const retry = { ...input, resolve_wait: retained.submissions[0]!.resolve_wait,
+    confirmation: { option_id: input.option_id, scope: packet.authorization.scope } }
+  const saved = await submit(retry)
+  expect(saved).toMatchObject({ outcome: 'recorded-empty' })
+  expect(await submit(retry)).toEqual(saved)
+  const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
+  expect(card.properties.Status?.value).toBe('Queued')
+  expect(card.properties['Waiting For']?.value).toBe('')
+})
 
 it('loads cold history for automatic admission only after replenishment is turned on', async () => {
   const { sources, reads, posts, reconcile } = await setup()

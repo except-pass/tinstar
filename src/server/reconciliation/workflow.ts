@@ -90,7 +90,7 @@ export class WorkflowOperations {
     // marker in truncated/unavailable history cannot authorize a second write.
     await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
     const notes = await this.content.notes(input.card_id)
-    const intents = decisionRecordRows(notes, 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id)
+    const intents = notes.flatMap(note => decisionRecordRows([note], 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id).map(row => ({ ...row, noteId: note.id })))
     const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
     const matches = (value: unknown) => {
       const parsed = updateWorkSchema.safeParse(value)
@@ -107,7 +107,7 @@ export class WorkflowOperations {
       desired = (await this.updatePlan(planning, input, actor, notes)).desired
     }
     return { state: conflict ? 'conflict' as const : answers.length ? 'confirmed' as const : own ? 'pending' as const : 'absent' as const,
-      original: own?.original as Record<string, unknown> | undefined, desired }
+      original: own?.original as Record<string, unknown> | undefined, desired, ownIntentId: own?.noteId }
   }
   async preparedHistory(cardId: string) {
     const [notes, sections] = await Promise.all([this.content.notes(cardId), this.content.sections(cardId, false, true)])
@@ -464,10 +464,10 @@ export class WorkflowOperations {
     if (!['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in'].some(name => name in desired)) return
     const value = (name: string) => name in desired ? desired[name] : card.properties[name]?.value
     const status = String(value('Status') ?? '')
-    if ((card.properties.Status?.value === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })) && status !== 'Waiting For') {
-      const current = waitState(card)
+    const current = waitState(card)
+    if ((current.status === 'Waiting For' || hasActiveTypedWait(current)) && status !== 'Waiting For') {
       const entries = waitEntries(current.waitingFor, current).map(entry => entry.text)
-      if (!resolve || entries.filter(line => line === resolve).length !== 1 || entries.some(line => line !== resolve) || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
+      if (!resolve || entries.length !== 1 || entries[0] !== resolve || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
     }
     const state = { ...waitState(card), status, type: String(value('Waiting For Type') ?? ''), id: String(value('Waiting For ID') ?? ''),
       waitingFor: String(value('Waiting For') ?? ''), nextCheckIn: value('Next check-in') as ReturnType<typeof waitState>['nextCheckIn'] }
@@ -561,9 +561,9 @@ export class WorkflowOperations {
       note += `\n${line}`
     }
     const resolveWait = (resolve: string | undefined, requestedStatus: string) => {
-      const wasWaiting = String(card.properties.Status?.value ?? '') === 'Waiting For' || hasActiveTypedWait({ type: String(card.properties['Waiting For Type']?.value ?? ''), id: String(card.properties['Waiting For ID']?.value ?? ''), waitingFor: String(card.properties['Waiting For']?.value ?? '') })
       const entries = currentWaits()
-      if (!wasWaiting) {
+      const state = waitState(card)
+      if (state.status !== 'Waiting For' && !hasActiveTypedWait(state)) {
         if (!resolve) return
         if (entries.filter(entry => entry.text === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
         editedWaits = entries.filter(entry => entry.text !== resolve)

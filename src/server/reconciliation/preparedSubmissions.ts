@@ -19,8 +19,8 @@ export const preparedSubmitInput = z.object({
 export const preparedRecoveryInput = z.object({ review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256).optional(), original_lease_token: z.string().min(1).max(256).optional() }).strict()
 type Input = z.infer<typeof preparedSubmitInput>
 export interface PreparedAnswerSource {
-  observe(input: Answer, actor: string): Promise<{ state: 'absent' | 'pending' | 'confirmed' | 'conflict'; original?: Record<string, unknown>; desired?: Record<string, unknown> }>
-  evidence(packet: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>): Promise<DecisionEvidence>
+  observe(input: Answer, actor: string): Promise<{ state: 'absent' | 'pending' | 'confirmed' | 'conflict'; original?: Record<string, unknown>; desired?: Record<string, unknown>; ownIntentId?: string }>
+  evidence(packet: StoredDecisionPacket, original?: Record<string, unknown>, desired?: Record<string, unknown>, ownIntentId?: string): Promise<DecisionEvidence>
   write(input: Answer, actor: string): Promise<StartWorkResult>
   scheduleReconciliation?(card: string): void
 }
@@ -28,6 +28,7 @@ interface Attempt {
   caller: string; scope: string; operation: string; signature: string; session_id: string; binding: string; selection: string; answer: string; actor: string;
   state: string; detail: string; created: number; confirmed: number | null; finished: number | null
 }
+type SubmissionBinding = PreparedBinding & { next_card_scope?: string | null }
 export interface PreparedSubmitResult {
   outcome: string; operation_id: string; selection: { packet_id: string; packet_version: number; request_id: string; option_id: string };
   message: string; source_state?: string; saved_fields?: string[]; reasons?: string[]; observed_at?: string | null;
@@ -93,7 +94,7 @@ export class PreparedSubmissions {
         // Completed operation replay is authorized by its original capability,
         // even after advance/expiry; it cannot release or write a newer card.
         if (prior) {
-          const oldBinding: PreparedBinding = JSON.parse(prior.binding)
+          const oldBinding: SubmissionBinding = JSON.parse(prior.binding)
           const oldSelection: PreparedSubmitResult['selection'] = JSON.parse(prior.selection)
           if (oldBinding.token_hash !== leaseHash(input.lease_token) || oldSelection.packet_id !== input.packet_id || oldSelection.packet_version !== input.packet_version) {
             if (prior.confirmed !== null) throw new DecisionDeskConflict('A recorded operation cannot be rebound to another packet')
@@ -105,7 +106,8 @@ export class PreparedSubmissions {
             const sameContext = held.session_id === prior.session_id || input.original_lease_token && leaseHash(input.original_lease_token) === oldBinding.token_hash
             if (!sameContext || held.binding.packet_id !== input.packet_id || held.binding.packet_version !== input.packet_version || !oldPacket || !fresh ||
               bindingMeaning(oldPacket.packet.binding) !== bindingMeaning(fresh.packet.binding) || decisionMeaning(oldPacket.packet.authorization) !== decisionMeaning(fresh.packet.authorization)) throw new CardLeaseError(null)
-            prior.binding = JSON.stringify(held.binding); prior.session_id = held.session_id; prior.selection = JSON.stringify(this.selection(input))
+            const nextCardScope = oldBinding.next_card_scope === undefined ? this.reviews.claimScopeInStorage(db, caller, oldBinding) ?? null : oldBinding.next_card_scope
+            prior.binding = JSON.stringify({ ...held.binding, next_card_scope: nextCardScope }); prior.session_id = held.session_id; prior.selection = JSON.stringify(this.selection(input))
             db.prepare('UPDATE decision_desk_submissions SET binding = ?,session_id = ?,selection = ? WHERE caller = ? AND scope = ? AND operation = ?').run(prior.binding, prior.session_id, prior.selection, caller, prior.scope, prior.operation)
             this.leases.auditInStorage(db, held.binding.card, 'prepared-submit-reclaimed', { operation_key: leaseHash(JSON.stringify([caller, input.operation_id])), packet_id: fresh.id, packet_version: fresh.version, generation: held.binding.generation })
           }
@@ -126,7 +128,8 @@ export class PreparedSubmissions {
         if (other?.state === 'selected') db.prepare("UPDATE decision_desk_submissions SET state = 'superseded' WHERE caller = ? AND scope = ? AND operation = ?").run(other.caller, this.reviews.scope, other.operation)
         else if (other) throw new DecisionDeskConflict('This source request has a retained submission; reconcile the original operation ID before selecting another answer')
         const row: Attempt = { caller, scope: this.reviews.scope, operation: input.operation_id, signature: this.signature(input), session_id: held.session_id,
-          binding: JSON.stringify(held.binding), selection: JSON.stringify(this.selection(input)), answer: JSON.stringify(answer), actor,
+          binding: JSON.stringify({ ...held.binding, next_card_scope: this.reviews.claimScopeInStorage(db, caller, held.binding) ?? null }),
+          selection: JSON.stringify(this.selection(input)), answer: JSON.stringify(answer), actor,
           state: 'selected', detail: '{}', created: this.now(), confirmed: null, finished: null }
         db.prepare('INSERT INTO decision_desk_submissions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(...Object.values(row))
         db.prepare('INSERT OR IGNORE INTO decision_desk_recording VALUES(?,?)').run(row.scope, this.now())
@@ -137,7 +140,8 @@ export class PreparedSubmissions {
       return { outcome: 'lease-lost', operation_id: input.operation_id, selection: this.selection(input), message: 'Lease expired or lost. Re-claim and revalidate before submitting. Your selection is retained.' }
     }
     if (attempt.confirmed !== null) return this.finish(attempt, holder)
-    const binding: PreparedBinding = JSON.parse(attempt.binding), answer: Answer = JSON.parse(attempt.answer)
+    const { next_card_scope: _nextCardScope, ...binding }: SubmissionBinding = JSON.parse(attempt.binding)
+    const answer: Answer = JSON.parse(attempt.answer)
     const stored = await this.reviews.packets.read(input.packet_id)
     if (!stored) return this.response(attempt, 'packet-invalidated', 'Packet unavailable. Your selection is retained.')
     const confirmation = { option_id: input.option_id, selected_option: answer.answer, scope: stored.packet.authorization.scope,
@@ -159,7 +163,7 @@ export class PreparedSubmissions {
           (input.confirmation?.option_id !== input.option_id || input.confirmation.scope !== confirmation.scope)) {
           return this.response(attempt, 'confirmation-required', 'Confirm the selected option and its explicit authorization scope before saving.', { confirmation: workReadback(confirmation) })
         }
-        const evidence = await this.source.evidence(stored, observation.original, observation.desired)
+        const evidence = await this.source.evidence(stored, observation.original, observation.desired, observation.ownIntentId)
         const current = await this.reviews.packets.read(stored.id, evidence)
         if (!current?.validation.valid || !current.validation.valid_until || Date.parse(current.validation.valid_until) <= this.now()) {
           const request = evidence.requests.find(request => request.binding?.request_id === input.request_id)
@@ -199,7 +203,7 @@ export class PreparedSubmissions {
     }
   }
   private async finish(attempt: Attempt, holder: string): Promise<PreparedSubmitResult> {
-    const binding: PreparedBinding = JSON.parse(attempt.binding)
+    const binding: SubmissionBinding = JSON.parse(attempt.binding)
     try {
       const next = await this.leases.writeStorage(db => {
         const row = this.read(db, attempt.caller, attempt.operation)!
@@ -208,7 +212,8 @@ export class PreparedSubmissions {
           this.reviews.finishInStorage(db, attempt.caller, binding, 'Decision source answer confirmed')
           db.prepare("UPDATE decision_desk_submissions SET state = 'recorded',finished = ? WHERE caller = ? AND scope = ? AND operation = ?").run(this.now(), attempt.caller, attempt.scope, attempt.operation)
         }
-        const result = this.reviews.tryContinueInStorage(db, attempt.caller, holder, attempt.session_id, `submit-next:${leaseHash(attempt.operation)}`)
+        const cardScope = binding.next_card_scope === undefined ? this.reviews.claimScopeInStorage(db, attempt.caller, binding) : binding.next_card_scope ?? undefined
+        const result = this.reviews.tryContinueInStorage(db, attempt.caller, holder, attempt.session_id, `submit-next:${leaseHash(attempt.operation)}`, undefined, cardScope)
         this.leases.auditInStorage(db, binding.card, 'prepared-submit-to-next', { operation_key: leaseHash(JSON.stringify([attempt.caller, attempt.operation])), outcome: result.outcome, duration_ms: this.now() - attempt.created, source_readback_ms: row.confirmed - attempt.created })
         return result
       })

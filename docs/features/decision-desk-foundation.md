@@ -355,14 +355,19 @@ capabilities in request bodies/tool arguments only. The server derives the exact
 answer label and source tuple from the held immutable packet; callers cannot
 supply an alternate answer or infer subrequest IDs. `next` uses the existing
 workflow vocabulary and must match the packet's bounded next owner/status.
-Existing optional `resolve_wait` and `next.wait` semantics remain explicit.
+API callers may supply an exact `resolve_wait` under the
+[workflow wait rules](workflow.md#slice-2-remaining-operations-and-first-mate-integration).
+The browser omits that field on a new Desk submission. A transition that
+requires an explicit wait resolution must use the API or be handled through
+the source workflow.
 
 The server durably retains selection/operation/context before source I/O. It
 requires the matching active canonical generation before writing, forces exact
 complete source-history reads and refreshes the source snapshot, compares request,
 card and declared dependency meaning, then uses the existing workflow answer
-writer. Source observations retain their actual freshness; this is bounded
-observation, not atomic universal invalidation across providers. Material unknown
+writer. On retry, the forced history read excludes the operation’s own retained
+intent comment from the discussion comparison. Source observations retain their
+actual freshness and provide bounded validation across providers. Material unknown
 or changed PR/worker evidence blocks submit. P1's unsupported external evidence
 stays unknown; P3 does not invent PR-head proof.
 
@@ -375,7 +380,10 @@ never just an intent, delivered inbox note, property match or list of saved
 fields. It returns `recorded-awaiting-worker-acknowledgment` and schedules the
 existing receipt bridge asynchronously after local release/next commits, so
 receipt writes cannot race that step. In one short local transaction, the
-coordinator records release and binds the next Ready packet. Allocation failure
+coordinator records release and attempts to bind the next Ready packet. If the
+claim that established the review binding was limited to one card, submit
+continuation searches only that card, including on retry. If it returns empty,
+use **Refresh prepared decisions** to search the full queue. Allocation failure
 cannot roll back release of a source-confirmed answer. A crash between source
 confirmation and release/next is reconciled by the same operation ID.
 
@@ -494,9 +502,13 @@ before anything is stored.
 
 The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
-one current, unanswered request on that same card. Complete, fresh history is
-required. Labelled sections are mapped into a normal packet and run through the
-same schema and evidence validation. The question always comes from the exact
+one current, unanswered request and include its `Prep job <id>` for the same
+card and source revision. Superseded jobs cannot publish through this fallback.
+Comments without matching jobs are ignored, and previously imported packets
+without matching jobs are ineligible for review. The request can still enter
+normal preparation. Complete, fresh history is required.
+Labelled sections are mapped into a normal packet and run through the same
+schema and evidence validation. The question always comes from the exact
 request record; the bot's question is advisory background. Options use the
 request's identities. Explicit undo/rollback wording supplies reversibility;
 missing evidence still blocks the named field.
@@ -511,15 +523,17 @@ Comment imports are marked `card comment (default authorization)`. Their
 That route applies to every answer. Per-option next actions from the bot remain
 advisory prose, not executable authorization. Importing does not claim a card,
 answer it, change its status, or dispatch another job. The comment ID and card
-identify a single durable import, with the job ID recorded when supplied. A
+identify a single durable import, with its preparation job ID recorded. A
 matching expired job may complete through this fallback. A newer comment
-supersedes the request's older packet. Re-reading a comment can renew source
-evidence automatically after restart or source recovery, but never rebinds it
+can supersede the request's older packet when accepted for publication.
+Re-reading a comment can renew source evidence after restart or source
+recovery, but never rebinds it
 to a changed request revision. Unchanged packet research has no age expiry:
 `expires_at` is null on the wire, and `review_within_ms` is retained only as a
-legacy input hint. Fresh source evidence is still required at review/submit. Existing
-imports blocked by the former prose-question or undo-mapping defects receive
-one audited corrected version, retaining their original binding/dependencies.
+legacy input hint. Fresh source evidence is still required at review/submit.
+Existing imports with a matching job that are blocked by the former prose-question
+or undo-mapping defects receive one audited corrected version, retaining their
+original binding and dependencies.
 A correction cannot supersede newer preparation.
 
 The isolated sample proof is reproducible after `npm run build:all`:
@@ -635,14 +649,13 @@ generation validation. Both kinds dispatch the same webhook job and save owner
 selections through the existing `answer_decision` operation. Answered requests
 are excluded from the pending list.
 
-For prepared decisions, a later `owner-chatgpt` workflow receipt or an
-`owner-chatgpt`-authored comment on the card suppresses every request whose own
-source creation timestamp precedes it. This deliberately includes unrelated owner
-edits/assignments/parks: it is a broad structural answer rule, with no guessing
-from prose. Receipt identity comes from the terminal `Tin Star operation` tuple;
-plain comment identity comes from source author metadata. Unknown ordering blocks
-verification rather than asserting an answer. Canonical `Tin Star answer` records
-continue to count as answers.
+For both request types, substantive card comments contribute to the source
+revision through a digest of normalized, redacted text. Adding or changing that
+discussion invalidates existing preparation while leaving the request open.
+Comment order and timestamps do not affect the digest. The digest excludes
+comments that validate as labeled check-in reports, carry a waiting-on-main
+workflow receipt, or start with the Decision Prep packet heading. Canonical
+answer records determine whether the request was answered.
 
 Decision history reads all pages of page comments and top-level paragraphs
 (the legacy workflow record surface). Specification code, embeds, and nested
@@ -717,8 +730,10 @@ Each explicit Return to source or card/request selection creates a **one-shot**
 claim target. Its first result consumes it, whether claimed, retained by this
 session, held elsewhere, refused as a substitute, or not ready. Queue observations,
 ordinary revisions, refreshes and mode changes do not re-arm it. Subsequent claims,
-including Refresh and continuation after submit/skip/research, are untargeted
-next-ready claims (the backend still resumes this session's unresolved held card).
+including Refresh and continuation after Skip or Need more research, are
+untargeted next-ready claims (the backend still resumes this session's unresolved
+held card). See [submit continuation](#p3-durable-source-bound-submit-and-recovery)
+for the scope after saving an answer.
 A requested-target conflict/refusal/not-ready screen exposes **Claim next prepared
 decision** as its primary action at every width and **Try this decision again** as
 a quiet, explicitly targeted retry. Retained answers and pending release recovery

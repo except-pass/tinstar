@@ -106,11 +106,11 @@ export class ReconciliationSources {
     this.workflow = new WorkflowOperations(this.workReader, () => this.fleetSnapshot(true), receiptRoot, this.proposalSource)
     this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, {
       observe: (input, actor) => this.workflow.observePreparedAnswer(input, actor),
-      evidence: async (stored, original, desired) => {
+      evidence: async (stored, original, desired, ownIntentId) => {
         // Forced exact history and source observation on every submit, without
         // queue()/get_work reconciliation or research in the critical path.
         const [snapshot, blocks] = await Promise.all([this.snapshot(true, {}, false), this.workflow.preparedHistory(stored.packet.binding.card_id)])
-        return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks, original, desired)
+        return projectPreparedSubmitEvidence(snapshot, stored.packet.binding.card_id, blocks.filter(block => block.id !== ownIntentId), original, desired)
       },
       write: (input, actor) => this.workflow.answerPrepared(input, actor),
       scheduleReconciliation: card => {
