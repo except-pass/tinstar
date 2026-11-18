@@ -21,6 +21,10 @@ export class NotionApi {
   private schemas = new Map<string, { until: number; value: Promise<Response>; background: boolean }>()
   constructor(private fetcher: typeof fetch = fetch, private intervalMs = 350) {}
 
+  invalidateSchema(dataSourceId: string) {
+    this.schemas.delete(`https://api.notion.com/v1/data_sources/${dataSourceId}`)
+  }
+
   readonly backgroundFetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, true, false, onSend)
   readonly parallelFetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, false, false, onSend)
   readonly fetch: NotionFetch = (input, init, timeoutMs, onSend) => this.cachedRequest(input, init, timeoutMs, false, true, onSend)
