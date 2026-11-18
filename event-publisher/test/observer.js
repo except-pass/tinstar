@@ -381,14 +381,14 @@ test('reversed task and worker reads preserve accepted snapshots and events', as
   const baseline = journal.sources()
   const changedWorker = { ...worker, state: 'parked' }
   for (const observation of [
-    taskObservation([{ ...task, state: 'done' }], 2),
-    workerObservation([changedWorker], 2),
+    taskObservation([{ ...task, state: 'done' }], 10),
+    workerObservation([changedWorker], 10),
   ]) {
     deepEqual(journal.recordAttempt({ ...observation, observed_at: at(-1) }), { written: 0, complete: false })
   }
   for (const [index, source] of journal.sources().entries()) {
     equal(source.health, 'stale')
-    for (const field of ['last_attempt_at', 'last_success_at', 'last_snapshot_id', 'last_generated_at']) {
+    for (const field of ['last_attempt_started', 'last_attempt_at', 'last_success_at', 'last_snapshot_id', 'last_generated_at']) {
       equal(source[field], baseline[index][field])
     }
   }

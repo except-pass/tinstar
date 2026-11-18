@@ -120,7 +120,7 @@ async function collect(journal, homes, interval) {
     let complete
     do {
       complete = true
-      const start = Date.now()
+      const start = performance.now()
       for (const home of homes) {
         if (home.path || controller.signal.aborted) continue
         home.unavailableReason = null
@@ -142,7 +142,7 @@ async function collect(journal, homes, interval) {
         }
       }
       // Always pause after a slow pass as well. Never overlap collector passes.
-      if (interval) await pause(Math.max(1000 * interval - (Date.now() - start), 5000), controller.signal)
+      if (interval) await pause(Math.max(1000 * interval - (performance.now() - start), 5000), controller.signal)
     } while (interval && !controller.signal.aborted)
     if (!interval) return !controller.signal.aborted && complete
   } finally {

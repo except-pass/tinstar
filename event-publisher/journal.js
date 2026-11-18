@@ -175,6 +175,7 @@ export class Journal {
 
   recordAttempt(observation) {
     const { source, started_at, observed_at, entries, generated_at } = observation
+    let batchStartedAt = started_at
     let batchObservedAt = observed_at
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -191,6 +192,7 @@ export class Journal {
         if (observed_at < started_at) {
           health = 'stale'
           reason = 'read ended before it started'
+          batchStartedAt = previous.last_attempt_started
           batchObservedAt = previous.last_attempt_at
         } else if (entries && previous.last_attempt_at && started_at < previous.last_attempt_at) {
           health = 'stale'
@@ -225,7 +227,7 @@ export class Journal {
             last_success_at = COALESCE(?, last_success_at),
             last_generated_at = COALESCE(?, last_generated_at)
           WHERE source_id = ?
-        `).run(started_at, batchObservedAt, health, reason, JSON.stringify(counts),
+        `).run(batchStartedAt, batchObservedAt, health, reason, JSON.stringify(counts),
           snapshotId, snapshotId ? batchObservedAt : null,
           acceptedGeneration, source.source_id)
       }
