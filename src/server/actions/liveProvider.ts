@@ -25,19 +25,20 @@ export type BrokerConfig = z.infer<typeof brokerConfigSchema>
 type Profile = 'reader' | 'repair'
 type Permissions = Record<string, 'read' | 'write'>
 export type ProviderRequest = { method: 'GET' | 'POST' | 'PUT'; path: string; authorization: string; body?: unknown; etag?: string }
-export type ProviderTransport = (input: ProviderRequest) => Promise<GithubRestResponse>
+export type ProviderTransport = (input: ProviderRequest, received?: (status: number) => void) => Promise<GithubRestResponse>
 /** No subprocess, env or argv receives authentication. HTTPS stays inside the
  * broker process; gh-axi has no secret-in-memory input interface. No redirects,
  * arbitrary origins, automatic retries or provider diagnostics leave custody. */
-export const githubTransport: ProviderTransport = input => new Promise((resolveResponse, reject) => {
+export const githubTransport: ProviderTransport = (input, received) => new Promise((resolveResponse, reject) => {
   const request = httpsRequest({ hostname: 'api.github.com', port: 443, method: input.method, path: input.path,
     headers: { Authorization: `Bearer ${input.authorization}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'tinstar-action-broker', ...(input.body ? { 'Content-Type': 'application/json' } : {}), ...(input.etag ? { 'If-None-Match': input.etag } : {}) }, timeout: 12_000,
   }, response => {
+    const status = response.statusCode ?? 0
+    received?.(status)
     let bytes = 0; const chunks: Buffer[] = []
     response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) request.destroy(); else chunks.push(chunk) })
     response.on('error', () => reject(new Error('GitHub broker request failed')))
     response.on('end', () => {
-      const status = response.statusCode ?? 0
       let data: unknown = null
       try { if (bytes) data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
       catch {
@@ -132,7 +133,7 @@ export class LiveProvider {
     catch { throw new Error(`Live ${profile} not provisioned: invalid App private key`) }
     this.#secrets.add(jwt)
     let response
-    try { response = await this.rest.send(() => this.transport({ method: 'POST', path: `/app/installations/${installation.installationId}/access_tokens`, authorization: jwt, body: { repository_ids: [repositoryId], permissions } })) }
+    try { response = await this.rest.send(received => this.transport({ method: 'POST', path: `/app/installations/${installation.installationId}/access_tokens`, authorization: jwt, body: { repository_ids: [repositoryId], permissions } }, received)) }
     catch (error) {
       if (isGithubRateLimit(error)) throw error
       throw new Error('App installation token request failed; no ambient authentication fallback')
@@ -154,7 +155,7 @@ export class LiveProvider {
     try { this.rest.assertAvailable(); authorization = await this.token(profile, repository, permissions); await beforeSend?.(); this.rest.assertAvailable() }
     catch (error) { throw new BrokerEffectError(error instanceof Error ? error.message : 'Broker validation refused request', 'not-sent') }
     let response
-    try { response = await this.rest.send(() => this.transport({ method, path, body, authorization, etag })) }
+    try { response = await this.rest.send(received => this.transport({ method, path, body, authorization, etag }, received)) }
     catch (error) {
       if (isGithubRateLimit(error)) throw new BrokerEffectError(error.message, 'not-sent')
       throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown')

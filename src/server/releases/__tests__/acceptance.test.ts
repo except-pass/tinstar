@@ -261,15 +261,20 @@ describe('release acceptance safe checks', () => {
   })
   it('sends acceptance requests through the CLI budget and shares its hold with polling', async () => {
     const f = await setup()
-    const executable = join(f.root, 'gh')
-    await writeFile(executable, `#!/usr/bin/env node
+    const legacy = join(f.root, 'gh-axi')
+    await writeFile(legacy, `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args[3] === 'POST') {
-  const body = JSON.parse(fs.readFileSync(args[args.indexOf('--input') + 1], 'utf8'));
-  if (body.return_run_details !== true) process.exit(4);
-  process.stdout.write('HTTP/2.0 200 OK\\n\\n{"payload":{"workflow_run_id":99}}');
-} else if (args[1].endsWith('/runs/99')) {
+const body = JSON.parse(fs.readFileSync(args[args.indexOf('--input') + 1], 'utf8'));
+if (args[1] !== 'POST' || body.return_run_details !== true) process.exit(4);
+process.stdout.write('payload: ' + JSON.stringify(JSON.stringify({ workflow_run_id: 99 })));
+`)
+    await chmod(legacy, 0o700)
+    const executable = join(f.root, 'gh')
+    await writeFile(executable, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[3] !== 'GET') process.exit(4);
+if (args[1].endsWith('/runs/99')) {
   process.stdout.write('HTTP/2.0 200 OK\\n\\n{"payload":{"id":99}}');
 } else {
   process.stdout.write('HTTP/2.0 429 Too Many Requests\\nRetry-After: 120\\n\\n');
@@ -284,6 +289,7 @@ if (args[3] === 'POST') {
     const { githubCliJson } = await import('../../pulls/github')
     await expect(githubCliJson(`${base}/runs?per_page=1`)).rejects.toThrow('GitHub REST rate limited')
     await expect(acceptanceGithub('GET', `${base}/runs/99`)).rejects.toThrow('GitHub REST rate limited')
+    await expect(acceptanceGithub('POST', `${base}/workflows/existing-smoke.yml/dispatches`, { return_run_details: true })).rejects.toThrow('GitHub REST rate limited')
   })
   it('an audited skip is recoverable and never becomes a pass', async () => {
     const f = await setup('human')

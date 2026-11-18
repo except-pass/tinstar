@@ -5,6 +5,7 @@ const cacheBudget = 16 * 1024 * 1024
 export interface GithubRestResponse {
   status: number
   data: unknown
+  statusObserved?: false
   headers?: { etag?: string; remaining?: string; reset?: string; retryAfter?: string }
 }
 
@@ -39,7 +40,7 @@ export class GithubRestBudget {
     if (this.blockedUntil > this.now()) throw new Error(rateLimitMessage)
   }
 
-  async send(send: () => Promise<GithubRestResponse>) {
+  async send(send: (received: (status: number) => void) => Promise<GithubRestResponse>) {
     this.assertAvailable()
     if (!this.reporting) {
       this.reporting = true
@@ -49,15 +50,15 @@ export class GithubRestBudget {
         this.hourly = { requests: 0, notModified: 0, holds: 0 }
       }, hour).unref()
     }
-    const window = this.hourly
-    window.requests++
-    let response: GithubRestResponse
-    try { response = await send() }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') window.requests--
-      throw error
+    let observed = false
+    const received = (status: number) => {
+      if (observed || status < 100 || status > 599) return
+      observed = true
+      this.hourly.requests++
+      if (status === 304) this.hourly.notModified++
     }
-    if (response.status === 304) this.hourly.notModified++
+    const response = await send(received)
+    if (response.statusObserved !== false) received(response.status)
     const now = this.now()
     const until = holdUntil(response, now)
     if (until) {

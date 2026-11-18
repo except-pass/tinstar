@@ -388,7 +388,7 @@ export class CockpitFleet {
     let status: ReviewStatus = 'unknown'
     try {
       // GitHub is authoritative for merge state; First Mate's PR URL can outlive a merge.
-      const pull = await githubCliJson(parsed.apiPath, '{state,merged_at}', { timeout: 8_000, maxBuffer: 1024 * 1024 }) as { state?: unknown; merged_at?: unknown }
+      const pull = await githubCliJson(parsed.apiPath, '{state,merged_at}', { timeout: 8_000, maxBuffer: 1024 * 1024 }, false) as { state?: unknown; merged_at?: unknown }
       if (pull.merged_at) status = 'merged'
       else if (pull.state === 'open' || pull.state === 'closed') status = pull.state
     } catch (err) {

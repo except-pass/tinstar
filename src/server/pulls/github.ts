@@ -28,11 +28,11 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
 }
 
 type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string }
-type CliMethod = 'GET' | 'POST'
 type CliLimits = typeof options
 
-async function includedRequest(method: CliMethod, path: string, projection: string, flags: string[], limits: CliLimits) {
-  const args = ['api', path, '--method', method, '--include', '--jq', `{payload:(${projection})}`, ...flags]
+async function includedRequest(path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (status: number) => void) {
+  const args = ['api', path, '--method', 'GET', '--include', '--jq', `{payload:(${projection})}`]
+  if (etag) args.push('--header', `If-None-Match:${etag}`)
   let stdout: string
   let failure: CliError | undefined
   try { ({ stdout } = await exec('gh', args, limits)) }
@@ -43,6 +43,7 @@ async function includedRequest(method: CliMethod, path: string, projection: stri
     stdout = failure.stdout
   }
   const response = includedResponse(stdout)
+  if (response) received(response.status)
   if (failure && (!response || response.status < 300)) throw failure
   if (!response) throw new Error('GitHub response metadata unavailable')
   return response
@@ -51,14 +52,13 @@ async function includedRequest(method: CliMethod, path: string, projection: stri
 async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits): Promise<GithubRestResponse> {
   try {
     const { stdout } = await exec('gh-axi', args, commandOptions)
-    return { status: 200, data: decode(stdout) }
+    return { status: 200, statusObserved: false, data: decode(stdout) }
   } catch (error) {
     const failure = error as CliError
     const diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`
-    if (/\bHTTP 304\b/.test(diagnostics)) return { status: 304, data: null }
     if (/^code: RATE_LIMITED\r?$/m.test(diagnostics) || /\bHTTP 429\b/.test(diagnostics)) {
       const retryAfter = /secondary rate limit/i.test(diagnostics) ? '60' : '3600'
-      return { status: 429, data: null, headers: { retryAfter } }
+      return { status: 429, statusObserved: false, data: null, headers: { retryAfter } }
     }
     if (failure.code === 'ENOENT') {
       throw Object.assign(new Error('GitHub reader unavailable: gh-axi is missing from the server PATH.'), { code: 'ENOENT' })
@@ -67,9 +67,9 @@ async function legacyRequest(args: string[], decode: (stdout: string) => unknown
   }
 }
 
-async function cliRequest(method: CliMethod, path: string, projection: string, flags: string[], limits: CliLimits) {
+async function cliGet(path: string, projection: string, etag: string | undefined, limits: CliLimits, allowFallback: boolean) {
   try {
-    const response = await budget.send(() => includedRequest(method, path, projection, flags, limits))
+    const response = await budget.send(received => includedRequest(path, projection, etag, limits, received))
     if (response.status >= 200 && response.status < 300) {
       if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new Error('Unsupported GitHub response')
       response.data = response.data.payload
@@ -77,11 +77,11 @@ async function cliRequest(method: CliMethod, path: string, projection: string, f
     return response
   }
   catch (error) {
-    if ((error as CliError).code !== 'ENOENT') {
+    if (!allowFallback || (error as CliError).code !== 'ENOENT') {
       if (isGithubRateLimit(error)) throw error
       throw new Error('GitHub request failed: check CLI authentication, repository access and rate budget.')
     }
-    return budget.send(() => legacyRequest(['api', method, path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full', ...flags], stdout => {
+    return budget.send(() => legacyRequest(['api', 'GET', path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full'], stdout => {
       const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
       const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
       if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new Error('Unsupported GitHub response')
@@ -90,14 +90,16 @@ async function cliRequest(method: CliMethod, path: string, projection: string, f
   }
 }
 
-export function githubCliJson(path: string, projection = '.', limits: CliLimits = options): Promise<unknown> {
-  return budget.get(JSON.stringify([path, projection, limits.timeout, limits.maxBuffer]), etag =>
-    cliRequest('GET', path, projection, etag ? ['--header', `If-None-Match:${etag}`] : [], limits))
+export function githubCliJson(path: string, projection = '.', limits: CliLimits = options, allowFallback = true): Promise<unknown> {
+  return budget.get(JSON.stringify([path, projection, limits.timeout, limits.maxBuffer, allowFallback]), etag =>
+    cliGet(path, projection, etag, limits, allowFallback))
 }
 
 export async function githubCliPost(path: string, input: string, limits: CliLimits): Promise<unknown> {
-  const response = await cliRequest('POST', path, '.', ['--input', input], limits)
-  if (response.status < 200 || response.status >= 300) throw new Error(`GitHub request failed (HTTP ${response.status})`)
+  const response = await budget.send(() => legacyRequest(['api', 'POST', path, '--jq', '{payload: (.|tojson)}', '--full', '--input', input], stdout => {
+    const value: unknown = JSON.parse(stdout.trim().replace(/^payload: /, ''))
+    return typeof value === 'string' ? JSON.parse(value) : value
+  }, limits))
   return response.data
 }
 

@@ -79,7 +79,7 @@ it('keeps timeout and decoding failures from sending a second request', async ()
   exec.mockImplementationOnce((_binary, _args, _options, done) => setTimeout(() => done(new Error('private timeout diagnostic')), 3_600_001))
   const timedOut = expect(github.githubJson(pulls)).rejects.toThrow('GitHub request failed')
   await vi.advanceTimersByTimeAsync(3_600_000)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0 holds=0')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0 holds=0')
   await vi.advanceTimersByTimeAsync(1)
   await timedOut
   answer(200, { unexpected: [] })
@@ -97,7 +97,7 @@ it('shares a hold from the legacy transport with subsequent CLI requests', async
   expect(exec).toHaveBeenCalledTimes(2)
   await vi.advanceTimersByTimeAsync(3_600_000)
   expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0 holds=1')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0 holds=1')
 })
 
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
@@ -113,4 +113,18 @@ it('falls back to gh-axi when gh is missing and decodes the legacy projection', 
 it('reports a missing binary without echoing credential-bearing stderr', async () => {
   exec.mockImplementation((_binary, _args, _options, done) => done(Object.assign(new Error('secret stderr'), { code: 'ENOENT' })))
   await expect(github.githubJson('/user')).rejects.toThrow('gh-axi is missing from the server PATH')
+})
+
+it('does not fall back for a native-only read when gh is unavailable', async () => {
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  await expect(github.githubCliJson(pulls, '.', { timeout: 8_000, maxBuffer: 1024 * 1024 }, false)).rejects.toThrow('GitHub request failed')
+  expect(exec).toHaveBeenCalledTimes(1)
+})
+
+it('refuses a legacy 304 diagnostic even with a cached response', async () => {
+  answer(200, { payload: [] }, 'Etag: "cached"\n')
+  await expect(github.githubCliJson(pulls)).resolves.toEqual([])
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('legacy failure'), { stderr: 'HTTP 304' })))
+  await expect(github.githubCliJson(pulls)).rejects.toThrow('GitHub request failed')
 })
