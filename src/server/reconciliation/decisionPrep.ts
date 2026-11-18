@@ -418,7 +418,7 @@ export class DecisionPreparation {
     const imported = await this.packets.leases.writeStorage(db => comments.flatMap(comment => {
       const job = comment.job_id ? db.prepare('SELECT id, card_id, request_id, source_revision, state FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(comment.job_id, this.scope) as Row | undefined : undefined
       const binding = comment.packet.binding
-      if (!job || job.state === 'superseded' || job.card_id !== binding.card_id || job.request_id !== binding.request_id || job.source_revision !== binding.source_revision) return []
+      const matchedJob = job && job.state !== 'superseded' && job.card_id === binding.card_id && job.request_id === binding.request_id && job.source_revision === binding.source_revision ? job : undefined
       const operation = createHash('sha256').update(JSON.stringify([cardId, comment.comment_id])).digest('hex')
       const previous = db.prepare("SELECT packet_id AS id FROM decision_packet_events WHERE type = 'comment-import' AND json_extract(detail,'$.card_id') = ? AND json_extract(detail,'$.comment_id') = ? ORDER BY sequence DESC LIMIT 1").get(cardId, comment.comment_id) as { id: string } | undefined
       let packet = comment.packet, publication = operation
@@ -427,24 +427,26 @@ export class DecisionPreparation {
         // Correct only the two mapper defects in an existing current import.
         // Retain its original binding/dependencies; an older comment must not
         // replace newer preparation or borrow a changed source revision.
-        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return [{ id: prior.id, comment, jobId: job.id }]
+        if (prior.reasons.includes('Packet is superseded') || bindingMeaning(prior.packet.binding) !== bindingMeaning(packet.binding)) return [{ id: prior.id, comment, jobId: matchedJob?.id }]
         const questionChanged = prior.packet.question !== packet.question
         const reversibilityMissing = prior.packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
         const reversibilityRecovered = reversibilityMissing && !packet.material_unknowns.some(reason => /^Missing required field: reversibility(?:\.|$)/.test(reason))
-        if (!questionChanged && !reversibilityRecovered) return [{ id: prior.id, comment, jobId: job.id }]
+        if (!questionChanged && !reversibilityRecovered) return [{ id: prior.id, comment, jobId: matchedJob?.id }]
         packet = { ...prior.packet, question: packet.question,
           ...(questionChanged ? { background: packet.background } : {}),
           ...(reversibilityRecovered ? { reversibility: packet.reversibility, material_unknowns: prior.packet.material_unknowns.filter(reason => !/^Missing required field: reversibility(?:\.|$)/.test(reason)) } : {}) }
         publication = createHash('sha256').update(JSON.stringify([operation, 'mapping-correction', packetContentHash(packet)])).digest('hex')
-      }
-      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication)
-      if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: comment.job_id, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
-      return [{ id: stored.id, comment, jobId: job.id }]
+      } else if (!matchedJob) return []
+      const wait = prior ? this.packets.waitInStorage(db, prior.id) : evidence.owner_wait ?? null
+      const stored = this.packets.publishInStorage(db, packet, evidence, commentPacketActor, publication, wait)
+      if (!stored.replayed) db.prepare('INSERT INTO decision_packet_events(packet_id,type,actor,at,detail) VALUES(?,?,?,?,?)').run(stored.id, 'comment-import', commentPacketActor, new Date(this.now()).toISOString(), JSON.stringify({ source: commentPacketSource, card_id: cardId, request_id: packet.binding.request_id, source_revision: packet.binding.source_revision, comment_id: comment.comment_id, job_id: matchedJob?.id ?? null, ...(prior ? { corrected_from: prior.id, reason: 'Use exact request question and source undo wording' } : {}) }))
+      return [{ id: stored.id, comment, jobId: matchedJob?.id }]
     }))
     // A restart or a later source refresh renews evidence even when publication
     // was idempotent. Validation failures never become a permanent Ready bit.
     for (const { id, comment, jobId } of imported) {
       await this.packets.validate(id, evidence, commentPacketActor)
+      if (!jobId) continue
       await this.packets.leases.writeStorage(db => {
         const current = this.packets.readInStorage(db, id, evidence)
         db.prepare('UPDATE decision_prep_jobs SET state = CASE WHEN published_at IS NOT NULL OR ? THEN \'published\' ELSE ? END, published_at = CASE WHEN ? THEN coalesce(published_at, ?) ELSE published_at END, reason = CASE WHEN published_at IS NOT NULL THEN reason ELSE ? END, updated_at = ?, packet_id = ? WHERE id = ? AND scope = ? AND card_id = ? AND request_id = ? AND source_revision = ? AND state != \'superseded\' AND (packet_id IS NULL OR packet_id = ? OR state IN (\'failed\',\'blocked\'))')

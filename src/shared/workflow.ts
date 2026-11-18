@@ -44,7 +44,7 @@ export const ordinaryPropertiesSchema = z.object({
 const contentSchema = z.object({ brief: prose.optional(), acceptance_criteria: prose.optional() }).strict()
 const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
   expected: z.record(z.unknown()).optional() }
-const resolvedWait = z.string().refine(value => value.trim().length > 0, 'Wait must not be blank')
+const resolvedWait = z.string().min(1)
 const waitId = z.string().trim().min(1).max(2048)
 export const waitSchema = z.object({
   type: z.enum(waitingForTypes).describe('Actor, Event or Work.'),

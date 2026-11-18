@@ -31,11 +31,8 @@ const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 function resolvedWaitIndex(entries: string[], resolve: string) {
-  const exact = entries.indexOf(resolve)
-  if (exact !== -1) return exact === entries.lastIndexOf(resolve) ? exact : -1
-  const normalized = entries.map(line => line.trim())
-  const match = normalized.indexOf(resolve.trim())
-  return match === normalized.lastIndexOf(resolve.trim()) ? match : -1
+  const index = entries.indexOf(resolve)
+  return index === entries.lastIndexOf(resolve) ? index : -1
 }
 
 const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, source?: Extract<UpdateWorkInput, { kind: 'answer_decision' }>['source_request']) => ({
@@ -693,11 +690,11 @@ export class WorkflowOperations {
           }
         }
         transition(input.next.owner, input.next.status)
+        resolveWait(input.resolve_wait, input.next.status)
         if (input.next.status === 'Waiting For') {
           if (!input.next.wait) throw new WorkflowError('wait-required', 'Entering Waiting For requires type, id, dependency, unblock condition, follow-up owner and a future Next check-in')
           await wait(input.next.wait)
         }
-        resolveWait(input.resolve_wait, input.next.status)
         if (input.next.status === 'In Progress' && !heldWait) {
           if (!input.next.worker) throw new WorkflowError('worker-required', 'Returning to In Progress requires current tracked worker evidence; Queued is available without a worker')
           const start = await this.startPlan(card, { card_id: card.id, operation_id: input.operation_id, worker: input.next.worker }, actor)

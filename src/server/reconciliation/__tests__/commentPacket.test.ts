@@ -268,20 +268,20 @@ it('keeps missing undo evidence blocked with the exact field', () => {
 })
 
 it('automatically corrects legacy imported prose questions and undo ratings after restart', async () => {
-  const f = await setup()
+  const f = await setup({ prepare: false })
   f.setComments([])
   await loaded(f.sources)
   const evidence = f.sources.preparationEvidence(f.cardId)
-  const text = sampleCommentPacket.replace(sampleCommentQuestion, 'Approve this staged plan?').replace(/^Reversibility:.*$/m, 'Undo: Revert the scoped change and restore the previous configuration.')
+  const text = sampleCommentPacket.replace(/ · Prep job [a-f0-9-]+/i, '').replace(sampleCommentQuestion, 'Approve this staged plan?').replace(/^Reversibility:.*$/m, 'Undo: Revert the scoped change and restore the previous configuration.')
   const packet = mapCommentPacket({ id: 'sample-packet-comment', type: 'comment', text }, evidence)!.packet
   packet.question = 'Approve this staged plan?'
   packet.reversibility = { rating: 'Moderate', explanation: 'Not provided in card comment: reversibility', rollback: 'Not provided in card comment: reversibility', residual_exposure: 'Not provided in card comment: reversibility' }
   packet.material_unknowns = ['Missing required field: reversibility', 'Missing required field: reversibility.rating']
   const operation = createHash('sha256').update(JSON.stringify([f.cardId, 'sample-packet-comment'])).digest('hex')
   const legacy = await f.sources.decisionPackets.publish(packet, evidence, commentPacketActor, operation)
-  await f.sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { source: commentPacketSource, card_id: f.cardId, comment_id: 'sample-packet-comment', job_id: f.jobIds.get(f.cardId) }, legacy.id)
+  await f.sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { source: commentPacketSource, card_id: f.cardId, comment_id: 'sample-packet-comment' }, legacy.id)
   await f.sources.decisionPackets.validate(legacy.id, { ...evidence, reasons: ['Complete cached decision history is unavailable'] }, commentPacketActor)
-  const restarted = await commentPacketHistoryFixture(f.root, { packet: text, jobIds: f.jobIds })
+  const restarted = await commentPacketHistoryFixture(f.root, { packet: text, prepare: false })
   expect(restarted.sources.preparationEvidence(f.cardId).reasons).toContain('Complete cached decision history is unavailable')
   const recovered = await loaded(restarted.sources)
   expect(recovered.counts.ready).toBe(1)

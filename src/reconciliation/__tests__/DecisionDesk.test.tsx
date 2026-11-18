@@ -10,12 +10,12 @@ import type { DeskPacket, DeskSubmit } from '../decisionDeskClient'
 const workspace = vi.hoisted(() => ({ value: {} as Record<string, unknown>, consumed: null as string | null }))
 vi.mock('../../ask/DeskWorkspace', () => ({ useDeskWorkspace: () => ({ ...workspace.value, decisionTarget: (workspace.value.decisionTarget as { id: string } | undefined)?.id === workspace.consumed ? undefined : workspace.value.decisionTarget, consumeDecisionTarget: (target: string) => { workspace.consumed = target } }) }))
 
-let leaseToken: string, claimCode: string | undefined, resolveWait: string | undefined
+let leaseToken: string, claimCode: string | undefined, waitToResolve: string | undefined
 let packet: DeskPacket, outcome: string, submits: DeskSubmit[], policy: { version: number; values: { target_ready: number; max_preparers: number; automatic_replenishment: boolean } }
 beforeEach(() => {
   workspace.consumed = null
   workspace.value = {}
-  sessionStorage.clear(); submits = []; outcome = 'not-saved'; claimCode = undefined; resolveWait = undefined; leaseToken = 'secret-lease'
+  sessionStorage.clear(); submits = []; outcome = 'not-saved'; claimCode = undefined; waitToResolve = undefined; leaseToken = 'secret-lease'
   Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({ matches: false }) })
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
@@ -29,7 +29,7 @@ beforeEach(() => {
     else if (path === 'sessions') data = body ? { session: { id: 'actual-session' }, review_session_token: 'secret-session' } : { sessions: [{ id: 'actual-session', expires_at: new Date(Date.now() + 86400000).toISOString(), label: 'Browser review', device: 'desktop', held: null }] }
     else if (path.startsWith('packet?id=')) data = packet
     else if (path === 'submission-state') data = { submissions: [] }
-    else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, resolve_wait: resolveWait, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
+    else if (path === 'claim') data = claimCode ? { outcome: 'not-saved', code: claimCode, message: 'This exact card is held by another context' } : { outcome: 'held', packet, wait_to_resolve: waitToResolve, lease_token: leaseToken, lease: { card_id: packet.packet.binding.card_id, generation: 1, holder: 'Browser review', expires_at: new Date(Date.now() + 60_000).toISOString() } }
     else if (path === 'snapshot') data = { counts: { ready: null, leased: 1, preparing: 0, requests: 1 }, coverage: 'unknown', omissions: ['Fixture source coverage is partial'], runner: { configured: false, preparer: 'Tinstar Decision Prep', explanation: 'The preparer webhook is not configured.' }, ready: [], recorded_requests: [], pending: [] }
     else if (path === 'policy') { if (body) policy = { version: policy.version + 1, values: body.values }; data = policy }
     else if (path === 'metrics') data = { reviewed_today_utc: 0, scope: 'test', recording_started_at: new Date().toISOString() }
@@ -55,15 +55,16 @@ it('requires deliberate selection, suppresses double submits and retries the sam
   expect(submits[1]).toEqual(submits[0])
   expect(document.body.textContent).not.toMatch(/secret-session|secret-lease/)
 })
-it('discloses and submits the exact Will wait when answering a prepared decision clears it', async () => {
-  resolveWait = 'Will: Dependency: Choose preview scope | Unblocks when: Will selects an option | Follow-up: Firstmate | Type: Actor | ID: Will'
+it('discloses the prepared wait without sending it in the answer', async () => {
+  waitToResolve = 'Choose preview scope'
   outcome = 'recorded-empty'
   await ready()
   expect(screen.getByText('Saving the answer clears this wait: Choose preview scope')).toBeVisible()
   fireEvent.click(screen.getByRole('radio', { name: /Authorize preview only/ }))
   fireEvent.click(screen.getByRole('button', { name: 'Submit decision & next →' }))
   await screen.findByText('No prepared decisions ready.')
-  expect(submits).toEqual([expect.objectContaining({ resolve_wait: resolveWait, next: { owner: 'Firstmate', status: 'Queued' } })])
+  expect(submits).toEqual([expect.objectContaining({ next: { owner: 'Firstmate', status: 'Queued' } })])
+  expect(submits[0]).not.toHaveProperty('resolve_wait')
 })
 it('distinguishes an unconfirmed save and retains its operation through a reload, clearing the old card only on durable success', async () => {
   outcome = 'save-unconfirmed'; await ready()

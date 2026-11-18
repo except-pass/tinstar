@@ -120,13 +120,15 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   })
   const waitingFor = String(card?.properties['Waiting For']?.value ?? '')
   const waitId = String(card?.properties['Waiting For ID']?.value ?? '').trim()
-  const waits = waitingFor.split('\n').filter(line => {
-    const wait = parseWaitLine(line)
+  const waitLines = waitingFor.split('\n')
+  const waits = waitLines.filter(line => {
+    const wait = parseWaitLine(line.trimEnd())
     return wait?.type === 'Actor' && wait.id === 'Will'
-      || !wait && line.trimStart().startsWith('Will:') && waitId === 'Will'
+      || !wait && line.startsWith('Will:') && waitId === 'Will'
   })
   const openCount = openDecisionCount(currentRequests.map(id => ({ id })), new Set(rows.filter(row => row.answered).map(row => row.id)))
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),
+    ...(card ? { wait_lines: waitLines } : {}),
     ...(openCount === 1 && waits.length === 1 ? { owner_wait: waits[0] } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }

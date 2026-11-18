@@ -175,8 +175,19 @@ it('keeps preparation across Tin Star housekeeping, then invalidates a substanti
   expect(f.posts).toHaveLength(2)
 }, 20_000)
 
-it('saves a prepared answer with a sole padded wait', async () => {
-  const { sources, cardId, requestId } = await setup({ waitPadding: '  ' })
+it.each([false, true])('submits a pinned wait without exposing raw text, changed=%s', async changed => {
+  const raw = 'Will: Token: staging-readonly  '
+  let editWait = false
+  const { sources, cardId, requestId } = await setup({ ownerWait: raw, wrapFetch: transport => async (input, init) => {
+    const response = await transport(input, init)
+    const path = new URL(String(input)).pathname
+    if (!editWait || (!path.endsWith('/query') && !path.includes('/v1/pages/'))) return response
+    const body = await response.json()
+    for (const page of body.results ?? [body]) for (const text of page.properties['Waiting For'].rich_text) {
+      if (text.plain_text === raw) text.plain_text = raw.trimEnd()
+    }
+    return Response.json(body)
+  } })
   const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
   const packet = preparedDecisionFixture().packet
   const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
@@ -186,13 +197,19 @@ it('saves a prepared answer with a sole padded wait', async () => {
   expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'shared-wait-packet', packet })).toMatchObject({ ready: true })
   const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'shared-wait-claim', card_id: cardId })
   expect(claim.outcome).toBe('claimed')
-  expect(claim.resolve_wait).toBe('Will: Choose the bounded preview route?  ')
+  expect(claim.wait_to_resolve).toBe('Will: Token=[credential omitted]  ')
+  expect(JSON.stringify(claim)).not.toContain('staging-readonly')
+  editWait = changed
   const saved = await sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', {
     operation_id: 'shared-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id,
     packet_version: claim.packet!.version, request_id: requestId, option_id: packet.recommended_option_id,
     next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
-    resolve_wait: ` ${claim.resolve_wait} `,
   })
+  if (changed) {
+    expect(saved).toMatchObject({ outcome: 'not-saved', source_state: 'wait-conflict' })
+    expect((await sources.workflow.preparedHistory(cardId)).some(note => note.text.includes('Tin Star answer data:'))).toBe(false)
+    return
+  }
   expect(saved.outcome).toMatch(/^recorded/)
   const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
   expect(card.properties.Status?.value).toBe('Queued')
