@@ -1027,6 +1027,13 @@ describe('remaining shared workflow operations', () => {
     expect(await f.workflow.update(input('answer_decision', {
       ...answer, operation_id: 'answer-open-by-comment', request_id: siblingCommentId,
     }), 'Owner')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(input('withdraw_decision', {
+      operation_id: 'withdraw-answered-sibling', request_id: 'sibling', reason: 'Fixture correction',
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    expect(await f.workflow.update(input('supersede_decision', {
+      operation_id: 'supersede-answered-sibling', request_id: 'sibling', reason: 'Fixture correction',
+      replacement: { ...replacement, request_id: 'another-replacement' },
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
   })
   it.each([
     ['withdraw_decision', false], ['answer_decision', false],

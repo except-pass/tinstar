@@ -96,7 +96,7 @@ export function decisionRequests(notes: RequestNote[]) {
         ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
         requestedFrom: replacement && typeof row.requested_from === 'string' ? row.requested_from : lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: replacement && typeof row.question === 'string' ? row.question : lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
-        since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) }]
+        since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) || answered.has(note.id) }]
     } catch { return [] }
   }))
 }

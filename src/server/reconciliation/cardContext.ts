@@ -61,7 +61,8 @@ export class CardContextReader {
     const withdrawn = withdrawnDecisionIds(history)
     const audits = new Set(history.filter(note => isDecisionRetraction(note.text)).map(note => note.id))
     const excluded = history.filter(note => audits.has(note.id) ||
-      decisionRecordRows([note], 'Tin Star request: ').some(row => incomplete || withdrawn.has(row?.id))).map(note => note.id)
+      decisionRecordRows([note], 'Tin Star request: ').some(row =>
+        incomplete || withdrawn.has(row?.id) || typeof row?.id === 'string' && workReadback(row.id) !== row.id)).map(note => note.id)
     const replacements = incomplete ? [] : decisionRequests(history).filter(request =>
       !request.answered && audits.has(request.sourceId) && workReadback(request.id) === request.id)
       .map(({ sourceId, id, question }) => ({ sourceId, id, question }))
