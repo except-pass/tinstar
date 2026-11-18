@@ -2,6 +2,14 @@
 
 Jira owns the ticket, its current status, and its history. Configure the same Tin Star MCP endpoint in ChatGPT and First Mate. The Jira credential stays in Tin Star. Humans can edit tickets in Jira. Keep GitHub PR URLs and First Mate execution references in the native description or comments.
 
+## Jira provisioning
+
+Start with an empty private team-managed project. Set its access in Jira and verify the intended membership before creating tickets. Confirm which default statuses belong to this project before preparing workflow payloads. [Jira space access](https://support.atlassian.com/jira-software-cloud/docs/manage-how-people-access-your-team-managed-project/) · [Team-managed REST privacy limitation](https://jira.atlassian.com/browse/JRACLOUD-83174)
+
+Create missing project-owned statuses with `POST /rest/api/3/statuses` and explicit `PROJECT` scope. Confirm each status by ID and scope. Build a workflow from those project-owned definitions and validate it with `POST /rest/api/3/workflows/create/validation` before creating it. An update of a mixed-scope workflow can require shared status definitions in the mutable payload. Use a separate project-owned workflow in that case. [Jira Status API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-status/) · [Jira Workflows API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-workflows/)
+
+Use `POST /rest/api/3/workflowscheme/read` to find the existing scheme, confirm its project scope and exclusive usage, then use `POST /rest/api/3/workflowscheme/update/mappings` to get required issue-status migrations. Apply the new Task mapping through `POST /rest/api/3/workflowscheme/update`. Preserve the unrelated issue type mappings and use the scheme version from the read. A 303 response starts an asynchronous migration. Confirm the active mapping and the ticket's resulting native status before testing transitions. [Jira Workflow Schemes API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-workflow-schemes/)
+
 ## Private server configuration
 
 Set `reconciliation.jira` in the server's private `TINSTAR_CONFIG_HOME/config.json`. This example uses illustrative IDs. Copy IDs from the isolated Jira project and confirm them against Task and Epic create and edit metadata.
@@ -54,4 +62,4 @@ Decision Questions uses headings such as `D1 [Open]: Which option should we adop
 npx vitest run src/server/reconciliation/__tests__/jiraWork.test.ts --exclude='e2e/**' --minWorkers=1 --maxWorkers=2
 ```
 
-This exercises the MCP catalog and Jira request/readback contract with a synthetic source. For live acceptance, start a terminal watch in the standalone Event Publisher, write a proof ticket through Tin Star MCP, and edit that ticket directly in Jira. Inspect the resulting source deliveries, restart on the same journal, and replay from the previous sequence. Project workflow capabilities, native UI structural validation and live webhook coverage need verification on the actual tenant. [Atlassian workflow capabilities](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-workflows/#api-rest-api-3-workflows-capabilities-get)
+This exercises the MCP catalog and Jira request/readback contract with a synthetic source. For live acceptance, start a terminal watch in the standalone Event Publisher, write a proof ticket through Tin Star MCP, and edit that ticket directly in Jira. Inspect the resulting source deliveries, restart on the same journal, and replay from the previous sequence. The isolated API proof confirmed a native required-description validator on Queue. Confirm the actual Owner field validator and native UI behavior on the target project, then verify live webhook coverage there. [Atlassian workflow capabilities](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-workflows/#api-rest-api-3-workflows-capabilities-get)
