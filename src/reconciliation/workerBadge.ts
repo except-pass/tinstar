@@ -17,13 +17,14 @@ export function overviewPullStatuses(workers: Worker[]): ReadonlyMap<string, Fin
   return pulls
 }
 
-function waitBadge(worker: Execution, state: string, label: string, tone: string, observedAt: number, now: number) {
+function waitBadge(worker: Execution, state: string, label: string, tone: string, observedAt: number, now: number, pull: FinishedPullStatus | undefined) {
   const event = worker.source.last_event
   const age = event.age_seconds
   // Event age is relative to the snapshot that observed this task.
   const began = state === event.state && typeof age === 'number' && age >= 0 ? observedAt - age * 1000 : NaN
   const duration = began > 0 && began <= now ? now - began : NaN
   const ageText = Number.isFinite(duration) ? ` · ${ageLabel(began, now).replace(/ ago$/, '')}` : ''
+  if (pull) return { label: `PR ${pull}${ageText}`, tone: 'done' }
   const backlog = worker.source.backlog
   const ownBacklog = worker.identity.task_id && backlog.id === worker.identity.task_id ? backlog : undefined
   if (ownBacklog?.blocked_by_ids?.length && ownBacklog.unresolved_blocker_ids?.length === 0) {
@@ -42,14 +43,13 @@ export function workerBadge(worker: Execution, now: number, pulls: ReadonlyMap<s
     Number.isFinite(observedAt) && observedAt <= now && current.source && current.source !== 'none' ? current.state : null
   const url = worker.source.pr.url
   const pullId = typeof url === 'string' ? releasePull(url)?.id : null
-  const pull = pullId ? pulls?.get(pullId) : null
-  const waiting = state === 'parked' || state === 'paused' || state === 'waiting'
-  if (pull === 'merged' || (pull === 'closed' && (waiting || state === 'blocked' || state === 'needs-decision'))) {
-    return { label: `PR ${pull}`, tone: 'done' }
+  const pull = pullId ? pulls?.get(pullId) : undefined
+  if (state === 'blocked') return waitBadge(worker, state, 'Blocked', 'blocked', observedAt, now, pull)
+  if (state === 'needs-decision') return waitBadge(worker, state, 'Needs a decision', 'decision', observedAt, now, pull)
+  if (state === 'parked' || state === 'paused' || state === 'waiting') {
+    return waitBadge(worker, state, 'Waiting', 'waiting', observedAt, now, pull)
   }
-  if (state === 'blocked') return waitBadge(worker, state, 'Blocked', 'blocked', observedAt, now)
-  if (state === 'needs-decision') return waitBadge(worker, state, 'Needs a decision', 'decision', observedAt, now)
-  if (waiting) return waitBadge(worker, state, 'Waiting', 'waiting', observedAt, now)
+  if (pull === 'merged') return { label: 'PR merged', tone: 'done' }
   const executionState = state && (current.source === 'pane' || current.source === 'run-step' || state === 'done' || state === 'failed') ? current : {}
   if (homeAuthoritative(worker.observation, now, readFailed) && hasCurrentExecution(worker.source, now, executionState)) {
     return { label: 'Running', tone: 'running' }

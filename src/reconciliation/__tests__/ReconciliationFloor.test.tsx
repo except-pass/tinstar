@@ -102,6 +102,7 @@ it.each([
   const helper = sources.fleet[2]!.observation.data!.tasks[0]!
   helper.pr.url = url
   helper.current_state.state = 'parked'
+  Object.assign(helper.last_event, { state: 'parked', age_seconds: 20 * 60 })
   const scene = new SceneReconciler().reconcile(sources, now)
   observed.scene = scene
   const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[{
@@ -119,7 +120,7 @@ it.each([
   expect(stateFor(stalled!.id)).toHaveTextContent('Stalled · 1m')
   expect(stateFor(stalled!.id)).toHaveClass('status-stalled')
   expect(stateFor(running!.id)).toHaveTextContent(expected)
-  expect(stateFor(helper.id)).toHaveTextContent('PR merged')
+  expect(stateFor(helper.id)).toHaveTextContent('PR merged · 20m')
 })
 
 const groupings = [
