@@ -971,6 +971,11 @@ describe('remaining shared workflow operations', () => {
       operation_id: `publish-${request_id}`, request_id, question: 'Run the fixture?', requested_from: 'Will',
     }), 'Fixture publisher')
     expect(await publish('original')).toMatchObject({ outcome: 'saved' })
+    const originalCommentId = f.comments.at(-1)!.id
+    const answer = { answer: 'Review', next: { owner: 'Firstmate', status: 'Queued' } }
+    expect(await f.workflow.update(input('answer_decision', {
+      ...answer, operation_id: 'answer-open-by-comment', request_id: originalCommentId,
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
     expect(await publish('sibling')).toMatchObject({ outcome: 'saved' })
 
     const replacement = { request_id: 'replacement', question: 'Review the fixture output?', requested_from: 'Will',
@@ -1010,7 +1015,11 @@ describe('remaining shared workflow operations', () => {
       expect(f.raw.properties[key]).toEqual(before[key])
     }
     expect(f.raw.properties['Will action'].multi_select).toEqual([{ name: 'Merge' }, { name: 'Decision' }])
-    const answer = { answer: 'Review', next: { owner: 'Firstmate', status: 'Queued' } }
+    for (const [index, request_id] of [originalCommentId, notes.at(-1)!.id].entries()) {
+      expect(await f.workflow.update(input('answer_decision', {
+        ...answer, operation_id: `answer-by-comment-${index}`, request_id,
+      }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    }
     expect(await f.workflow.update(input('answer_decision', { ...answer, request_id: 'original', option_id: 'review' }), 'Owner'))
       .toMatchObject({ code: 'decision-not-open', message: 'This request was withdrawn. No answer was saved.' })
     expect(await f.workflow.update(input('answer_decision', { ...answer, operation_id: 'answer-replacement', request_id: 'replacement', option_id: 'review' }), 'Owner'))

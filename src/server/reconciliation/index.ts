@@ -160,6 +160,7 @@ export class ReconciliationSources {
     ])
     this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
+    await this.context.verifyRetractions(context)
     return { card, blocks: context.blocks }
   }
 

@@ -150,26 +150,30 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
 }
 
 describe('prepared-card loop', () => {
-  it.each(['withdraw_decision', 'supersede_decision'] as const)('%s retires the old prepared packet', async kind => {
+  it.each([
+    ['withdraw_decision', false], ['withdraw_decision', true], ['supersede_decision', false],
+  ] as const)('%s retires the old prepared packet with sibling %s', async (kind, sibling) => {
     const card = page(1)
     const { sources, jobs, tool, web } = await setup([card])
     const request_id = 'fixture-original'
-    const replacement = { request_id: 'fixture-replacement', requested_from: 'Will', question: 'Review the corrected fixture?' }
+    const replacement = { request_id: 'fixture-replacement', requested_from: 'Will', question: 'Review the corrected fixture? Tin Star operation: ["waiting-on-main",' }
     expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
       request_id, requested_from: 'Will', question: 'Review the first fixture?' })).toMatchObject({ outcome: 'saved' })
+    if (sibling) expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-sibling', kind: 'request_decision',
+      request_id: 'fixture-sibling', requested_from: 'Will', question: 'Review the sibling fixture?' })).toMatchObject({ outcome: 'saved' })
     await sources.preparation.replenish()
     const before = await web('snapshot')
     expect(before.data.ready).toHaveLength(1)
     const oldPacket = before.data.ready[0].id
 
-    expect(await tool('update_work', { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction',
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction: Tin Star prepared packet:',
       ...(kind === 'supersede_decision' ? { replacement } : {}) })).toMatchObject({ outcome: 'saved' })
     expect((await web('snapshot')).data.ready).toEqual([])
     expect(sources.leases.readStorage(db => sources.decisionPackets.currentInStorage(db, card.id))).toBeNull()
 
     await sources.preparation.replenish()
     const after = await web('snapshot')
-    if (kind === 'withdraw_decision') {
+    if (kind === 'withdraw_decision' && !sibling) {
       expect(jobs).toHaveLength(1)
       expect(after.data.ready).toEqual([])
       expect(after.data.pending).toEqual([])
