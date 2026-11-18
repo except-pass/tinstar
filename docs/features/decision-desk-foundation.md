@@ -461,9 +461,9 @@ first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
 
 The preparer is the Tinstar Decision Prep bot. Tin Star posts one job per eligible
 decision to the bot's webhook and does not run a Codex preparer. Each JSON body
-carries `card_url` (the Notion card URL), `source_question`, an opaque SHA-256
+carries `card_url` (the source card URL), `source_question`, an opaque SHA-256
 `source_revision` token, `options` (each with an `id` and `label`), and
-`publish.tool` / `publish.job_id`.
+`publish.tool` / `publish.job_id` for the MCP callback.
 The sender key is sent only as `Authorization: Bearer`. It is never logged,
 returned, or stored in the job row.
 
@@ -490,20 +490,21 @@ limit or spend record.
 
 `publish_prepared_packet` requires the webhook's `publish.job_id` as `job_id`, a
 unique `operation_id`, and a `packet`. Reuse the operation ID for identical
-retries and use a new one for a corrected packet. The preparer supplies
-`schema` (`tinstar.decision-packet.v1`), `background`, `rationale`,
-`recommended_option_id` from the webhook options, `risk`, `reversibility`,
-`confidence`, `uncertainty`, `material_unknowns`, `consequences`, `impacted`,
-`prerequisites`, `authorization`, `references`, `invalidation_conditions`, and
-`review_within_ms`. The title and question default to the exact request question.
-The server supplies the binding and dependencies. Missing or invalid packet
-fields are returned as `issue_paths`.
+retries and use a new one for a corrected packet. Supply the required research
+fields from [the packet schema](../../src/shared/decisionPacket.ts) and choose
+`recommended_option_id` from the webhook options. Omitted `title` and `question`
+default to the exact request question. The server replaces any supplied
+`binding` and `dependencies` with values from its source evidence. Packet
+validation failures return `outcome: not-saved` with `issue_paths`.
 
-The callback returns `source changed; job superseded` if the request changes,
-gains an answer, or its dependency revisions differ from dispatch. Unpublished
-jobs from before dispatch started recording dependency revisions require a new
-preparation attempt. The packet becomes Ready only after source validation
-passes. Publishing leaves the source card and its lease untouched.
+The callback checks for a single matching unanswered request and compares the
+request and dependency revisions with those recorded for dispatch. If no
+matching request can be selected and cached history is unavailable, retry the
+same job after history recovers. Otherwise a source mismatch returns
+`source changed; job superseded`. Unpublished jobs from before dispatch started
+recording dependency revisions require a new preparation attempt. The packet
+becomes Ready only after source validation passes. Publishing leaves the source
+card and its lease untouched.
 
 The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
@@ -640,8 +641,8 @@ For a card-native `Decision` requested from `Will`, the packet binding uses
 `card_id`, `request_id`, the request paragraph/comment `source_id` and its semantic
 `source_revision`. Its `request_key` is the canonical JSON encoding of
 `["card-request", card_id, request_id]`; `source_request` and `source_spawn_gen`
-are null, and `source_question` is the card request's question. The evidence API
-returns this binding and the dependencies to copy into the packet. Changed
+are null, and `source_question` is the card request's question. See
+[P4 preparation jobs](#p4--preparation-jobs) for the MCP callback contract. Changed
 questions, options or request records invalidate the old packet; timestamps and
 option ordering do not. First Mate-bound requests retain live source and worker
 generation validation. Both kinds dispatch the same webhook job and save owner
