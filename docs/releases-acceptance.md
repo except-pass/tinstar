@@ -68,7 +68,9 @@ receipt-backed integration and is not activated by the native source.
 
 Owner prerequisites for that integration: current authoritative deployment receipts, complete exact
 PR-to-card/target associations, an existing approved safe workflow and service
-credentials for `gh-axi` with Actions read/write access to that repository.
+credentials with Actions read access through the
+[shared CLI reader](features/pr-operations.md#sources-and-scope) and Actions
+write access through `gh-axi` for dispatch to that repository.
 Historical snapshots support review but cannot authorize dispatch or a new human
 pass. A partial release may check its fully proven subset. Tag-only, skipped,
 rolled-back, flagged, unknown or mismatched required targets hold the check.

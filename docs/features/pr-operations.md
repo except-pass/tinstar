@@ -6,7 +6,11 @@ Click row body or its keyboard-accessible Inspect button to expand the actual de
 
 ## Sources and scope
 
-By default, GitHub reads use `gh-axi api GET` with its existing local authentication; `gh-axi` must be in the backend service PATH. With live Reader/Repair enabled, reads use the separate broker instead. The [installed PR actions guide](../pr-actions.md) owns activation, App scope, isolation and write boundaries. Missing transport/auth/access failures appear as repository errors, with last-known rows explicitly stale. Inventory and inspection remain read-only; Repair requires an explicit installed-action invocation.
+CLI reads use the backend service's authenticated `gh` (`GH_BIN` can select the executable for the shared reader). If that executable is missing, the shared reader falls back to `gh-axi api GET` on the service PATH. With live Reader/Repair enabled, PR Operations, Releases and Queue reads use the separate broker. The [installed PR actions guide](../pr-actions.md) owns activation, App scope, isolation and write boundaries. Missing transport, authentication or access appears as a repository error, with last-known rows explicitly stale. Inventory and inspection remain read-only. Repair requires an explicit installed-action invocation.
+
+Native CLI and broker reads send a cached ETag when available and reuse the cached response on HTTP 304. Rate-limited 403 and 429 responses pause new requests through the affected transport until the deadline from the reset or Retry-After headers, with a one-minute default when no usable deadline is available. The CLI and broker track holds separately in memory. Legacy `gh-axi` calls lack ETag and reset headers and use a fallback delay of one minute for recognized secondary limits or one hour for other recognized limits. Guarded CLI writes also respect the hold within the same process.
+
+Each active transport logs `GitHub REST hourly` with its observed request and 304 counts. The request count includes successful and recognized rate-limited legacy CLI invocations and is scoped to that transport in that process.
 
 Inventory, individual origin, detail and files reads require a Tailscale-User-Login listed in `ask.ownerLogins`, forwarded through the loopback-only backend trust boundary used by Ask. Missing or unauthorized identity returns 403 with a visible page error.
 
