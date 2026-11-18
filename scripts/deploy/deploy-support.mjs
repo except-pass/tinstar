@@ -14,10 +14,12 @@ export async function runningSha(e = process.env) {
   } catch { return null }
 }
 
-export async function audit(action, gate, reason) {
+export async function audit(action, gate, reason, head) {
   const e = process.env
-  let head = 'unavailable'
-  try { head = execFileSync('git', ['-C', e.TINSTAR_DEPLOY_SOURCE ?? '/home/farm/srv/tinstar-src', 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || head } catch { /* A broken checkout must still be recoverable. */ }
+  if (!head) {
+    head = 'unavailable'
+    try { head = execFileSync('git', ['-C', e.TINSTAR_DEPLOY_SOURCE ?? '/home/farm/srv/tinstar-src', 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || head } catch { /* A broken checkout must still be recoverable. */ }
+  }
   const entry = { time: new Date().toISOString(), user: userInfo().username, action, gate, reason, head }
   const line = JSON.stringify(entry)
   try {
@@ -74,6 +76,40 @@ export async function preflight() {
   return errors.length ? 1 : 0
 }
 
+async function unitCI(sha) {
+  const check = 'typecheck-and-test' // This GitHub Actions job runs the full unit suite in ci.yml.
+  let id
+  try {
+    if (!/^[a-f0-9]{40}$/.test(sha)) throw Error()
+    const output = execFileSync('gh-axi', ['api', 'GET',
+      `/repos/except-pass/tinstar/commits/${sha}/check-runs?check_name=${check}&filter=latest&per_page=100`,
+      '--jq', '{receipt: ({count: .total_count, runs: [.check_runs[] | {id, name, app: .app.slug, head_sha, status, conclusion}]} | tojson)}',
+      '--full',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 })
+    const { count, runs } = JSON.parse(JSON.parse(/^receipt: (.+)$/m.exec(output)?.[1] ?? 'null'))
+    const matching = runs.filter(run => run.name === check && run.app === 'github-actions' && run.head_sha === sha)
+    // The same SHA can have checks from more than one suite. A partial page
+    // or another matching check still pending or failed calls for local tests.
+    if (count === runs.length && matching.every(run => run.status === 'completed' && run.conclusion === 'success')) {
+      id = matching[0]?.id
+    }
+  } catch {
+    console.error(`WARNING Tin Star deploy: could not read GitHub unit check for ${sha}; running local unit suite`)
+    return 1
+  }
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    console.error(`WARNING Tin Star deploy: no green GitHub unit check for ${sha}; running local unit suite`)
+    return 1
+  }
+  try {
+    await audit('receipt', 'unit-tests', `GitHub ${check} passed: https://github.com/except-pass/tinstar/runs/${id}`, sha)
+    return 0
+  } catch {
+    console.error('WARNING Tin Star deploy: could not record GitHub unit check; running local unit suite')
+    return 1
+  }
+}
+
 export async function unitTests() {
   const temp = await mkdtemp(join(tmpdir(), 'tinstar-unit-gate-'))
   const report = join(temp, 'results.json')
@@ -108,6 +144,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (action === 'old-sha') console.log(await runningSha() ?? 'unknown')
     else if (action === 'audit') await audit(...args)
     else if (action === 'preflight') process.exitCode = await preflight()
+    else if (action === 'unit-ci') process.exitCode = await unitCI(...args)
     else if (action === 'unit-tests') process.exitCode = await unitTests()
     else throw Error('Unknown deploy helper command')
   } catch { console.error('Deploy helper failed (credentials withheld)'); process.exitCode = 1 }

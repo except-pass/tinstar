@@ -16,6 +16,9 @@ const roots: string[] = [], servers: Server[] = []
 const token = 'preview-only-bridge-credential-1234567890', caller = 'Bearer preview-only-caller-credential-1234567890'
 const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }]
 const script = resolve('scripts/deploy/floor-deploy.sh')
+const head = 'a'.repeat(40), newer = 'b'.repeat(40)
+const greenCheck = { id: 123, name: 'typecheck-and-test', app: 'github-actions', head_sha: head, status: 'completed', conclusion: 'success' }
+const checkResponse = (runs: object[], count = runs.length) => JSON.stringify({ count, runs })
 // A deploy runs this suite with its own exported configuration. Never let those
 // unit names, live paths/URLs or shell/Node startup hooks leak into fixtures.
 const relatedEnv = new Set(['COMMAND_LOG', 'FAIL_TESTS', 'FAIL_TYPECHECK', 'FAIL_VOICE', 'MISSING_UNIT', 'NODE_ENV', 'NODE_OPTIONS', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH'])
@@ -92,12 +95,15 @@ printf '%s %s\\n' "$name" "$*" >> "$COMMAND_LOG"
 if [[ "$name" == systemctl ]]; then
   if [[ "\${MISSING_UNIT:-}" == 1 ]]; then echo not-found; else echo loaded; fi
 fi
-if [[ "$name $*" == *'rev-parse HEAD' ]]; then echo "\${DEPLOY_FIXTURE_HEAD:-fixture-head}"; fi
+if [[ "$name $*" == *'rev-parse HEAD' || "$name $*" == 'git rev-parse --verify '* ]]; then
+  echo "\${DEPLOY_FIXTURE_HEAD:-${head}}"
+fi
+if [[ "$name $*" == 'sudo -n systemctl restart tinstar-mcp-facade' && "\${DEPLOY_FIXTURE_FAIL_RESTART:-}" == 1 ]]; then exit 46; fi
 if [[ "$name $*" == 'npm ci --include=dev' && -n "\${DEPLOY_FIXTURE_ZOD:-}" ]]; then
   [[ ! -e node_modules ]] || exit 44
   printf 'old-sha=%s\\n' "$TINSTAR_PREVIOUS_DEPLOYED_SHA" >> "$COMMAND_LOG"
   mkdir node_modules
-  cp -R "$DEPLOY_FIXTURE_ZOD" node_modules/zod
+  ln -s "$DEPLOY_FIXTURE_ZOD" node_modules/zod
 fi
 if [[ "$name $*" == 'npm run typecheck' && "\${FAIL_TYPECHECK:-}" == 1 ]]; then exit 41; fi
 if [[ "$name $*" == 'npm run test:unit'* && "\${FAIL_TESTS:-}" != '' ]]; then
@@ -111,13 +117,21 @@ if [[ "$name $*" == 'npm run test:unit'* && "\${FAIL_TESTS:-}" != '' ]]; then
 fi
 `
   for (const name of ['git', 'npm', 'sudo', 'systemctl']) await writeFile(join(bin, name), command, { mode: 0o700 })
-  if (isolatedDeploy) await writeFile(join(bin, 'node'), `#!/bin/bash
+  await writeFile(join(bin, 'gh-axi'), `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.appendFileSync(process.env.COMMAND_LOG, 'gh-axi ' + process.argv.slice(2, 5).join(' ') + '\\n')
+if (!process.argv[4]?.includes('/check-runs?') || process.env.DEPLOY_FIXTURE_FORGE_ERROR === '1') process.exit(45)
+console.log('receipt: ' + JSON.stringify(process.env.DEPLOY_FIXTURE_FORGE))
+`, { mode: 0o700 })
+  await writeFile(join(bin, 'node'), `#!/bin/bash
 if [[ "$2" == old-sha && "\${DEPLOY_FIXTURE_FAIL_PROBE:-}" == 1 ]]; then exit 47; fi
+if [[ "$1" == */review-handoff.mjs && '${isolatedDeploy}' == false ]]; then exit 1; fi
 exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `, { mode: 0o700 })
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !deploymentEnv(key)))
   const env = { ...inherited, PATH: `${bin}:${process.env.PATH}`, COMMAND_LOG: join(root, 'commands.log'), TINSTAR_DEPLOY_SOURCE: root,
-    ...(isolatedDeploy ? { DEPLOY_FIXTURE_HEAD: 'a'.repeat(40), DEPLOY_FIXTURE_ZOD: resolve('node_modules/zod') } : {}),
+    ...(isolatedDeploy ? { DEPLOY_FIXTURE_ZOD: resolve('node_modules/zod') } : {}),
+    DEPLOY_FIXTURE_FORGE: checkResponse([]),
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
@@ -154,7 +168,7 @@ describe('floor deploy executable', () => {
     expect(result.stderr).toContain('review handoff incomplete; healthy floor retained')
     expect(result.stdout).toContain('Ask and MCP smoke passed')
     await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
-  })
+  }, 15_000)
 
   it('gates all restarts on tests, then round trips Ask, removes its row and verifies MCP', async () => {
     const { root, run } = await fixture()
@@ -216,17 +230,51 @@ describe('floor deploy executable', () => {
     const commands = await readFile(join(root, 'commands.log'), 'utf8')
     expect(commands).toContain('sudo -n systemctl restart tinstar-mcp-facade\nsudo -n systemctl restart preview-shim\nsudo -n systemctl restart tinstar-mcp-tunnel')
   })
-  it('reruns failures once, blocks before build/restart, and refuses the next deploy before fetching', async () => {
+  it('uses one green GitHub check for the fetched SHA and still runs local build gates and smoke', async () => {
+    const { root, run } = await fixture()
+    const result = await run(false, { DEPLOY_FIXTURE_FORGE: checkResponse([greenCheck]), FAIL_TESTS: '1' })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Ask and MCP smoke passed')
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands.match(/gh-axi api GET/g)).toHaveLength(1)
+    expect(commands).toContain(`gh-axi api GET /repos/except-pass/tinstar/commits/${head}/check-runs?check_name=typecheck-and-test`)
+    expect(commands).toContain(`git checkout --detach ${head}`)
+    for (const command of ['npm ci --include=dev', 'npm run typecheck', 'npm run build:all', 'sudo -n systemctl restart tinstar-floor']) {
+      expect(commands).toContain(command)
+    }
+    expect(commands).not.toContain('npm run test:unit')
+    const receipt = JSON.parse((await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim())
+    expect(receipt).toMatchObject({ action: 'receipt', gate: 'unit-tests', head, reason: expect.stringContaining('/runs/123') })
+  })
+  it.each([
+    ['old SHA', checkResponse([{ ...greenCheck, head_sha: newer }])],
+    ['different job', checkResponse([{ ...greenCheck, name: 'browser-suite' }])],
+    ['different app', checkResponse([{ ...greenCheck, app: 'other' }])],
+    ['queued check alongside a green check', checkResponse([greenCheck, { ...greenCheck, id: 124, status: 'queued', conclusion: null }])],
+    ['failed check', checkResponse([{ ...greenCheck, conclusion: 'failure' }])],
+    ['partial page', checkResponse([greenCheck], 101)],
+    ['bad response', 'unparseable'],
+    ['failed read', ''],
+  ])('falls back to the local suite for %s', async (_case, response) => {
+    const { root, run } = await fixture()
+    const result = await run(false, { DEPLOY_FIXTURE_FORGE: response, DEPLOY_FIXTURE_FORGE_ERROR: response ? '0' : '1' })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stderr).toContain('running local unit suite')
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands.match(/gh-axi api GET/g)).toHaveLength(1)
+    expect(commands).toContain('npm run test:unit -- --reporter=default')
+  })
+  it('reruns failures once and stops before build or restart, allowing the same revision to retry', async () => {
     const { root, run } = await fixture()
     const result = await run(false, { FAIL_TESTS: '1' })
     expect(result.code).toBe(42)
     expect(result.stderr.match(/ALERT/g)).toHaveLength(1)
-    expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=unit-tests')
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
     const commands = await readFile(join(root, 'commands.log'), 'utf8')
     expect(commands).not.toContain('build:all')
     expect(commands).not.toContain('sudo -n systemctl restart')
-    expect((await run()).code).not.toBe(0)
-    expect((await readFile(join(root, 'commands.log'), 'utf8')).match(/git fetch origin main/g)).toHaveLength(1)
+    expect((await run()).code).toBe(0)
+    expect((await readFile(join(root, 'commands.log'), 'utf8')).match(/git fetch origin main/g)).toHaveLength(2)
     expect(commands).toContain('npm run test:unit -- tests/slow.test.ts --no-file-parallelism --maxWorkers=1 --minWorkers=1 --isolate')
     expect(commands).toContain('npm run test:unit -- tests/other.test.ts --no-file-parallelism --maxWorkers=1 --minWorkers=1 --isolate')
     expect(commands).not.toContain('npm run test:unit -- tests/passing.test.ts')
@@ -238,7 +286,7 @@ describe('floor deploy executable', () => {
     expect(result.stderr).toContain('WARNING Tin Star deploy: Full suite failed; isolated serial rerun passed: tests/slow.test.ts, tests/other.test.ts')
     const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({ action: 'warning', gate: 'unit-tests', head: 'fixture-head' })
+    expect(entries[0]).toMatchObject({ action: 'warning', gate: 'unit-tests', head })
     expect(entries[0].reason).toContain('tests/slow.test.ts, tests/other.test.ts')
     expect(await readFile(join(root, 'commands.log'), 'utf8')).toContain('sudo -n systemctl restart tinstar-floor')
   })
@@ -259,14 +307,16 @@ describe('floor deploy executable', () => {
     await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
     const lines = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n')
     expect(lines).toHaveLength(1)
-    expect(JSON.parse(lines[0]!)).toMatchObject({ action: 'clear-block', gate: 'block', reason, head: 'fixture-head', user: expect.any(String), time: expect.any(String) })
+    expect(JSON.parse(lines[0]!)).toMatchObject({ action: 'clear-block', gate: 'block', reason, head, user: expect.any(String), time: expect.any(String) })
     expect(Number.isFinite(Date.parse(JSON.parse(lines[0]!).time))).toBe(true)
     expect(result.stderr).toContain(lines[0])
     expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toContain('npm')
   })
   it('requires a reason for every override and clear-block', async () => {
     const { root, run } = await fixture()
-    for (const args of [['--override'], ['--override', '  '], ['--clear-block'], ['--clear-block', '']]) {
+    for (const args of [['--override'], ['--override', '  '], ['--clear-block'], ['--clear-block', ''],
+      ['--skip-gate', 'unit-tests'], ['--skip-gate', 'block', '--reason', ' '],
+      ['--skip-gate', 'typecheck', '--reason', 'skip'], ['--reason', 'skip']]) {
       expect((await run(false, {}, args)).code).toBe(2)
     }
     await expect(readFile(join(root, 'deploy.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -278,15 +328,55 @@ describe('floor deploy executable', () => {
     const result = await run(false, { FAIL_TESTS: '1', FAIL_TYPECHECK: '1' }, ['--override', 'Owner accepts known failures'])
     expect(result.code, result.stderr).toBe(0)
     const lines = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n')
-    expect(lines.map(line => JSON.parse(line).gate)).toEqual(['invocation', 'block', 'typecheck', 'unit-tests'])
+    expect(result.stderr).toContain('existing block has no exact SHA')
+    expect(lines.map(line => JSON.parse(line).gate)).toEqual(['invocation', 'typecheck', 'unit-tests'])
     for (const line of lines) {
-      expect(JSON.parse(line)).toMatchObject({ action: JSON.parse(line).gate === 'invocation' ? 'override-request' : 'override', reason: 'Owner accepts known failures', head: 'fixture-head', user: expect.any(String), time: expect.any(String) })
+      expect(JSON.parse(line)).toMatchObject({ action: JSON.parse(line).gate === 'invocation' ? 'override-request' : 'override', reason: 'Owner accepts known failures', head, user: expect.any(String), time: expect.any(String) })
       expect(result.stderr).toContain(line)
     }
     expect(result.stderr).toContain('completed with audited overrides')
     await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await run(false, { FAIL_TYPECHECK: '1' })).code).toBe(41)
   }, 15_000) // Two complete deploy invocations include several child processes.
+  it('audits a unit-only skip without calling either suite and still enforces typecheck', async () => {
+    const { root, run } = await fixture()
+    const reason = 'Emergency repair'
+    const args = ['--skip-gate', 'unit-tests', '--reason', reason]
+    expect((await run(false, { FAIL_TYPECHECK: '1' }, args)).code).toBe(41)
+    const result = await run(false, { FAIL_TESTS: '1' }, args)
+    expect(result.code, result.stderr).toBe(0)
+    const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(entries.map(entry => entry.action)).toEqual(['override-request', 'override-request', 'override'])
+    for (const entry of entries) expect(entry).toMatchObject({ gate: 'unit-tests', head, reason })
+    const commands = await readFile(join(root, 'commands.log'), 'utf8')
+    expect(commands).not.toMatch(/gh-axi|npm run test:unit/)
+    expect(commands.match(/sudo -n systemctl restart tinstar-floor/g)).toHaveLength(1)
+  })
+  it('latches a restart failure for the exact SHA, supports a block-only bypass, and admits a newer SHA', async () => {
+    const { root, run, setDeployedSha } = await fixture()
+    const marker = join(root, 'deploy.blocked')
+    const failed = await run(false, { DEPLOY_FIXTURE_FAIL_RESTART: '1' })
+    expect(failed.code, failed.stderr).toBe(46)
+    const block = await readFile(marker, 'utf8')
+    expect(block).toContain(`phase=restart:tinstar-mcp-facade\nsha=${head}\n`)
+    await writeFile(join(root, 'commands.log'), '')
+    expect((await run(false, {}, ['--skip-gate', 'unit-tests', '--reason', 'Unit bypass only'])).code).toBe(1)
+    expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toMatch(/git checkout|npm|sudo -n systemctl restart/)
+    const args = ['--skip-gate', 'block', '--reason', 'Retry after service repair']
+    const bypass = await run(false, { FAIL_TYPECHECK: '1' }, args)
+    expect(bypass.code, bypass.stderr).toBe(41)
+    expect(await readFile(marker, 'utf8')).toBe(block)
+    const entries = (await readFile(join(root, 'deploy.blocked.audit.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(entries.at(-1)).toMatchObject({ action: 'override', gate: 'block', reason: args[3], head })
+
+    setDeployedSha(newer)
+    expect((await run(true)).code).toBe(0)
+    expect(await readFile(marker, 'utf8')).toBe(block)
+    const replacement = await run(false, { DEPLOY_FIXTURE_HEAD: newer, DEPLOY_FIXTURE_FORGE: checkResponse([greenCheck]) })
+    expect(replacement.code, replacement.stderr).toBe(0)
+    expect(replacement.stderr).toContain(`no green GitHub unit check for ${newer}`)
+    await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 15_000)
   it('logs override requests even when no gate fails', async () => {
     const { root, run } = await fixture()
     const result = await run(true, {}, ['--override', 'Owner requested a recovery check'])
@@ -308,7 +398,8 @@ describe('floor deploy executable', () => {
     expect(await readFile(join(root, 'commands.log'), 'utf8')).not.toContain('npm')
   })
   it('names an MCP scope difference and permits an audited override', async () => {
-    const { root, run } = await fixture()
+    const { root, run, setDeployedSha } = await fixture()
+    setDeployedSha(head)
     await writeFile(join(root, 'approved.json'), '["old_tool"]')
     const failed = await run(true)
     expect(failed.code).not.toBe(0)
@@ -337,15 +428,17 @@ describe('floor deploy executable', () => {
     expect(commands).not.toContain('sudo -n systemctl restart')
   })
   it('cleans the synthetic partition when a bridge check fails after creating the question', async () => {
-    const { root, run, setFailBridgeRead } = await fixture()
+    const { root, run, setDeployedSha, setFailBridgeRead } = await fixture()
+    setDeployedSha(head)
     setFailBridgeRead()
     const result = await run(true)
     expect(result.code).not.toBe(0)
     expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))).toEqual([])
-    expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=post-deploy-smoke')
+    expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain(`phase=post-deploy-smoke\nsha=${head}\n`)
   })
-  it.each(['not ready', 'catalog drift', 'stale publication', 'owner failure'])('latches %s and leaves no synthetic records or credentials in output', async reason => {
-    const { root, run, setReady, setCatalog, setStarted } = await fixture()
+  it.each(['not ready', 'catalog drift', 'stale publication', 'owner failure'])('classifies %s and leaves no synthetic records or credentials in output', async reason => {
+    const { root, run, setDeployedSha, setReady, setCatalog, setStarted } = await fixture()
+    setDeployedSha(head)
     if (reason === 'not ready') setReady(false)
     if (reason === 'catalog drift') setCatalog([])
     if (reason === 'stale publication') setStarted('2026-11-09T17:00:00Z')
@@ -353,13 +446,28 @@ describe('floor deploy executable', () => {
     expect(result.code).not.toBe(0)
     if (reason === 'owner failure') {
       await expect(readFile(join(root, 'deploy.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
-    } else expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain('phase=post-deploy-smoke')
+    }
+    if (reason === 'catalog drift') {
+      expect(await readFile(join(root, 'deploy.blocked'), 'utf8')).toContain(`phase=post-deploy-smoke\nsha=${head}\n`)
+    } else {
+      await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
+    }
     if (reason !== 'owner failure') expect(JSON.parse(await readFile(join(root, 'ask-requests.json'), 'utf8'))).toEqual([])
     expect(result.stderr.match(/ALERT/g)).toHaveLength(1)
     expect(result.stdout + result.stderr).not.toContain(token)
     expect(result.stdout + result.stderr).not.toContain(caller)
     await expect(readFile(join(root, 'commands.log'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
+  it('allows a same-SHA deploy when startup recovers after a smoke timeout', async () => {
+    const { root, run, setReady } = await fixture()
+    setReady(false)
+    const waiting = await run()
+    expect(waiting.code, waiting.stderr).toBe(75)
+    expect(waiting.stderr).toContain('MCP startup checks unavailable')
+    await expect(readFile(join(root, 'deploy.blocked'))).rejects.toMatchObject({ code: 'ENOENT' })
+    setReady(true)
+    expect((await run()).code).toBe(0)
+  }, 15_000)
 })
 
 it('compares full catalog semantics, tolerates object order and rejects duplicate/extra/mutated tools', () => {
