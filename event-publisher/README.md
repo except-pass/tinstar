@@ -151,6 +151,9 @@ read's start to the current read's end when both states were witnessed.
 A replay returns the same event IDs and payloads after a restart.
 
 Slice A covers explicitly configured First Mate homes on the running host.
+Local second mates with a task ID and generation are covered as worker
+incarnations. Second mates without a generation are counted as
+`secondmate_without_generation` in source coverage.
 Remote endpoints, archive inventories and GitHub, Jira and deployment event
 sources remain outside its coverage.
 

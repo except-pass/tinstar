@@ -579,18 +579,28 @@ FLEET
     equal(health.last_generated_at, null)
     equal(health.last_snapshot_id, null)
   }
-  equal(journal.record(await poll(failures.length, () => {})), 0)
-  equal(journal.record(await poll(failures.length + 1, fleet => {
-    fleet.tasks[1].current_state.state = 'parked'
+  const addMates = (fleet, state) => {
+    const worker = fleet.tasks[0]
     fleet.tasks.push(
       { id: 'kind-mate', kind: 'secondmate', remote: null },
       { id: 'role-mate', role: 'secondmate', remote: null },
       { id: 'listed-mate', remote: null },
+      { ...worker, id: 'kind-worker', kind: 'secondmate', current_state: { ...worker.current_state, state } },
+      { ...worker, id: 'role-worker', role: 'secondmate', current_state: { ...worker.current_state, state } },
+      { ...worker, id: 'listed-worker', current_state: { ...worker.current_state, state } },
       { id: 'remote-worker', remote: { host: 'example', root: '/example' } },
     )
-    fleet.secondmate_current.records = [{ id: 'listed-mate' }]
-  })), 1)
-  equal(journal.events()[0].change.before, 'working')
+    fleet.secondmate_current.records = [{ id: 'listed-mate' }, { id: 'listed-worker' }]
+  }
+  equal(journal.record(await poll(failures.length, fleet => addMates(fleet, 'working'))), 0)
+  equal(journal.record(await poll(failures.length + 1, fleet => addMates(fleet, 'parked'))), 3)
+  deepEqual(journal.events().map(event => event.evidence.source_reference.task_id), ['kind-worker', 'listed-worker', 'role-worker'])
+  for (const event of journal.events()) {
+    deepEqual(event.change, { field: 'current_state', before: 'working', after: 'parked' })
+  }
+  const [health] = journal.sources()
+  equal(health.health, 'ok')
+  equal(health.counts.secondmate_without_generation, 3)
 })
 
 test('unchanged markdown uses the fast path and a new local date reevaluates the hold', async t => {

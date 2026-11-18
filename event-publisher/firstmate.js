@@ -191,7 +191,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
 
   const entries = []
-  const counts = { remote_excluded: 0, current_state_unavailable: 0 }
+  const counts = { remote_excluded: 0, secondmate_without_generation: 0, current_state_unavailable: 0 }
   const ids = new Set()
   const mates = new Set(Array.isArray(data.secondmate_current.records)
     ? data.secondmate_current.records.map(record => record?.id) : [])
@@ -209,8 +209,12 @@ export function parseWorkers(text, home, startedAt, observedAt) {
       counts.remote_excluded++
       continue
     }
-    if (row.kind === 'secondmate' || row.role === 'secondmate' || mates.has(row.id)) continue
     if (typeof row.spawn_gen !== 'string' || !identifier.test(row.spawn_gen)) {
+      if ((row.spawn_gen == null || row.spawn_gen === '') &&
+          (row.kind === 'secondmate' || row.role === 'secondmate' || mates.has(row.id))) {
+        counts.secondmate_without_generation++
+        continue
+      }
       partial('local fleet worker lacks a valid spawn generation')
     }
     const current = row.current_state
