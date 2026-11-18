@@ -203,6 +203,26 @@ describe('prepared-card loop', () => {
     }
   })
 
+  it('omits redacted replacement IDs from answer choices while accepting the exact ID', async () => {
+    const card = page(1)
+    const { sources, tool } = await setup([card])
+    const requestId = 'fixture-original'
+    const replacementId = 'secret_rotation_approval_stage'
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
+      request_id: requestId, requested_from: 'Will', question: 'Review the original?' })).toMatchObject({ outcome: 'saved' })
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'supersede-fixture', kind: 'supersede_decision',
+      request_id: requestId, reason: 'Corrected scope',
+      replacement: { request_id: replacementId, requested_from: 'Will', question: 'Review the replacement?' },
+    })).toMatchObject({ outcome: 'saved' })
+
+    const context = await sources.card(card.id, true)
+    expect(context.answerSources).toEqual({ excluded: ['comment-0', 'comment-1'], replacements: [] })
+    expect(JSON.stringify(context)).not.toContain(replacementId)
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'answer-replacement', kind: 'answer_decision',
+      request_id: replacementId, answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' },
+    })).toMatchObject({ outcome: 'saved' })
+  })
+
   it('pushes batches of ten and claims, reads and answers ten throwaway cards through ChatGPT', async () => {
     const cards = Array.from({ length: 22 }, (_, n) => page(n + 1,
       n % 3 === 0 ? { tag: 'Decision' } : n % 3 === 1 ? { owner: 'Will' } : { status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' }))
