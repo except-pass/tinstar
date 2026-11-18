@@ -193,7 +193,7 @@ export function startServer(opts: ServerOptions) {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ok: true, data: { sha: typeof __TINSTAR_BUILD_SHA__ === 'undefined' ? null : __TINSTAR_BUILD_SHA__ } })); return
       }
       if (sessionRequestHandler(req, res)) return
-      if (await handleCockpitRequest(fleet, req, res)) return
+      if (await handleCockpitRequest(fleet, req, res, request => pulls.authorized(request))) return
       if (await actions.handle(req, res)) return
       if (await asks.handle(req, res)) return
       if (await decisionDesk.handle(req, res)) return
