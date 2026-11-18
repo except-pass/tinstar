@@ -549,10 +549,12 @@ reasons/counts, Ready/in-flight depth, free slots and dispatch failures. Source
 read failures are reported separately from webhook failures in `runner.refill_pass`.
 The runner explanation includes the most recent pass, including exhausted sources.
 
-Current packet cards and in-flight jobs take priority over queued board history
-reads, bounded by the saved target plus maximum preparers. Their canonical card
-properties and complete body/comment history are re-read when either has less
-than fifteen seconds of evidence remaining. The five-second runner renews these
+Current packet cards and in-flight jobs get early renewals, bounded by the saved
+target plus maximum preparers. Their canonical card properties and complete
+body/comment history are re-read when either has less than fifteen seconds of
+evidence remaining. When renewals and other board reads are both queued, the two
+readers alternate starts between them so cold histories can complete during
+recurring renewals. The five-second runner renews these
 sources even with automatic admission off and the Desk closed. Other queued cards refresh expired
 properties as well as history, including explicit retries outside the priority
 set. Two readers remain the concurrency bound. During renewal or transient

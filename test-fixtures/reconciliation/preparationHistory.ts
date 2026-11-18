@@ -9,7 +9,7 @@ import type { ReconciliationConfig } from '../../src/server/reconciliation/confi
 
 export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: {
   cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number; cardStatus?: 'Queued' | 'Waiting For'
-  answered?: boolean; independentRequest?: boolean
+  answered?: boolean; independentRequest?: boolean; cardNative?: boolean
   largeContract?: boolean; historySurface?: 'comments' | 'body' | 'none'; commentCount?: number
   wrapFetch?: (fixtureFetch: typeof fetch) => typeof fetch
 } = {}) {
@@ -25,6 +25,10 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const homes = fixture.snapshot.fleet.map((home, index) => ({ ...home, source: { ...home.source, home: join(root, `home-${index}`) } }))
   let historyText = fixture.history.context.blocks[0]!.text
   for (const [index, home] of fixture.snapshot.fleet.entries()) historyText = historyText.replaceAll(home.source.home, homes[index]!.source.home)
+  if (options.cardNative) {
+    const { request_id: id, source_question: question, options } = fixture.packet.binding
+    historyText = `Operation: request_decision\nRequested from: Will\nQuestion: ${question}\nTin Star request: ${JSON.stringify({ id, action: 'Decision', options })}`
+  }
   const extraNotes: string[] = []
   const publishedNotes: Array<{ id: string; cardId: string; rich_text: unknown[]; created_time?: string }> = []
   if (options.answered) extraNotes.push(`Operation: answer_decision\nAnswer: Defer the preview.\nNext owner: Firstmate\nNext status: Queued\nTin Star answer data: ${JSON.stringify({ request_id: 'preview-question', answer: 'Defer the preview.', next: { owner: 'Firstmate', status: 'Queued' } })}\nTin Star answer: preview-question`)

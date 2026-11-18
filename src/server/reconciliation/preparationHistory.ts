@@ -8,12 +8,13 @@ export const decisionRenewalGraceMs = 180_000
 /** One shared queue for display and admission. Two card reads at a time also
  * bound the body/comment requests waiting on the shared Notion rate limiter. */
 export class PreparationHistory {
-  private pending = new Map<string, { promise: Promise<void>; resolve(): void }>()
+  private pending = new Map<string, { promise: Promise<void>; resolve(): void; explicit?: boolean }>()
   private failures = new Map<string, { attempts: number; retryAt: number; message: string }>()
   private complete = new Map<string, CachedDecisionHistory>()
   private priority = new Set<string>()
   private queue: string[] = []
   private active = 0
+  private lastReadWasPriority = false
   constructor(private reader: CardContextReader, private onLoaded: () => void = () => {}, private onRead: (id: string) => Promise<void> = async () => {},
     private readProperties: (id: string, signal: AbortSignal) => Promise<void> = async () => {},
     private propertiesFresh: (id: string, until: number) => boolean = () => true) {}
@@ -27,8 +28,6 @@ export class PreparationHistory {
       if ((this.failures.get(id)?.retryAt ?? 0) > Date.now()) continue
       this.enqueue(id)
     }
-    // Existing queued board reads yield to exact sources, without adding readers.
-    this.queue.sort((a, b) => Number(important.has(b)) - Number(important.has(a)))
     this.drain()
   }
 
@@ -39,9 +38,11 @@ export class PreparationHistory {
       this.enqueue(id)
     }
     this.warm([id])
-    const index = this.queue.indexOf(id)
-    if (index > 0) { this.queue.splice(index, 1); this.queue.unshift(id) }
-    await this.pending.get(id)?.promise
+    const entry = this.pending.get(id)
+    if (entry) {
+      entry.explicit = true
+      await entry.promise
+    }
   }
 
   invalidate(id: string) {
@@ -123,7 +124,13 @@ export class PreparationHistory {
 
   private drain() {
     while (this.active < 2 && this.queue.length) {
-      const id = this.queue.shift()!, entry = this.pending.get(id)!
+      // Renewals can become due faster than a paced sweep can finish. Alternate
+      // queue starts so recurring renewals cannot starve cold board history.
+      const explicit = this.queue.findIndex(id => this.pending.get(id)!.explicit)
+      const preferred = explicit >= 0 ? explicit : this.queue.findIndex(id => this.priority.has(id) !== this.lastReadWasPriority)
+      const id = this.queue.splice(Math.max(0, preferred), 1)[0]!
+      const entry = this.pending.get(id)!
+      this.lastReadWasPriority = this.priority.has(id)
       this.active++
       void this.load(id).finally(() => {
         this.active--
