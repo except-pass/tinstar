@@ -485,6 +485,8 @@ test('confirmed backlog absence survives both inventory failures', async t => {
   journal.recordAttempts(await observeHome(fixture, path, { now: () => new Date(generation) }))
   const [taskStatus, workerStatus] = journal.sources()
   equal(taskStatus.health, 'unavailable')
+  equal(taskStatus.reason, 'read command is missing or inaccessible')
+  deepEqual(taskStatus.counts, { fleet_backlog_absent: 1 })
   equal(workerStatus.health, 'partial')
   equal(taskStatus.last_snapshot_id, null)
   equal(workerStatus.last_snapshot_id, null)

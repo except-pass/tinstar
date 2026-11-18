@@ -236,6 +236,7 @@ export class Journal {
       freshFleet(pr, fleetWindow, previous.last_generated_at) &&
       pr.generated_at > (worker?.last_generated_at ?? '')
     const backlogAbsent = fresh && pr.backlogAbsent
+    if (backlogAbsent) counts = { ...counts, fleet_backlog_absent: 1 }
     let acceptedFleet = backlogAbsent ? pr : null
     if (observed_at < started_at) {
       health = 'stale'
@@ -253,10 +254,7 @@ export class Journal {
       if (source.type === 'task') {
         const projected = withPullRequests(entries, fresh ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-        counts = pr_links_unobserved || backlogAbsent ? {
-          ...(pr_links_unobserved ? { pr_links_unobserved } : {}),
-          ...(backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
-        } : null
+        if (pr_links_unobserved) counts = { ...counts, pr_links_unobserved }
         if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
