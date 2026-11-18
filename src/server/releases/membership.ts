@@ -43,8 +43,12 @@ export class ReleaseMembershipReader {
       work: this.read(`/repos/${repository}/commits/${commit}/pulls?per_page=100`, '[.[]|{number,title,html_url,merged_at,merge_commit_sha,head:{sha:.head.sha},base:{ref:.base.ref}}]')
         .then(response => {
           if (!Array.isArray(response) || response.length >= 100 || response.some(row => !row || typeof row !== 'object')) throw new Error('Commit-associated PR history is incomplete')
-          entry.until = this.now() + commitTtl
-          return (response as CommitPull[]).filter(row => row.merged_at && sha(row.merge_commit_sha))
+          const merged = (response as CommitPull[]).filter(row =>
+            typeof row.merged_at === 'string' && Number.isFinite(Date.parse(row.merged_at)) &&
+            sha(row.merge_commit_sha) && typeof row.html_url === 'string' && releasePull(row.html_url)?.repository === repository)
+          if (merged.length > 0 && merged.length === response.length) entry.until = this.now() + commitTtl
+          else this.commitPulls.delete(key)
+          return merged
         })
         .catch(error => { this.commitPulls.delete(key); throw error }),
     }
