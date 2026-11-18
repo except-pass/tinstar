@@ -18,7 +18,7 @@ export const preparedRecoveryInput = z.object({
 })
 type Input = z.infer<typeof preparedSubmitInput>
 type Selection = Pick<Input, 'option_id' | 'answer'>
-type AnswerBinding = PreparedBinding & { answerer?: DeskAnswerer }
+type AnswerBinding = PreparedBinding & { answerer: DeskAnswerer }
 interface Attempt {
   card: string
   caller: string
@@ -43,9 +43,10 @@ export class PreparedSubmissions {
   private get scope() { return this.reviews.scope }
 
   private apply(attempt: Attempt, stored: StoredDecisionPacket, binding: AnswerBinding, token: string | undefined, canPost: boolean) {
+    if (binding.answerer === undefined) throw new Error('Missing stored Desk answer attribution')
     return withLeaseCaller(attempt.caller, token, () =>
       this.writeAnswer(stored, JSON.parse(attempt.input) as Selection,
-        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, binding.answerer ?? 'other', canPost))
+        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, binding.answerer, canPost))
   }
 
   private invalidate(db: DatabaseSync, card: string, packetId: string) {
