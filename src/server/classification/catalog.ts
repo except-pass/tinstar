@@ -31,7 +31,7 @@ export const pairKey = (initiative: string, epic: string | null) => JSON.stringi
 export const eligible = (card: WorkCard) => !card.source && !card.archived && !card.in_trash
 export const active = (card: WorkCard) => eligible(card) && !['Done', 'Archived'].includes(label(card, 'Status') ?? '')
 
-const credentialKey = String.raw`[_-]*(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret|authorization)(?:[_-]+[\da-z]+)*[_-]*`
+const credentialKey = String.raw`[_-]*(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret|authorization|cookie)(?:[_-]+[\da-z]+)*[_-]*`
 const quotedCredential = String.raw`(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))`
 const omittedCredential = '[credential omitted]'
 const closingPunctuation = String.raw`)\]}>,;:.!?"'”’`
@@ -49,11 +49,11 @@ const assignmentWithValue = (key: string, flags: string) =>
   new RegExp(String.raw`(?:${key})\s*${credentialValue}`, flags)
 
 const credentialAssignment = assignmentWithValue(
-  String.raw`(?<![\w-])(?:${credentialKey}["']?${sameLineSpace}*[:=]|--${credentialKey}${sameLineSpace}+)`,
+  String.raw`(?<![\w-])(?:${credentialKey}["']?\s*[:=]|--${credentialKey}${sameLineSpace}+)`,
   'gi',
 )
 const legacyCredentialAssignment = assignmentWithValue(
-  String.raw`\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)${sameLineSpace}*=`,
+  String.raw`\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)\s*=`,
   'g',
 )
 
@@ -72,10 +72,10 @@ function redactClassificationText(text: string) {
 
 const flatten = (text: string) => text.replace(/\s+/g, ' ').trim()
 
-export function clean(text: unknown, limit: number, omitLines?: RegExp) {
+export function clean(text: unknown, limit: number, maskLabels?: (text: string) => string) {
   if (typeof text !== 'string') return ''
-  const sanitized = omitLines
-    ? flatten(redactClassificationText(text).replace(omitLines, ''))
+  const sanitized = maskLabels
+    ? flatten(maskLabels(redactClassificationText(text)))
     : redactClassificationText(flatten(text)).trim()
   return sanitized.slice(0, limit)
 }

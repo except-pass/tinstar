@@ -73,14 +73,29 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
   return { parents, complete }
 }
 
-function openingProse(context: CardContextRead, historical: boolean) {
+function openingProse(context: CardContextRead, maskLabels?: (text: string) => string) {
   const blocks: string[] = []
   for (const block of context.blocks.slice(0, 5)) {
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
     blocks.push(block.text)
   }
-  const labels = historical ? /^[^\S\r\n\u2028\u2029]*(?:initiative|epic)[^\S\r\n\u2028\u2029]*:.*$/gim : undefined
-  return clean(blocks.join('\n'), 1_100, labels)
+  return clean(blocks.join('\n'), 1_100, maskLabels)
+}
+
+function maskHistoricalLabels(text: string, card: WorkCard) {
+  const expected = { initiative: label(card, 'Initiative'), epic: label(card, 'Epic') }
+  const lines = text.split(/\r\n|[\r\n\u2028\u2029]/)
+  for (let index = 0; index < lines.length; index++) {
+    const match = /^(initiative|epic)(?:\s*:(.*))?$/i.exec(lines[index]!.trim())
+    if (!match) continue
+    lines[index] = ''
+    if (match[2]?.trim()) continue
+    let next = index + 1
+    while (next < lines.length && !lines[next]!.trim()) next++
+    const value = expected[match[1]!.toLowerCase() as keyof typeof expected]
+    if (value && lines[next]?.trim().toLowerCase() === value.trim().toLowerCase()) lines[next] = ''
+  }
+  return lines.join('\n')
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({
@@ -113,10 +128,11 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
   if (excerpt.outcome === 'provenance-rejected') {
     return { ...base, ...timing(), state: 'needs-review', reason: 'source-provenance-rejected' }
   }
-  const body = openingProse(excerpt, mode === 'historical')
+  const maskLabels = mode === 'historical' ? (text: string) => maskHistoricalLabels(text, card) : undefined
+  const body = openingProse(excerpt, maskLabels)
   const area = clean(property(card, 'Area'), 100)
-  const brief = clean(property(card, 'Brief'), 500)
-  const description = clean(property(card, 'Description'), 500)
+  const brief = clean(property(card, 'Brief'), 500, maskLabels)
+  const description = clean(property(card, 'Description'), 500, maskLabels)
   const ancestors = hierarchy.parents.map(parent => clean(property(parent, 'Name'), 120)).filter(Boolean)
   const initiativeCriteria = Object.fromEntries(initiatives.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
   const pairCriteria = Object.fromEntries(destinations.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
