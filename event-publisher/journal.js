@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { canonicalPullRequests, entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
+import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
 
 const schema = `
 CREATE TABLE IF NOT EXISTS homes (
@@ -248,7 +248,6 @@ export class Journal {
     for (const entry of entries) {
       const prior = select.get(source.source_id, entry.id)
       const before = prior?.fields ? JSON.parse(prior.fields) : null
-      if (Array.isArray(before?.pull_requests)) before.pull_requests = canonicalPullRequests(before.pull_requests)
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
       const rebaselinePullRequests = source.type === 'task' && before && Object.hasOwn(entry.fields, 'pull_requests') &&

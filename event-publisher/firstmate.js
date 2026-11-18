@@ -60,7 +60,7 @@ function normalizedDependencies(value, home) {
   })
 }
 
-export function canonicalPullRequests(urls) {
+function canonicalPullRequests(urls) {
   const locators = new Set()
   for (const value of urls) {
     if (typeof value !== 'string' || /\s/u.test(value)) continue
