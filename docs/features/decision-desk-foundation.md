@@ -1,11 +1,14 @@
 # Decision Desk
 
-The Desk reviews prepared cards from the configured work board. A card needs Will
-when its owner is Will, it has a Will action tag, or it is Waiting For Will.
-Todo, Backlog, Archived, Done, and trashed cards stay out of preparation and
-review. An answer retires the answered revision. A substantive change can open
-a new decision when the card needs Will again. The Decisions Workbench remains the view
-for browsing source requests and their evidence.
+The Desk reviews prepared Notion cards from the configured work board. A card
+needs Will when its owner is Will, it has an active Will action tag, or its
+status is Waiting For and Will is one of its blockers. Todo, Backlog, Archived,
+Done, and trashed cards stay out of preparation and review. A card that needs
+Will is ready to claim when it has a current packet, no active lease, and no
+blocking source-write reservation or answer save in progress. An answer retires
+the answered revision. A substantive
+change can open a new decision when the card needs Will again. The Decisions
+Workbench remains the view for browsing source requests and their evidence.
 
 ## Review and Preparation UI
 
@@ -13,11 +16,13 @@ Open **Decisions** and select **Decision Desk**. Review shows the summary,
 options, recommendation, and links for the card held by this browser. Select
 an option and enter the words to record. **Record answer & next** saves one card
 comment with the chosen option and the exact answer. Tin Star uses its own
-integration identity and clears the Will action tag. When the card is Waiting
-For, it removes Will’s waits and keeps it Waiting For while an independent
-blocker remains. If Will owned the card, Tin Star assigns it to Firstmate.
-It sets the status to Queued when all waits are clear. **Skip** releases the
-card while keeping its packet available.
+integration identity and clears the Will action tag. On a Waiting For card,
+Tin Star removes Will’s waits, transfers ownership to Firstmate if Will owned
+the card, and sets the status to Queued once all waits are clear. **Skip**
+releases the card while keeping its packet available.
+
+Browser review uses the existing Tailscale owner authorization, origin
+allowlist, and `X-Tinstar-UI: 1` handshake.
 
 Preparation shows how many cards are ready, being prepared, and leased.
 When fewer than ten cards are claimable, Tin Star sends eligible cards up to
@@ -31,9 +36,10 @@ invalidates the packet.
 Configure the `url` and `key` fields of Clavis secret
 `grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
 authentication. Its body contains `card_url`, a credential-scrubbed
-`source_question`, and an opaque `source_revision` token for the card revision. The `publish`
-object names the callback tool in `publish.tool` and provides its job ID in
-`publish.job_id`. Call `publish_prepared_packet` with that job ID and the
+`source_question` taken from the card’s Next action, Waiting For text, or title,
+in that order, and an opaque `source_revision` token for the card revision.
+The `publish` object names the callback tool in `publish.tool` and provides its
+job ID in `publish.job_id`. Call `publish_prepared_packet` with that job ID and the
 four packet content fields.
 
 ```json
@@ -51,10 +57,11 @@ four packet content fields.
 }
 ```
 
-Each option contains its label.
 Tin Star attaches the card ID and its revision, assigns option IDs, and reports
-missing packet fields by name. A repeated publish for the same job returns the
-same packet. Jobs and packets from the former request-based protocol are kept
+invalid packet fields by path. Use HTTPS evidence links without embedded
+credentials to make them visible in browser review. The authoritative packet
+schema is exposed by MCP `tools/list`. A repeated publish for the same job
+returns the same packet ID. Jobs and packets from the former request-based protocol are kept
 in local storage for audit. Active cards receive new card-based preparations.
 
 ## ChatGPT claims
@@ -65,11 +72,16 @@ Call `claim_next_card` or `claim_next_prepared_decision` with a unique
 A scoped claim stays within that card when submitting or skipping. To move to
 another card after a scoped review, issue an unscoped claim explicitly.
 
-Keep the lease token in tool arguments. Call `submit_prepared_decision` with
+Keep lease and review session tokens in tool arguments. Call `submit_prepared_decision` with
 `lease_token`, the selected `option_id`, Will's exact `answer`, and a new
 `operation_id`. Reuse the same arguments when a save result is uncertain.
 To continue reading an existing hold, call the claim with its lease token.
 For an unscoped review, the answer returns the next prepared card when available.
+`release_prepared_decision` can release the hold or skip the card with
+`action: "skip"`. Use `open_prepared_review_session` to register a context
+explicitly and retain its `review_session_token` across claims.
+`list_prepared_review_sessions` lists the caller's contexts without returning
+their capabilities. Claim audits record outcomes and timing.
 
 ## Per-card source-write reservations and recovery
 

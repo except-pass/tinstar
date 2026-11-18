@@ -425,12 +425,8 @@ MCP and workflow request bodies remain bounded at 256 KiB. UI registration and s
 
 ## Session-scoped card leases
 
-Call `claim_next_card(operation_id)` for the next prepared card that needs
-Will. `claim_card(card_id, operation_id)` scopes review to one card.
-These are aliases of the Decision Desk claim tools. Claims return the packet
-and a per-card lease. See the
-[Decision Desk guide](decision-desk-foundation.md#chatgpt-claims) for answers,
-scoped claims, and skip.
+See the [Decision Desk guide](decision-desk-foundation.md#chatgpt-claims) for
+prepared claims, review contexts, answers, and skip.
 
 `not_for_me(card_id, operation_id, lease_token, reason)` returns a leased ask with
 a one-line reason. The workflow writer records that reason, clears all Will
@@ -446,10 +442,8 @@ operation for an interrupted save. An unresolved provider write uses the existin
 audited source-write recovery before retry. After a lost final response, read `get_work`
 for the recorded return and current lease before retrying.
 
-Keep the returned `lease_token` in tool arguments across calls and later turns.
-Never print it in chat, card text, URLs or logs. Every later card read/change
-accepts `lease_token`; repeat `claim_next_card` with it to retrieve the held
-card rather than allocate another. Separate conversations start without a token.
+Never print a lease token in chat, card text, URLs or logs. Later card reads
+and changes accept `lease_token`. Separate conversations start without a token.
 The authenticated caller includes the installation and facade caller credentials,
 exactly as for `session_probe`; a browser tab or actor label alone is not a chat.
 
@@ -488,8 +482,6 @@ Firstmate owns the guarded deploy and live proof: two separate ChatGPT chats
 holding distinct cards, one refused cross-chat change and one refused mate
 update. Local automated coverage does not substitute for that live proof.
 
-Prepared-only claims, registered review contexts, skip and claim timing audit
-are documented in the [Decision Desk reference](decision-desk-foundation.md#chatgpt-claims).
 Follow-ups: admin force-claim/takeover, an active-claims dashboard,
 the five-conversation DEV load proof, and generic skip/cooldown semantics. The facade
 scope list and deploy approved-tool catalog currently duplicate tool names;
