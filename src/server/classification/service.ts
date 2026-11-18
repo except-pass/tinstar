@@ -1,3 +1,4 @@
+import { CardContextReader } from '../reconciliation/cardContext'
 import { randomUUID } from 'node:crypto'
 import type { CardLeases } from '../reconciliation/cardLeases'
 import type { ReconciliationConfig } from '../reconciliation/config'
@@ -77,6 +78,7 @@ export const validHistoricalLimit = (limit: number) => Number.isInteger(limit) &
 export class ClassificationService {
   private readonly board
   private readonly history
+  private readonly context
   private readonly reader
   private readonly taxonomy
   private readonly ledger
@@ -85,6 +87,7 @@ export class ClassificationService {
     leases: CardLeases, private jev = new OpenRouterJev(), notes: TaxonomyNotes = {}) {
     this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch, true)
     this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch, true)
+    this.context = new CardContextReader(config, api.parallelFetch)
     this.reader = new WorkReader(config, api)
     this.taxonomy = new ClassificationCatalog(notes)
     this.ledger = new ClassificationLedger(leases)
@@ -121,6 +124,7 @@ export class ClassificationService {
     const batchId = randomUUID()
     await this.ledger.start(batchId, board.dataSourceId, catalog.revision, entries)
     const source = {
+      excerpt: (id: string) => this.context.classificationExcerpt(id),
       parent: async (id: string) => cards.get(id) ?? this.reader.card(id),
     }
     const rows: DryRunRow[] = new Array(entries.length)

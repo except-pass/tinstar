@@ -11,7 +11,6 @@ import { NotionApi } from '../src/server/reconciliation/notionApi'
 
 async function main() {
   const { values } = parseArgs({ options: {
-    'config-home': { type: 'string' },
     'ledger-home': { type: 'string' },
     'historical-limit': { type: 'string', default: String(maxHistoricalLimit) },
     'taxonomy-notes': { type: 'string' },
@@ -19,7 +18,7 @@ async function main() {
     help: { type: 'boolean' },
   } })
   if (values.help) {
-    console.log('Usage: npx tsx scripts/jev-classifier-dry-run.ts [--config-home DIR] [--ledger-home DIR] [--historical-limit N] [--taxonomy-notes FILE] [--output FILE]\nReads the live Notion board and replays historical labels through OpenRouter. Writes only the local ledger and optional Markdown report.')
+    console.log('Usage: npx tsx scripts/jev-classifier-dry-run.ts [--ledger-home DIR] [--historical-limit N] [--taxonomy-notes FILE] [--output FILE]\nReads the live Notion board and replays historical labels through OpenRouter. Writes only the local ledger and optional Markdown report.')
     return
   }
   const historicalLimit = Number(values['historical-limit'])
@@ -28,7 +27,7 @@ async function main() {
     process.exitCode = 1
     return
   }
-  const configHome = values['config-home'] ?? getConfigRoot()
+  const configHome = getConfigRoot()
   const { notion } = loadReconciliationConfig(configHome)
   if (!notion) { console.error('The configured Tin Star board has no Notion credentials'); process.exitCode = 1; return }
   const notes = values['taxonomy-notes'] ? taxonomyNotes.parse(JSON.parse(await readFile(values['taxonomy-notes'], 'utf8'))) : {}

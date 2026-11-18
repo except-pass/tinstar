@@ -1,9 +1,11 @@
+import type { CardContextRead } from '../reconciliation/cardContext'
 import type { WorkCard } from '../reconciliation/workReader'
 import { clean, eligible, exampleTitleLimit, fingerprint, label, property, type Catalog, type Destination } from './catalog'
 import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, type Question } from './openRouter'
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
 export type ClassifierSource = {
+  excerpt(id: string): Promise<CardContextRead>
   parent(id: string): Promise<WorkCard | undefined>
 }
 type Rank = { id: string; probability: number }
@@ -71,6 +73,15 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
   return { parents, complete }
 }
 
+function openingProse(context: CardContextRead) {
+  const blocks: string[] = []
+  for (const block of context.blocks.slice(0, 5)) {
+    if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
+    blocks.push(block.text)
+  }
+  return clean(blocks.join('\n'), 1_100)
+}
+
 const noul = (instructions: string, yes: string, no: string): Question => ({
   type: 'noul', instructions, criteria: { true: yes, false: no },
 })
@@ -97,14 +108,15 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
   if (!initiatives.length) return { ...base, ...timing(), state: 'needs-review', reason: 'no-existing-initiative' }
 
   const title = clean(property(card, 'Name'), 250)
-  const hierarchy = await readParents(card, source)
+  const [hierarchy, excerpt] = await Promise.all([readParents(card, source), source.excerpt(card.id)])
+  const body = openingProse(excerpt)
   const area = clean(property(card, 'Area'), 100)
   const brief = clean(property(card, 'Brief'), 500)
   const description = clean(property(card, 'Description'), 500)
   const ancestors = hierarchy.parents.map(parent => clean(property(parent, 'Name'), 120)).filter(Boolean)
   const initiativeCriteria = Object.fromEntries(initiatives.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
   const pairCriteria = Object.fromEntries(destinations.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
-  const state = { card: { title, area, brief, description }, ancestors }
+  const state = { card: { title, area, brief, description, body }, ancestors }
   const questions: Record<string, Question> = {
     initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use ancestor titles as supporting context. A child can belong to a different initiative.',
       criteria: { ...initiativeCriteria, [none]: 'No listed initiative is supported by the work.' } },
@@ -159,7 +171,7 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
       initiativeConfidence: initiativeAnswer.confidence, destinationConfidence: destinationAnswer?.confidence ?? 0,
       initiativeFit: probability('initiative_fit'), epicFit, ambiguous: probability('ambiguous'),
       initiativeOnly: questions[initiativeOnlyKey] ? probability(initiativeOnlyKey) : null,
-      parentConflict, sourceComplete: !!title && !!(area || brief || description) && hierarchy.complete,
+      parentConflict, sourceComplete: !!title && !!(area || brief || description || body) && hierarchy.complete && excerpt.outcome === 'available',
       parentCount: hierarchy.parents.length,
     } }
   } catch (error) {

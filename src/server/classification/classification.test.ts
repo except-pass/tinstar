@@ -60,6 +60,7 @@ describe('classifier catalog and policy', () => {
   const cache = new ClassificationCatalog({ initiatives: [{ initiative: 'Platform', initiativeOnly: true }] })
   const catalog = cache.get(board)
   const source = {
+    excerpt: async () => ({ outcome: 'available' as const, blocks: [] }),
     parent: async (value: string) => board.data.cards.find(card => card.id === value),
   }
 
@@ -163,7 +164,7 @@ describe('classifier catalog and policy', () => {
       'Next Action': { type: 'rich_text', rich_text: [{ plain_text: 'Owner instructions in alternate spelling' }] },
     } }, true)
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(privateCatalog, 'Platform')))
-    const result = await classifyCard(work, privateCatalog, { parent: async () => example }, ask)
+    const result = await classifyCard(work, privateCatalog, { ...source, parent: async () => example }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toEqual({
@@ -171,6 +172,7 @@ describe('classifier catalog and policy', () => {
         title: 'Rotation [credential omitted]',
         area: 'Platform [credential omitted]',
         brief: 'Verify rotation. [credential omitted]',
+        body: '',
         description: 'Retry with ([credential omitted]), [[credential omitted]], and [credential omitted].',
       },
       ancestors: ['Example [credential omitted] confirmed'],
@@ -242,7 +244,8 @@ describe('OpenRouter Decisions transport', () => {
 it('reads the configured board through NotionApi and persists replay results in the shared database', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-classifier-test-'))
   roots.push(root)
-  const page = card(4, 'Follow-up', null, null)
+  const page = card(4, 'Check authentication', null, null)
+  const followUp = card(6, 'Follow-up', null, null)
   const unassigned = { ...page, properties: {
     ...page.properties,
     Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication.\n-----BEGIN PRIVATE KEY-----\nU1lOVEhFVElDUEtDUzg=\n-----END PRIVATE KEY-----\nVerify the rollout.' }] },
@@ -257,11 +260,21 @@ it('reads the configured board through NotionApi and persists replay results in 
     const url = new URL(String(input))
     if (url.pathname.endsWith('/query')) {
       const filter = JSON.parse(String(init?.body)).filter.and[0]
-      return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned], has_more: false })
+      return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned, followUp], has_more: false })
     }
-    if (url.pathname.endsWith('/children')) return Response.json({ has_more: true, next_cursor: 'ignored', results: [{
-      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail.\nThen sk-abcdefghijklmnop.' }] },
-    }] })
+    if (url.pathname.endsWith('/children')) {
+      const texts = url.pathname.includes(id(6)) ? [
+        'Restore billing exports.',
+        'password="cross-block first fragment',
+        'cross-block last fragment" Verify recovery.',
+        'token:',
+        'opaque continuation fragment',
+        'Excluded sixth block',
+      ] : []
+      return Response.json({ has_more: true, next_cursor: 'ignored', results: texts.map((plain_text, index) => ({
+        id: String(index), type: 'paragraph', paragraph: { rich_text: [{ plain_text }] },
+      })) })
+    }
     return Response.json({ object: 'data_source', properties: Object.fromEntries(Object.entries(schema).map(([name, value]) =>
       [name, { type: value.type, id: value.id, select: { options: value.options.map(name => ({ name })) } }])) })
   })
@@ -271,7 +284,7 @@ it('reads the configured board through NotionApi and persists replay results in 
     expect(request.state).toEqual({
       card: {
         title: expect.any(String), area: 'Platform',
-        brief: expect.any(String), description: expect.any(String),
+        brief: expect.any(String), description: expect.any(String), body: expect.any(String),
       },
       ancestors: [],
     })
@@ -284,20 +297,28 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(notion).not.toHaveBeenCalled()
   expect(model).not.toHaveBeenCalled()
   const report = await service.dryRun(2000)
-  expect(model).toHaveBeenCalledTimes(3)
+  expect(model).toHaveBeenCalledTimes(4)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Check authentication', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(transmitted).toContainEqual(expect.objectContaining({
+    state: expect.objectContaining({ card: expect.objectContaining({
+      title: 'Follow-up', brief: '', description: '',
+      body: 'Restore billing exports. [credential omitted] Verify recovery. [credential omitted]',
+    }) }),
+  }))
+  expect(JSON.stringify(transmitted)).not.toMatch(/cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
-  expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)
+  const blockRequests = notion.mock.calls.map(([url]) => new URL(String(url))).filter(url => url.pathname.includes('/blocks/'))
+  expect(blockRequests).toHaveLength(4)
+  expect(blockRequests.every(url => url.searchParams.get('page_size') === '12' && !url.searchParams.has('start_cursor'))).toBe(true)
   const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT card_id, state, result, write_receipt FROM classification_jobs').all())
-  expect(rows).toHaveLength(3)
+  expect(rows).toHaveLength(4)
   expect(rows.every(row => row.state === 'examined' && row.write_receipt === null)).toBe(true)
   for (const row of report.rows) {
     const stored = rows.find(record => record.card_id === row.result.cardId)
@@ -307,6 +328,6 @@ it('reads the configured board through NotionApi and persists replay results in 
     })
     expect(payload).not.toHaveProperty('decision')
   }
-  expect(JSON.stringify(rows)).not.toMatch(/test-notion-token|test-openrouter-credential|Work on panel status support/)
+  expect(JSON.stringify(rows)).not.toMatch(/test-notion-token|test-openrouter-credential|Restore billing exports|opaque continuation fragment/)
   expect(dryRunReport(report, api.diagnostics)).toContain('Historical confusion matrix')
 })

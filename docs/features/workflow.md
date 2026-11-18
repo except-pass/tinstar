@@ -71,7 +71,7 @@ Run the server-side evaluation from the checkout with the configured board and
 an isolated ledger directory:
 
 ```sh
-npx tsx scripts/jev-classifier-dry-run.ts --config-home /path/to/tinstar-config \
+npx tsx scripts/jev-classifier-dry-run.ts \
   --ledger-home /path/to/private-proof --output /path/to/dry-run.md
 ```
 
@@ -79,7 +79,8 @@ The CLI reads the board through the foreground Notion scheduler and uses the
 existing Clavis bundle `openrouter/api-key`. It examines every active card
 missing Initiative and replays closed cards whose Initiative and Epic are set.
 OpenRouter receives sanitized card titles, Areas, ancestor titles, Brief, and
-Description along with the taxonomy choices. The dry run skips body reads.
+Description along with the taxonomy choices and a bounded, sanitized excerpt
+from the opening body blocks.
 Use `--historical-limit N` to cap the historical sample. The limit must be
 between 1 and 2,000. Candidates and abstentions go to the report and the
 local `classification_jobs` table in
