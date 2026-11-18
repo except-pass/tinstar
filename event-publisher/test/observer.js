@@ -54,6 +54,7 @@ function workerObservation(samples, minute) {
 function encodeFleet(generated, samples) {
   return JSON.stringify({
     schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated,
+    main_inventory: { valid: true },
     secondmate_current: { registry: { present: false } },
     tasks: samples.map(({ id, gen, state, source = 'pane', last = 'paused' }) => ({
       id, spawn_gen: gen, remote: null,
@@ -62,6 +63,39 @@ function encodeFleet(generated, samples) {
     })),
   })
 }
+
+test('home binding survives restart and is shared by task and worker sources', async t => {
+  const path = await temp(t)
+  const db = join(path, 'journal.sqlite')
+  const baseline = new Journal(db)
+  baseline.register(tasks)
+  baseline.record(taskObservation([row('sample-a')], 0))
+  baseline.close()
+
+  const journal = new Journal(db)
+  t.after(() => journal.close())
+  const rebound = { ...home, path: join(path, 'different-home') }
+  throws(() => journal.register(sourcesFor(rebound)[1]), /already bound/)
+
+  const config = join(path, 'config.json')
+  await writeFile(config, JSON.stringify({ homes: [rebound] }))
+  for (const command of ['serve', 'observe']) {
+    await rejects(exec(cli, [command, '--config', config, '--db', db]),
+      error => error.code === 1 && /already bound/.test(error.stderr))
+  }
+  journal.register(tasks)
+  journal.register(workers)
+  equal(journal.tail(), 0)
+})
+
+test('CLI rejects oversized intervals and JSON source health output', async () => {
+  for (const interval of ['3601', '2147484']) {
+    await rejects(exec(cli, ['serve', '--interval', interval]),
+      error => error.code === 2 && /--interval must be at most 3600/.test(error.stderr))
+  }
+  await rejects(exec(cli, ['sources', '--json']),
+    error => error.code === 2 && /--json is unsupported for sources/.test(error.stderr))
+})
 
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {
   const path = join(await temp(t), 'journal.sqlite')
@@ -234,6 +268,7 @@ FLEET
     fleet => { fleet.tasks[1].spawn_gen = null },
     fleet => { Object.assign(fleet.tasks[1], { spawn_gen: null, remote: {} }) },
     fleet => { fleet.main_inventory = { valid: false } },
+    fleet => { delete fleet.main_inventory },
   ]
   for (const [minute, fail] of failures.entries()) {
     equal(journal.record(await poll(minute, fail)), 0)
@@ -242,8 +277,8 @@ FLEET
     equal(health.last_generated_at, null)
     equal(health.last_snapshot_id, null)
   }
-  equal(journal.record(await poll(4, () => {})), 0)
-  equal(journal.record(await poll(5, fleet => { fleet.tasks[1].current_state.state = 'parked' })), 1)
+  equal(journal.record(await poll(failures.length, () => {})), 0)
+  equal(journal.record(await poll(failures.length + 1, fleet => { fleet.tasks[1].current_state.state = 'parked' })), 1)
   equal(journal.events()[0].change.before, 'working')
 })
 

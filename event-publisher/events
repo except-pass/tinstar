@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
 import { observe, sourcesFor } from './firstmate.js'
-import { Journal } from './journal.js'
+import { Journal, JournalConfigurationError } from './journal.js'
 
 const usage = `Usage
   events serve --config <file> [--interval <seconds>]
@@ -13,7 +13,7 @@ const usage = `Usage
   events watch [--after <sequence>] [filters] [--json]
   events replay [--last <count> | --after <sequence>] [filters] [--json]
   events inspect <event-id>
-  events sources [--json]
+  events sources
 
 Filters
   --source firstmate|<source-id>    --type task|worker    --entity <entity-id>
@@ -38,7 +38,7 @@ const commandOptions = {
   watch: ['after', 'source', 'type', 'entity', 'json'],
   replay: ['after', 'last', 'source', 'type', 'entity', 'json'],
   inspect: [],
-  sources: ['json'],
+  sources: [],
 }
 const pageSize = 200
 
@@ -233,8 +233,9 @@ async function main() {
   const filters = { source: values.source, type: values.type, entity: values.entity }
   const path = resolve(values.db ?? process.env.EVENTS_DB ?? join(homedir(), 'srv/event-publisher/journal.sqlite'))
   const writer = command === 'serve' || command === 'observe'
-  const homes = writer ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
+  if (interval > 3600) throw new UsageError('--interval must be at most 3600 seconds')
+  const homes = writer ? await readConfig(values.config ?? process.env.EVENTS_CONFIG) : null
   const journal = new Journal(path, { readOnly: !writer })
   try {
     if (writer) {
@@ -248,8 +249,7 @@ async function main() {
       console.log(JSON.stringify(event, null, 2))
     } else if (command === 'sources') {
       for (const source of journal.sources()) {
-        console.log(values.json ? JSON.stringify(source)
-          : `${healthText(source)} · last attempt ${age(source.last_attempt_at)} · last accepted inventory ${age(source.last_success_at)}`)
+        console.log(`${healthText(source)} · last attempt ${age(source.last_attempt_at)} · last accepted inventory ${age(source.last_success_at)}`)
       }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
@@ -276,8 +276,7 @@ process.stdout.on('error', error => {
 try {
   await main()
 } catch (error) {
-  const message = error instanceof UsageError ? error.message
-    : error.message === 'use a separate journal for live and fixture baselines' ? error.message
+  const message = error instanceof UsageError || error instanceof JournalConfigurationError ? error.message
     : error.code === 'ERR_SQLITE_ERROR' ? 'cannot access the journal; check its path, permissions and writer'
     : 'publisher failed; check the journal path and permissions'
   console.error(`events: ${message}`)

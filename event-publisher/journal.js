@@ -5,6 +5,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { entityId } from './firstmate.js'
 
 const schema = `
+CREATE TABLE IF NOT EXISTS homes (
+  home_id TEXT PRIMARY KEY,
+  path TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sources (
   source_id TEXT PRIMARY KEY,
   description TEXT NOT NULL,
@@ -81,6 +85,8 @@ function readEvent(row) {
   return row ? { ...JSON.parse(row.envelope), sequence: row.sequence } : null
 }
 
+export class JournalConfigurationError extends Error {}
+
 export class Journal {
   constructor(path, { readOnly = false } = {}) {
     this.db = openJournal(path, readOnly)
@@ -90,14 +96,22 @@ export class Journal {
     this.db.close()
   }
 
-  register(source) {
+  register({ home_path, ...source }) {
+    const binding = this.db.prepare(`
+      INSERT INTO homes (home_id, path) VALUES (?, ?)
+      ON CONFLICT(home_id) DO UPDATE SET path = excluded.path
+      WHERE homes.path = excluded.path
+    `).run(source.home_id, home_path)
+    if (!binding.changes) {
+      throw new JournalConfigurationError(`home id ${source.home_id} is already bound to a different FM_HOME path`)
+    }
     const result = this.db.prepare(`
       INSERT INTO sources (source_id, description) VALUES (?, ?)
       ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
       WHERE json_extract(sources.description, '$.mode') = json_extract(excluded.description, '$.mode')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
-    if (!result.changes) throw new Error('use a separate journal for live and fixture baselines')
+    if (!result.changes) throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
   }
 
   record(observation) {

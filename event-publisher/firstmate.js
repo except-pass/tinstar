@@ -29,6 +29,7 @@ export function sourcesFor(home) {
   ].map(source => ({
     ...source,
     home_id: home.id,
+    home_path: home.path,
     source_id: entityId('home', home.id, source.type),
     mode: home.mode,
   }))
@@ -144,7 +145,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
   if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== home.path ||
       !Array.isArray(data.tasks) || data.complete === false || data.truncated === true ||
-      data.main_inventory?.valid === false ||
+      data.main_inventory?.valid !== true ||
       data.secondmate_current?.registry?.present !== false) {
     partial('fleet snapshot lacks verified local inventory')
   }

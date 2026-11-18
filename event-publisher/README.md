@@ -36,10 +36,14 @@ independently readable home. The paths and ID below are synthetic.
 `bin/` read interfaces. A home defaults to live mode. For synthetic inputs, set
 `"mode": "fixture"` and use a separate journal. Keep the database and its SQLite
 sidecars in a private directory outside the checkout.
+The journal binds each home ID to its configured path on first registration.
+Use a distinct ID when adding a different home.
 
 ```sh
 events serve --interval 20
 ```
+
+The polling interval accepts whole seconds from 15 through 3600.
 
 Leave one publisher running per journal. Use the same `EVENTS_DB` in a second
 terminal and start the tail. Ctrl-C stops either process. The collector finishes
@@ -61,7 +65,7 @@ events replay --last 100
 events replay --after 42 --json
 events watch --after 42 --json
 events inspect 'event:61b7b914-c227-43fe-be7a-10754f266230'
-events sources --json
+events sources
 ```
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
