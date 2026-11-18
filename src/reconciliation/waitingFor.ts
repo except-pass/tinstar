@@ -1,5 +1,5 @@
-import { isJiraCard } from '../shared/workIdentity'
-import { waitingForException, waitingForFieldIssue, waitingForTypes, type SourceCoverage, type WaitingForType } from '../shared/waitingForPolicy'
+import { cardSourceUrl } from '../shared/workIdentity'
+import { canonicalWorkId, closedWorkBlocker, waitingForIssues, waitingForTypes, waitingForWorkIds, waitEntries, waitState, workBlocker, type SourceCoverage, type WaitingForIssue, type WaitingForType, type WorkBlocker } from '../shared/waitingForPolicy'
 import type { SceneCard } from '../server/reconciliation/scene'
 import { propertyDate, propertyText } from './recordFields'
 import { checkInTime } from '../shared/checkIn'
@@ -10,7 +10,6 @@ export interface WaitingForGroup {
   target?: { kind: 'card'; id: string } | { kind: 'url'; url: string }
 }
 const normalize = (id: string) => id.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
-const pageId = (id: string) => isJiraCard(id) ? id : /^(?:[a-f\d]{32}|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(id) ? id.replaceAll('-', '').toLowerCase() : null
 export { waitingForActive } from '../shared/floorOrganization'
 function githubTarget(value: string) {
   try {
@@ -22,8 +21,6 @@ function githubTarget(value: string) {
   } catch { return null }
 }
 function eventTarget(id: string, cards: SceneCard[]) {
-  const direct = githubTarget(id)
-  if (direct) return direct
   const candidates = cards.flatMap(card => [...propertyText(card, 'Waiting For').matchAll(/https:\/\/github\.com\/[^\s<>"()]+/g)].flatMap(match => {
     const parsed = githubTarget(match[0].replace(/[.,;]+$/, ''))
     return parsed && normalize(id).includes(parsed.repo.toLowerCase()) && new RegExp(`(?:#|\\b)${parsed.number}\\b`).test(id) ? [parsed] : []
@@ -31,19 +28,8 @@ function eventTarget(id: string, cards: SceneCard[]) {
   const unique = [...new Map(candidates.map(value => [value.url, value])).values()]
   return unique.length === 1 ? unique[0] : null
 }
-export function waitingForIssue(card: SceneCard, known: readonly SceneCard[]): string | null {
-  return waitingForFieldIssue({
-    cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
-    knownWorkIds: known.filter(item => !item.source.in_trash && !item.source.archived && !['Done', 'Archived'].includes(propertyText(item, 'Status'))).map(item => item.id),
-  })
-}
-export function waitingForSemanticsIssue(card: SceneCard, coverage: SourceCoverage, known: readonly SceneCard[] = []): string | null {
-  const exception = waitingForException({
-    cardId: card.id, status: propertyText(card, 'Status'), type: propertyText(card, 'Waiting For Type'), id: propertyText(card, 'Waiting For ID'),
-    knownWork: known.map(item => ({ id: item.id, status: propertyText(item, 'Status'), archived: item.source.archived, in_trash: item.source.in_trash })), waitingFor: propertyText(card, 'Waiting For'), nextCheckIn: card.source.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null, observedAt: card.source.last_edited_time ?? null, coverage,
-  })
-  if (!exception || exception.reason === waitingForIssue(card, [])) return null
-  return exception.reason
+export function cardWaitIssues(card: SceneCard, coverage: SourceCoverage, work?: readonly WorkBlocker[]) {
+  return waitingForIssues({ ...waitState(card.source), coverage }, work && new Map(work.map(target => [canonicalWorkId(target.id) ?? target.id, target])))
 }
 const priority = (card: SceneCard) => {
   const value = propertyText(card, 'Priority').replace(/^[^\p{L}\p{N}]+/u, '').toLowerCase()
@@ -57,34 +43,70 @@ const checkpoint = (card: SceneCard) => {
 }
 const compareCards = (a: SceneCard, b: SceneCard) => priority(a) - priority(b) || checkpoint(a) - checkpoint(b) || title(a).localeCompare(title(b)) || a.id.localeCompare(b.id)
 /** A projection of the shared read, never a dependency store or a workflow action. */
-export function waitingForGroups(scope: readonly SceneCard[], known: readonly SceneCard[] = scope) {
+export function waitingForGroups(scope: readonly SceneCard[], known: readonly SceneCard[] = scope,
+  references: readonly WorkBlocker[] = known.map(card => workBlocker(card.source)), coverage: SourceCoverage = 'complete') {
   const distinct = new Map<string, SceneCard>()
   for (const card of scope) {
-    const key = pageId(card.id) ?? card.id, old = distinct.get(key)
+    const key = canonicalWorkId(card.id) ?? card.id, old = distinct.get(key)
     if (!old || card.source.last_edited_time > old.source.last_edited_time) distinct.set(key, card)
   }
   const active = [...distinct.values()].filter(card => propertyText(card, 'Status') === 'Waiting For' && !card.source.archived && !card.source.in_trash)
-  const groups = new Map<string, WaitingForGroup>(), unclassified: SceneCard[] = []
+  const groups = new Map<string, WaitingForGroup>(), unclassified: SceneCard[] = [], referenceIssues: SceneCard[] = []
+  const issues = new Map<string, WaitingForIssue[]>()
+  const work = new Map(references.map(target => [canonicalWorkId(target.id) ?? target.id, target]))
+  const loaded = new Map(known.map(card => [canonicalWorkId(card.id) ?? card.id, card.id]))
   for (const card of active.sort(compareCards)) {
-    if (waitingForIssue(card, known)) { unclassified.push(card); continue }
-    const type = propertyText(card, 'Waiting For Type') as WaitingForType, id = propertyText(card, 'Waiting For ID').trim()
-    const canonical = type === 'Work' ? pageId(id)! : normalize(type === 'Event' ? githubTarget(id)?.url ?? id : id), key = JSON.stringify([type, canonical])
-    let group = groups.get(key)
-    if (!group) {
-      const work = type === 'Work' ? known.find(card => pageId(card.id) === canonical) : null
-      group = { key, type, id, label: work ? title(work) : id, cards: [], ...(work ? { target: { kind: 'card' as const, id: work.id } } : {}) }
-      groups.set(key, group)
+    const state = waitState(card.source)
+    const cardIssues = waitingForIssues({ ...state, coverage }, work)
+    if (cardIssues.length) issues.set(card.id, cardIssues)
+    const unclassifiedCard = cardIssues.some(issue => issue.category === 'classification')
+    if (unclassifiedCard) unclassified.push(card)
+    const primaryType = state.type.trim()
+    const primaryId = state.id.trim()
+    const primaryWorkId = primaryType === 'Work' ? canonicalWorkId(primaryId) : null
+    const dependencies = waitingForWorkIds(state).flatMap(canonical => {
+      const blocker = work.get(canonical)
+      return blocker && !closedWorkBlocker(blocker)
+        ? [{ type: 'Work' as const, canonical, id: canonical === primaryWorkId ? primaryId : canonical, blocker }]
+        : []
+    })
+    const actorEventGroups = [state, ...waitEntries(state.waitingFor, state).map(entry => entry.fields)].flatMap(fields => {
+      const type = fields.type?.trim(), id = fields.id?.trim()
+      return id && (type === 'Actor' || type === 'Event')
+        ? [{ type, id, canonical: normalize(type === 'Event' ? githubTarget(id)?.url ?? id : id) } as const]
+        : []
+    })
+    if (cardIssues.some(issue => issue.category === 'reference')) referenceIssues.push(card)
+    const cardGroups = new Set<string>()
+    for (const dependency of [...actorEventGroups, ...dependencies]) {
+      const { type, id, canonical } = dependency
+      const key = JSON.stringify([type, canonical])
+      if (cardGroups.has(key)) continue
+      cardGroups.add(key)
+      let group = groups.get(key)
+      if (!group) {
+        const blocker = 'blocker' in dependency ? dependency.blocker : undefined
+        const loadedId = loaded.get(canonical)
+        const target = blocker ? loadedId
+          ? { kind: 'card' as const, id: loadedId }
+          : { kind: 'url' as const, url: cardSourceUrl(blocker.id) } : undefined
+        group = { key, type, id, label: blocker?.title || id, cards: [], target }
+        groups.set(key, group)
+      }
+      group.cards.push(card)
     }
-    group.cards.push(card)
   }
   for (const group of groups.values()) if (group.type === 'Event') {
-    const link = eventTarget(group.id, group.cards)
-    if (link) { group.target = { kind: 'url', url: link.url }; if (githubTarget(group.id)) group.label = link.label }
+    const exact = githubTarget(group.id)
+    const primaryOnly = group.cards.every(card => propertyText(card, 'Waiting For Type').trim() === 'Event' &&
+      normalize(propertyText(card, 'Waiting For ID')) === normalize(group.id))
+    const link = exact ?? (primaryOnly ? eventTarget(group.id, group.cards) : null)
+    if (link) { group.target = { kind: 'url', url: link.url }; if (exact) group.label = link.label }
   }
   const categories = waitingForTypes.map(type => ({ type, groups: [...groups.values()].filter(group => group.type === type).sort((a, b) =>
     (type === 'Actor' ? Number(normalize(b.id) === 'will') - Number(normalize(a.id) === 'will') : 0) || b.cards.length - a.cards.length || a.label.localeCompare(b.label) || a.key.localeCompare(b.key)) }))
   const initial = [...groups.values()].sort((a, b) => Number(b.type === 'Actor' && normalize(b.id) === 'will') - Number(a.type === 'Actor' && normalize(a.id) === 'will') || b.cards.length - a.cards.length || a.label.localeCompare(b.label)).slice(0, 3).map(group => group.key)
-  return { categories, unclassified, count: active.length, initial }
+  return { categories, unclassified, referenceIssues, issues, count: active.length, initial }
 }
 
 const expansionKey = 'tinstar.overview.waitingFor.expansion.v1'

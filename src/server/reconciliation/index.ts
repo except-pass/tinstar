@@ -37,8 +37,9 @@ import { WorkReader, type WorkCard } from './workReader'
 import { getConfigRoot } from '../configRoot'
 import { WorkflowOperations } from './workflow'
 import { externalWorkers, searchWorkSchema, getWorkSchema, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
-import { coverageFromObservation, waitingForException } from '../../shared/waitingForPolicy'
+import { closedWorkBlocker, coverageFromObservation, waitingForIssues, waitingForWorkIds, waitState, type WorkBlocker } from '../../shared/waitingForPolicy'
 import { searchSeeds, directNeighbors } from '../../shared/smartSearch'
+import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { workHealth } from '../../shared/workHealth'
 import { workReadback } from './workReadback'
 import { executionWarnings } from './workflowViews'
@@ -380,7 +381,7 @@ export class ReconciliationSources {
   releaseTransport() { return notionReleaseTransport(this.workReader) }
   async currentCardContext(id: string) { return this.context.checkpoints(id) }
 
-  async scene(force = false, scope: WorkScope = {}) {
+  async scene(force = false, scope: WorkScope = {}, waitReferences?: 'exact' | 'cached'): Promise<FloorScene & { searchIndex: ReturnType<SearchDocumentCollector['get']> }> {
     const snapshot = await this.snapshot(force, scope)
     const scene = this.reconciler.reconcile(snapshot)
     if (this.checkInIndicators) {
@@ -390,7 +391,10 @@ export class ReconciliationSources {
     // Filtered tool reads must not close waits outside their requested scope.
     const filtered = Object.entries(scope).some(([key, value]) => key !== 'history' && value !== undefined)
     const waits = this.waitingOnMain ? await this.waitingOnMain(filtered ? await this.snapshot() : snapshot) : undefined
-    return { ...scene, searchIndex: this.search.get(scene), ...(waits ? { waitingOnMain: waits } : {}) }
+    const work = waitReferences && await this.workReader.waitingForWork(scene.cards.map(card => waitState(card.source)),
+      snapshot.intentions.status === 'stale' ? [] : scene.cards.map(card => card.source), { refresh: force, cachedOnly: waitReferences === 'cached' })
+    return { ...scene, searchIndex: this.search.get(scene), ...(work && { waitingForWork: [...work.values()] }), ...(waits && { waitingOnMain: waits }) }
+
   }
 
 
@@ -407,29 +411,31 @@ export class ReconciliationSources {
     const cardScoped = !!(args.owner || args.statuses || args.initiative || args.epic || args.checkpoint_before || args.patterns.length)
     const workers = scene.executions.filter(worker => keys.has(`execution:${worker.id}`) &&
       (!cardScoped || links.some(link => link.executionId === worker.id && filteredCards.has(link.cardId))))
+    const work = await this.workReader.waitingForWork(page.map(card => waitState(card.source)),
+      intentions.status === 'stale' ? [] : scene.cards.map(card => card.source), { refresh: args.refresh })
     return { scope, coverage: scene.coverage, warnings: scene.warnings, total: cards.length,
       next_offset: args.offset + args.limit < Math.max(cards.length, workers.length) ? args.offset + args.limit : null,
       worker_total: workers.length, workers: workReadback(workers.slice(args.offset, args.offset + args.limit).map(worker => ({ ...worker,
         links: links.filter(link => link.executionId === worker.id),
         relationship_scope: 'Observed links only; unlinked is not proof of no assignment' }))),
-      records: page.map(card => this.workRecord(scene, card.id)), diagnostics: { notion: this.notionApi.diagnostics } }
+      records: page.map(card => this.workRecord(scene, card, work)), diagnostics: { notion: this.notionApi.diagnostics } }
   }
-  private workRecord(scene: ReturnType<SceneReconciler['reconcile']>, id: string) {
-    const card = scene.cards.find(card => card.id === id)
+  private workRecord(scene: ReturnType<SceneReconciler['reconcile']>, card: SceneCard, work: ReadonlyMap<string, WorkBlocker>) {
+    const { id } = card
     const links = [...scene.claims, ...scene.claimHistory].filter(claim => claim.cardId === id)
+    const state = waitState(card.source)
+    const waiting_for_issues = waitingForIssues({ ...state, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage) }, work)
+    const waiting_for_work = waitingForWorkIds(state).map(id => {
+      const target = work.get(id)
+      return target ? { ...target, state: closedWorkBlocker(target) ? 'closed' : 'resolved', url: cardSourceUrl(id) } : { id, state: 'unknown' }
+    })
     // Source readers already allowlist fields; redact likely credential literals
     // from ordinary properties/evidence as well as body and comments.
-    const text = (name: string) => String(card?.source.properties[name]?.value ?? '')
-    const waiting_for_exception = card ? waitingForException({
-      cardId: card.id, status: text('Status'), type: text('Waiting For Type'), id: text('Waiting For ID'), waitingFor: text('Waiting For'),
-      nextCheckIn: card.source.properties['Next check-in']?.value as { start?: string; time_zone?: string } | null,
-      knownWork: scene.cards.map(item => ({ id: item.id, status: String(item.source.properties.Status?.value ?? ''), archived: item.source.archived, in_trash: item.source.in_trash })),
-      observedAt: card.source.last_edited_time ?? null, coverage: coverageFromObservation(scene.coverage.intentions.status, scene.coverage.intentions.coverage),
-    }) : null
-    return workReadback({ card, links, waiting_for_exception, external_workers: externalWorkers(card?.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
+    return workReadback({ card, links, waiting_for_exception: waiting_for_issues[0] ?? null, waiting_for_issues, waiting_for_work,
+      external_workers: externalWorkers(card.source.properties['Delegated To']?.value), workers: scene.executions.filter(worker => links.some(link => link.executionId === worker.id)),
       findings: scene.findings.filter(finding => finding.cardIds.includes(id)), health: workHealth(scene, id, Date.now()),
       omissions: 'Allowlisted source metadata only; no raw terminal transcripts or secrets. Query pages and on-demand body/comment reads have explicit bounds.',
-      pull_requests: [...new Set([...(card ? Object.values(card.source.properties).map(property => String(property.value ?? '')) : []),
+      pull_requests: [...new Set([...Object.values(card.source.properties).map(property => String(property.value ?? '')),
         ...scene.executions.filter(worker => links.some(link => link.executionId === worker.id)).map(worker => String(worker.source.pr.url ?? ''))]
         .flatMap(value => value.match(/https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/g) ?? []))] })
   }
@@ -456,7 +462,8 @@ export class ReconciliationSources {
       const scene = this.reconciler.project({ generatedAt: new Date().toISOString(), scope: 'configured-homes-only', warnings: this.config.warnings, intentions, fleet })
       const context = args.details ? await this.context.details(card.id, false, this.notionApi.parallelFetch) : undefined
       const review = reviewView(intentions, new Map(context && (context.commentsOutcome ?? context.outcome) === 'available' ? [[card.id, context.blocks]] : [])).items[0] ?? null
-      const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, card.id), coverage: scene.coverage,
+      const work = await this.workReader.waitingForWork([waitState(card)], [], { refresh: args.refresh })
+      const result = workReadback({ review, outcome: 'available', scope: { card_id: card.id, source: 'configured-board exact-card read' }, ...this.workRecord(scene, scene.cards[0]!, work), coverage: scene.coverage,
         ...(context ? { context } : {}) })
       // Explicit full-contract retrieval preserves bytes; routine reads remain bounded.
       return { ...result, lease: this.leases.status(card.id), ...(reconciliationWarning ? { warnings: [reconciliationWarning] } : {}), implementation_contract: args.implementation_contract
@@ -720,5 +727,12 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
     return ok(res, await sources.card(id), { headers })
   }
-  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1') : path === '/api/reconciliation/scene' ? await sources.scene(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1', new URL(req.url!, 'http://localhost').searchParams.get('history') === '1' ? { history: true } : {}) : await sources.snapshot(), { headers })
+  const query = new URL(req.url!, 'http://localhost').searchParams
+  const refresh = query.get('refresh') === '1'
+  if (path === '/api/reconciliation/scene') {
+    const requestedReferences = query.get('wait_references')
+    const waitReferences = requestedReferences === '1' ? 'exact' : requestedReferences === 'cached' ? 'cached' : undefined
+    return ok(res, await sources.scene(refresh, { history: query.get('history') === '1' }, waitReferences), { headers })
+  }
+  return ok(res, path === '/api/reconciliation/queue' ? await sources.queueDisplay(req, refresh) : await sources.snapshot(), { headers })
 }

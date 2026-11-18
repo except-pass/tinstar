@@ -139,7 +139,7 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(tools).toHaveLength(33)
   const approvedTools = JSON.parse(await readFile(new URL('../../../../scripts/deploy/approved-tools.json', import.meta.url), 'utf8'))
   expect(tools.map(tool => tool.name).sort()).toEqual(approvedTools)
-  // About 65 KiB with structured waits and exact legacy-wait repair inputs.
+  // About 65 KiB with structured waits and exact replacement inputs.
   // Catch accidental catalog expansion without an exact byte snapshot.
   expect(Buffer.byteLength(text)).toBeLessThan(72 * 1024)
   const ajv = new Ajv2020({ strict: false })
@@ -167,10 +167,24 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   expect(update.properties!.kind).toEqual({ type: 'string', enum: kinds })
   expect(update.oneOf).toHaveLength(kinds.length)
   expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
+  const waitBranch = (update.oneOf as Array<{ properties: Record<string, unknown> }>).find(branch =>
+    (branch.properties.kind as { const: string }).const === 'wait')!
+  const rootFields = ['card_id', 'operation_id', 'type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in', 'replace_wait']
+  const { kind: _kind, ...rootProperties } = update.properties!
+  expect(rootProperties).toEqual(Object.fromEntries(rootFields.map(name => [name, waitBranch.properties[name]])))
   const validate = ajv.compile(update)
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
-  expect(validate({ ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' })).toBe(true)
+  const wait = { ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' }
+  expect(validate(wait)).toBe(true)
+  expect(validate({ ...wait, replace_wait: 'Current wait entry' })).toBe(true)
+  expect(validate({ ...wait, replace_wait: '' })).toBe(false)
+  for (const field of ['type', 'id', 'dependency', 'unblocks_when', 'follow_up_by', 'next_check_in'] as const) {
+    expect(update.properties).toHaveProperty(field)
+
+    // Undefined serializes as an omitted argument.
+    expect(validate({ ...wait, [field]: undefined })).toBe(false)
+  }
   expect(validate({ ...base, kind: 'close_worker', worker: { kind: 'firstmate', fm_home: '/fixture', task_id: 'finished', first_observed_spawn_gen: 'g1' }, disposition: 'done', evidence: 'Terminal receipt proves completion.' })).toBe(true)
   expect(validate({ ...base, kind: 'close_worker', disposition: 'done' })).toBe(false)
   expect(validate({ ...base, kind: 'release_wait', pulls: ['https://github.com/acme/repo/pull/15'], evidence: 'Awaiting this production release.' })).toBe(true)
@@ -190,6 +204,11 @@ it('keeps original Zod validation and defaults for update_work calls', async () 
   const response = await post(url, 'tools/call', '2026-07-28', { name: 'update_work', arguments: { ...base, kind: 'assign', owner: 'Firstmate' } })
   expect(parse((await response.json()).result)).toEqual({ outcome: 'saved' })
   expect(updateWork).toHaveBeenCalledWith({ ...base, kind: 'assign', owner: 'Firstmate', status: 'Queued' }, 'owner-chatgpt')
+  const wait = { ...base, kind: 'wait', operation_id: 'typed-wait-proof', type: 'Actor', id: 'Clawson', dependency: 'Review evidence',
+    unblocks_when: 'The reviewer posts a decision', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' }
+  const saved = await post(url, 'tools/call', '2026-07-28', { name: 'update_work', arguments: wait })
+  expect(parse((await saved.json()).result)).toEqual({ outcome: 'saved' })
+  expect(updateWork).toHaveBeenCalledWith(wait, 'owner-chatgpt')
 })
 it('discovers facade capabilities and supported versions without initialization', async () => {
   const { url } = await setup()

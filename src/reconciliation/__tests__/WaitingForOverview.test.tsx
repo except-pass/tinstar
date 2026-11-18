@@ -6,6 +6,7 @@ import { Overview as NativeOverview } from '../Overview'
 import { Overview } from '../../../test-fixtures/reconciliation/Overview'
 import type { FloorScene } from '../presentation'
 import { overviewDensityKey } from '../overviewDensity'
+import { waitLine } from '../../shared/waitingForPolicy'
 import { preferencesKey } from '../presentationPreferences'
 
 const observed = vi.hoisted(() => ({ scene: null as unknown, error: null as string | null }))
@@ -123,13 +124,68 @@ describe('Waiting For in the native Overview', () => {
     expect(card(container, 1)).toBeNull()
     expect(screen.getByRole('region', { name: 'Inspector' })).toBeTruthy()
   })
+  it.each(['primary', 'appended'])('counts a %s blocker role and a faulty wait independently after refresh', mode => {
+    const blocker = { type: 'Work', id: fixtureId(6), dependency: 'Security review', unblocks_when: 'The review is posted', follow_up_by: 'Consumer' }
+    if (mode === 'primary') set(1, { 'Waiting For Type': blocker.type, 'Waiting For ID': blocker.id })
+    else set(1, { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will', waitLine(blocker),
+    ].join('\n') })
+    set(6, { 'Waiting For Type': 'Person', 'Waiting For ID': 'Security' })
+    const blockerTitle = String(scene.cards.find(card => card.id === fixtureId(6))?.source.properties.Name?.value)
+    const { rerender } = mount(); select()
+    const work = within(screen.getByRole('region', { name: 'Work dependencies' }))
+    expect(work.getByRole('heading')).toHaveTextContent('Work blockers1')
+    expect(work.getByRole('button', { name: `Open ${blockerTitle} in Inspector` })).toBeTruthy()
+    const classification = within(screen.getByRole('region', { name: 'Needs classification' }))
+    expect(classification.getByRole('heading')).toHaveTextContent('Needs classification1')
+    expect(classification.getByRole('button', { name: blockerTitle })).toBeTruthy()
+    expect(classification.getByText(/Replace legacy Person with Actor/)).toBeTruthy()
+    set(6, { 'Waiting For Type': 'Actor' })
+    observed.scene = scene = { ...scene, generatedAt: new Date().toISOString() }
+    rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+    expect(classification.getByRole('heading')).toHaveTextContent('Needs classification0')
+    expect(work.getByRole('heading')).toHaveTextContent('Work blockers1')
+    expect(screen.getByRole('region', { name: 'Waiting For work' })).toHaveTextContent('Waiting For · 3')
+  })
+  it('counts a shared open blocker once and shows closed references on their waiting rows', () => {
+    set(1, { 'Waiting For Type': 'Work', 'Waiting For ID': fixtureId(5) })
+    set(6, { 'Waiting For Type': 'Work', 'Waiting For ID': fixtureId(5) })
+    set(5, { Status: 'Queued' })
+    const { rerender } = mount(); select()
+    expect(within(screen.getByRole('region', { name: 'Work dependencies' })).getByRole('heading')).toHaveTextContent('Work blockers1')
+    set(5, { Status: 'Done' })
+    observed.scene = scene = { ...scene, generatedAt: new Date().toISOString() }
+    rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
+    expect(screen.queryByRole('region', { name: 'Work dependencies' })).toBeNull()
+    const rows = within(screen.getByRole('region', { name: 'Work reference issues' }))
+    expect(rows.getAllByText(/is completed, archived or deleted/)).toHaveLength(2)
+  })
+  it('shows appended typed entries and Work diagnostics in their filters', () => {
+    const blockerId = fixtureId(5)
+    const wait = { dependency: 'Review evidence', unblocks_when: 'Evidence is posted', follow_up_by: 'Will' }
+    set(5, { Status: 'Done' })
+    set(1, { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will',
+      waitLine({ ...wait, type: 'Event', id: 'Scheduled review' }),
+      waitLine({ ...wait, type: 'Work', id: blockerId }),
+    ].join('\n') })
+    mount(); select()
+    const filters = within(screen.getByRole('group', { name: 'Waiting For Type' }))
+    fireEvent.click(filters.getByRole('button', { name: 'Event' }))
+    expect(group('Scheduled review, 1 card')).toBeTruthy()
+    fireEvent.click(filters.getByRole('button', { name: 'Work' }))
+    expect(screen.queryByRole('region', { name: 'Work dependencies' })).toBeNull()
+    const rows = within(screen.getByRole('region', { name: 'Work reference issues' }))
+    expect(rows.getByText(/is completed, archived or deleted/)).toBeTruthy()
+    expect(screen.queryByText('No Waiting For cards in this group')).toBeNull()
+  })
   it('shows precise missing-field information in Inspector and source failures without a false zero', () => {
     set(1, { 'Waiting For ID': '' })
     localStorage.setItem(preferencesKey, JSON.stringify({ donutFilter: { cards: ['Waiting For'], workers: [] } }))
     const { container, rerender } = mount()
     expect(screen.getByRole('region', { name: 'Needs classification' })).toHaveTextContent('1')
     fireEvent.click(card(container, 1))
-    expect(screen.getByText('Waiting For ID is missing.')).toBeTruthy()
+    expect(within(screen.getByRole('region', { name: 'Inspector' })).getByText(/Waiting For ID is missing/)).toBeTruthy()
     observed.error = 'Read failed'
     rerender(<Overview workers={[]} messages={[]} submit={vi.fn()} />)
     expect(screen.getByText(/Could not refresh Waiting For. Showing the last known cards./)).toBeTruthy()

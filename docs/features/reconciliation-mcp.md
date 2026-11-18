@@ -66,7 +66,10 @@ No version-rewriting proxy is needed in front of the facade.
 
 Tool input schemas are published directly from the registered Zod schemas, with
 shared schemas inlined and an object root for every tool. `update_work` exposes
-all operation kinds and their required fields as discriminated `oneOf` branches;
+all operation kinds and their required fields as discriminated `oneOf` branches.
+The object root also exposes the [wait inputs](workflow.md#waiting-for-writes)
+for clients that inspect only root properties. The branches define which inputs
+are required for each kind.
 no-argument tools publish a closed empty object. SDK/Zod validation of calls is
 unchanged. Tools omit optional task-execution metadata: these tools do not
 support task execution, and `execution` is absent from the `2026-07-28` Tool

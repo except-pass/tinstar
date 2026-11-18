@@ -5,9 +5,10 @@ import type { Pattern } from './workHealth'
 import type { SearchIndexRead } from './searchDocuments'
 import { defaultOrganizer, defaultStatusFilter, organizedGroups, waitingForActive, waitingForWorkerScope, type Organizer, type StatusFilter } from './floorOrganization'
 import { decisionItems, hasQueue, type QueueRead } from './reconciliationQueue'
+import type { WorkBlocker } from './waitingForPolicy'
 import type { SceneReconciler, Finding, SceneGroup, SceneCard } from '../server/reconciliation/scene'
 
-export type FloorScene = ReturnType<SceneReconciler['reconcile']> & { searchIndex?: SearchIndexRead; searchReadFailed?: boolean; waitingOnMain?: import('./waitingOnMain').MainWaitRead }
+export type FloorScene = ReturnType<SceneReconciler['reconcile']> & { searchIndex?: SearchIndexRead; searchReadFailed?: boolean; waitingOnMain?: import('./waitingOnMain').MainWaitRead; waitingForWork?: WorkBlocker[] }
 export type Arrangement = keyof FloorScene['arrangements']
 export type TargetKind = 'card' | 'execution' | 'claim' | 'manager' | 'group' | 'you' | 'firstMate' | 'pull'
 export interface Target { kind: TargetKind; id: string }

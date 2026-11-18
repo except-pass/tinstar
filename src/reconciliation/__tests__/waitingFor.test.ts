@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fixtureScene, fixtureId } from '../../../test-fixtures/reconciliation/scenes'
-import { waitingForGroups, waitingForIssue, waitingForActive } from '../waitingFor'
+import { waitLine } from '../../shared/waitingForPolicy'
+import { waitingForGroups, waitingForActive } from '../waitingFor'
 import { notionCard } from '../../server/reconciliation/notion'
 import { sceneSearchDocuments } from '../../shared/searchDocuments'
 import type { SceneCard } from '../../server/reconciliation/scene'
@@ -51,13 +52,74 @@ describe('Waiting For projection', () => {
     expect(result.find(group => group.id === 'repo PR #124 merged')?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/124' })
     expect(result.find(group => group.id.includes('evil'))?.target).toBeUndefined()
   })
-  it('classifies missing fields, malformed/self/unresolved Work IDs precisely', () => {
-    const cards = [card(1, '', ''), card(2, 'Work', ''), card(3, 'Work', 'bad'), card(4, 'Work', fixtureId(4)), card(5, 'Work', fixtureId(99)), card(6, 'Person', 'Someone')]
-    const result = waitingForGroups(cards)
-    expect(result.count).toBe(6); expect(result.unclassified).toHaveLength(6); expect(flat(result)).toHaveLength(0)
-    expect(cards.map(card => waitingForIssue(card, cards))).toEqual([
-      'Waiting For Type is missing.', 'Waiting For ID is missing.', 'Waiting For ID is not a valid Notion Work card identifier.', 'Waiting For ID references this same Work card.', 'Waiting For ID does not resolve to a Work card in the loaded source. The reference needs verification.', 'Waiting For Type “Person” is not Work, Actor or Event.',
+  it('links appended Events only when their own ID is an exact GitHub URL', () => {
+    const fields = { unblocks_when: 'Review closes', follow_up_by: 'Consumer' }
+    const actor = card(1, 'Actor', 'Will', { 'Waiting For': [
+      waitLine({ ...fields, type: 'Actor', id: 'Will', dependency: 'Review https://github.com/other/repo/pull/124 before replying' }),
+      waitLine({ ...fields, type: 'Event', id: 'repo PR #124 merged', dependency: 'Merge prerequisite' }),
+      waitLine({ ...fields, type: 'Event', id: 'https://github.com/acme/repo/pull/125', dependency: 'Merge prerequisite' }),
+    ].join('\n') })
+    const events = flat(waitingForGroups([actor])).filter(group => group.type === 'Event')
+    expect(events.find(group => group.id === 'repo PR #124 merged')?.target).toBeUndefined()
+    expect(events.find(group => group.id.endsWith('/125'))?.target).toEqual({ kind: 'url', url: 'https://github.com/acme/repo/pull/125' })
+  })
+  it('projects primary and appended Work destinations without duplicating waiting cards', () => {
+    const loaded = card(3, 'Actor', 'Will', { Name: 'Loaded blocker' })
+    const offPage = { id: fixtureId(4), title: 'Off-page blocker', status: 'Queued' }
+    const work = (id: string) => waitLine({ type: 'Work', id, dependency: 'Blocker completes', unblocks_when: 'Work closes', follow_up_by: 'Consumer' })
+    const waiting = card(1, 'Actor', 'Will', { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will',
+      work(loaded.id), work(offPage.id), work(offPage.id.toUpperCase()),
+    ].join('\n') })
+    const primary = card(2, 'Work', loaded.id)
+    const result = waitingForGroups([waiting, primary], [loaded], [
+      { id: loaded.id, title: 'Loaded blocker', status: 'Queued' }, offPage,
     ])
+    expect(result.count).toBe(2)
+    expect(result.categories.find(category => category.type === 'Work')?.groups).toMatchObject([
+      { cards: [{ id: waiting.id }, { id: primary.id }], target: { kind: 'card', id: loaded.id } },
+      { cards: [{ id: waiting.id }], target: { kind: 'url', url: 'https://www.notion.so/' + offPage.id } },
+    ])
+    waiting.source.properties['Waiting For Type']!.value = 'Person'
+    const faulty = waitingForGroups([waiting], [], [offPage])
+    expect(faulty.unclassified).toEqual([waiting])
+    expect(faulty.categories.find(category => category.type === 'Work')?.groups).toContainEqual(expect.objectContaining({
+      cards: [waiting], target: { kind: 'url', url: 'https://www.notion.so/' + offPage.id },
+    }))
+  })
+  it('separates invalid classification from an unknown exact Work reference', () => {
+    const cards = [card(1, '', ''), card(2, 'Work', ''), card(3, 'Work', 'mcp'), card(4, 'Work', fixtureId(4)),
+      card(5, 'Work', fixtureId(99)), card(6, 'Person', 'Someone'), card(7, 'Card', fixtureId(99))]
+    const result = waitingForGroups(cards)
+    expect(result.count).toBe(7)
+    expect(result.unclassified).toHaveLength(6)
+    expect(flat(result)).toEqual([])
+    expect(result.referenceIssues).toEqual([cards[4]])
+    expect(cards.map(card => result.issues.get(card.id)?.[0]?.code)).toEqual([
+      'missing-type', 'missing-id', 'invalid-work-id', 'work-self', 'work-unverified', 'legacy-type', 'legacy-type',
+    ])
+    expect(result.issues.get(fixtureId(6))?.[0]?.reason).toMatch(/Person with Actor/)
+    expect(result.issues.get(fixtureId(7))?.[0]?.reason).toMatch(/Card with Work/)
+  })
+  it.each(['unknown', 'done', 'archived', 'trashed'])('keeps %s primary and appended Work references as diagnostics', state => {
+    const blockerId = fixtureId(9)
+    const references = state === 'unknown' ? [] : [{
+      id: blockerId, status: state === 'done' ? 'Done' : 'Queued', archived: state === 'archived', in_trash: state === 'trashed',
+    }]
+    const line = waitLine({ type: 'Work', id: blockerId, dependency: 'Review result', unblocks_when: 'Review closes', follow_up_by: 'Consumer' })
+    const primary = card(1, 'Work', blockerId, { 'Waiting For': line })
+    const appended = card(2, 'Actor', 'Will', { 'Waiting For': [
+      'Dependency: Approval\nUnblocks when: Approval is posted\nFollow-up by: Will', line,
+    ].join('\n') })
+    const result = waitingForGroups([primary, appended], [], references)
+    expect(result.count).toBe(2)
+    expect(flat(result).map(group => group.type)).toEqual(['Actor'])
+    expect(result.referenceIssues).toEqual([primary, appended])
+    for (const waiting of [primary, appended]) {
+      expect(result.issues.get(waiting.id)).toContainEqual(expect.objectContaining({
+        code: state === 'unknown' ? 'work-unverified' : 'work-not-blocking',
+      }))
+    }
   })
   it('moves a card after refresh without duplicating or treating a status change as deletion', () => {
     const one = card(1), changed = structuredClone(one)
@@ -74,4 +136,34 @@ describe('Waiting For projection', () => {
     expect(waitingForActive({ ...state, statusFilter: { preset: 'custom', statuses: ['Waiting For'] } })).toBe(true)
     expect(waitingForActive({ ...state, donutFilter: { cards: ['Waiting for Prod Release'], workers: [] } })).toBe(false)
   })
+})
+
+const mergeId = '41b50ce6d422814c8edbd29f321f94e8'
+const normalized = [
+  ['KD nightly', '41b50ce6d42281acb62af11f5d4bf9b4', 'Event', 'KD nightly CI run 2026-11-18 03:25Z'],
+  ['Gateway bug', '41b50ce6d4228133a8c5c9fe8a16a04d', 'Work', mergeId],
+  ['Clawson PROD role', '41b50ce6d422817a8437c263c316ed9c', 'Actor', 'Firstmate'],
+  ['Remote CAN real writes', '41b50ce6d42281a2abb7ebf340c1da35', 'Actor', 'hilda'],
+  ['Move Mac', '3ff50ce6d4228143973bd04fc4aa3088', 'Actor', 'mcp'],
+  ['Dirt Farm shared admission', '40150ce6d42281a9860ece280540cf2a', 'Actor', 'hulk'],
+  ['Jev classifier', '41b50ce6d42281378c2ff70c270c0394', 'Actor', 'hulk'],
+  ['Farm upload limit', '41b50ce6d4228116affce015c0d3023c', 'Actor', 'fleet'],
+  ['Clawson Influx rehearsal', '41a50ce6d422818b8a9cf70188f67332', 'Actor', 'Clawson'],
+] as const
+
+it.each(normalized)('groups %s by its normalized Notion wait fields', (name, cardId, type, id) => {
+  const multiline = name === 'Dirt Farm shared admission'
+  const waiting = card(1, type, id, { Name: name, 'Next check-in': { start: '2026-11-18T15:00Z' },
+    'Waiting For': multiline ? 'Dependency: Hulk mate must post the real next step.\nUnblocks when: Hulk posts an executable step or names the remaining gate.\nFollow-up by: Hulk mate' : 'Original blocker description' })
+  waiting.id = waiting.source.id = cardId
+  const merge = { id: mergeId, title: 'Gateway merge', status: 'Waiting For' }
+  const result = waitingForGroups([waiting], [waiting], [merge], 'partial')
+  expect(result.unclassified).toEqual([])
+  expect(flat(result)).toMatchObject([{ type, id, cards: [{ id: cardId }] }])
+  if (type === 'Work') expect(flat(result)[0]?.target).toEqual({ kind: 'url', url: 'https://www.notion.so/' + mergeId })
+  expect((result.issues.get(cardId) ?? []).map(issue => issue.field)).toEqual(multiline ? [] : ['Unblocks when', 'Follow-up by'])
+  if (name === 'Farm upload limit') {
+    waiting.source.properties.Status!.value = 'Done'
+    expect(waitingForGroups([waiting]).count).toBe(0)
+  }
 })

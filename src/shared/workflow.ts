@@ -47,8 +47,12 @@ const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_i
 const resolvedWait = z.string().min(1)
 const waitId = z.string().trim().min(1).max(2048)
 export const waitSchema = z.object({
-  type: z.enum(waitingForTypes), id: waitId, dependency: prose, unblocks_when: prose, follow_up_by: label,
-  next_check_in: z.string().trim().min(1).max(100),
+  type: z.enum(waitingForTypes).describe('Actor, Event or Work.'),
+  id: waitId.describe('Actor identity, stable event reference or exact Work card ID.'),
+  dependency: prose.describe('Actual blocker.'),
+  unblocks_when: prose.describe('Observable unblock condition.'),
+  follow_up_by: label.describe('Follow-up owner.'),
+  next_check_in: z.string().trim().min(1).max(100).describe('Future ISO 8601 date or timestamp. Notion stores minutes.'),
 }).strict()
 const next = { owner: label, status: z.enum(['Queued', 'Todo', 'Backlog', 'In Progress', 'Waiting For', 'Done', 'Archived']),
   worker: workerSchema.optional(), disposition: prose.optional(), evidence: prose.optional(),
@@ -71,7 +75,7 @@ export const updateWorkSchema = z.discriminatedUnion('kind', [
   z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: resolvedWait.optional() }).strict(),
   z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
-  z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, repair_waits: z.array(z.object({ current: z.string().min(1).max(12000), replacement: waitSchema }).strict()).min(1).max(100).optional(), note: prose.optional() }).strict(),
+  z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, replace_wait: resolvedWait.describe('Exact current entry to replace. Include every line of a multiline wait.').optional(), note: prose.optional() }).strict(),
   z.object({ ...base, kind: z.literal('request_decision'), request_id: z.string().min(1).max(128), question: prose, options: decisionOptionsSchema.optional(), proposal: decisionProposalSchema.optional(),
     action: label.default('Decision'), requested_from: label, source_request: firstMateRequestSchema.optional() }).strict(),
   answerDecisionSchema,

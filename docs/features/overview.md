@@ -275,9 +275,12 @@ Waiting for Prod Release is excluded.
 
 The Work header shows the current matching Waiting For scope count and inline
 All / Actor / Event / Work choices. On narrow screens, entry scrolls the Work
-header into view. All is selected on entry; these choices filter
-dependency groups only. Categories appear in Actor, Event, Work order. Each card
-contributes once by canonical Notion ID to its primary dependency. The deterministic
+header into view. All is selected on entry. The type choices filter dependency
+groups and the Work reference issue list. Categories appear in Actor, Event,
+Work order. The header counts distinct waiting cards. A card can appear in
+multiple dependency groups, once per group. The **Work blockers** heading
+counts distinct verified blocker cards. Each blocker heading counts the
+cards waiting on it. The deterministic
 projection and normalization rules live in
 [`waitingFor.ts`](../../src/reconciliation/waitingFor.ts). Within categories,
 groups sort by card count descending, then label; Will comes first in Actor.
@@ -301,12 +304,19 @@ described above.
 
 Click an affected card or press Enter/Space to open the existing Inspector and
 reveal its confirmed worker relationships. Dependency headings toggle only their
-own list; a separate link appears for a resolved Work card or an exact trusted
-GitHub PR/run URL. Work links use the same Inspector navigation; external links
-open in a new tab. Other dependency labels have no invented destination.
+own list. Open a verified Work blocker in Inspector if it is loaded, or open
+its source card in a new tab otherwise. An Event can link to an exact GitHub
+PR or run URL. A descriptive Event ID can also link to a single matching URL
+in the wait text when all cards in the group record that Event as primary.
 
-Missing/invalid structured dependencies appear under **Needs classification**;
-Inspector explains the precise issue and retains the original Waiting For prose.
+**Needs classification** counts cards with invalid or missing classification
+fields. A card can appear here for its own wait and separately head a Work
+blocker group for other cards. **Needs wait details** counts cards with
+description or check-in issues. **Work reference issues** lists cards with
+reference issues that lack a visible dependency group and classification row.
+Affected rows show field diagnostics, and Inspector retains the original
+Waiting For prose. See the [wait contract](workflow.md#waiting-for-writes) for
+dependency types and corrections.
 Counts derive from the current loaded matching cards, with partial coverage and
 last-known refresh failure labels and timestamp. Grouping is a read-only
 projection of the shared source/cache and never fulfills dependencies or changes

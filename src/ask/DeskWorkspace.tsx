@@ -24,6 +24,7 @@ function overviewTarget(target: AskReturn['target']) {
 }
 
 type Workspace = ReturnType<typeof useFloorScene> & ReturnType<typeof usePresentation> & {
+  setWaitingForReferences: (value: boolean) => void
   overviewSearch: { search: ReturnType<typeof useSearchSession>; canvas: React.RefObject<HTMLDivElement>; root: React.RefObject<HTMLDivElement>; density: OverviewDensity; setDensity: React.Dispatch<React.SetStateAction<OverviewDensity>>; openRelationships: Target[]; setOpenRelationships: React.Dispatch<React.SetStateAction<Target[]>>; detailedCollapsed: string[]; setDetailedCollapsed: React.Dispatch<React.SetStateAction<string[]>> }
   decisionTarget: DecisionTarget | undefined; consumeDecisionTarget: (id: string) => void
   views?: WorkspaceHistory; origin?: AskReturn; clearOrigin?: () => void
@@ -52,7 +53,8 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
   const [history, setHistory] = useState(false)
   const [openRequest, setOpenRequest] = useState(0)
   const [closeRequest, setCloseRequest] = useState(0)
-  const floor = useFloorScene(overviewActive || decisionsActive, history), { queue, error: queueError } = useDeskQueue()
+  const [waitingForReferences, setWaitingForReferences] = useState(false)
+  const floor = useFloorScene(overviewActive || decisionsActive, history, overviewActive && waitingForReferences), { queue, error: queueError } = useDeskQueue()
   const presentation = usePresentation(floor.scene, queue, !!floor.error, overviewActive || decisionsActive, decisionsActive, !!queueError, action => {
     if (action.type === 'open-queue' || action.type === 'navigate-queue') {
       if (action.origin === 'assistant') setCloseRequest(value => value + 1)
@@ -120,7 +122,7 @@ export function DeskWorkspace({ views, origin, onNavigate, onClearOrigin, overvi
     presentation.send({ type: 'flash', targets: [target] })
   })
   const overviewSearch = { search, canvas, root, density, setDensity, openRelationships, setOpenRelationships, detailedCollapsed, setDetailedCollapsed }
-  const workspace = { decisionTarget, consumeDecisionTarget, views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
+  const workspace = { decisionTarget, consumeDecisionTarget, views, origin, clearOrigin: onClearOrigin, ...floor, ...presentation, setWaitingForReferences, overviewSearch, send, queue, queueError, openDesk, workers, messages, submit }
   return <WorkspaceContext.Provider value={workspace}>
     <AskProvider decisionUnavailable={!!queueError || !!floor.error} decisionItems={queue?.needsWill ?? queue?.items} onSourceReturn={() => setCloseRequest(value => value + 1)} scene={floor.scene} state={presentation.state} send={send} canBack={views?.canBack} onBack={views?.back} onReturn={destination => {
       targetOrigin.current = decisionSourceKey(destination)

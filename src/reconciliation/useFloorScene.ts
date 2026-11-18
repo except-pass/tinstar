@@ -8,7 +8,7 @@ const refreshInterval = 30_000
 const readFailure = 'Scene read unavailable. Last-known records are retained; absence conclusions are suspended.'
 /** One sequential read for polling, focus, manual refresh and acknowledged card
  * mutations. Publish the entire scene at once; classifications/counts derive from it. */
-export function useFloorScene(active = true, history = false) {
+export function useFloorScene(active = true, history = false, waitingFor = false) {
   const search = useRef<SmartSearchIndex>()
   if (!search.current) search.current = new SmartSearchIndex()
   const activeView = useRef(active)
@@ -40,11 +40,16 @@ export function useFloorScene(active = true, history = false) {
         do {
           const expected = revision
           again = false
+          const initial = lastAttempt === 0
           lastAttempt = Date.now()
           controller = new AbortController()
           const deadline = setTimeout(() => controller?.abort(), 60_000)
           try {
-            const response = await apiFetch(`/api/reconciliation/scene${force || history ? `?${new URLSearchParams({ ...(force ? { refresh: '1' } : {}), ...(history ? { history: '1' } : {}) })}` : ''}`, { signal: controller.signal })
+            const params = new URLSearchParams()
+            if (force) params.set('refresh', '1')
+            if (waitingFor && activeView.current) params.set('wait_references', force || initial ? '1' : 'cached')
+            if (history) params.set('history', '1')
+            const response = await apiFetch('/api/reconciliation/scene' + (params.size ? '?' + params : ''), { signal: controller.signal })
             if (!response.ok) throw new Error('read failed')
             const body = await response.json() as { ok: boolean; data?: FloorScene }
             if (!body.ok || !body.data) throw new Error('scene missing')
@@ -74,6 +79,6 @@ export function useFloorScene(active = true, history = false) {
     void readScene(false)
     const clock = setInterval(() => setNow(Date.now()), 1000)
     return () => { stopped = true; reader.current = undefined; clearTimeout(timer); clearInterval(clock); controller?.abort(); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus) }
-  }, [history])
+  }, [history, waitingFor])
   return { ...read, now, refresh, refreshAfterMutation }
 }
