@@ -357,7 +357,9 @@ supply an alternate answer or infer subrequest IDs. `next` uses the existing
 workflow vocabulary and must match the packet's bounded next owner/status.
 API callers may supply an exact `resolve_wait` under the
 [workflow wait rules](workflow.md#slice-2-remaining-operations-and-first-mate-integration).
-The browser omits that field on a new Desk submission.
+The browser omits that field on a new Desk submission. A transition that
+requires an explicit wait resolution must use the API or be handled through
+the source workflow.
 
 The server durably retains selection/operation/context before source I/O. It
 requires the matching active canonical generation before writing, forces exact
@@ -379,10 +381,11 @@ fields. It returns `recorded-awaiting-worker-acknowledgment` and schedules the
 existing receipt bridge asynchronously after local release/next commits, so
 receipt writes cannot race that step. In one short local transaction, the
 coordinator records release and attempts to bind the next Ready packet. If the
-original claim was limited to one card, submit continuation keeps that limit,
-including on retry. Allocation failure cannot roll back release of a
-source-confirmed answer. A crash between source confirmation and release/next
-is reconciled by the same operation ID.
+claim that established the review binding was limited to one card, submit
+continuation searches only that card, including on retry. If it returns empty,
+use **Refresh prepared decisions** to search the full queue. Allocation failure
+cannot roll back release of a source-confirmed answer. A crash between source
+confirmation and release/next is reconciled by the same operation ID.
 
 Results are explicit:
 
@@ -501,8 +504,9 @@ The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify
 one current, unanswered request and include its `Prep job <id>` for the same
 card and source revision. Superseded jobs cannot publish through this fallback.
-Comments and previously imported packets without matching jobs leave the
-request eligible for normal preparation. Complete, fresh history is required.
+Comments without matching jobs are ignored, and previously imported packets
+without matching jobs are ineligible for review. The request can still enter
+normal preparation. Complete, fresh history is required.
 Labelled sections are mapped into a normal packet and run through the same
 schema and evidence validation. The question always comes from the exact
 request record; the bot's question is advisory background. Options use the
@@ -521,8 +525,9 @@ advisory prose, not executable authorization. Importing does not claim a card,
 answer it, change its status, or dispatch another job. The comment ID and card
 identify a single durable import, with its preparation job ID recorded. A
 matching expired job may complete through this fallback. A newer comment
-supersedes the request's older packet. Re-reading a comment can renew source
-evidence automatically after restart or source recovery, but never rebinds it
+can supersede the request's older packet when accepted for publication.
+Re-reading a comment can renew source evidence after restart or source
+recovery, but never rebinds it
 to a changed request revision. Unchanged packet research has no age expiry:
 `expires_at` is null on the wire, and `review_within_ms` is retained only as a
 legacy input hint. Fresh source evidence is still required at review/submit.
