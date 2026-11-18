@@ -135,17 +135,17 @@ Initiative: password="another
 multiline fragment"` }, {
           id: 'start', type: 'paragraph', text: 'Then password="first half',
         }, {
-          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg==',
+          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg== then Basic dXNlcjpwYXNzd29yZA==',
         }] }),
       }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and authorization: [credential omitted]',
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and [credential omitted] then [credential omitted]',
     } })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg/)
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg|dXNlcjpwYXNzd29yZA/)
   })
 
   it('keeps at most five body snippets and clips each to 450 characters', async () => {
@@ -223,7 +223,7 @@ describe('OpenRouter Decisions transport', () => {
 it('reads the configured board through NotionApi and persists replay results in the shared database', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-classifier-test-'))
   roots.push(root)
-  const unassigned = card(4, 'Panel updates', null, null)
+  const unassigned = card(4, 'Fix basic authentication', null, null)
   const historical = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
   const notion = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input))
@@ -232,7 +232,7 @@ it('reads the configured board through NotionApi and persists replay results in 
       return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned], has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({ has_more: true, next_cursor: 'ignored', results: [{
-      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support' }] },
+      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail' }] },
     }] })
     return Response.json({ object: 'data_source', properties: Object.fromEntries(Object.entries(schema).map(([name, value]) =>
       [name, { type: value.type, id: value.id, select: { options: value.options.map(name => ({ name })) } }])) })
@@ -240,7 +240,10 @@ it('reads the configured board through NotionApi and persists replay results in 
   const model = vi.fn<typeof fetch>(async (_url, init) => {
     const request = JSON.parse(String(init?.body)) as DecisionRequest
     expect(JSON.stringify(request.state)).not.toContain('Prior panel update / Operations')
-    expect(request.state).toMatchObject({ existing_classification: { initiative: '', epic: '' } })
+    expect(request.state).toMatchObject({
+      existing_classification: { initiative: '', epic: '' },
+      card: { brief: 'Work on panel status support [credential omitted]' },
+    })
     return Response.json(modelDecision(request, 'initiative_1', 'pair_1'))
   })
   const api = new NotionApi(notion, 0)
@@ -254,6 +257,11 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(service.dryRun(2000)).toBe(running)
   const report = await running
   expect(model).toHaveBeenCalledTimes(3)
+  const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+  expect(transmitted).toContainEqual(expect.objectContaining({
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Fix basic authentication' }) }),
+  }))
+  expect(JSON.stringify(transmitted)).not.toContain('opaqueTail')
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   expect(api.diagnostics.requests['GET blocks']).toBe(3)

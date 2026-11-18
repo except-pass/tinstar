@@ -239,7 +239,7 @@ export class CardContextReader {
             blocks.push({ id: String(b.id), type,
               created_time: typeof b.created_time === 'string' ? b.created_time : undefined,
               last_edited_time: typeof b.last_edited_time === 'string' ? b.last_edited_time : undefined,
-              text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+              text: excerpt ? text : text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
           } else if (!historySignal) partial = true
           if (!excerpt && b.has_children === true) {
             if (safeTypes.has(type) || type === 'table' || type === 'column_list' || type === 'column') await visit(String(b.id), depth + 1)

@@ -31,12 +31,12 @@ export const pairKey = (initiative: string, epic: string | null) => JSON.stringi
 export const eligible = (card: WorkCard) => !card.source && !card.archived && !card.in_trash
 export const active = (card: WorkCard) => eligible(card) && !['Done', 'Archived'].includes(label(card, 'Status') ?? '')
 
-const credentialKey = String.raw`(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret)(?:[_-]+[\da-z]+)*`
+const credentialKey = String.raw`[_-]*(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret|authorization)(?:[_-]+[\da-z]+)*[_-]*`
 const quotedCredential = String.raw`(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))`
 const omittedCredential = '[credential omitted]'
-const credentialValue = String.raw`(?:${quotedCredential}|\[credential omitted\]|[^\s"',;]+)`
+const credentialValue = String.raw`(?:(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])\s+)?(?:${quotedCredential}|\S+)`
 const credentialAssignment = new RegExp(
-  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)(?:\[credential omitted\]|${quotedCredential}|\S+)|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
+  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)${credentialValue}|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
   'gi',
 )
 
@@ -47,12 +47,14 @@ const legacyCredentialAssignment = new RegExp(
 
 export function redactClassificationText(text: unknown) {
   return (typeof text === 'string' ? text : '')
-    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+\/-]+=*/gi, omittedCredential)
-    .replace(/\b(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}/g, omittedCredential)
-    .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, omittedCredential)
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, omittedCredential)
     .replace(credentialAssignment, omittedCredential)
     .replace(legacyCredentialAssignment, omittedCredential)
+    .replace(/\bbearer\s+[A-Za-z0-9._~+\/-]{12,}=*(?=$|[\s"',;])/gi, omittedCredential)
+    .replace(/\bbasic\s+([A-Za-z0-9+/]{12,}={0,2})(?=$|[\s"',;])/gi, (match, token: string) =>
+      Buffer.from(token, 'base64').toString('latin1').includes(':') ? omittedCredential : match)
+    .replace(/\b(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}\S*/g, omittedCredential)
+    .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\S*/g, omittedCredential)
     .replace(/```[\s\S]*?(?:```|$)/g, '')
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
 }
