@@ -118,8 +118,8 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
   const sources = new ReconciliationSources({ warnings: [], fleet: [], notion: { token: 'integration-writer', dataSourceId: board } },
     provider, new NotionApi(provider, 0), root, async () => JSON.stringify({ url: webhook.url, key: 'fixture-webhook-key' }))
   const mcp = new ReconciliationMcp(sources, root)
-  const connect = async () => {
-    const server = mcp.createServer('owner-chatgpt')
+  const connect = async (actor = 'owner-chatgpt') => {
+    const server = mcp.createServer(actor)
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
     const client = new Client({ name: 'fixture', version: '1' })
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
@@ -201,6 +201,27 @@ describe('prepared-card loop', () => {
     expect(ready).toBeGreaterThanOrEqual(10)
     expect(new Set(jobs.map(job => job.card_url)).size).toBe(jobs.length)
   }, 40_000)
+
+  it.each([
+    ['owner-chatgpt', 'Will chose'],
+    ['Firstmate', "Firstmate chose on Will's behalf"],
+    ['Tin Star MCP', "Chosen on Will's behalf (not by Will)"],
+    ['reviewer@example.test', "Chosen on Will's behalf (not by Will)"],
+  ])('attributes a prepared answer submitted by %s', async (actor, attribution) => {
+    const card = page(1, { tag: 'Decision' })
+    const { sources, connect } = await setup([card])
+    const notify = vi.fn(async () => {})
+    sources.workflow.onChange = notify
+    await sources.preparation.replenish()
+    const caller = await connect(actor)
+    const held = await caller('claim_card', { operation_id: 'attribution-claim', card_id: card.id })
+    expect(held.outcome).toBe('claimed')
+    const answer = 'Proceed with the fixture.'
+    const input = { operation_id: 'attribution-answer', lease_token: held.lease_token, answer, option_id: '1' }
+    expect(await caller('submit_prepared_decision', input)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.comments).toEqual([expect.stringContaining(`${attribution}: Approve the fixture\n\n${answer}\n${deskAnswerMarker}`)])
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: card.comments }))
+  })
 
   it('keeps exactly ten jobs outstanding across refill ticks while callbacks are slow', async () => {
     let now = Date.now()
@@ -321,7 +342,8 @@ describe('prepared-card loop', () => {
       Status: { status: { name: 'Waiting for Prod Release' } }, 'Waiting For': { rich_text: [] },
       'Waiting For Type': { select: null }, 'Waiting For ID': { rich_text: [] } })
     expect(card.comments).toHaveLength(1)
-    expect(card.comments[0]).toContain('Will chose: Keep reviewing\n\nLeave this with Alice.\nThank you.')
+    expect(card.comments[0]?.split('\n')[0]).toBe('Will chose: Keep reviewing')
+    expect(card.comments[0]).toContain('\n\nLeave this with Alice.\nThank you.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
     expect(await tool('claim_card', { operation_id: 'answered', card_id: card.id })).toMatchObject({ outcome: 'no-prepared-decisions' })
@@ -371,13 +393,20 @@ describe('prepared-card loop', () => {
     const card = page(1, { owner: 'Firstmate', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
       wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
     card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
-    const { sources, tool, writes, jobs } = await setup([card], true, 'rejected')
+    const { sources, connect, writes, jobs } = await setup([card], true, 'rejected')
+    const tool = await connect('Firstmate')
+    const notify = vi.fn(async () => {})
+    sources.workflow.onChange = notify
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'wait-claim', card_id: card.id })
     expect(held).toMatchObject({ outcome: 'claimed' })
     const answer = { operation_id: 'wait-answer', lease_token: held.lease_token, option_id: '1', answer: 'Proceed when deployed.' }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
     expect(card.comments).toHaveLength(1)
+    const expectedNote = card.comments[0]!
+    expect(expectedNote).toMatch(/^Firstmate chose on Will's behalf: /)
+    const legacyNote = expectedNote.replace(/^Firstmate chose on Will's behalf:/, 'Will chose:')
+    card.comments[0] = legacyNote
     if (recovery !== 'retry') {
       expect(await sources.leases.ownerRelease(card.id, held.lease.generation, 'Release fixture lease')).toMatchObject({ outcome: 'released' })
       expect(await tool('claim_card', { operation_id: 'competing-wait', card_id: card.id })).not.toHaveProperty('packet')
@@ -390,7 +419,8 @@ describe('prepared-card loop', () => {
       'Waiting For': { rich_text: text(deploy) }, 'Waiting For Type': { select: { name: 'Event' } },
       'Waiting For ID': { rich_text: text('deploy') } })
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toHaveLength(1)
+    expect(card.comments).toEqual([legacyNote])
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: [expectedNote] }))
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
     expect(sources.leases.status(card.id)).toBeNull()
     await sources.preparation.replenish()

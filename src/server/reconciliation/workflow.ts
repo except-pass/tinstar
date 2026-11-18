@@ -1,5 +1,5 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
-import type { RecordDeskAnswer } from './preparedSubmissions'
+import type { DeskAnswerer, RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
 import { decisionCardSource, decisionPropertyRevision, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
@@ -33,6 +33,11 @@ const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ 
   waiting_for: card.properties['Waiting For']?.value ?? null, waiting_for_type: card.properties['Waiting For Type']?.value ?? null, waiting_for_id: card.properties['Waiting For ID']?.value ?? null,
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const deskAttribution: Record<DeskAnswerer, string> = {
+  Will: 'Will chose',
+  Firstmate: "Firstmate chose on Will's behalf",
+  other: "Chosen on Will's behalf (not by Will)",
+}
 
 const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, source?: Extract<UpdateWorkInput, { kind: 'answer_decision' }>['source_request']) => ({
   request_id: input.request_id, answer: input.answer, option_id: input.option_id, next: input.next,
@@ -85,7 +90,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
-    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment: boolean): ReturnType<RecordDeskAnswer> {
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, answerer: DeskAnswerer, canPost: boolean): ReturnType<RecordDeskAnswer> {
     const id = packet.card_id
     const actor = 'Tin Star Decision Desk'
     const marker = deskAnswerMarker + operation
@@ -93,8 +98,8 @@ export class WorkflowOperations {
     return withSourceOperation(actor, operation, () => this.exclusive(id, async () => {
       await this.content.recoverAppliedWrite(id)
       const { card, blocks } = await load()
-      const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
-      if (!recorded && requireComment) return { outcome: 'answer-missing' }
+      const recorded = blocks.find(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
+      if (!recorded && !canPost) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
       if (!source.actionable || source.revision !== packet.source_revision) {
         return recorded
@@ -135,7 +140,7 @@ export class WorkflowOperations {
         }
         throw error
       }
-      const note = `Will chose: ${option.label}\n\n${selection.answer}`
+      const note = `${deskAttribution[answerer]}: ${option.label}\n\n${selection.answer}`
       if (!recorded) await this.content.note(id, note, marker)
       let saved = card
       if (Object.keys(properties).length) {

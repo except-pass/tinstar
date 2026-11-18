@@ -18,6 +18,7 @@ export const preparedRecoveryInput = z.object({
 })
 type Input = z.infer<typeof preparedSubmitInput>
 type Selection = Pick<Input, 'option_id' | 'answer'>
+type AnswerBinding = PreparedBinding & { answerer: DeskAnswerer }
 interface Attempt {
   card: string
   caller: string
@@ -32,7 +33,8 @@ export interface PreparedSubmitResult {
   message: string
   next?: PreparedClaimResult
 }
-export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, requireComment: boolean) =>
+export type DeskAnswerer = 'Will' | 'Firstmate' | 'other'
+export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, answerer: DeskAnswerer, canPost: boolean) =>
   Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string; settledRevision?: string }>
 
 export class PreparedSubmissions {
@@ -40,10 +42,11 @@ export class PreparedSubmissions {
   private get leases() { return this.reviews.packets.leases }
   private get scope() { return this.reviews.scope }
 
-  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, requireComment: boolean) {
+  private apply(attempt: Attempt, stored: StoredDecisionPacket, binding: AnswerBinding, token: string | undefined, canPost: boolean) {
+    if (binding.answerer === undefined) throw new Error('Missing stored Desk answer attribution')
     return withLeaseCaller(attempt.caller, token, () =>
       this.writeAnswer(stored, JSON.parse(attempt.input) as Selection,
-        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, requireComment))
+        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, binding.answerer, canPost))
   }
 
   private invalidate(db: DatabaseSync, card: string, packetId: string) {
@@ -72,7 +75,7 @@ export class PreparedSubmissions {
       .all(this.scope) as unknown as Attempt[])
     for (const attempt of attempts) {
       try {
-        const binding = JSON.parse(attempt.binding) as PreparedBinding
+        const binding = JSON.parse(attempt.binding) as AnswerBinding
         const { stored, token } = this.leases.readStorage(db => {
           const lease = this.leases.rowInStorage(db, attempt.card)
           const token = this.leases.activeInStorage(lease) && lease.generation === binding.generation &&
@@ -81,7 +84,7 @@ export class PreparedSubmissions {
           return { stored: this.reviews.packets.readInStorage(db, binding.packet_id), token }
         })
         if (!stored) continue
-        const result = await this.apply(attempt, stored, token, true)
+        const result = await this.apply(attempt, stored, binding, token, false)
         await this.leases.writeStorage(db => {
           if (result.outcome === 'recorded') this.finish(db, attempt, binding, result.settledRevision)
           else this.discard(db, attempt, binding, result.outcome)
@@ -92,7 +95,7 @@ export class PreparedSubmissions {
     }
   }
 
-  async submit(caller: string, holder: string, input: unknown): Promise<PreparedSubmitResult> {
+  async submit(caller: string, holder: string, input: unknown, answerer: DeskAnswerer): Promise<PreparedSubmitResult> {
     const parsed = preparedSubmitInput.parse(input)
     const { operation_id, option_id, answer } = parsed
     const outcome = (state: string, message: string, next?: PreparedClaimResult) =>
@@ -116,17 +119,17 @@ export class PreparedSubmissions {
         if (!stored || stored.id !== binding.packet_id) return { attempt: null, stored: null }
         if (!stored.packet.options.some(option => option.id === option_id)) throw new DecisionDeskConflict('option_id is unavailable on the held packet')
         if (this.reviews.packets.savingInStorage(db, binding.card)) throw new SourceWritePending()
-        const attempt: Attempt = { card: binding.card, caller, operation: operation_id, binding: JSON.stringify(binding), input: selected, state: 'saving' }
+        const attempt: Attempt = { card: binding.card, caller, operation: operation_id, binding: JSON.stringify({ ...binding, answerer }), input: selected, state: 'saving' }
         db.prepare('INSERT INTO decision_card_answers (scope,card,caller,operation,binding,input,state) VALUES (?,?,?,?,?,?,?)')
           .run(this.scope, attempt.card, caller, operation_id, attempt.binding, attempt.input, attempt.state)
         return { attempt, stored, token: parsed.lease_token }
       })
       if (!attempt || !stored) return outcome('packet-invalidated', 'The card changed. Release it to continue.')
-      const binding = JSON.parse(attempt.binding) as PreparedBinding
+      const binding = JSON.parse(attempt.binding) as AnswerBinding
       let message = 'Decision recorded on the card.'
       let settledRevision: string | undefined
       if (attempt.state !== 'recorded') {
-        const result = await this.apply(attempt, stored, token, !token)
+        const result = await this.apply(attempt, stored, binding, token, !!token)
         message = result.message ?? message
         settledRevision = result.settledRevision
         if (result.outcome !== 'recorded') {

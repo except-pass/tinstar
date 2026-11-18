@@ -71,7 +71,7 @@ export class DecisionDeskApi {
             return respond(await this.reviews.close(caller, input.review_session_token, input.reason))
           }
           case 'submit':
-            return respond(await this.submissions.submit(caller, 'Browser review', preparedSubmitInput.parse(await body(req))))
+            return respond(await this.submissions.submit(caller, 'Browser review', preparedSubmitInput.parse(await body(req)), 'Will'))
           case 'submission-state':
             return respond(await this.submissions.recover(caller, preparedRecoveryInput.parse(await body(req))))
           case 'reconcile-source-write': {
