@@ -18,8 +18,8 @@ assigns the card to Firstmate, and keeps it Waiting For while an independent
 blocker remains. It sets the status to Queued when all waits are clear. **Skip** releases the card while keeping its packet available.
 
 Preparation shows how many cards are ready, being prepared, and leased.
-When fewer than ten cards are claimable, Tin Star sends enough eligible cards
-to fill the gap. Each card can have one outstanding job. Jobs expire after
+When fewer than ten cards are claimable, Tin Star sends a batch of up to ten
+eligible cards without outstanding jobs. Each card can have one outstanding job. Jobs expire after
 15 minutes without publication. Published packets have no age limit. Editing the
 decision properties, card text, or substantive discussion invalidates the packet.
 
@@ -27,9 +27,11 @@ decision properties, card text, or substantive discussion invalidates the packet
 
 Configure the `url` and `key` fields of Clavis secret
 `grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
-authentication, the card URL, its question, and `publish.job_id` for the callback.
-Provide the callback through MCP `publish_prepared_packet` with the job ID and
-four content fields.
+authentication. Its body contains `card_url`, a credential-scrubbed
+`source_question`, an empty `options` array for the preparer to propose choices,
+and an opaque `source_revision` token bound to the job and card revision.
+Call MCP `publish_prepared_packet` with that token as `job_id` and the four
+packet content fields.
 
 ```json
 {
@@ -77,7 +79,9 @@ Source mutations acquire per-card reservations. An interrupted write is
 checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
 If the answer comment saves before the property handoff completes, retrying
-the same operation or the next refill pass completes the handoff. The answer
-is retained if the lease is released. Other cards remain available while a
+the same operation or the next refill pass completes the handoff while the
+same actionable revision remains. If the card changes, Tin Star preserves
+the saved answer and the current card properties. Releasing the lease
+keeps the saved answer. Other cards remain available while a
 write is resolved. Reminder reservations
 can coexist with a review claim and continue to serialize actual source writes.

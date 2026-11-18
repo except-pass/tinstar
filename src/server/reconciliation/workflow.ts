@@ -94,10 +94,12 @@ export class WorkflowOperations {
       await this.content.recoverAppliedWrite(id)
       const { card, blocks } = await load()
       const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
-      if (!recorded) {
-        if (requireComment) return { outcome: 'answer-missing' }
-        const source = decisionCardSource(card, blocks)
-        if (!source.actionable || source.revision !== packet.source_revision) return { outcome: 'packet-invalidated' }
+      if (!recorded && requireComment) return { outcome: 'answer-missing' }
+      const source = decisionCardSource(card, blocks)
+      if (!source.actionable || source.revision !== packet.source_revision) {
+        return recorded
+          ? { outcome: 'recorded', message: 'The answer is on the card. Current card properties were preserved.' }
+          : { outcome: 'packet-invalidated' }
       }
       const wait = waitState(card)
       const entries = waitEntries(wait.waitingFor, wait)
@@ -114,7 +116,6 @@ export class WorkflowOperations {
         if (card.properties['Waiting For ID']) desired['Waiting For ID'] = identity.id
       }
       const matches = (current: WorkCard, name: string) => this.matches(current, name, this.normalized(current, name, desired[name]))
-      if (recorded && Object.keys(desired).every(name => matches(card, name))) return { outcome: 'recorded' }
       let properties: Record<string, unknown>
       try {
         const statuses = this.reader.declarations().data?.schema?.Status?.options ?? []

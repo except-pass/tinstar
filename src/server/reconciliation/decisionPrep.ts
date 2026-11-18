@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
 import { packetContents } from '../../shared/decisionPacket'
+import { redactSourceText } from '../../shared/searchDocuments'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
 import type { DecisionCardSource } from './decisionEvidence'
@@ -111,7 +112,7 @@ export class DecisionPreparation {
       const ready = prepared.filter(card => this.packets.claimableInStorage(db, card)).length
       const candidates = !this.secret || ready >= refillSize ? [] : queue.filter(card => this.canDispatch(db, card.id, cutoff))
       const first = candidates.length ? this.candidateCursor % candidates.length : 0
-      const selected = [...candidates.slice(first), ...candidates.slice(0, first)].slice(0, refillSize - ready)
+      const selected = [...candidates.slice(first), ...candidates.slice(0, first)].slice(0, refillSize)
       return { candidates: selected, prepared }
     })
     if (prepared.length) {
@@ -126,7 +127,7 @@ export class DecisionPreparation {
     if (!secret) { this.explanation = webhookMissing; return }
     const sources = await Promise.allSettled(candidates.map(card => this.source.read(card.id, true)))
     const jobs = await this.packets.leases.writeStorage(db => {
-      const needed = refillSize - queue.filter(card => this.packets.claimableInStorage(db, card)).length
+      if (queue.filter(card => this.packets.claimableInStorage(db, card)).length >= refillSize) return []
       const eligible = sources.flatMap(result => {
         if (result.status !== 'fulfilled') return []
         const source = result.value, card = source.card.id
@@ -135,7 +136,7 @@ export class DecisionPreparation {
         return [source]
       })
       const insert = db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'sending',?)")
-      return eligible.slice(0, Math.max(0, needed)).map(source => {
+      return eligible.map(source => {
         const id = randomUUID()
         insert.run(id, this.scope, source.card.id, source.revision, this.now())
         return { id, source }
@@ -146,15 +147,15 @@ export class DecisionPreparation {
     const failures = results.filter(Boolean)
     this.explanation = failures.length ? `${failures.length} of ${jobs.length} jobs could not be sent. ${failures[0]}` :
       jobs.length ? `Sent ${jobs.length} cards to the preparer.` :
-      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Refills the gap below 10 ready cards.'
+      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Sends up to 10 cards when fewer than 10 are ready.'
   }
 
   private async push(secret: Secret, id: string, source: DecisionCardSource) {
     const payload = {
       card_url: cardSourceUrl(source.card.id),
-      source_question: source.question,
-      publish: { tool: 'publish_prepared_packet', job_id: id,
-        instructions: 'Send packet with summary, options [{label}], recommendation and links [{label,url}].' },
+      source_question: redactSourceText(source.question),
+      options: [],
+      source_revision: id,
     }
     let message: string | null = null
     try {
