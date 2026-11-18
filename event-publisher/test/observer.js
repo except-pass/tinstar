@@ -426,7 +426,7 @@ test('rejected and unavailable reads cannot lower the accepted window floor', as
   t.after(() => journal.close())
   journal.registerSources([tasks, workers])
   const observations = [
-    minute => taskObservation([row('sample-task', { priority: minute ? 1 : 0 })], minute),
+    minute => taskObservation([row('sample-task', { priority: minute ? 1 : 0 })], minute, tasks, []),
     minute => workerObservation([{ id: 'sample-task', gen: 'gen-1', state: minute ? 'parked' : 'working' }], minute),
   ]
   for (const read of observations) {
@@ -435,8 +435,27 @@ test('rejected and unavailable reads cannot lower the accepted window floor', as
     deepEqual(journal.recordAttempt(read(1)), { written: 0, complete: false })
     journal.record({ ...read(2), entries: undefined, health: 'unavailable' })
     deepEqual(journal.recordAttempt(read(4)), { written: 0, complete: false })
+    journal.record({ ...read(10), entries: undefined, health: 'unavailable' })
     equal(journal.record(read(5)), 1)
   }
+})
+
+test('worker inventory respects accepted PR fleet windows and can share a fresh read', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  journal.record(taskObservation([task], 0))
+  const prOnly = taskObservation([task], 1, tasks, [{ id: task.id, links: [] }])
+  journal.record({ ...prOnly, pullRequests: { ...prOnly.pullRequests, observed_at: at(5) } })
+  journal.record({ ...workerObservation([], 2), entries: undefined, health: 'unavailable' })
+  deepEqual(journal.recordAttempt(workerObservation([], 3)), { written: 0, complete: false })
+  equal(journal.sources().find(source => source.type === 'worker').last_generated_at, null)
+
+  const fresh = taskObservation([task], 5)
+  equal(journal.recordAttempt(fresh).complete, true)
+  equal(journal.recordAttempt(workerObservation([], 5)).complete, true)
+  equal(journal.recordAttempt(workerObservation([], 5)).complete, false)
 })
 
 test('a fleet window overlapping accepted worker evidence cannot advance PR links', async t => {
@@ -634,7 +653,7 @@ test('missing, failed, partial and out-of-order task polls preserve the last wit
   equal(journal.record({ ...taskObservation([row('sample-a', { state: 'done' })], 2),
     health: 'partial', reason: 'synthetic truncation' }), 0)
   equal(journal.sources().find(source => source.source_id === tasks.source_id).last_snapshot_id, cursor)
-  equal(journal.record(taskObservation([row('sample-a', { state: 'done' })], 1)), 0)
+  equal(journal.record(taskObservation([row('sample-a', { state: 'done' })], 0)), 0)
   equal(journal.record(taskObservation([], 3)), 0)
   equal(journal.record(taskObservation([row('sample-a')], 3, moved)), 1)
   equal(journal.events()[0].subject.id, entityId('task', moved.home_id, 'sample-a'))
