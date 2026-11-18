@@ -198,8 +198,8 @@ export class Journal {
       if (!previous) throw new Error('observation source was not registered')
       let written = 0
       let complete = false
-      if (started_at >= (previous.last_success_at ?? '') &&
-          (entries || started_at > (previous.last_attempt_started ?? ''))) {
+      const overlapsAcceptedWindow = started_at < (previous.last_success_at ?? '')
+      if (entries || (!overlapsAcceptedWindow && started_at > (previous.last_attempt_started ?? ''))) {
         let { health, reason = null, counts = null } = observation
         let snapshotId = null
         let acceptedFleet = null
@@ -208,6 +208,9 @@ export class Journal {
           health = 'stale'
           reason = 'read ended before it started'
           batchObservedAt = previous.last_attempt_at
+        } else if (overlapsAcceptedWindow) {
+          health = 'stale'
+          reason = 'read overlaps the accepted collection window'
         } else if (generated_at && !freshFleet(observation, fleetWindow, previous.last_generated_at, true)) {
           health = 'stale'
           reason = 'fleet watermark did not advance'

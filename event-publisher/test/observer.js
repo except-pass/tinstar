@@ -432,12 +432,31 @@ test('rejected and unavailable reads cannot lower the accepted window floor', as
   for (const read of observations) {
     const baseline = read(0)
     journal.record({ ...baseline, observed_at: at(5) })
+    const status = () => journal.sources().find(source => source.source_id === baseline.source.source_id)
+    const accepted = status()
     deepEqual(journal.recordAttempt(read(1)), { written: 0, complete: false })
+    equal(status().health, 'stale')
+    for (const field of ['last_success_at', 'last_snapshot_id', 'last_generated_at']) {
+      equal(status()[field], accepted[field])
+    }
     journal.record({ ...read(2), entries: undefined, health: 'unavailable' })
     deepEqual(journal.recordAttempt(read(4)), { written: 0, complete: false })
     journal.record({ ...read(10), entries: undefined, health: 'unavailable' })
     equal(journal.record(read(5)), 1)
   }
+})
+
+test('an overlapping task inventory cannot support a worker relationship', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  const worker = { id: task.id, gen: 'gen-1', state: 'working' }
+  journal.record({ ...taskObservation([task], 0), observed_at: at(3) })
+  journal.record(workerObservation([worker], 0))
+  equal(journal.recordAttempt(taskObservation([], 1)).complete, false)
+  equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 3)), 1)
+  deepEqual(journal.events()[0].related, [])
 })
 
 test('worker inventory respects accepted PR fleet windows and can share a fresh read', async t => {
