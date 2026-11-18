@@ -202,15 +202,7 @@ it('projects only the exact Will wait from the card, preserving independent wait
   card.properties['Waiting For'] = property
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBe(will)
   f.history.context.blocks.push({ ...f.history.context.blocks[0]!, id: 'second-source', text: f.history.context.blocks[0]!.text.replace(JSON.stringify(f.packet.binding.request_id), '"second-request"') })
-  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now)).toMatchObject({ shared_wait: true })
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBeUndefined()
-  const activeWait = property.value
-  property.value = 'An old dependency note'
-  card.properties.Status!.value = 'Queued'
-  delete card.properties['Waiting For Type']
-  delete card.properties['Waiting For ID']
-  expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).shared_wait).toBeUndefined()
-  property.value = activeWait
   f.history.context.blocks.pop()
   property.value += '\n' + will.replace('Choose scope', 'Choose timing')
   expect(projectDecisionEvidence(f.snapshot, f.cardId, f.history, now).owner_wait).toBeUndefined()

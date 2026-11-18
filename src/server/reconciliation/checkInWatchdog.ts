@@ -74,6 +74,7 @@ const deliverySchema = z.object({
   error: z.enum(['capture-failed', 'wake-failed']).nullable(),
   // Legacy rows wait for the next sweep to reserve an offer.
   pending: z.boolean().optional(),
+  issued: z.boolean().optional(),
 })
 type Delivery = z.infer<typeof deliverySchema>
 const rowSchema = z.object({
@@ -308,18 +309,18 @@ export class CheckInWatchdog {
       return correction
     } catch { /* Failed read never closes an appointment; retry on next sweep. */ }
   }
-  /** The bridge reads the last completed sweep, never sources or the writer queue. */
   async bridgeWork() {
     if (!(await this.settings()).deliveryEnabled) return { pending: [], tracked: [] }
-    const rows = await this.load()
-    return {
+    return this.change(rows => ({
       pending: rows.filter(row => !['resolved', 'superseded', 'answered-needs-correction'].includes(row.state))
-        .flatMap(row => [row.request, row.followUp].flatMap(item => item?.pending && !item.reply &&
-          (!item.noteId || item.announced === false || !!item.error)
-          ? [{ request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }] : [])),
+        .flatMap(row => [row.request, row.followUp].flatMap(item => {
+          if (!item?.pending || item.reply || item.noteId && item.announced !== false && !item.error) return []
+          item.issued = true
+          return [{ request_id: item.requestId, inbox_request_id: inboxRequestId(item.requestId), body: item.body }]
+        })),
       tracked: rows.flatMap(row => [row.request, row.followUp].flatMap(item => item?.noteId && !item.reply
         ? [{ request_id: item.requestId, note_id: item.noteId }] : [])),
-    }
+    }))
   }
   /** Reserve offers during the periodic sweep. External reads stay outside the
    * writer; the last persisted offers remain available while a read is in flight. */
@@ -381,7 +382,7 @@ export class CheckInWatchdog {
   }
   async requestIds(cardId: string) {
     return new Set((await this.rows()).filter(row => row.cardId === cardId)
-      .flatMap(row => [row.request, row.followUp].flatMap(item => item?.offeredAt ? [item.requestId] : [])))
+      .flatMap(row => [row.request, row.followUp].flatMap(item => (item?.issued || item?.noteId) ? [item.requestId] : [])))
   }
   async owns(requestId: string) { return (await this.rows()).some(row => row.request.requestId === requestId || row.followUp?.requestId === requestId) }
   ingest(input: BridgeUpdate) {

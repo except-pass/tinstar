@@ -528,12 +528,14 @@ describe('durable lifecycle on the existing bridge', () => {
   })
   it('resolves a previously followed-up row when its skewed checkpoint now verifies', async () => {
     const h = await harness(); await h.watchdog.sweep()
+    expect(await h.watchdog.requestIds(h.card.id)).toEqual(new Set())
     const id = (await h.watchdog.bridgeWork()).pending[0]!.request_id
+    expect(await h.make().requestIds(h.card.id)).toEqual(new Set([id]))
     await h.note(id)
     h.advance(CHECK_IN_GRACE_MS)
     await h.watchdog.sweep(true)
     const followUp = (await h.watchdog.bridgeWork()).pending[0]!
-    expect(await h.watchdog.requestIds(h.card.id)).toEqual(new Set([id]))
+    expect(await h.make().requestIds(h.card.id)).toEqual(new Set([id, followUp.request_id]))
     await h.note(followUp.request_id)
     expect(await h.watchdog.requestIds(h.card.id)).toEqual(new Set([id, followUp.request_id]))
     h.publish(id, '2026-11-10T19:00:00Z')

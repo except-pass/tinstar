@@ -5,7 +5,7 @@ import { requestAnchor } from '../../shared/deskSource'
 import { decisionRequests, decisionRecordRows, workflowReceipt } from '../../shared/workflowRequests'
 import { workflowMarkers } from '../../shared/workflowMarkers'
 import { redactSourceText } from '../../shared/searchDocuments'
-import { hasActiveWait, parseWaitLine } from '../../shared/waitingForPolicy'
+import { parseWaitLine } from '../../shared/waitingForPolicy'
 import type { SourceSnapshot } from './index'
 import type { Observation } from './observation'
 import type { CardContextRead } from './cardContext'
@@ -29,7 +29,7 @@ function discussionText(note: CardContextRead['blocks'][number]) {
   return text.replace(/^Tin Star request: .*$/m, `Tin Star request: ${decisionMeaning({ ...request, options: sorted })}`)
 }
 
-export function openDecisionCount(requests: Array<{ id: string }>, answered: Set<string>) {
+function openDecisionCount(requests: Array<{ id: string }>, answered: Set<string>) {
   return new Set(requests.filter(request => !answered.has(request.id)).map(request => request.id)).size
 }
 
@@ -126,9 +126,8 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
       || !wait && line.startsWith('Will:') && waitId === 'Will'
   })
   const openCount = openDecisionCount(currentRequests.map(id => ({ id })), new Set(rows.filter(row => row.answered).map(row => row.id)))
-  const sharedWait = openCount > 1 && hasActiveWait({ status: String(card?.properties.Status?.value ?? ''), type: String(card?.properties['Waiting For Type']?.value ?? ''), id: waitId, waitingFor })
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),
-    ...(openCount === 1 && waits.length === 1 ? { owner_wait: waits[0] } : {}), ...(sharedWait ? { shared_wait: true } : {}), observed_at: observation.observedAt,
+    ...(openCount === 1 && waits.length === 1 ? { owner_wait: waits[0] } : {}), observed_at: observation.observedAt,
     omissions: ['Projection of cached observations only; no source refresh or answer reconciliation.', 'Cross-channel Ask publication coverage, PR details and release proofs are not collected here; material missing evidence blocks readiness.', ...(history?.context.omissions ? [history.context.omissions] : [])] }
 }
 

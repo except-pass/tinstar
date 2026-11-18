@@ -9,7 +9,7 @@ import type { ReconciliationConfig } from '../../src/server/reconciliation/confi
 
 export async function preparationHistoryFixture(root: string, secret: () => Promise<string | null> = async () => null, options: {
   cards?: number; onRead?: () => void; beforeRead?: (url: URL) => Promise<void>; intervalMs?: number; cardStatus?: 'Queued' | 'Waiting For'
-  answered?: boolean; independentRequest?: boolean; waitPadding?: string; inactiveWait?: string
+  answered?: boolean; independentRequest?: boolean; waitPadding?: string; additionalWait?: string; inactiveWait?: string
   largeContract?: boolean; historySurface?: 'comments' | 'body' | 'none'; commentCount?: number
   wrapFetch?: (fixtureFetch: typeof fetch) => typeof fetch
 } = {}) {
@@ -18,9 +18,10 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
   const card = fixture.snapshot.intentions.data!.cards.find(card => card.id === fixture.cardId)!
   card.properties.Area = { id: 'Area', type: 'select', value: 'Engineering', hasMore: false }
   card.properties.Status!.value = options.cardStatus ?? 'Waiting For'
-  if (card.properties.Status!.value === 'Waiting For') for (const [name, value] of Object.entries({ Owner: 'Will', 'Waiting For': 'Will: Choose the bounded preview route?' + (options.waitPadding ?? ''), 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) {
+  if (card.properties.Status!.value === 'Waiting For') for (const [name, value] of Object.entries({ Owner: 'Will', 'Waiting For': 'Will: Choose the bounded preview route?' + (options.waitPadding ?? '') + (options.additionalWait ? `\n${options.additionalWait}` : ''), 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) {
     card.properties[name] = { id: name, type: name === 'Waiting For' ? 'rich_text' : 'select', value, hasMore: false }
   }
+  if (options.additionalWait) card.properties['Next check-in'] = { id: 'Next check-in', type: 'date', value: { start: new Date(Date.now() + 3600_000).toISOString() }, hasMore: false }
   if (options.inactiveWait) {
     card.properties['Waiting For'] = { id: 'Waiting For', type: 'rich_text', value: options.inactiveWait, hasMore: false }
     card.properties['Waiting For Type'] = { id: 'Waiting For Type', type: 'select', value: null, hasMore: false }
@@ -49,7 +50,7 @@ export async function preparationHistoryFixture(root: string, secret: () => Prom
     const type = name === 'Next check-in' ? 'date' : name === 'Name' ? 'title' : name === 'Status' ? 'status' : name === 'First Mate tasks' || name === 'Next action' || name === 'Waiting For' ? 'rich_text' : Array.isArray(value) ? name === 'Will action' ? 'multi_select' : 'relation' : 'select'
     const content = type === 'title' || type === 'rich_text' ? [{ plain_text: String(value), text: { content: String(value) } }]
       : type === 'multi_select' ? (value as string[]).map(name => ({ name }))
-      : type === 'relation' ? (value as string[]).map(id => ({ id })) : value === null ? null : { name: value }
+      : type === 'relation' ? (value as string[]).map(id => ({ id })) : type === 'date' ? value : value === null ? null : { name: value }
     return [name, { id: name, type, [type]: content }]
   }))
   // The source requires these board schema fields even if a page leaves them empty.

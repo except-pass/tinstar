@@ -175,31 +175,45 @@ it('keeps preparation across Tin Star housekeeping, then invalidates a substanti
   expect(f.posts).toHaveLength(2)
 }, 20_000)
 
-it.each(['sole', 'shared'] as const)('saves a prepared answer with a %s wait', async scenario => {
-  const shared = scenario === 'shared'
-  const { sources, cardId, requestId } = await setup({ independentRequest: shared, waitPadding: '  ' })
+it('saves a prepared answer with a sole padded wait', async () => {
+  const { sources, cardId, requestId } = await setup({ waitPadding: '  ' })
   const job = await sources.preparation.prepareNow('fixture-owner', { card_id: cardId, request_id: requestId, reason: 'Prepare this request' })
   const packet = preparedDecisionFixture().packet
   const request = sources.preparationEvidence(cardId).requests.find(row => row.binding?.request_id === requestId)!
   packet.binding = request.binding!
   packet.dependencies = request.dependencies.map(({ kind, key, revision }) => ({ kind, key, revision: revision! }))
+  expect(job).toMatchObject({ outcome: 'dispatched' })
   expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'shared-wait-packet', packet })).toMatchObject({ ready: true })
   const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'shared-wait-claim', card_id: cardId })
   expect(claim.outcome).toBe('claimed')
-  expect(claim.shared_wait).toBe(shared ? true : undefined)
-  expect(claim.resolve_wait).toBe(scenario === 'sole' ? 'Will: Choose the bounded preview route?' : undefined)
+  expect(claim.resolve_wait).toBe('Will: Choose the bounded preview route?')
   const saved = await sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', {
     operation_id: 'shared-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id,
     packet_version: claim.packet!.version, request_id: requestId, option_id: packet.recommended_option_id,
     next: { owner: packet.authorization.next_owner, status: packet.authorization.next_status },
-    ...(claim.resolve_wait ? { resolve_wait: ` ${claim.resolve_wait} ` } : {}),
+    resolve_wait: ` ${claim.resolve_wait} `,
   })
   expect(saved.outcome).toMatch(/^recorded/)
   const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
-  expect(card.properties.Status?.value).toBe(scenario === 'sole' ? 'Queued' : 'Waiting For')
-  expect(card.properties['Waiting For']?.value).toBe(shared ? 'Will: Choose the bounded preview route?  ' : '')
-  expect((await sources.workflow.preparedHistory(cardId)).some(note => note.text.includes('Existing wait retained for independent requests.'))).toBe(shared)
+  expect(card.properties.Status?.value).toBe('Queued')
+  expect(card.properties['Waiting For']?.value).toBe('')
+  expect(card.properties['Waiting For ID']?.value ?? '').toBe('')
 }, 20_000)
+
+it('resolves an explicitly named wait with multiple open requests and retains the other blocker', async () => {
+  const remaining = 'Dependency: Vendor upgrade | Unblocks when: Vendor confirms | Follow-up: Firstmate | Type: Event | ID: upgrade'
+  const { sources, cardId, requestId } = await setup({ independentRequest: true, additionalWait: remaining })
+  const saved = await sources.workflow.answerPrepared({
+    kind: 'answer_decision', card_id: cardId, request_id: requestId, operation_id: 'resolve-exact-wait',
+    answer: 'Approve the preview', option_id: 'preview', resolve_wait: 'Will: Choose the bounded preview route?',
+    next: { owner: 'Firstmate', status: 'Queued' },
+  }, 'Fixture owner')
+  expect(saved).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+  const card = (await sources.snapshot(true)).intentions.data!.cards.find(card => card.id === cardId)!
+  expect(card.properties.Status?.value).toBe('Waiting For')
+  expect(card.properties['Waiting For']?.value).toBe(remaining)
+  expect(card.properties['Waiting For ID']?.value).toBe('upgrade')
+})
 
 it('preserves inactive legacy prose when the normal wait transition rejects it', async () => {
   const { sources, cardId, requestId } = await setup({ independentRequest: true, cardStatus: 'Queued', inactiveWait: 'An old dependency note' })

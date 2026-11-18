@@ -18,7 +18,7 @@ interface Session { id: string; caller: string; scope: string; label: string; de
 export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
 export interface PreparedQueue { card_ids: string[]; coverage: 'complete' | 'unknown'; requests: number | null
   history?: Array<{ card_id: string; title: string; state: 'loading' | 'available' | 'unavailable'; observed_at: string | null; expires_at: string | null; message?: string | null; retry_at?: string | null }> }
-export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: ReturnType<DecisionPackets['readInStorage']>; session_id?: string; packet_version?: number; message?: string; coverage?: string; resolve_wait?: string; shared_wait?: boolean }
+export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: ReturnType<DecisionPackets['readInStorage']>; session_id?: string; packet_version?: number; message?: string; coverage?: string; resolve_wait?: string }
 const sessionLifetime = 24 * 60 * 60 * 1000
 
 /** Explicit contexts, not inferred conversations. Packet validation, canonical
@@ -162,7 +162,6 @@ export class PreparedReviews {
     // context's canonical lease, never source freshness or a pending workflow write.
     const blocked = !stored?.validation.valid || !stored.validation.valid_until || Date.parse(stored.validation.valid_until) <= this.now() || this.leases.reviewReservedInStorage(db, binding.card)
     return { outcome: blocked ? 'packet-invalidated' : 'held', lease: publicLease(row), lease_token: token,
-      ...(evidence.shared_wait ? { shared_wait: true } : {}),
       ...(stored && stored.packet.authorization.next_status !== 'Waiting For' && wait && workReadback(wait) === wait ? { resolve_wait: wait } : {}), packet: stored ? {
       ...workReadback(stored), packet: {
         ...workReadback(stored.packet), recommended_option_id: stored.packet.recommended_option_id,
