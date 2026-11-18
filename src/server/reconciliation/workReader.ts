@@ -7,7 +7,7 @@ import { checkInTime } from '../../shared/checkIn'
 import { isJiraCard } from '../../shared/workIdentity'
 import { JiraAdapter } from './jira'
 import { CachedObservation, retainMissing } from './observation'
-export type WorkCard = Awaited<ReturnType<typeof readNotionCard>> & { source?: { provider: 'jira'; instanceId: string; collectionId: string; itemId: string; displayKey: string; synthetic: boolean } }
+export type WorkCard = Awaited<ReturnType<typeof readNotionCard>> & { source?: { provider: 'jira'; instanceId: string; collectionId: string; itemId: string; displayKey: string; synthetic: true } }
 export type WorkData = Omit<NonNullable<Awaited<ReturnType<ReturnType<typeof notionObservation>['get']>>['data']>, 'cards'> & { cards: WorkCard[] }
 export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
   const value = (name: string) => card.properties[name]?.value

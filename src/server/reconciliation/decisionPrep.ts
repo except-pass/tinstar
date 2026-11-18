@@ -97,6 +97,12 @@ export class DecisionPreparation {
         .get(this.scope, card, cutoff)
   }
 
+  private needsBatch(db: DatabaseSync, queue: WorkCard[], cutoff: number) {
+    const outstanding = db.prepare("SELECT 1 FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent') AND at > ?")
+      .get(this.scope, cutoff)
+    return !outstanding && queue.filter(card => this.packets.claimableInStorage(db, card)).length < refillSize
+  }
+
   private async refill() {
     await this.initialize()
     if (this.now() - this.loadedAt >= 30_000) {
@@ -109,8 +115,7 @@ export class DecisionPreparation {
       db.prepare("UPDATE decision_card_prep SET state = 'failed', message = 'No packet received; retrying preparation' WHERE scope = ? AND state IN ('sending','sent') AND at <= ?")
         .run(this.scope, cutoff)
       const prepared = queue.filter(card => this.packets.currentInStorage(db, card.id))
-      const ready = prepared.filter(card => this.packets.claimableInStorage(db, card)).length
-      const candidates = !this.secret || ready >= refillSize ? [] : queue.filter(card => this.canDispatch(db, card.id, cutoff))
+      const candidates = !this.secret || !this.needsBatch(db, queue, cutoff) ? [] : queue.filter(card => this.canDispatch(db, card.id, cutoff))
       const first = candidates.length ? this.candidateCursor % candidates.length : 0
       const selected = [...candidates.slice(first), ...candidates.slice(0, first)].slice(0, refillSize)
       return { candidates: selected, prepared }
@@ -127,7 +132,7 @@ export class DecisionPreparation {
     if (!secret) { this.explanation = webhookMissing; return }
     const sources = await Promise.allSettled(candidates.map(card => this.source.read(card.id, true)))
     const jobs = await this.packets.leases.writeStorage(db => {
-      if (queue.filter(card => this.packets.claimableInStorage(db, card)).length >= refillSize) return []
+      if (!this.needsBatch(db, queue, this.now() - retryAfter)) return []
       const eligible = sources.flatMap(result => {
         if (result.status !== 'fulfilled') return []
         const source = result.value, card = source.card.id
@@ -147,7 +152,7 @@ export class DecisionPreparation {
     const failures = results.filter(Boolean)
     this.explanation = failures.length ? `${failures.length} of ${jobs.length} jobs could not be sent. ${failures[0]}` :
       jobs.length ? `Sent ${jobs.length} cards to the preparer.` :
-      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Sends up to 10 cards when fewer than 10 are ready.'
+      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Sends up to 10 cards when fewer than 10 are ready and no jobs are outstanding.'
   }
 
   private async push(secret: Secret, id: string, source: DecisionCardSource) {

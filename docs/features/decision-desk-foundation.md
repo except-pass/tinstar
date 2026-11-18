@@ -19,8 +19,9 @@ Waiting For while an independent blocker remains. It sets the status to Queued
 when all waits are clear. **Skip** releases the card while keeping its packet available.
 
 Preparation shows how many cards are ready, being prepared, and leased.
-When fewer than ten cards are claimable, Tin Star sends a batch of up to ten
-eligible cards without outstanding jobs. Each card can have one outstanding job. Jobs expire after
+Tin Star counts claimable cards and outstanding jobs as supply. When supply
+is below ten and no jobs are outstanding, Tin Star sends up to ten eligible
+cards. Jobs expire after
 15 minutes without publication. Published packets have no age limit. Editing the
 decision properties, card text, or substantive discussion invalidates the packet.
 

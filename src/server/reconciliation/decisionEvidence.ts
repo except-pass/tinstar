@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { WorkCard } from './workReader'
 import type { CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
+import { isJiraCard } from '../../shared/workIdentity'
 import { actionableWillCard } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
@@ -32,7 +33,7 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
   return createHash('sha256').update(canonical([decisionProperties(card), body, comments])).digest('hex')
 }
 
-export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !/^TSSPIKE-/i.test(card.source?.displayKey ?? '') && actionableWillCard(card)
+export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')

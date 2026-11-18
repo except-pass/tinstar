@@ -202,7 +202,21 @@ describe('prepared-card loop', () => {
     expect(new Set(jobs.map(job => job.card_url)).size).toBe(jobs.length)
   }, 40_000)
 
-  it('sends a full batch below ten ready and releases outstanding jobs after 15 minutes', async () => {
+  it('keeps exactly ten jobs outstanding across refill ticks while callbacks are slow', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const cards = Array.from({ length: 50 }, (_, n) => page(n + 1, { owner: 'Will' }))
+    const { sources, jobs, web } = await setup(cards, false)
+    await sources.preparation.replenish()
+    for (let tick = 0; tick < 3; tick++) {
+      now += 5_000
+      await sources.preparation.replenish()
+    }
+    expect(jobs).toHaveLength(10)
+    expect((await web('snapshot')).data.counts).toMatchObject({ ready: 0, preparing: 10 })
+  })
+
+  it('waits for the last outstanding job to expire before sending a full batch', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const cards = Array.from({ length: 20 }, (_, n) => page(n + 1, { owner: 'Will' }))
@@ -212,17 +226,13 @@ describe('prepared-card loop', () => {
     for (const { publish } of jobs.slice(0, 9)) {
       expect(await tool(publish.tool, { job_id: publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
     }
+    now += 14 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(10)
     now += 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(20)
-    expect(new Set(jobs.map(job => job.card_url)).size).toBe(20)
-    now += 13 * 60_000
-    await sources.preparation.replenish()
-    expect(jobs).toHaveLength(20)
-    now += 60_000
-    await sources.preparation.replenish()
-    expect(jobs).toHaveLength(21)
-    expect(jobs[20]!.card_url).toBe(jobs[9]!.card_url)
+    expect(jobs.slice(10).map(job => job.card_url)).toContain(jobs[9]!.card_url)
     expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
@@ -243,24 +253,19 @@ describe('prepared-card loop', () => {
     expect((await web('snapshot')).data).toMatchObject({ counts: { ready: 1 }, ready: [{ card_id: card.id }] })
   })
 
-  it.each([
-    { displayKey: 'TSSPIKE-1', synthetic: false, eligible: false },
-    { displayKey: 'FIXTURE-1', synthetic: true, eligible: false },
-    { displayKey: 'LIVE-1', synthetic: false, eligible: true },
-  ])('dispatches $displayKey only when eligible ($eligible)', async ({ displayKey, synthetic, eligible }) => {
+  it('keeps the Jira pilot out of preparation', async () => {
     const card = page(1, { tag: 'Decision' })
     const { sources } = await setup([card])
     const live = await sources.currentCard(card.id)
-    const jira = { ...live, id: jiraCardPrefix + '1', source: { provider: 'jira', instanceId: 'fixture',
-      collectionId: 'fixture', itemId: '1', displayKey, synthetic } as const }
-    expect(actionableDecisionCard(jira)).toBe(eligible)
+    const jira = { ...live, id: jiraCardPrefix + '1' }
+    expect(actionableDecisionCard(jira)).toBe(false)
     const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
     const prep = new DecisionPreparation(sources.decisionPackets, {
       refreshQueue: async () => [jira],
       read: async () => decisionCardSource(jira, []),
     }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
     await prep.replenish()
-    expect(push).toHaveBeenCalledTimes(eligible ? 1 : 0)
+    expect(push).not.toHaveBeenCalled()
   })
 
   it('names missing publication fields, keeps packets across time, and invalidates changed card content', async () => {
