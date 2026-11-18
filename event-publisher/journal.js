@@ -195,7 +195,8 @@ export class Journal {
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
       const rebaselinePullRequests = source.type === 'task' && before && Object.hasOwn(entry.fields, 'pull_requests') &&
-        (!Object.hasOwn(before, 'pull_requests') || previousEvidence?.pr_link_source !== 'fleet-snapshot backlog')
+        (prior.last_seen_snapshot !== previousSnapshot || !Object.hasOwn(before, 'pull_requests') ||
+          previousEvidence?.pr_link_source !== 'fleet-snapshot backlog')
       const evidence = {
         ...entry.evidence,
         ...(rebaselinePullRequests ? { pr_link_coverage: 'rebaselined' } : {}),

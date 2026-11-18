@@ -295,43 +295,57 @@ async function runRead(home, script, args, overrides) {
   }
 }
 
-export async function observe(home, source, scratch, { now = () => new Date(), taskCache } = {}) {
+export async function observeHome(home, scratch, { now = () => new Date(), taskCache } = {}) {
+  const [task, worker] = sourcesFor(home)
   const started_at = now().toISOString()
-  try {
-    if (!home.path || await realpath(home.path).catch(() => null) !== home.path) {
-      throw new ObservationError('unavailable', 'configured FM_HOME could not be verified')
+  const attempt = async (source, started_at, read) => {
+    try {
+      return { source, started_at, ...await read() }
+    } catch (error) {
+      if (!(error instanceof ObservationError)) throw error
+      return { source, started_at, observed_at: now().toISOString(), health: error.health, reason: error.message }
     }
-    // The fleet command uses FM_DATA_OVERRIDE for the secondmate registry and
-    // auxiliary projections. An empty data root keeps the read local. Worker
-    // metadata and the crew-state reconciler still use the configured home.
-    const readFleet = () => runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
+  }
+
+  if (!home.path || await realpath(home.path).catch(() => null) !== home.path) {
+    return [task, worker].map(source => ({
+      source, started_at, observed_at: now().toISOString(),
+      health: 'unavailable', reason: 'configured FM_HOME could not be verified',
+    }))
+  }
+
+  const tasks = await attempt(task, started_at, async () => {
+    const payload = await readTasks(home, taskCache, now)
+    return { ...payload, observed_at: now().toISOString(), health: 'ok' }
+  })
+  const fleetStartedAt = now().toISOString()
+  let text
+  let fleetObservedAt
+  const workers = await attempt(worker, fleetStartedAt, async () => {
+    text = await runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
       FM_DATA_OVERRIDE: scratch,
       FM_SNAPSHOT_CACHE_DIR: join(scratch, 'disabled', 'cache'),
       FM_CREW_STATE_NO_FORGE: '1',
     })
-    if (source.type === 'task') {
-      const payload = await readTasks(home, taskCache, now)
-      const fleetStartedAt = now().toISOString()
-      const text = await readFleet().catch(error => {
-        if (!(error instanceof ObservationError)) throw error
-        return null
-      })
-      const observed_at = now().toISOString()
-      const links = fleetPullRequests(text, home.path, fleetStartedAt, observed_at)
-      return { source, started_at, observed_at, health: 'ok', ...payload,
-        entries: withPullRequests(payload.entries, links) }
-    }
-    const text = await readFleet()
-    const observed_at = now().toISOString()
-    const payload = parseWorkers(text, home, started_at, observed_at)
+    fleetObservedAt = now().toISOString()
+    const payload = parseWorkers(text, home, fleetStartedAt, fleetObservedAt)
     const incomplete = payload.counts.current_state_unavailable > 0
     return {
-      source, started_at, observed_at, ...payload,
+      ...payload, observed_at: fleetObservedAt,
       health: incomplete ? 'partial' : 'ok',
       reason: incomplete ? 'some local incarnations have no verified current state' : null,
     }
-  } catch (error) {
-    if (!(error instanceof ObservationError)) throw error
-    return { source, started_at, observed_at: now().toISOString(), health: error.health, reason: error.message }
+  })
+  if (tasks.entries?.length) {
+    const links = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
+    tasks.entries = withPullRequests(tasks.entries, links)
+    const pr_links_unobserved = tasks.entries.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
+    if (pr_links_unobserved) {
+      tasks.counts = { pr_links_unobserved }
+      tasks.health = 'partial'
+      tasks.reason = 'PR link coverage is unavailable for some tasks'
+    }
+    if (pr_links_unobserved < tasks.entries.length) tasks.observed_at = fleetObservedAt
   }
+  return [tasks, workers]
 }

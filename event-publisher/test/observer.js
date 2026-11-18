@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { encode } from '@toon-format/toon'
-import { entityId, fleetPullRequests, observe, parseTasks, parseWorkers, sourcesFor, withPullRequests } from '../firstmate.js'
+import { entityId, fleetPullRequests, observeHome, parseTasks, parseWorkers, sourcesFor, withPullRequests } from '../firstmate.js'
 import { Journal } from '../journal.js'
 
 const exec = promisify(execFile)
@@ -131,6 +131,38 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
     field: 'pull_requests', before: [], after: [next],
   })
   equal(changed.observation.observed_between.after, at(2))
+  equal(journal.record(taskObservation([], 4)), 0)
+  equal(journal.record(taskObservation([{ ...first, priority: 3 }], 5, tasks, [{ id: first.id, pr_url: pr }])), 1)
+  const returned = journal.events().at(-1)
+  equal(returned.change.field, 'priority')
+  equal(returned.evidence.pr_link_coverage, 'rebaselined')
+})
+
+test('one fleet call feeds worker health and reports a quiet PR coverage gap', async t => {
+  const path = await temp(t)
+  const bin = join(path, 'bin')
+  const calls = join(path, 'fleet-calls')
+  const config = join(path, 'config.json')
+  const db = join(path, 'journal.sqlite')
+  await mkdir(bin)
+  await writeFile(config, JSON.stringify({ homes: [{ ...home, path }] }))
+  await writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
+cat <<'TASKS'
+${encode({ count: 1, tasks: [row('sample-task')] })}
+TASKS
+`, { mode: 0o700 })
+  await writeFile(join(bin, 'fm-fleet-snapshot.sh'), `#!/bin/sh
+echo call >> '${calls}'
+printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HOME\\",\\"generated\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\",\\"main_inventory\\":{\\"valid\\":true},\\"secondmate_current\\":{\\"registry\\":{\\"present\\":false}},\\"tasks\\":[]}"
+`, { mode: 0o700 })
+  await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
+  equal(await readFile(calls, 'utf8'), 'call\n')
+  const { stdout } = await exec(cli, ['sources', '--db', db])
+  match(stdout, /:task .*partial.*pr_links_unobserved=1/)
+  match(stdout, /:worker .*ok/)
+  const journal = new Journal(db, { readOnly: true })
+  t.after(() => journal.close())
+  equal(journal.tail(), 0)
 })
 
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {
@@ -304,7 +336,8 @@ cat <<'FLEET'
 ${JSON.stringify(fleet)}
 FLEET
 `, { mode: 0o700 })
-    return observe(fixture, workers, path, { now: () => new Date(at(minute)) })
+    const [, worker] = await observeHome(fixture, path, { now: () => new Date(at(minute)) })
+    return worker
   }
   const failures = [
     fleet => { fleet.tasks[1].id = null },
@@ -368,13 +401,14 @@ fi
   const options = date => ({ now: () => new Date(date), taskCache })
   const fingerprint = await stat(backlog, { bigint: true })
   process.env.EVENTS_TEST_DAY = 'old'
-  journal.record(await observe(fixture, tasks, path, options(new Date(2026, 0, 1, 23, 59, 20))))
+  const [baseline] = await observeHome(fixture, path, options(new Date(2026, 0, 1, 23, 59, 20)))
+  journal.record(baseline)
   process.env.EVENTS_TEST_DAY = 'new'
-  const cached = await observe(fixture, tasks, path, options(new Date(2026, 0, 1, 23, 59, 40)))
+  const [cached] = await observeHome(fixture, path, options(new Date(2026, 0, 1, 23, 59, 40)))
   equal(cached.method, 'markdown-fingerprint')
   equal(journal.record(cached), 0)
   let clockReads = 0
-  const after = await observe(fixture, tasks, path, {
+  const [after] = await observeHome(fixture, path, {
     taskCache,
     now: () => clockReads++ < 2 ? new Date(2026, 0, 1, 23, 59, 59) : new Date(2026, 0, 2, 0, 0, 0),
   })

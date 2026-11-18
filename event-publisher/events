@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { parseArgs } from 'node:util'
-import { observe, sourcesFor } from './firstmate.js'
+import { observeHome, sourcesFor } from './firstmate.js'
 import { Journal, JournalConfigurationError } from './journal.js'
 
 const usage = `Usage
@@ -112,8 +112,9 @@ async function collect(journal, homes, interval) {
   const controller = signalController()
   const scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
   try {
-    const sources = homes.flatMap(home => sourcesFor(home).map(source => ({ source, home, taskCache: {} })))
-    journal.registerSources(sources.map(({ source }) => source))
+    const sources = homes.flatMap(sourcesFor)
+    const taskCaches = new Map(homes.map(home => [home.id, {}]))
+    journal.registerSources(sources)
     if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
     do {
       const start = Date.now()
@@ -128,16 +129,17 @@ async function collect(journal, homes, interval) {
           if (!(error instanceof JournalConfigurationError)) throw error
         }
       }
-      for (const { source, home, taskCache } of sources) {
+      for (const home of homes) {
         if (controller.signal.aborted) break
-        journal.record(await observe(home, source, scratch, { taskCache }))
+        const observations = await observeHome(home, scratch, { taskCache: taskCaches.get(home.id) })
+        for (const observation of observations) journal.record(observation)
       }
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (Date.now() - start), 5000), controller.signal)
     } while (interval && !controller.signal.aborted)
     if (!interval) {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source.health]))
-      return !controller.signal.aborted && sources.every(({ source }) => statuses.get(source.source_id) === 'ok')
+      return !controller.signal.aborted && sources.every(source => statuses.get(source.source_id) === 'ok')
     }
   } finally {
     controller.close()
