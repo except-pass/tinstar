@@ -109,10 +109,7 @@ export function fleetObservation(source: FleetSource) {
       // Identity uses a tuple, never delimiter concatenation or array position.
       identity: { fm_home: source.home, task_id: text(task.id), spawn_gen: text(task.spawn_gen) },
       cardReferences: [...cardReferences(task, 'task'), ...cardReferences(record(task.backlog), 'task.backlog')],
-      current_state: {
-        ...fields(task.current_state, ['state', 'source', 'detail', 'observed_at', 'freshness']),
-        ...('wait_pr_url' in record(task.current_state) && { wait_pr_url: text(record(task.current_state).wait_pr_url) ?? '' }),
-      },
+      current_state: fields(task.current_state, ['state', 'source', 'detail', 'observed_at', 'freshness']),
       endpoint: fields(task.endpoint, ['exists', 'agent_alive', 'status', 'observed_at', 'freshness']),
       paths: { home: text(record(record(task.paths).home).path), worktree: text(record(record(task.paths).worktree).path) },
       last_event: fields(record(record(task.paths).status_log).last_event, ['state', 'note', 'raw', 'age_seconds']),

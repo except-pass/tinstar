@@ -16,7 +16,7 @@ export function overviewPullStatuses(workers: Worker[]): ReadonlyMap<string, Fin
   return pulls
 }
 
-function waitBadge(worker: Execution, state: string, label: string, tone: string, observedAt: number, now: number, pulls: ReadonlyMap<string, FinishedPullStatus> | undefined) {
+function waitBadge(worker: Execution, state: string, label: string, tone: string, observedAt: number, now: number) {
   const event = worker.source.last_event
   const age = event.age_seconds
   // Event age is relative to the snapshot that observed this task.
@@ -25,13 +25,7 @@ function waitBadge(worker: Execution, state: string, label: string, tone: string
   const ageText = Number.isFinite(duration) ? ` · ${ageLabel(began, now).replace(/ ago$/, '')}` : ''
   const backlog = worker.source.backlog
   const ownBacklog = worker.identity.task_id && backlog.id === worker.identity.task_id ? backlog : undefined
-  const hasDependencies = !!ownBacklog?.blocked_by_ids?.length
-  const unresolved = ownBacklog?.unresolved_blocker_ids?.length
-  const waitUrl = worker.source.current_state.wait_pr_url
-  const waitPullId = waitUrl && releasePull(waitUrl)?.id
-  if ((hasDependencies || waitUrl !== undefined) &&
-    (hasDependencies ? unresolved === 0 : !unresolved) &&
-    (waitUrl === undefined || (waitPullId && pulls?.has(waitPullId)))) {
+  if (ownBacklog?.blocked_by_ids?.length && ownBacklog.unresolved_blocker_ids?.length === 0) {
     return { label: `Stalled${ageText}`, tone: 'stalled' }
   }
   // A linked pull request or the absence of a dependency does not establish
@@ -45,15 +39,11 @@ export function workerBadge(worker: Execution, now: number, pulls: ReadonlyMap<s
   const observedAt = Date.parse(String(current.observed_at ?? ''))
   const state = !readFailed && !stale(worker.observation, now) && current.freshness === 'fresh' &&
     Number.isFinite(observedAt) && observedAt <= now && current.source && current.source !== 'none' ? current.state : null
-  if (state === 'blocked') return waitBadge(worker, 'blocked', 'Blocked', 'blocked', observedAt, now, pulls)
-  if (state === 'parked' || state === 'needs-decision') {
-    // The producer emits this exact delimited component for a human pipeline gate.
-    const decision = state === 'needs-decision' || current.source === 'status-log' ||
-      current.source === 'run-step' && String(current.detail).split(' · ').includes('ask-user: authority decision')
-    return decision ? waitBadge(worker, 'needs-decision', 'Needs a decision', 'decision', observedAt, now, pulls)
-      : waitBadge(worker, 'parked', 'Waiting', 'waiting', observedAt, now, pulls)
+  if (state === 'blocked') return waitBadge(worker, state, 'Blocked', 'blocked', observedAt, now)
+  if (state === 'needs-decision') return waitBadge(worker, state, 'Needs a decision', 'decision', observedAt, now)
+  if (state === 'parked' || state === 'paused' || state === 'waiting') {
+    return waitBadge(worker, state, 'Waiting', 'waiting', observedAt, now)
   }
-  if (state === 'paused' || state === 'waiting') return waitBadge(worker, state, 'Waiting', 'waiting', observedAt, now, pulls)
   const url = worker.source.pr.url
   const pullId = typeof url === 'string' ? releasePull(url)?.id : null
   const pull = pullId ? pulls?.get(pullId) : null
