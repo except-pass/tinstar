@@ -1,8 +1,8 @@
 # Releases
 
 Releases (`?view=releases`) reads **fortresspower/cmsandbox version tags,
-GitHub Release records and component Actions runs**, through the same GitHub
-Reader transport as PRs. No coordinator export or repository configuration is
+GitHub Release records and component Actions runs**, through the
+[shared GitHub reader](pr-operations.md#sources-and-scope). No coordinator export or repository configuration is
 needed. New version tags appear on refresh. Release identity is repository/tag;
 the current tagged commit is retained separately so a moved tag does not reuse
 its old source evidence.
@@ -39,7 +39,11 @@ Changes and source-file scope come from the Git compare between consecutive
 version tags. Effective merged PR identities are read from those commits and
 joined to existing explicit many-to-many Notion associations. Plan uses the
 latest-tag-to-main comparison rather than a synthetic release candidate. Membership advances
-in bounded batches, with partial counts and exact gaps until complete. A non-linear
+through up to eight commits per range refresh, with partial counts and exact gaps
+until complete. Merge associations observed at main HEAD are cached for 24 hours
+when every returned row identifies a merged PR and at least one row is present.
+The current range rotates through the commits on refresh. Fully inspected
+historical ranges retained in memory wait an hour between refreshes. A non-linear
 range remains unknown; equal-source consecutive tags have an empty range. GitHub's
 300-file compare limit is visible independently of paginated commit/PR membership.
 
@@ -54,8 +58,8 @@ mark association coverage incomplete and show a safe warning, including on a
 cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
-GitHub observations cache for one minute. Only the recent five tags (plus an
-explicit historical selection) receive Actions reads. Membership advances for
+Catalog and Actions observations cache for one minute. Only the recent five tags
+and an explicit historical selection receive Actions reads. Membership advances for
 the latest and selected releases and for untagged main. Catalogs paginate up to
 ten pages and report partial coverage at that limit. Source loss retains known
 observations with a visible unknown state; missing data never means no releases.
@@ -148,6 +152,10 @@ retains safe read errors in `readError` and `githubSync.errors`; the release
 projection names unavailable Git history in its source gaps. Neither exposes
 stderr/credentials. Fix the **service** PATH/auth, not only an interactive
 shell. In live mode, broker/access failures also remain sync errors; the reader never falls back to CLI authentication. Recovered reads clear the error; stale prior facts remain labeled.
+
+Successful merged PR observations in the legacy projection cache for 24 hours in
+memory, even if a PR temporarily leaves the requested set. Other PR observations
+and failures cache for one minute.
 
 ### Configure existing sources
 

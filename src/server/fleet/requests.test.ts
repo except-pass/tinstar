@@ -15,7 +15,7 @@ vi.mock('./inbox', () => ({ FleetOutbox: class { get = fixtures.get; submit = fi
 vi.mock('./dismiss', () => ({ dismissDirect: fixtures.dismiss }))
 vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
-  execFile: vi.fn((_file, _args, _options, callback) => callback(null, { stdout: '{"state":"closed","merged_at":"2026-11-17T21:40:00Z"}' })),
+  execFile: vi.fn((_file, _args, _options, callback) => callback(null, { stdout: 'HTTP/2.0 200 OK\n\r\n{"payload":{"state":"closed","merged_at":"2026-11-17T21:40:00Z"}}' })),
 }))
 import { CockpitFleet, handleCockpitRequest } from './cockpit'
 import { PullsApi } from '../pulls/routes'

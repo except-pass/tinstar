@@ -1,8 +1,6 @@
 import { readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import type { ReleasesRead } from '../../shared/releases'
@@ -12,6 +10,7 @@ import type { ReleaseChange, ReleaseObject } from '../../shared/releaseObjects'
 import { releaseChanges } from '../../shared/releaseChanges'
 import { CreationReceipts } from '../reconciliation/workflowReceipts'
 import { acquireLock } from '../infra/lock'
+import { githubCliJson, githubCliPost } from '../pulls/github'
 
 const text = z.string().trim().min(1)
 const workflow = z.object({
@@ -40,20 +39,18 @@ export async function readAcceptanceRecords(root: string): Promise<AcceptanceRec
   })
 }
 export type AcceptanceGithub = (method: 'GET' | 'POST', path: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>
-const exec = promisify(execFile)
 /** Existing GitHub Actions is the executor. API dispatch returns the exact run
  * directly; never guess from timestamps or the most recent workflow run.
  * https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event */
 export const acceptanceGithub: AcceptanceGithub = async (method, path, body) => {
-  const temporary = body ? await mkdtemp(join(tmpdir(), 'tinstar-check-')) : null
+  const limits = { timeout: 15_000, maxBuffer: 256 * 1024 }
+  if (method === 'GET') return await githubCliJson(path, '.', limits) as Record<string, unknown>
+  const temporary = await mkdtemp(join(tmpdir(), 'tinstar-check-'))
   try {
-    const args = ['api', method, path, '--jq', '{payload: (.|tojson)}', '--full']
-    if (temporary) { const file = join(temporary, 'request.json'); await writeFile(file, JSON.stringify(body), { mode: 0o600 }); args.push('--input', file) }
-    const { stdout } = await exec('gh-axi', args, { timeout: 15_000, maxBuffer: 256 * 1024 })
-    const raw = stdout.trim().replace(/^payload: /, '')
-    const value = JSON.parse(raw)
-    return typeof value === 'string' ? JSON.parse(value) : value
-  } finally { if (temporary) await rm(temporary, { recursive: true, force: true }) }
+    const file = join(temporary, 'request.json')
+    await writeFile(file, JSON.stringify(body ?? {}), { mode: 0o600 })
+    return await githubCliPost(path, file, limits) as Record<string, unknown>
+  } finally { await rm(temporary, { recursive: true, force: true }) }
 }
 interface Selection { release: ReleaseObject; change: ReleaseChange; check: AcceptanceResult }
 export function acceptanceSelections(data: ReleasesRead, scene: FloorScene): Selection[] {

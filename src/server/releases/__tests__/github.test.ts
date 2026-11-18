@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GithubReleaseReader, nativeReleaseSummary } from '../github'
+import { ReleaseMembershipReader } from '../membership'
 import { releaseAssociations } from '../../../shared/releases'
 import { releaseChanges } from '../../../shared/releaseChanges'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
@@ -222,4 +223,79 @@ it('revalidates containment for a changed effective merge immediately before a s
   await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()
   expect(transition).not.toHaveBeenCalled()
   expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
+})
+
+it('reuses completed commit observations across overlapping ranges for 24 hours', async () => {
+  const first = 'c'.repeat(40), second = 'd'.repeat(40), third = 'e'.repeat(40)
+  let clock = now
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) {
+      const commits = path.includes(third) ? [first, second, third] : path.includes(second) ? [first, second] : [first]
+      return { status: 'ahead', merge_base_commit: { sha: nativeBase }, total_commits: commits.length, commits: commits.map(sha => ({ sha })) }
+    }
+    return path.includes(first) ? [{ html_url: `https://github.com/${nativeRepo}/pull/123`, merged_at: nativeTime, merge_commit_sha: second }] : []
+  })
+  const reader = new ReleaseMembershipReader(read, () => clock)
+  const baseline = { name: 'v1.0.0', commit: { sha: nativeBase } }
+  expect((await reader.since(nativeRepo, first, baseline)).pulls.size).toBe(0)
+  clock += 24 * 60 * 60_000 - 1
+  expect((await reader.since(nativeRepo, second, baseline)).pulls.size).toBe(1)
+  const readsOfFirst = () => read.mock.calls.filter(([path]) => path.includes(`/commits/${first}/pulls`)).length
+  expect(readsOfFirst()).toBe(1)
+  clock++
+  expect((await reader.since(nativeRepo, third, baseline)).pulls.size).toBe(1)
+  expect(readsOfFirst()).toBe(2)
+})
+
+it.each(['empty', 'open', 'mixed'])('refreshes a %s commit association when a PR later merges', async initial => {
+  const first = 'c'.repeat(40), merge = 'd'.repeat(40)
+  const pull = { html_url: `https://github.com/${nativeRepo}/pull/123`, merged_at: nativeTime, merge_commit_sha: merge }
+  const alreadyMerged = { ...pull, html_url: `https://github.com/${nativeRepo}/pull/124`, merge_commit_sha: first }
+  let merged = false
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) {
+      const commits = (merged ? [first, merge] : [first]).map(sha => ({ sha }))
+      return { status: 'ahead', merge_base_commit: { sha: nativeBase }, total_commits: commits.length, commits }
+    }
+    if (!path.includes(`/commits/${first}/pulls`)) return []
+    if (merged) return [pull, ...(initial === 'mixed' ? [alreadyMerged] : [])]
+    if (initial === 'empty') return []
+    const open = { ...pull, merged_at: null }
+    return initial === 'mixed' ? [alreadyMerged, open] : [open]
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const baseline = { name: 'v1.0.0', commit: { sha: nativeBase } }
+  const tagged = await reader.get(nativeRepo, first, 'v1.1.0', [baseline])
+  expect([...tagged.pulls.values()].map(row => row.number)).toEqual(initial === 'mixed' ? [124] : [])
+
+  merged = true
+  const main = await reader.since(nativeRepo, merge, baseline)
+  expect(main.membership.status).toBe('complete')
+  expect([...main.pulls.values()].map(row => row.number)).toEqual(initial === 'mixed' ? [123, 124] : [123])
+})
+
+it('refreshes a merged association first observed outside main', async () => {
+  const first = 'c'.repeat(40), merge = 'd'.repeat(40), later = 'e'.repeat(40)
+  let onMain = false
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) {
+      const commits = (path.includes(later) ? [first, merge, later] : onMain ? [first, merge] : [first]).map(sha => ({ sha }))
+      return { status: 'ahead', merge_base_commit: { sha: nativeBase }, total_commits: commits.length, commits }
+    }
+    if (!path.includes(`/commits/${first}/pulls`)) return []
+    const number = onMain ? 124 : 123
+    return [{ html_url: `https://github.com/${nativeRepo}/pull/${number}`, merged_at: nativeTime, merge_commit_sha: onMain ? merge : first }]
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const baseline = { name: 'v1.0.0', commit: { sha: nativeBase } }
+  const tagged = await reader.get(nativeRepo, first, 'v1.1.0', [baseline])
+  expect([...tagged.pulls.values()].map(row => row.number)).toEqual([123])
+
+  onMain = true
+  for (const head of [merge, later]) {
+    const main = await reader.since(nativeRepo, head, baseline)
+    expect(main.membership.status).toBe('complete')
+    expect([...main.pulls.values()].map(row => row.number)).toEqual([124])
+  }
+  expect(read.mock.calls.filter(([path]) => path.includes(`/commits/${first}/pulls`))).toHaveLength(2)
 })

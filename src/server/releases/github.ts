@@ -226,7 +226,7 @@ export class GithubReleaseReader {
     }
     const selected = [recent[0], requested].filter((tag, index, rows): tag is z.infer<typeof tagSchema> => !!tag && rows.indexOf(tag) === index)
     for (const tag of selected) {
-      ranges.set(tag.name, await this.memberships.get(repository, tag.commit.sha, tag.name, tags))
+      ranges.set(tag.name, await this.memberships.get(repository, tag.commit.sha, tag.name, tags, undefined, tag.commit.sha === mainSha, tag.commit.sha !== mainSha))
       this.cached = publish()
     }
     if (tags[0] && mainSha && mainSha !== tags[0].commit.sha) {

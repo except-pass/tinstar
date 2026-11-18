@@ -25,19 +25,29 @@ describe('Git release membership', () => {
     expect(range.membership).toMatchObject({ status: 'unknown', baseline: null })
     expect(read).not.toHaveBeenCalled()
   })
-  it('retains precise partial progress without inventing an empty release on a failed read', async () => {
+  it('retains partial progress through failure and replaces superseded PRs on their next turn', async () => {
     let now = 0
+    let pullNumber = 1
     const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
-    const read = vi.fn(async (path: string) => path.includes('/tags?') ? [tag('v1.0.0', base)] : path.includes('/compare/') ? { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 10, commits: commits.map(sha => ({ sha })) } : [pull(1, commits[0]!)])
+    const read = vi.fn(async (path: string) => path.includes('/tags?') ? [tag('v1.0.0', base)] : path.includes('/compare/') ? { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 10, commits: commits.map(sha => ({ sha })) } : path.includes(commits[0]!) ? [pull(pullNumber, commits[0]!)] : [])
     const reader = new ReleaseMembershipReader(read, () => now)
     const first = await reader.get('owner/repo', head, 'v2.0.0')
     expect(first.membership.status).toBe('partial'); expect(first.cursor).toBe(8)
     now = 20_000; read.mockRejectedValueOnce(new Error('Read unavailable'))
     const failed = await reader.get('owner/repo', head, 'v2.0.0')
     expect(failed.membership.status).toBe('partial'); expect(failed.pulls.size).toBe(1)
+    pullNumber = 2
     now = 90_000
+    const rotated = await reader.get('owner/repo', head, 'v2.0.0')
+    expect(rotated.membership.status).toBe('partial')
+    expect([...rotated.pulls.values()].map(row => row.number)).toEqual([2])
+    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(18)
+
+    now = 110_000
     const resumed = await reader.get('owner/repo', head, 'v2.0.0')
-    expect(resumed.membership.status).toBe('complete'); expect(resumed.pulls.size).toBe(1)
+    expect(resumed.membership.status).toBe('complete')
+    expect([...resumed.pulls.values()].map(row => row.number)).toEqual([2])
+    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(20)
   })
   it('does not guess a baseline from unrelated or newer tags', async () => {
     const read = vi.fn(async (path: string) => path.includes('/tags?') ? [tag('v3.0.0', base), tag('feature-only', base), tag('v1.0.0', base)] : { status: 'diverged', merge_base_commit: { sha: 'f'.repeat(40) } })
@@ -52,4 +62,93 @@ it('keeps consecutive equal-source tags as an empty range rather than reusing al
   expect(range.membership).toMatchObject({ status: 'complete', baseline: 'v1.0.0', baselineSha: head })
   expect(range.pulls.size).toBe(0)
   expect(read).toHaveBeenCalledTimes(2)
+})
+
+it('reopens an unchanged tag with the current commit associations', async () => {
+  let number = 1
+  const read = vi.fn(async (path: string) => path.includes('/compare/')
+    ? { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 2, commits: [{ sha: merge }, { sha: head }] }
+    : [pull(number)])
+  let now = 0
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const tags = [tag('v1.0.0', base)]
+  expect([...((await reader.get('owner/repo', head, 'v2.0.0', tags)).pulls.values())].map(row => row.number)).toEqual([1])
+  number = 2
+  now = 15_000
+  const reopened = await reader.get('owner/repo', head, 'v2.0.0', tags)
+  expect(reopened.membership.status).toBe('complete')
+  expect([...reopened.pulls.values()].map(row => row.number)).toEqual([2])
+})
+
+it('updates siblings and reaches later commits despite a persistently failing lookup', async () => {
+  let now = 0
+  let refreshing = false
+  let failing = false
+  const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: commits.length, commits: commits.map(sha => ({ sha })) }
+    const commit = path.split('/commits/')[1]?.split('/')[0]
+    if (commit === commits[0]) {
+      if (failing) throw new Error('Read unavailable')
+      return [pull(1, commits[0])]
+    }
+    if (commit === commits[1]) return [pull(refreshing ? 3 : 2, commits[1])]
+    if (commit === commits[9]) return [pull(refreshing ? 5 : 4, commits[9])]
+    return []
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const get = () => reader.get('owner/repo', head, 'v2.0.0', [tag('v1.0.0', base)])
+  const numbers = (range: Awaited<ReturnType<typeof get>>) => [...range.pulls.values()].map(row => row.number)
+  await get()
+  now = 15_000
+  expect(numbers(await get())).toEqual([1, 2, 4])
+
+  refreshing = true
+  failing = true
+  now = 30_000
+  expect(numbers(await get())).toEqual([1, 3, 4])
+  now = 90_000
+  const later = await get()
+  expect(numbers(later)).toEqual([1, 3, 5])
+  expect(later.membership.status).toBe('partial')
+  expect(later.pulls.get('owner/repo#1')).toMatchObject({ freshness: 'stale', observedAt: new Date(0).toISOString() })
+  expect(later.pulls.get('owner/repo#5')).toMatchObject({ freshness: 'fresh', observedAt: new Date(now).toISOString() })
+  now = 105_000
+  expect(numbers(await get())).toEqual([1, 3, 5])
+  expect(read.mock.calls.filter(([path]) => path.includes(`/commits/${commits[0]}/`))).toHaveLength(3)
+
+  failing = false
+  now = 165_000
+  expect((await get()).membership.status).toBe('partial')
+  now = 180_000
+  const recovered = await get()
+  expect(recovered.membership.status).toBe('complete')
+  expect(recovered.pulls.get('owner/repo#1')).toMatchObject({ freshness: 'fresh', observedAt: new Date(now).toISOString() })
+})
+
+it('limits completed historical revalidation to one turn per hour while current ranges rotate', async () => {
+  let now = 0
+  const tags = [tag('v1.0.0', base)]
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 1, commits: [{ sha: merge }] }
+    return [pull(1)]
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const get = (historical: boolean) => reader.get('owner/repo', head, 'v2.0.0', tags, undefined, false, historical)
+  expect((await get(false)).membership.status).toBe('complete')
+  now = 15_000
+  await get(false)
+  expect(read).toHaveBeenCalledTimes(3)
+  now += 3_599_999
+  await get(true)
+  expect(read).toHaveBeenCalledTimes(3)
+  now++
+  read.mockRejectedValueOnce(new Error('Lookup failed'))
+  expect((await get(true)).membership.status).toBe('partial')
+  now += 60_000
+  await get(true)
+  expect(read).toHaveBeenCalledTimes(4)
+  now += 3_540_000
+  expect((await get(true)).membership.status).toBe('complete')
+  expect(read).toHaveBeenCalledTimes(5)
 })

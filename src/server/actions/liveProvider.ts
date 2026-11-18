@@ -9,6 +9,7 @@ import { operationSchema, readerRepositories, type ActionOperation, type ActionS
 import { readActionJob, readActionSnapshot } from './evidence'
 import { BrokerEffectError, simulatedRequest } from './broker'
 import type { RunnerResource } from './sandbox'
+import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
 
 const id = z.number().int().positive().safe()
 const app = z.object({ appId: id, installations: z.array(z.object({ installationId: id, repositories: z.record(id) }).strict()).min(1) }).strict()
@@ -23,21 +24,29 @@ export const brokerConfigSchema = z.object({
 export type BrokerConfig = z.infer<typeof brokerConfigSchema>
 type Profile = 'reader' | 'repair'
 type Permissions = Record<string, 'read' | 'write'>
-export type ProviderRequest = { method: 'GET' | 'POST' | 'PUT'; path: string; authorization: string; body?: unknown }
-export type ProviderTransport = (input: ProviderRequest) => Promise<{ status: number; data: unknown }>
+export type ProviderRequest = { method: 'GET' | 'POST' | 'PUT'; path: string; authorization: string; body?: unknown; etag?: string }
+export type ProviderTransport = (input: ProviderRequest, received?: (response: GithubRestHeaders) => void) => Promise<GithubRestResponse>
 /** No subprocess, env or argv receives authentication. HTTPS stays inside the
  * broker process; gh-axi has no secret-in-memory input interface. No redirects,
  * arbitrary origins, automatic retries or provider diagnostics leave custody. */
-export const githubTransport: ProviderTransport = input => new Promise((resolveResponse, reject) => {
+export const githubTransport: ProviderTransport = (input, received) => new Promise((resolveResponse, reject) => {
   const request = httpsRequest({ hostname: 'api.github.com', port: 443, method: input.method, path: input.path,
-    headers: { Authorization: `Bearer ${input.authorization}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'tinstar-action-broker', ...(input.body ? { 'Content-Type': 'application/json' } : {}) }, timeout: 12_000,
+    headers: { Authorization: `Bearer ${input.authorization}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'tinstar-action-broker', ...(input.body ? { 'Content-Type': 'application/json' } : {}), ...(input.etag ? { 'If-None-Match': input.etag } : {}) }, timeout: 12_000,
   }, response => {
+    const status = response.statusCode ?? 0
+    const headers = { etag: response.headers.etag, remaining: response.headers['x-ratelimit-remaining']?.toString(),
+      reset: response.headers['x-ratelimit-reset']?.toString(), retryAfter: response.headers['retry-after'] }
+    received?.({ status, headers })
     let bytes = 0; const chunks: Buffer[] = []
     response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) request.destroy(); else chunks.push(chunk) })
     response.on('error', () => reject(new Error('GitHub broker request failed')))
     response.on('end', () => {
-      try { resolveResponse({ status: response.statusCode ?? 0, data: bytes ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null }) }
-      catch { reject(new Error('GitHub broker response was not JSON')) }
+      let data: unknown = null
+      try { if (bytes) data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+      catch {
+        if (status >= 200 && status < 300) { reject(new Error('GitHub broker response was not JSON')); return }
+      }
+      resolveResponse({ status, data, headers })
     })
   })
   request.on('timeout', () => request.destroy())
@@ -75,6 +84,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
 }
 
 export class LiveProvider {
+  private rest = new GithubRestBudget('broker')
   #tokens = new Map<string, { token: string; until: number }>()
   #secrets = new Set<string>()
   constructor(readonly config: BrokerConfig, private transport: ProviderTransport = githubTransport, private enabled = process.env.TINSTAR_ACTIONS_LIVE === 'reader-repair') {
@@ -124,8 +134,11 @@ export class LiveProvider {
     catch { throw new Error(`Live ${profile} not provisioned: invalid App private key`) }
     this.#secrets.add(jwt)
     let response
-    try { response = await this.transport({ method: 'POST', path: `/app/installations/${installation.installationId}/access_tokens`, authorization: jwt, body: { repository_ids: [repositoryId], permissions } }) }
-    catch { throw new Error('App installation token request failed; no ambient authentication fallback') }
+    try { response = await this.rest.send(received => this.transport({ method: 'POST', path: `/app/installations/${installation.installationId}/access_tokens`, authorization: jwt, body: { repository_ids: [repositoryId], permissions } }, received)) }
+    catch (error) {
+      if (isGithubRateLimit(error)) throw error
+      throw new Error('App installation token request failed; no ambient authentication fallback')
+    }
     // The token never leaves this closure, including malformed/overbroad responses.
     const raw = z.object({ token: z.string().min(1), expires_at: z.string(), permissions: z.record(z.string()), repositories: z.array(z.object({ id, full_name: z.string() })) }).safeParse(response.data)
     const possibleToken = z.object({ token: z.string().min(1) }).safeParse(response.data)
@@ -138,19 +151,22 @@ export class LiveProvider {
     this.#tokens.set(cacheKey, { token: token.token, until: expires })
     return token.token
   }
-  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>) {
+  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string) {
     let authorization: string
-    try { authorization = await this.token(profile, repository, permissions); await beforeSend?.() }
+    try { this.rest.assertAvailable(); authorization = await this.token(profile, repository, permissions); await beforeSend?.(); this.rest.assertAvailable() }
     catch (error) { throw new BrokerEffectError(error instanceof Error ? error.message : 'Broker validation refused request', 'not-sent') }
     let response
-    try { response = await this.transport({ method, path, body, authorization }) }
-    catch { throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown') }
-    if (response.status < 200 || response.status >= 300) throw new BrokerEffectError(`GitHub broker request refused (${response.status}); no retry or permission expansion`, response.status >= 500 ? 'unknown' : 'not-sent')
-    return { status: response.status, data: this.redact(response.data) }
+    try { response = await this.rest.send(received => this.transport({ method, path, body, authorization, etag }, received)) }
+    catch (error) {
+      if (isGithubRateLimit(error)) throw new BrokerEffectError(error.message, 'not-sent')
+      throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown')
+    }
+    if (!(method === 'GET' && response.status === 304) && (response.status < 200 || response.status >= 300)) throw new BrokerEffectError(`GitHub broker request refused (${response.status}); no retry or permission expansion`, response.status >= 500 ? 'unknown' : 'not-sent')
+    return { ...response, data: this.redact(response.data) }
   }
   read = async (path: string, _projection = '.'): Promise<unknown> => {
     const { repository, permissions } = readerScope(path)
-    return (await this.call('reader', repository, permissions, 'GET', path)).data
+    return this.rest.get(path, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag))
   }
   snapshot = (url: string) => readActionSnapshot(url, this.read)
   async identity() {

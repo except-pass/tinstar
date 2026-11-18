@@ -1,7 +1,9 @@
 import { releasePull } from '../../shared/releases'
 import type { ReleasePull } from '../../shared/releases'
 import { readGithubScalars } from '../reconciliation/queuePulls'
+import { isGithubRateLimit } from '../pulls/restBudget'
 
+const mergedTtl = 24 * 60 * 60_000
 type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
 /** One GET per explicit PR, at most four concurrently per refresh. No repository crawl. */
 export class ReleasePullReader {
@@ -11,7 +13,8 @@ export class ReleasePullReader {
   constructor(private read = readGithubScalars, private now = Date.now) {}
   async get(urls: string[]) {
     const result = new Map<string, Observation>(), candidates = [...new Set(urls)]
-    for (const url of this.cache.keys()) if (!candidates.includes(url)) this.cache.delete(url)
+    const requested = new Set(candidates)
+    for (const [url, cached] of this.cache) if (!requested.has(url) && (cached.value.state !== 'merged' || cached.until <= this.now())) this.cache.delete(url)
     const start = this.cursor % Math.max(candidates.length, 1)
     const work: Promise<void>[] = []
     let budget = 4
@@ -39,12 +42,12 @@ export class ReleasePullReader {
       if (raw.merged && (typeof raw.merged_at !== 'string' || !Number.isFinite(Date.parse(raw.merged_at)) || !/^[a-f0-9]{40,64}$/.test(String(raw.merge_commit_sha)))) throw new Error('Missing effective merge identity')
       value = { base: typeof raw.base_ref === 'string' && raw.base_ref.length > 0 ? raw.base_ref : null, head: /^[a-f0-9]{40,64}$/.test(String(raw.head_sha)) ? String(raw.head_sha) : null, title: raw.title, state: raw.merged ? 'merged' : raw.state as 'open' | 'closed', mergedAt: raw.merged ? String(raw.merged_at) : null, mergeSha: raw.merged ? String(raw.merge_commit_sha) : null, observedAt: new Date(this.now()).toISOString(), freshness: 'fresh' }
     } catch (error) {
-      const readError = (error as { code?: unknown }).code === 'ENOENT' ? 'gh-axi is unavailable on the server PATH; configure the service PATH' : `GitHub read failed for ${url}; check service PATH, credentials and repository access`
+      const readError = isGithubRateLimit(error) ? error.message : (error as { code?: unknown }).code === 'ENOENT' ? 'gh-axi is unavailable on the server PATH; configure the service PATH' : `GitHub read failed for ${url}; check service PATH, credentials and repository access`
       const previous = this.cache.get(url)?.value
       value = previous ? { ...previous, freshness: 'stale', readError } : { title: null, state: 'unknown', mergedAt: null, mergeSha: null, observedAt: null, freshness: 'unknown', readError }
     }
-    // Merged identity is stable; a longer cache lets the bounded reader cover the whole queue.
-    this.cache.set(url, { until: this.now() + (value.state === 'merged' && value.freshness === 'fresh' ? 600_000 : 60_000), value })
+    const delay = value.state === 'merged' && value.freshness === 'fresh' ? mergedTtl : 60_000
+    this.cache.set(url, { until: this.now() + delay, value })
     return value
   }
 }
