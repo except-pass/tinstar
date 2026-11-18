@@ -205,9 +205,15 @@ test('worker reconciliation preserves provenance and keeps incarnations separate
   ok(!JSON.stringify(changed).includes('synthetic sensitive'))
   equal(journal.record(workerObservation([{ ...sample, gen: 'gen-2', state: 'unknown' }], 3)), 0)
   equal(journal.record(workerObservation([{ ...sample, gen: 'gen-2', state: 'working' }], 4)), 1)
-  equal(journal.events()[1].event_type, 'worker.current_state.observed')
-  equal(journal.events()[1].subject.id, entityId('worker', home.id, sample.id, 'gen-2'))
-  equal(journal.events()[1].change.before, undefined)
+  equal(journal.record(workerObservation([{ ...sample, gen: 'gen-3', state: 'working' }], 5)), 1)
+  const [, previouslyUnknown, newlySeen] = journal.events()
+  for (const event of [previouslyUnknown, newlySeen]) {
+    equal(event.event_type, 'worker.observed')
+    deepEqual(event.change, { after: { current_state: 'working' } })
+  }
+  equal(previouslyUnknown.subject.id, entityId('worker', home.id, sample.id, 'gen-2'))
+  equal(previouslyUnknown.evidence.confidence_basis, 'first verified state for a previously seen incarnation')
+  equal(newlySeen.evidence.confidence_basis, 'first seen after the initial inventory')
   throws(() => parseWorkers(encodeFleet(at(0), [sample]), home, at(1), at(2)), /outside this collection window/)
 })
 

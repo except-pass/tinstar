@@ -37,7 +37,8 @@ independently readable home. The paths and ID below are synthetic.
 `"mode": "fixture"` and use a separate journal. Keep the database and its SQLite
 sidecars in a private directory outside the checkout.
 The journal binds each home ID to its configured path on first registration.
-Use a distinct ID when adding a different home.
+Existing journals retain that binding. Start a new journal to use the same ID
+with a different path.
 
 ```sh
 events serve --interval 20
@@ -120,9 +121,9 @@ exclusion.
 A worker ID includes the exact task ID and generation. A worker links to a
 task when the same home has a matching active-backlog row in its latest
 successful observation. Worker inventory and current-state evidence have
-separate coverage. A verified new incarnation appears as `worker.observed`.
-If a previously seen incarnation gains its first verified state, the event is
-`worker.current_state.observed`. The historical status verb is retained as
+separate coverage. After initial attach, the first verified state of an
+incarnation appears as `worker.observed`. Its evidence records whether the
+incarnation was previously seen with unknown state. The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR references
 drop URL credentials, query strings and fragments.

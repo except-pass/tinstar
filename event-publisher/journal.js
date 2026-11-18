@@ -188,12 +188,8 @@ export class Journal {
         entry.sample.current_state, entry.sample.reason, evidence)
       if (previousSnapshot && fields && fields !== prior?.fields) {
         const before = prior?.fields ? JSON.parse(prior.fields) : null
-        const firstVerified = prior && !before
         const related = this.relationships(source, entry)
-        const changes = firstVerified
-          ? [{ event_type: 'worker.current_state.observed', change: { after: entry.fields } }]
-          : eventChanges(source.type, before, entry.fields)
-        for (const difference of changes) {
+        for (const difference of eventChanges(source.type, before, entry.fields)) {
           const envelope = {
             schema: 'event-publisher.event.v1',
             event_id: `event:${randomUUID()}`,
@@ -219,7 +215,7 @@ export class Journal {
               ...(prior?.evidence ? { previous_state_source: JSON.parse(prior.evidence).state_source } : {}),
               ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
               confidence_basis: before ? 'field differs across verified observations'
-                : firstVerified ? 'first verified state for a previously seen incarnation'
+                : prior ? 'first verified state for a previously seen incarnation'
                 : 'first seen after the initial inventory',
             },
           }
