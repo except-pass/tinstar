@@ -262,10 +262,7 @@ it('reads the configured board through NotionApi and persists replay results in 
   for (const invalid of [0, -1, 1.5, 2001]) expect(() => service.dryRun(invalid)).toThrow(RangeError)
   expect(notion).not.toHaveBeenCalled()
   expect(model).not.toHaveBeenCalled()
-  const running = service.dryRun(2000)
-  expect(() => service.dryRun(0)).toThrow(RangeError)
-  expect(service.dryRun(2000)).toBe(running)
-  const report = await running
+  const report = await service.dryRun(2000)
   expect(model).toHaveBeenCalledTimes(3)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({

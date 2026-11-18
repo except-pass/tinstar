@@ -78,7 +78,6 @@ export class ClassificationService {
   private readonly reader
   private readonly taxonomy
   private readonly ledger
-  private running?: Promise<DryRun>
 
   constructor(config: NonNullable<ReconciliationConfig['notion']>, api: NotionApi,
     leases: CardLeases, private jev = new OpenRouterJev(), notes: TaxonomyNotes = {}) {
@@ -91,11 +90,7 @@ export class ClassificationService {
 
   dryRun(historicalLimit: number, onProgress?: (done: number, total: number) => void) {
     if (!validHistoricalLimit(historicalLimit)) throw new RangeError(`Historical limit must be an integer from 1 to ${maxHistoricalLimit}`)
-    // Concurrent invocations in one backend share this read-only job.
-    if (!this.running) {
-      this.running = this.run(historicalLimit, onProgress).finally(() => { this.running = undefined })
-    }
-    return this.running
+    return this.run(historicalLimit, onProgress)
   }
 
   private async run(historicalLimit: number, onProgress?: (done: number, total: number) => void): Promise<DryRun> {
