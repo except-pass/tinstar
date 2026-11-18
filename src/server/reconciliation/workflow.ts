@@ -90,7 +90,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
-    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, answerer?: DeskAnswerer): ReturnType<RecordDeskAnswer> {
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, answerer: DeskAnswerer, canPost: boolean): ReturnType<RecordDeskAnswer> {
     const id = packet.card_id
     const actor = 'Tin Star Decision Desk'
     const marker = deskAnswerMarker + operation
@@ -99,10 +99,7 @@ export class WorkflowOperations {
       await this.content.recoverAppliedWrite(id)
       const { card, blocks } = await load()
       const recorded = blocks.find(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
-      const attribution = recorded
-        ? Object.values(deskAttribution).find(prefix => recorded.text.startsWith(`${prefix}: `)) ?? deskAttribution.other
-        : answerer && deskAttribution[answerer]
-      if (attribution === undefined) return { outcome: 'answer-missing' }
+      if (!recorded && !canPost) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
       if (!source.actionable || source.revision !== packet.source_revision) {
         return recorded
@@ -143,7 +140,7 @@ export class WorkflowOperations {
         }
         throw error
       }
-      const note = `${attribution}: ${option.label}\n\n${selection.answer}`
+      const note = `${deskAttribution[answerer]}: ${option.label}\n\n${selection.answer}`
       if (!recorded) await this.content.note(id, note, marker)
       let saved = card
       if (Object.keys(properties).length) {

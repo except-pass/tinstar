@@ -393,7 +393,8 @@ describe('prepared-card loop', () => {
     const card = page(1, { owner: 'Firstmate', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
       wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
     card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
-    const { sources, tool, writes, jobs } = await setup([card], true, 'rejected')
+    const { sources, connect, writes, jobs } = await setup([card], true, 'rejected')
+    const tool = await connect('Firstmate')
     const notify = vi.fn(async () => {})
     sources.workflow.onChange = notify
     await sources.preparation.replenish()
@@ -402,9 +403,10 @@ describe('prepared-card loop', () => {
     const answer = { operation_id: 'wait-answer', lease_token: held.lease_token, option_id: '1', answer: 'Proceed when deployed.' }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
     expect(card.comments).toHaveLength(1)
-    if (recovery === 'released refill') {
-      card.comments[0] = card.comments[0]!.replace('Will chose:', "reviewer@example.test chose on Will's behalf:")
-    }
+    const expectedNote = card.comments[0]!
+    expect(expectedNote).toMatch(/^Firstmate chose on Will's behalf: /)
+    const legacyNote = expectedNote.replace(/^Firstmate chose on Will's behalf:/, 'Will chose:')
+    card.comments[0] = legacyNote
     if (recovery !== 'retry') {
       expect(await sources.leases.ownerRelease(card.id, held.lease.generation, 'Release fixture lease')).toMatchObject({ outcome: 'released' })
       expect(await tool('claim_card', { operation_id: 'competing-wait', card_id: card.id })).not.toHaveProperty('packet')
@@ -417,8 +419,7 @@ describe('prepared-card loop', () => {
       'Waiting For': { rich_text: text(deploy) }, 'Waiting For Type': { select: { name: 'Event' } },
       'Waiting For ID': { rich_text: text('deploy') } })
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toHaveLength(1)
-    const expectedNote = card.comments[0]!.replace("reviewer@example.test chose on Will's behalf:", "Chosen on Will's behalf (not by Will):")
+    expect(card.comments).toEqual([legacyNote])
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: [expectedNote] }))
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
     expect(sources.leases.status(card.id)).toBeNull()
