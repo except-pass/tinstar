@@ -154,7 +154,6 @@ export class DecisionPreparation {
     const payload = {
       card_url: cardSourceUrl(source.card.id),
       source_question: redactSourceText(source.question),
-      options: [],
       source_revision: source.revision,
       publish: { tool: 'publish_prepared_packet', job_id: id },
     }

@@ -1,11 +1,11 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
 import type { RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
-import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
+import { decisionCardSource, deskAnswerMarker, liveDecisionCard } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { actionableWillCard, isWillWait, responsibleMate } from './claimPolicy'
+import { actionableWillCard, deferredDecisionCard, isWillWait, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -85,7 +85,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
-    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment = false): ReturnType<RecordDeskAnswer> {
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment: boolean, recoveryRevision?: string | null): ReturnType<RecordDeskAnswer> {
     const id = packet.card_id
     const actor = 'Tin Star Decision Desk'
     const marker = deskAnswerMarker + operation
@@ -96,7 +96,10 @@ export class WorkflowOperations {
       const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
       if (!recorded && requireComment) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
-      if (!source.actionable || source.revision !== packet.source_revision) {
+      const current = recorded && recoveryRevision
+        ? liveDecisionCard(card) && !deferredDecisionCard(card) && source.recoveryRevision === recoveryRevision
+        : source.actionable && source.revision === packet.source_revision
+      if (!current) {
         return recorded
           ? { outcome: 'recorded', message: 'The answer is on the card. Current card properties were preserved.' }
           : { outcome: 'packet-invalidated' }
@@ -106,9 +109,10 @@ export class WorkflowOperations {
       const remaining = entries.filter(entry => !isWillWait(entry))
       const primaryWill = isWillWait({ text: '', fields: wait })
       const status = remaining.length || (!primaryWill && (wait.type.trim() || wait.id.trim())) ? 'Waiting For' : 'Queued'
-      const desired: Record<string, unknown> = { Owner: 'Firstmate', Status: status }
+      const desired: Record<string, unknown> = {}
+      if (wait.status === 'Waiting For') Object.assign(desired, { Owner: 'Firstmate', Status: status })
       if (card.properties['Will action']) desired['Will action'] = []
-      if (remaining.length !== entries.length || primaryWill) {
+      if (wait.status === 'Waiting For' && (remaining.length !== entries.length || primaryWill)) {
         const successor = primaryWill ? remaining.map(typedWaitEntry).find(Boolean) : wait
         const identity = { type: successor?.type ?? '', id: successor?.id ?? '' }
         if (card.properties['Waiting For']) desired['Waiting For'] = remaining.map(entry => retainedWaitText(entry, identity)).join('\n')
@@ -119,7 +123,7 @@ export class WorkflowOperations {
       let properties: Record<string, unknown>
       try {
         const statuses = this.reader.declarations().data?.schema?.Status?.options ?? []
-        if (!card.source?.synthetic && statuses.length && !statuses.includes(status)) {
+        if ('Status' in desired && statuses.length && !statuses.includes(status)) {
           return { outcome: recorded ? 'save-unconfirmed' : 'not-saved', message: `Status: ${status} is unavailable on this board.` }
         }
         properties = Object.fromEntries(Object.keys(desired).filter(name => !matches(card, name))
@@ -150,7 +154,7 @@ export class WorkflowOperations {
       this.reader.confirm(saved)
       void this.changed({ before: card, card: saved, actor, operationId: operation,
         properties: Object.fromEntries(Object.keys(properties).map(name => [name, saved.properties[name]?.value])), notes: [`${note}\n${marker}`] }).catch(() => {})
-      return { outcome: 'recorded' }
+      return { outcome: 'recorded', settledRevision: decisionCardSource(saved, blocks).revision }
     }))
   }
 

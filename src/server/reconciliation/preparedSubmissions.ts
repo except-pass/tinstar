@@ -33,7 +33,7 @@ export interface PreparedSubmitResult {
   next?: PreparedClaimResult
 }
 export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, requireComment: boolean) =>
-  Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string }>
+  Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string; settledRevision?: string }>
 
 export class PreparedSubmissions {
   constructor(private reviews: PreparedReviews, private writeAnswer: RecordDeskAnswer, private now = Date.now) {}
@@ -59,9 +59,9 @@ export class PreparedSubmissions {
     if (removed.changes && outcome !== 'not-saved') this.invalidate(db, attempt.card, binding.packet_id)
   }
 
-  private finish(db: DatabaseSync, attempt: Attempt, binding: PreparedBinding) {
-    db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?) WHERE scope = ? AND caller = ? AND operation = ?")
-      .run(new Date(this.now()).toISOString(), this.scope, attempt.caller, attempt.operation)
+  private finish(db: DatabaseSync, attempt: Attempt, binding: PreparedBinding, settledRevision?: string) {
+    db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?), binding = CASE WHEN ? IS NULL THEN binding ELSE json_set(binding, '$.settled_revision', ?) END WHERE scope = ? AND caller = ? AND operation = ?")
+      .run(new Date(this.now()).toISOString(), settledRevision ?? null, settledRevision ?? null, this.scope, attempt.caller, attempt.operation)
     this.invalidate(db, attempt.card, binding.packet_id)
     this.reviews.finishInStorage(db, attempt.caller, binding, 'Decision answer recorded')
   }
@@ -83,7 +83,7 @@ export class PreparedSubmissions {
         if (!stored) continue
         const result = await this.apply(attempt, stored, token, true)
         await this.leases.writeStorage(db => {
-          if (result.outcome === 'recorded') this.finish(db, attempt, binding)
+          if (result.outcome === 'recorded') this.finish(db, attempt, binding, result.settledRevision)
           else this.discard(db, attempt, binding, result.outcome)
         })
       } catch {
@@ -124,9 +124,11 @@ export class PreparedSubmissions {
       if (!attempt || !stored) return outcome('packet-invalidated', 'The card changed. Release it to continue.')
       const binding = JSON.parse(attempt.binding) as PreparedBinding
       let message = 'Decision recorded on the card.'
+      let settledRevision: string | undefined
       if (attempt.state !== 'recorded') {
         const result = await this.apply(attempt, stored, token, !token)
         message = result.message ?? message
+        settledRevision = result.settledRevision
         if (result.outcome !== 'recorded') {
           await this.leases.writeStorage(db => this.discard(db, attempt, binding, result.outcome))
           if (result.outcome === 'answer-missing') throw new CardLeaseError(null)
@@ -134,7 +136,7 @@ export class PreparedSubmissions {
         }
       }
       const next = await this.leases.writeStorage(db => {
-        this.finish(db, attempt, binding)
+        this.finish(db, attempt, binding, settledRevision)
         const cardScope = this.reviews.claimScopeInStorage(db, caller, binding)
         return this.reviews.tryContinueInStorage(db, caller, holder, binding.session_id, `submit-next:${leaseHash(operation_id)}`, attempt.card, cardScope)
       })

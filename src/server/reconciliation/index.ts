@@ -1,11 +1,11 @@
 import { CardLeases, CardLeaseError } from './cardLeases'
-import { actionableWillCard, deferredDecisionCard } from './claimPolicy'
+import { deferredDecisionCard } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { DecisionPreparation, readClavisValue } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { decisionCardSource } from './decisionEvidence'
+import { actionableDecisionCard, decisionCardSource } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -104,7 +104,7 @@ export class ReconciliationSources {
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
     this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation, requireComment) =>
-      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), requireComment))
+      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), requireComment, this.decisionPackets.recoveryRevision(stored.id)))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
@@ -146,7 +146,7 @@ export class ReconciliationSources {
 
   private decisionQueue() {
     const observation = this.workReader.declarations()
-    return { cards: (observation.data?.cards ?? []).filter(actionableWillCard).sort((a, b) => a.id.localeCompare(b.id)),
+    return { cards: (observation.data?.cards ?? []).filter(actionableDecisionCard).sort((a, b) => a.id.localeCompare(b.id)),
       coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const }
   }
 
