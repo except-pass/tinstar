@@ -618,9 +618,11 @@ test('worker arrivals use the matching prior fleet window when PR links share th
   ])
   const worker = { id: task.id, gen: 'gen-1', state: 'working' }
   poll(1, [])
+  const previous = journal.sources().find(source => source.type === 'worker')
   poll(2, [worker])
   const [observed] = journal.events()
   equal(observed.event_type, 'worker.observed')
+  equal(observed.observation.previous_snapshot, previous.last_snapshot_id)
   deepEqual(observed.observation.observed_between, { after: at(1), by: at(2) })
 
   poll(3, [])
@@ -1131,6 +1133,26 @@ FLEET
   }
   equal(role.event_type, 'worker.inventory.left')
   equal(role.evidence.source_reference.task_id, 'role-worker')
+  equal(role.observation.previous_snapshot, health.last_snapshot_id)
+  equal(role.observation.observed_between.after, at(failures.length + 1))
+
+  const firstAppearance = { id: 'new-mate', kind: 'secondmate', remote: null }
+  equal(journal.record(await poll(failures.length + 5, fleet => {
+    loseGenerations(fleet)
+    fleet.tasks.push(firstAppearance)
+  })), 0)
+  equal(journal.record(await poll(failures.length + 6, fleet => {
+    addMates(fleet, 'working')
+    fleet.tasks = fleet.tasks.filter(task => task.id !== second.id)
+    fleet.tasks.find(task => task.id === 'role-worker').current_state.state = 'parked'
+    fleet.tasks.push({ ...fleet.tasks[0], ...firstAppearance })
+  })), 2)
+  const arrivals = journal.events().slice(-2)
+  deepEqual(arrivals.map(event => event.event_type), ['worker.observed', 'worker.inventory.entered'])
+  for (const arrival of arrivals) {
+    equal(Object.hasOwn(arrival.observation, 'previous_snapshot'), false)
+    deepEqual(arrival.observation.observed_between, { after: null, by: at(failures.length + 6) })
+  }
 })
 
 test('unchanged markdown uses the fast path and a new local date reevaluates the hold', async t => {

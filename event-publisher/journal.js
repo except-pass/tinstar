@@ -295,6 +295,14 @@ export class Journal {
     const previousSnapshot = previous.last_snapshot_id
     const { source, started_at, observed_at } = observation
     const isWorker = source.type === 'worker'
+    const previousCounts = isWorker ? JSON.parse(previous.counts) : null
+    const priorInventoryEstablishesAbsence = previous.last_attempt_at === previous.last_success_at &&
+      previousCounts?.secondmate_without_generation === 0 &&
+      (previous.health === 'ok' || (previous.health === 'partial' && previousCounts.current_state_unavailable > 0))
+    const priorWorkerAbsence = {
+      snapshot: priorInventoryEstablishesAbsence ? previousSnapshot : null,
+      startedAt: priorInventoryEstablishesAbsence ? previousWorkerStartedAt : null,
+    }
     const select = this.db.prepare('SELECT * FROM entities WHERE source_id = ? AND entity_id = ?')
     const save = this.db.prepare(`
       INSERT INTO entities (source_id, entity_id, last_seen_snapshot, snapshot_id, started_at, observed_at, fields, evidence)
@@ -325,6 +333,7 @@ export class Journal {
       const eventObservedAt = pullRequestChange ? observation.pullRequests.observed_at : observed_at
       const { evidence } = entry
       const previousEvidence = context.evidence
+      const { snapshot = previousSnapshot } = context
       const envelope = {
         schema: 'event-publisher.event.v1',
         event_id: `event:${randomUUID()}`,
@@ -338,7 +347,7 @@ export class Journal {
           read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
           coverage: source.coverage,
           batch_id: pullRequestChange || isWorker ? batchIds.fleet : batchIds.task,
-          previous_snapshot: context.snapshot ?? previousSnapshot,
+          ...(snapshot === null ? {} : { previous_snapshot: snapshot }),
           current_snapshot: snapshotId,
           observed_between: { after: context.startedAt ?? null, by: eventObservedAt },
         },
@@ -381,17 +390,16 @@ export class Journal {
         }
         if (isWorker && !prior) {
           const { current_state, reason } = entry.sample
-          context.startedAt = previousWorkerStartedAt
           publish(entry, {
             event_type: 'worker.observed',
             change: { after: { current_state, ...(reason ? { reason } : {}) } },
-          }, context)
+          }, { ...priorWorkerAbsence, basis: context.basis })
         }
         if (isWorker && prior && (sample?.snapshot_id ?? prior.last_seen_snapshot) !== previousSnapshot) {
           publish(entry, {
             event_type: 'worker.inventory.entered',
             change: { field: 'inventory_membership', before: 'absent', after: 'present' },
-          }, { startedAt: previousWorkerStartedAt, basis: 'present after absence from the accepted worker inventory' })
+          }, { ...priorWorkerAbsence, basis: 'present after absence from the accepted worker inventory' })
         }
         if ((!isWorker || prior) && fields && fields !== prior?.fields) {
           let previousFields = before
@@ -421,8 +429,9 @@ export class Journal {
         UPDATE worker_samples SET snapshot_id = ? WHERE source_id = ? AND entity_id = ?
       `)
       const departed = this.db.prepare(`
-        SELECT entity_id, evidence FROM worker_samples
-        WHERE source_id = ? AND snapshot_id = ? ORDER BY entity_id
+        SELECT w.entity_id, w.evidence, e.last_seen_snapshot
+        FROM worker_samples w JOIN entities e USING (source_id, entity_id)
+        WHERE w.source_id = ? AND w.snapshot_id = ? ORDER BY w.entity_id
       `).all(source.source_id, previousSnapshot)
       for (const sample of departed) {
         const evidence = JSON.parse(sample.evidence)
@@ -433,7 +442,8 @@ export class Journal {
         publish({ id: sample.entity_id, evidence: { ...evidence, state_source: null, historical_last_event: null } }, {
           event_type: 'worker.inventory.left',
           change: { field: 'inventory_membership', before: 'present', after: 'absent' },
-        }, { startedAt: evidence.started_at ?? previousWorkerStartedAt,
+        }, { snapshot: sample.last_seen_snapshot, startedAt: evidence.started_at ??
+            (sample.last_seen_snapshot === previousSnapshot ? previousWorkerStartedAt : null),
           evidence, basis: 'absent from the next accepted worker inventory' })
       }
     }
