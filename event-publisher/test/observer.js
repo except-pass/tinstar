@@ -425,6 +425,21 @@ test('worker reconciliation preserves provenance and keeps incarnations separate
   throws(() => parseWorkers(encodeFleet(at(0), [sample]), home, at(1), at(2)), /outside this collection window/)
 })
 
+test('verified active worker states advance the journal without trusting historical reports', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(workers)
+  const worker = { id: 'sample-worker', gen: 'gen-1', source: 'run-step' }
+  equal(journal.record(workerObservation([{ ...worker, state: 'parked' }], 0)), 0)
+  equal(journal.record(workerObservation([{ ...worker, state: 'running', source: 'status-log' }], 1)), 0)
+  equal(journal.record(workerObservation([{ ...worker, state: 'running' }], 2)), 1)
+  equal(journal.record(workerObservation([{ ...worker, state: 'executing' }], 3)), 1)
+  deepEqual(journal.events().map(event => event.change), [
+    { field: 'current_state', before: 'parked', after: 'running' },
+    { field: 'current_state', before: 'running', after: 'executing' },
+  ])
+})
+
 test('a worker with unknown state does not hold back another verified worker transition', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const journal = new Journal(path)
@@ -590,12 +605,22 @@ test('watch exits on SIGTERM while stdout is blocked', async t => {
   journal.close()
 
   const child = spawn(process.execPath, [cli, 'watch', '--db', path, '--after', '0', '--json'])
-  const done = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
+  const done = new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }))
+    child.once('error', error => resolve({ error: error.message }))
+  })
   t.after(() => {
     child.kill('SIGKILL')
     return done
   })
-  await new Promise(resolve => child.stdout.once('readable', resolve))
+  const startup = await Promise.race([
+    new Promise(resolve => child.stdout.once('readable', () => {
+      resolve(child.stdout.readableLength > 0 ? 'output' : 'stdout ended')
+    })),
+    done.then(result => `watch exited before output: ${JSON.stringify(result)}`),
+    sleep(3000, 'watch produced no output before the startup deadline', { ref: false }),
+  ])
+  equal(startup, 'output')
   await sleep(200)
   child.kill('SIGTERM')
   deepEqual(await Promise.race([done, sleep(1500, 'still blocked', { ref: false })]), { code: 0, signal: null })
