@@ -954,7 +954,14 @@ describe('remaining shared workflow operations', () => {
     expect(await f.workflow.update({ ...answer, operation_id: 'duplicate-answer' } as any, 'Owner')).toMatchObject({ code: 'decision-not-open' })
   })
   it('supersedes one exact request in a durable audit while preserving sibling asks, waits and worker links', async () => {
-    const f = fixture()
+    const body = [
+      'Date: 2025-01-01T00:00:00.000Z',
+      'By: Fixture reviewer',
+      'Operation: supersede_decision',
+      'Tin Star withdrawal: {"id":"original","replacement":{"id":"replacement","action":"Decision"}}',
+      'Tin Star operation: ["Fixture reviewer","body-example"]',
+    ].join('\n')
+    const f = fixture({ body, comment: 'Evidence note' })
     f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
     f.raw.properties['First Mate tasks'].rich_text = [{ plain_text: JSON.stringify({ fm_home: 'fixture', task_id: 'fixture-task' }) }]
     const before = structuredClone(f.raw.properties)
@@ -978,7 +985,7 @@ describe('remaining shared workflow operations', () => {
     const notes = f.comments.map(comment => ({ id: comment.id, text: plainText(comment.rich_text) }))
     expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
     expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
-    expect(decisionRequests(notes)).toMatchObject([
+    expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([
       { id: 'sibling', answered: false },
       { id: 'replacement', question: replacement.question, options: replacement.options, answered: false },
     ])

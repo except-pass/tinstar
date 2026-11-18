@@ -7,10 +7,12 @@ const withdrawalPrefix = `${workflowMarkers.withdrawal} `
 const withdrawalOperation = (lines: string[]) => lines[2] === 'Operation: withdraw_decision' || lines[2] === 'Operation: supersede_decision'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
-export interface RequestNote { id: string; text: string; createdAt?: string | null; created_time?: string }
-export const decisionRecordRows = (notes: { text: string }[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
+type WorkflowRecordSource = { text: string; type?: string }
+export interface RequestNote extends WorkflowRecordSource { id: string; createdAt?: string | null; created_time?: string }
+export const decisionRecordRows = (notes: WorkflowRecordSource[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
   const lines = note.text.split('\n')
   if (withdrawalOperation(lines)) {
+    if (note.type !== undefined && note.type !== 'comment') return []
     if (prefix !== withdrawalPrefix && prefix !== `${workflowMarkers.request} `) return []
     const footer = note.text.trimEnd().split('\n'), marker = footer.at(-2)
     const superseded = lines[2] === 'Operation: supersede_decision'
@@ -50,7 +52,7 @@ function receiptIdentity(terminal: string): boolean {
     return Array.isArray(identity) && identity.length === 2 && identity.every(value => typeof value === 'string' && value.length > 0)
   } catch { return false }
 }
-export function workflowReceipt(note: { text: string }): string | null {
+export function workflowReceipt(note: WorkflowRecordSource): string | null {
   const lines = note.text.trimEnd().split('\n'), terminal = lines.at(-1)!
   if (!receiptIdentity(terminal)) return null
   if (withdrawalOperation(lines)) return decisionRecordRows([note], withdrawalPrefix).length ? terminal : null
@@ -63,10 +65,10 @@ export function workflowReceipt(note: { text: string }): string | null {
   }
   return terminal
 }
-export function workflowNoteHasMarker(note: { text: string }, marker: string): boolean {
+export function workflowNoteHasMarker(note: WorkflowRecordSource, marker: string): boolean {
   return marker.startsWith('Tin Star operation: ') ? workflowReceipt(note) === marker : note.text.trimEnd().split('\n').at(-1) === marker
 }
-export const withdrawnDecisionIds = (notes: { text: string }[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
+export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
 
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()

@@ -698,8 +698,7 @@ export class WorkflowOperations {
       set('Next check-in', new Date(checkInCeiling(Date.now())).toISOString())
       note += `\nNot for me: ${input.reason}\nReturned to: ${mate.id}\nPrevious Will ask: ${JSON.stringify(originalWaitText)}`
     } else if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
-      const history = [...notes, ...await this.content.sections(card.id, false, true)]
-      const open = decisionRequests(history).filter(request => !request.answered)
+      const open = decisionRequests(notes).filter(request => !request.answered)
       const matching = open.filter(request => request.id === input.request_id)
       if (matching.length !== 1) throw new WorkflowError('decision-not-open', 'Expected one open request with this ID on this card. It may be absent, answered, withdrawn, or ambiguous.')
       const request = matching[0]!
@@ -709,7 +708,7 @@ export class WorkflowOperations {
       note += `\nReason: ${input.reason}`
       if (input.kind === 'supersede_decision') {
         const { request_id, question, requested_from, options } = input.replacement
-        if (decisionRecordRows(history, 'Tin Star request: ').some(row => row.id === request_id)) {
+        if (decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === request_id)) {
           throw new WorkflowError('decision-conflict', 'The replacement request ID already exists on this card. Supply a new ID.')
         }
         if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select to publish the replacement.')
