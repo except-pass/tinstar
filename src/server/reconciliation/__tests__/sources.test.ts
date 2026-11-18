@@ -709,7 +709,11 @@ it('routes a manual refresh through the existing scene endpoint', async () => {
     await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene`)
     await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene?refresh=1`)
     await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/scene?history=1`)
-    expect(read.mock.calls).toEqual([[false, {}], [true, {}], [false, { history: true }]])
+    expect(read.mock.calls).toEqual([
+      [false, { history: false }, undefined],
+      [true, { history: false }, undefined],
+      [false, { history: true }, undefined],
+    ])
   } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
 })
 
