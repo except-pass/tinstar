@@ -118,11 +118,15 @@ the next scheduled pass.
   task fields can still advance. If tasks-axi fails, the absence count appears
   alongside the original task failure reason.
   Accepted inventories report remote exclusions and unverifiable local
-  current states. An inventory with a missing local execution identity or
-  an unconfirmed producer verdict is rejected. A timed-out, stale, or
-  malformed read keeps prior snapshots. Within an accepted inventory, an unavailable worker
-  state is recorded as unknown with its source and reason. Each incarnation
-  keeps its last verified state and time for comparison with future reads.
+  current states. A local second mate with a valid task ID and a missing
+  generation makes worker coverage partial. The journal preserves prior
+  membership for that task ID and records verified observations for other
+  workers. Other invalid or missing local execution identities and unconfirmed
+  producer verdicts cause the inventory to be rejected. Rejected, timed-out,
+  stale, or malformed reads keep prior snapshots. Within an accepted inventory,
+  an unavailable worker state is recorded as unknown with its source and
+  reason. Each incarnation keeps its last verified state and time for
+  comparison with future reads.
 - On a home you have verified uses the wrapper's pinned
   `<home>/data/backlog.md` Markdown backend, you can set
   `"markdownFastPath": true`. Matching file fingerprints reuse that day's last
