@@ -20,7 +20,8 @@ export function overviewPullStatuses(workers: Worker[]): ReadonlyMap<string, Fin
 function waitBadge(worker: Execution, state: string, label: string, tone: string, observedAt: number, now: number, pull: FinishedPullStatus | undefined) {
   const event = worker.source.last_event
   const age = event.age_seconds
-  // Event age is relative to the snapshot that observed this task.
+  // The event reports snapshot-relative age. The badge estimates the start
+  // of the wait using the current state's observation time as its anchor.
   const began = state === event.state && typeof age === 'number' && age >= 0 ? observedAt - age * 1000 : NaN
   const duration = began > 0 && began <= now ? now - began : NaN
   const ageText = Number.isFinite(duration) ? ` · ${ageLabel(began, now).replace(/ ago$/, '')}` : ''

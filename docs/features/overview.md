@@ -392,19 +392,26 @@ Cards show known worker facts in their existing metadata, such as
 worker chips, relationships and pattern counts share the same observed, unfinished
 worker membership; finished tasks and declared links with no observed execution
 are excluded. Card worker facts read home unreachable for a stale or missing home.
-Worker badges use First Mate's current state and Tin Star's existing forge status.
-Merged and closed PR labels appear only when the existing cockpit lookup has a
-result for the linked PR and the request passes the PR Operations owner check.
-Reconciliation-only snapshots do not trigger a lookup.
-Known merged or closed PR outcomes take precedence over wait labels and retain
-the wait age when a matching event is available.
-Running requires fresh execution evidence from a native pane or run-step state,
-or a fresh open Codex turn when current crew state is unusable.
-A wait badge shows age when the latest structured event declared that same wait.
-A waiting worker shows **Stalled** when its own backlog row records task
-dependencies and explicitly lists no unresolved blockers. A parked worker shows
-**Waiting**. **Needs a decision** requires an explicit decision state. After 45
-minutes a wait with unavailable wake evidence shows **wake unknown**.
+Worker badges and the Inspector's worker status use First Mate's structured
+current state and [fleet PR status](firstmate-observer.md#fleet-pr-status).
+The latest report remains visible as activity.
+
+- **Running** requires a fresh, complete home observation, an endpoint with no
+  missing or dead signal, and fresh execution evidence from a native pane or
+  run-step state or an eligible open Codex turn.
+- A fresh blocked state shows **Blocked**, an explicit decision state shows
+  **Needs a decision**, and parked, paused and waiting states show **Waiting**.
+  A wait shows age when the latest structured event reports the same state and
+  provides a usable age. A wait shows **Stalled** when the worker's own backlog
+  row lists dependencies and explicitly lists zero unresolved blockers. A wait
+  older than 45 minutes with unavailable wake evidence adds **wake unknown**.
+  Stalled is amber on worker cards.
+- **PR merged** takes precedence over execution and wait labels. **PR closed**
+  takes precedence over wait labels and appears for other workers when current
+  execution is unconfirmed. Both PR labels retain a matching wait age.
+- Fresh done and failed states show **Done** and **Failed** when no PR label
+  applies. Without usable evidence the badge shows **Unknown**.
+
 No worker requires a supported per-card execution-gap finding and fresh source
 coverage. Fresh configured homes alone do not establish absence on an unknown
 home; when absence remains unknown, the card omits that fact.

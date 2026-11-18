@@ -27,6 +27,17 @@ The cockpit (`src/server/fleet/cockpit.ts`) reads each configured home through `
 
 The snapshot read, legacy attention derivation and inbox live in `src/server/fleet/` (`cockpit.ts`, `attention.ts`, `inbox.ts`).
 
+### Fleet PR status
+
+`GET /api/fleet` may include `workers[].prStatus` as `merged` or `closed`
+when the existing cockpit lookup has that result for the worker's linked PR.
+Reconciliation-only snapshots do not trigger a lookup. The field requires a
+request with no Origin or an allowed Origin and the
+[PR Operations owner check](workflow.md#slice-3-shared-operational-views-and-normal-use).
+A caller without an authorizer, such as the local Jira preview, receives the fleet payload with
+the field omitted. Fleet responses use `Cache-Control: no-store` and vary by
+`Tailscale-User-Login` and `Origin`.
+
 ### How the terminal view is safe
 
 `bin/tinstar-fm-view <fm-session> <window-id> <window-name>` is what each ttyd runs, once per browser connection. It checks the window is still that worker's, creates a private `tsview-<task>-<nonce>` tmux session holding only a **link** to the worker's window (not a session group), and attaches to it. So each viewer has its own current window, cannot reach any other first mate window, and nothing created in the view leaks into the first mate's session.
