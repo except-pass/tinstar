@@ -100,7 +100,6 @@ export class ReconciliationSources {
         return this.decisionQueue().cards
       },
       read: (card, background) => this.readDecisionCard(card, background),
-      statusOptions: () => this.workReader.declarations().data?.schema.Status?.options ?? [],
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
     this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation) =>

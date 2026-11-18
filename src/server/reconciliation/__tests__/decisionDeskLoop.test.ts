@@ -36,8 +36,8 @@ function page(n: number, { owner = 'Firstmate', status = 'In Progress', tag = ''
 const contents: PacketContents = {
   summary: 'A fixture packet prepared from a card without any request record.',
   options: [
-    { label: 'Approve the fixture', next: { owner: 'Firstmate', status: 'Queued' } },
-    { label: 'Keep reviewing', next: { status: 'Waiting For', waiting_for: 'Alice: Look at the evidence', waiting_for_type: 'Actor', waiting_for_id: 'Alice' } },
+    { label: 'Approve the fixture' },
+    { label: 'Keep reviewing' },
     { label: 'Record only' },
   ],
   recommendation: 'Approve the fixture.',
@@ -187,6 +187,30 @@ describe('prepared-card loop', () => {
     expect((await web('snapshot')).data.counts.ready).toBe(10)
   }, 20_000)
 
+  it('fills the ready deficit around outstanding jobs and releases each job after 15 minutes', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const cards = Array.from({ length: 11 }, (_, n) => page(n + 1, { owner: 'Will' }))
+    const { sources, tool, jobs } = await setup(cards, false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(10)
+    for (const { publish } of jobs.slice(0, 9)) {
+      expect(await tool(publish.tool, { job_id: publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
+    }
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(11)
+    expect(new Set(jobs.map(job => job.card_url)).size).toBe(11)
+    now += 14 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(11)
+    now += 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(12)
+    expect(jobs.slice(9, 11).map(job => job.card_url)).toContain(jobs[11]!.card_url)
+    expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
+  })
+
   it('names missing publication fields, keeps packets across time, and invalidates changed card content', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -213,27 +237,52 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
   })
 
-  it('uses the same scoped answer over the browser API and does not offer an answered Will-owned card again', async () => {
+  it('uses the fixed browser handoff and allows a new revision without replaying the old answer', async () => {
     const card = page(1, { owner: 'Will', tag: 'Decision' }), other = page(2, { tag: 'Decision' })
-    const { sources, jobs, tool, web } = await setup([card, other])
+    const { sources, jobs, tool, web } = await setup([card, other], false)
     await sources.preparation.replenish()
+    for (const { publish } of jobs) {
+      expect(await tool(publish.tool, { job_id: publish.job_id, packet: { ...contents,
+        options: contents.options.map(option => ({ ...option, next: { status: 'Done', owner: 'Will' } })),
+      } })).toMatchObject({ outcome: 'published' })
+    }
     expect(await web('snapshot', undefined, false)).toMatchObject({ ok: false, error: { code: 'FORBIDDEN' } })
     const session = await web('sessions', { operation_id: 'browser-open', label: 'Fixture review' })
     const review_session_token = session.data.review_session_token
     const held = await web('claim', { operation_id: 'scope', review_session_token, card_id: card.id })
     expect(held.data).toMatchObject({ outcome: 'claimed', packet: { packet: { card_id: card.id } } })
-    const decision = await web('submit', { operation_id: 'browser-answer', review_session_token, lease_token: held.data.lease_token,
-      option_id: '2', answer: 'Leave this with Alice.\nThank you.' })
-    expect(decision.data).toMatchObject({ outcome: 'recorded-empty', next: { outcome: 'no-prepared-decisions' } })
-    expect(card.properties).toMatchObject({ Owner: { select: { name: 'Will' } }, 'Will action': { multi_select: [] },
-      Status: { status: { name: 'Waiting For' } }, 'Waiting For': { rich_text: text('Alice: Look at the evidence') },
-      'Waiting For Type': { select: { name: 'Actor' } }, 'Waiting For ID': { rich_text: text('Alice') } })
+    expect(held.data.packet.packet.options[1]).toEqual({ id: '2', label: 'Keep reviewing' })
+    const answer = { operation_id: 'browser-answer', review_session_token, lease_token: held.data.lease_token,
+      option_id: '2', answer: 'Leave this with Alice.\nThank you.' }
+    expect((await web('submit', answer)).data).toMatchObject({ outcome: 'recorded-empty', next: { outcome: 'no-prepared-decisions' } })
+    expect(card.properties).toMatchObject({ Owner: { select: { name: 'Firstmate' } }, 'Will action': { multi_select: [] },
+      Status: { status: { name: 'Queued' } }, 'Waiting For': { rich_text: [] },
+      'Waiting For Type': { select: null }, 'Waiting For ID': { rich_text: [] } })
     expect(card.comments).toHaveLength(1)
     expect(card.comments[0]).toContain('Will chose: Keep reviewing\n\nLeave this with Alice.\nThank you.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
     expect(await tool('claim_card', { operation_id: 'answered', card_id: card.id })).toMatchObject({ outcome: 'no-prepared-decisions' })
     expect(await tool('claim_next_prepared_decision', { operation_id: 'other-chat' })).toMatchObject({ outcome: 'claimed', lease: { card_id: other.id } })
+
+    card.properties.Owner = select('Will')
+    card.properties.Status = { type: 'status', status: { name: 'In Progress' } }
+    card.properties['Will action'] = tags('Decision')
+    await sources.snapshot(true)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+
+    card.body.push('A second question requires a new decision.')
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(3)
+    expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
+    expect((await web('submit', answer)).data).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.comments).toHaveLength(1)
+    const reopened = await web('claim', { operation_id: 'reopened', review_session_token, card_id: card.id })
+    expect(reopened.data).toMatchObject({ outcome: 'claimed' })
+    expect((await web('submit', { ...answer, operation_id: 'second-answer', lease_token: reopened.data.lease_token })).data)
+      .toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.comments).toHaveLength(2)
   })
 
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {

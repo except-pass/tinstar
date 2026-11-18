@@ -76,7 +76,7 @@ export function DecisionDesk() {
             <legend>Choose an option</legend>
             {packet.options.map(option => <label key={option.id} className={`dd-option ${desk.option === option.id ? 'dd-selected' : ''}`}>
               <input type="radio" name="decision-option" checked={desk.option === option.id} onChange={() => desk.setOption(option.id)} />
-              <span>{option.label}{option.next && <small>{[option.next.status, option.next.owner, option.next.waiting_for].filter(Boolean).join(' · ')}</small>}</span>
+              <span>{option.label}</span>
             </label>)}
           </fieldset>
           <label className="dd-section">Your answer
@@ -104,9 +104,6 @@ export function DecisionDesk() {
             </div>}
         </div>}
       </main>
-      <aside className="dd-inspector" aria-label="Source links">
-        {packet && <><h2 className="dd-eyebrow">Source links</h2><SourceLinks packet={packet} /></>}
-      </aside>
     </div>}
   </section>
 }

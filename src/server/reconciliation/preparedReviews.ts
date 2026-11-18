@@ -82,7 +82,7 @@ export class PreparedReviews {
     return this.leases.readStorage(db => {
       const queue = this.queue()
       const jobs = new Map([...prep.jobs].reverse().map(job => [job.card, job]))
-      const rows = queue.cards.filter(card => !this.packets.answeredInStorage(db, card.id)).map(card => {
+      const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
@@ -116,7 +116,7 @@ export class PreparedReviews {
     if (!current) { if (this.leases.reviewReservedInStorage(db, binding.card)) throw new SourceWritePending(); return null }
     const token = this.leases.capability(session.caller, binding.claim_operation)
     const stored = this.packets.currentInStorage(db, binding.card)
-    const valid = stored?.id === binding.packet_id && !this.packets.answeredInStorage(db, binding.card)
+    const valid = stored?.id === binding.packet_id
     return { outcome: valid ? 'held' : 'packet-invalidated', lease: publicLease(row), lease_token: token,
       packet: valid ? workReadback(stored) : null, session_id: session.id }
   }
@@ -159,7 +159,7 @@ export class PreparedReviews {
             this.packets.currentInStorage(db, card_id)?.id === result.packet!.id) return result
         const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(result.session_id!) as unknown as PreparedBinding
         if (binding && !this.leases.reservedInStorage(db, card_id) &&
-            !db.prepare('SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ?').get(this.scope, card_id)) {
+            !this.packets.savingInStorage(db, card_id)) {
           this.finishInStorage(db, caller, binding, 'Card changed before review')
           return { outcome: 'packet-invalidated', packet: null, message: 'The card changed and will be prepared again if it still needs Will.' }
         }
@@ -286,7 +286,7 @@ export class PreparedReviews {
       const row = this.leases.rowInStorage(db, held.lease.card_id)!
       const binding = db.prepare('SELECT * FROM decision_review_bindings WHERE session_id = ?').get(session.id) as unknown as PreparedBinding
       const cardScope = this.claimScopeInStorage(db, caller, binding)
-      if (db.prepare("SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ? AND state = 'saving'").get(this.scope, row.card)) throw new SourceWritePending()
+      if (this.packets.savingInStorage(db, row.card)) throw new SourceWritePending()
       this.leases.releaseInStorage(db, row, parsed.reason, caller)
       db.prepare('DELETE FROM decision_review_bindings WHERE session_id = ?').run(session.id)
       const next = parsed.action !== 'release' ? this.tryContinueInStorage(db, caller, holder, session.id, `skip-next:${parsed.operation_id}`, row.card, cardScope) : null
@@ -303,7 +303,7 @@ export class PreparedReviews {
       const session = this.session(db, caller, { review_session_token: token })!
       const held = this.held(db, session)
       if (held) {
-        if (db.prepare("SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ? AND state = 'saving'").get(this.scope, held.lease.card_id)) throw new SourceWritePending()
+        if (this.packets.savingInStorage(db, held.lease.card_id)) throw new SourceWritePending()
         this.leases.releaseInStorage(db, this.leases.rowInStorage(db, held.lease.card_id)!, reason, caller)
       }
       db.prepare('UPDATE decision_review_sessions SET revoked = ? WHERE id = ?').run(this.now(), session.id)

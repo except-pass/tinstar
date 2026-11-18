@@ -28,13 +28,13 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
   const prose = (text: string) => text.replace(/\r\n?/g, '\n').trim()
   const body = blocks.filter(block => block.type !== 'comment').map(block => [block.type, prose(block.text)])
   const comments = blocks.filter(block => block.type === 'comment' && !checkInReport(block.text) &&
+    !block.text.split('\n').at(-1)?.startsWith(deskAnswerMarker) &&
     !block.text.includes('Tin Star prepared packet:') && !block.text.includes('Tin Star operation: ["waiting-on-main",'))
     .map(block => prose(block.text)).filter(Boolean).sort()
   return createHash('sha256').update(canonical([decisionProperties(card), body, comments])).digest('hex')
 }
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
-  const answered = blocks.some(block => block.type === 'comment' && block.text.split('\n').at(-1)?.startsWith(deskAnswerMarker))
   const title = String(value(card, 'Name') || 'Decision card')
   return {
     card,
@@ -42,8 +42,7 @@ export function decisionCardSource(card: WorkCard, blocks: CardContextRead['bloc
     question: String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
-    actionable: actionableWillCard(card) && !answered,
-    answered,
+    actionable: actionableWillCard(card),
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>

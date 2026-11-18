@@ -18,23 +18,34 @@ export class DecisionPackets {
   constructor(readonly leases: CardLeases, readonly scope: string, private now = Date.now) {}
 
   initialize() {
-    return this.initialized ??= this.leases.writeStorage(db => db.exec(`
-      CREATE TABLE IF NOT EXISTS decision_card_packets (
-        id TEXT PRIMARY KEY, scope TEXT NOT NULL, card TEXT NOT NULL, body TEXT NOT NULL,
-        published_at TEXT NOT NULL, property_revision TEXT NOT NULL, invalidated INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS decision_card_packet_lookup ON decision_card_packets(scope,card,invalidated);
-      CREATE TABLE IF NOT EXISTS decision_card_answers (
-        scope TEXT NOT NULL, card TEXT NOT NULL, caller TEXT NOT NULL, operation TEXT NOT NULL,
-        binding TEXT NOT NULL, input TEXT NOT NULL, state TEXT NOT NULL, confirmed_at TEXT,
-        PRIMARY KEY(scope,card), UNIQUE(scope,caller,operation)
-      );`))
+    return this.initialized ??= this.leases.writeStorage(db => {
+      const oldKey = db.prepare("SELECT 1 FROM pragma_table_info('decision_card_answers') WHERE name = 'card' AND pk > 0").get()
+      if (oldKey) db.exec('ALTER TABLE decision_card_answers RENAME TO decision_card_answers_previous')
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS decision_card_packets (
+          id TEXT PRIMARY KEY, scope TEXT NOT NULL, card TEXT NOT NULL, body TEXT NOT NULL,
+          published_at TEXT NOT NULL, property_revision TEXT NOT NULL, invalidated INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS decision_card_packet_lookup ON decision_card_packets(scope,card,invalidated);
+        CREATE TABLE IF NOT EXISTS decision_card_answers (
+          scope TEXT NOT NULL, card TEXT NOT NULL, caller TEXT NOT NULL, operation TEXT NOT NULL,
+          binding TEXT NOT NULL, input TEXT NOT NULL, state TEXT NOT NULL, confirmed_at TEXT,
+          PRIMARY KEY(scope,caller,operation)
+        );`)
+      if (oldKey) db.exec(`
+        INSERT INTO decision_card_answers SELECT * FROM decision_card_answers_previous;
+        DROP TABLE decision_card_answers_previous;`)
+      db.exec('CREATE INDEX IF NOT EXISTS decision_card_answer_lookup ON decision_card_answers(scope,card,state)')
+    })
   }
 
   readInStorage(db: DatabaseSync, id: string): StoredDecisionPacket | null {
     const row = db.prepare('SELECT id,body,published_at FROM decision_card_packets WHERE scope = ? AND id = ?')
       .get(this.scope, id) as PacketRow | undefined
-    return row ? { id: row.id, packet: JSON.parse(row.body) as DecisionPacket, published_at: row.published_at } : null
+    if (!row) return null
+    const packet = JSON.parse(row.body) as DecisionPacket
+    packet.options = packet.options.map(({ id, label }) => ({ id, label }))
+    return { id: row.id, packet, published_at: row.published_at }
   }
 
   currentInStorage(db: DatabaseSync, card: string, revision?: string): StoredDecisionPacket | null {
@@ -44,11 +55,16 @@ export class DecisionPackets {
     return revision === undefined || stored?.packet.source_revision === revision ? stored : null
   }
 
-  answeredInStorage(db: DatabaseSync, card: string) {
-    if (db.prepare("SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ? AND state = 'recorded'").get(this.scope, card)) return true
-    // Preserve completed answers from the former Desk across the upgrade.
-    return !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_desk_confirmed_answers'").get() &&
-      !!db.prepare('SELECT 1 FROM decision_desk_confirmed_answers WHERE scope = ? AND card = ? LIMIT 1').get(this.scope, card)
+  answeredInStorage(db: DatabaseSync, card: string, revision: string) {
+    return !!db.prepare(`
+      SELECT 1 FROM decision_card_answers AS answer
+      JOIN decision_card_packets AS packet ON packet.id = json_extract(answer.binding, '$.packet_id')
+      WHERE answer.scope = ? AND answer.card = ? AND answer.state = 'recorded'
+        AND json_extract(packet.body, '$.source_revision') = ?`).get(this.scope, card, revision)
+  }
+
+  savingInStorage(db: DatabaseSync, card: string) {
+    return !!db.prepare("SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ? AND state = 'saving'").get(this.scope, card)
   }
 
   claimableInStorage(db: DatabaseSync, card: WorkCard | string) {
@@ -56,13 +72,16 @@ export class DecisionPackets {
     const active = db.prepare('SELECT id,property_revision FROM decision_card_packets WHERE scope = ? AND card = ? AND invalidated = 0')
       .get(this.scope, id) as { id: string; property_revision: string } | undefined
     if (!active || typeof card !== 'string' && active.property_revision !== decisionPropertyRevision(card) ||
-      this.answeredInStorage(db, id) || db.prepare('SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ?').get(this.scope, id) ||
-      this.leases.activeInStorage(this.leases.rowInStorage(db, id)) || this.leases.reviewReservedInStorage(db, id)) return null
+      this.savingInStorage(db, id) || this.leases.activeInStorage(this.leases.rowInStorage(db, id)) ||
+      this.leases.reviewReservedInStorage(db, id)) return null
     return this.readInStorage(db, active.id)
   }
 
   publishInStorage(db: DatabaseSync, source: DecisionCardSource, contents: PacketContents): StoredDecisionPacket {
     const card_id = source.card.id
+    if (this.savingInStorage(db, card_id) || this.answeredInStorage(db, card_id, source.revision)) {
+      throw new DecisionDeskConflict('An answer is pending or recorded for this decision')
+    }
     const prior = this.currentInStorage(db, card_id, source.revision)
     if (prior) return prior
     this.invalidateInStorage(db, card_id)

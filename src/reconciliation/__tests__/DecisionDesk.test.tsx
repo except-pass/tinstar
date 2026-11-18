@@ -37,6 +37,9 @@ it('sends exact answer text and the option ID using the held card lease, then sh
   }))
   render(<DecisionDesk />)
   fireEvent.click(await screen.findByRole('radio', { name: /Authorize preview only/ }))
+  fireEvent.click(screen.getByText('Source links'))
+  expect(screen.getAllByRole('link', { name: /Test evidence/ })).toHaveLength(1)
+  expect(screen.getByRole('link', { name: /Open card/ }).getAttribute('href')).toContain(firstCard)
   const answer = '  Proceed only on the fixture.\nKeep the other card open.  '
   fireEvent.change(screen.getByRole('textbox', { name: 'Your answer' }), { target: { value: answer } })
   fireEvent.click(screen.getByRole('button', { name: 'Record answer & next' }))

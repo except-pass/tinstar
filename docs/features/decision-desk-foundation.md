@@ -3,8 +3,8 @@
 The Desk reviews prepared cards from the configured work board. A card needs Will
 when its owner is Will, it has a Will action tag, or it is Waiting For Will.
 Todo, Backlog, Archived, Done, and trashed cards stay out of preparation and
-review. An answer recorded by the Desk closes the card's decision even when the
-chosen option leaves Will as owner. The Decisions Workbench remains the view
+review. An answer retires the answered revision. A substantive change can open
+a new decision when the card needs Will again. The Decisions Workbench remains the view
 for browsing source requests and their evidence.
 
 ## Review and Preparation UI
@@ -13,14 +13,13 @@ Open **Decisions** and select **Decision Desk**. Review shows the summary,
 options, recommendation, and links for the card held by this browser. Select
 an option and enter the words to record. **Record answer & next** saves one card
 comment with the chosen option and the exact answer. Tin Star uses its own
-integration identity. It clears the Will action tag, applies the option's
-declared changes, and clears the waiting fields when the status moves out of
-Waiting For. **Skip** releases the card while keeping its packet available.
+integration identity. It clears the Will action tag and any wait for Will,
+assigns the card to Firstmate, and sets its status to Queued. **Skip** releases the card while keeping its packet available.
 
 Preparation shows how many cards are ready, being prepared, and leased.
-When the number of prepared, unleased cards falls below ten, Tin Star sends up
-to ten more cards to the preparer. Each card has one in-flight job. Unanswered
-webhook jobs can be retried. Published packets have no age limit. Editing the
+When fewer than ten cards are claimable, Tin Star sends enough eligible cards
+to fill the gap. Each card can have one outstanding job. Jobs expire after
+15 minutes without publication. Published packets have no age limit. Editing the
 decision properties, card text, or substantive discussion invalidates the packet.
 
 ## Webhook publication
@@ -37,7 +36,7 @@ four content fields.
   "packet": {
     "summary": "The proposed preview passed its smoke test.",
     "options": [
-      { "label": "Approve the preview", "next": { "owner": "Firstmate", "status": "Queued" } },
+      { "label": "Approve the preview" },
       { "label": "Record feedback only" }
     ],
     "recommendation": "Approve the preview so Firstmate can continue.",
@@ -46,9 +45,7 @@ four content fields.
 }
 ```
 
-Each option may name `next.status`, `next.owner`, `next.waiting_for`,
-`next.waiting_for_type`, or `next.waiting_for_id`. Omitted fields keep their
-current values, except when moving out of Waiting For clears the wait.
+Each option contains its label.
 Tin Star attaches the card ID and its revision, assigns option IDs, and reports
 missing packet fields by name. A repeated publish for the same job returns the
 same packet. Jobs and packets from the former request-based protocol are kept

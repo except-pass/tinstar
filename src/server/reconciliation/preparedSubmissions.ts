@@ -61,7 +61,7 @@ export class PreparedSubmissions {
         const stored = this.reviews.packets.currentInStorage(db, binding.card)
         if (!stored || stored.id !== binding.packet_id) return { attempt: null, stored: null }
         if (!stored.packet.options.some(option => option.id === option_id)) throw new DecisionDeskConflict('option_id is unavailable on the held packet')
-        if (db.prepare('SELECT 1 FROM decision_card_answers WHERE scope = ? AND card = ?').get(this.scope, binding.card)) throw new SourceWritePending()
+        if (this.reviews.packets.savingInStorage(db, binding.card)) throw new SourceWritePending()
         const attempt: Attempt = { card: binding.card, caller, operation: operation_id, binding: JSON.stringify(binding), input: selected, state: 'saving' }
         db.prepare('INSERT INTO decision_card_answers (scope,card,caller,operation,binding,input,state) VALUES (?,?,?,?,?,?,?)')
           .run(this.scope, attempt.card, caller, operation_id, attempt.binding, attempt.input, attempt.state)
@@ -79,16 +79,18 @@ export class PreparedSubmissions {
             if (result.outcome === 'packet-invalidated' && this.reviews.packets.currentInStorage(db, attempt.card)?.id === stored.id) {
               this.reviews.packets.invalidateInStorage(db, attempt.card)
             }
-            db.prepare("DELETE FROM decision_card_answers WHERE scope = ? AND card = ? AND operation = ? AND state = 'saving'")
-              .run(this.scope, attempt.card, operation_id)
+            db.prepare("DELETE FROM decision_card_answers WHERE scope = ? AND caller = ? AND operation = ? AND state = 'saving'")
+              .run(this.scope, caller, operation_id)
           })
           return outcome(result.outcome, result.message ?? 'The card changed. Release it to continue.')
         }
       }
       const next = await this.leases.writeStorage(db => {
-        db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?) WHERE scope = ? AND card = ? AND operation = ?")
-          .run(new Date(this.now()).toISOString(), this.scope, attempt.card, operation_id)
-        this.reviews.packets.invalidateInStorage(db, attempt.card)
+        db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?) WHERE scope = ? AND caller = ? AND operation = ?")
+          .run(new Date(this.now()).toISOString(), this.scope, caller, operation_id)
+        if (this.reviews.packets.currentInStorage(db, attempt.card)?.id === stored.id) {
+          this.reviews.packets.invalidateInStorage(db, attempt.card)
+        }
         this.reviews.finishInStorage(db, caller, binding, 'Decision answer recorded')
         const cardScope = this.reviews.claimScopeInStorage(db, caller, binding)
         return this.reviews.tryContinueInStorage(db, caller, holder, binding.session_id, `submit-next:${leaseHash(operation_id)}`, attempt.card, cardScope)

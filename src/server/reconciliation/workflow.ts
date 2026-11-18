@@ -5,7 +5,7 @@ import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { actionableWillCard, responsibleMate } from './claimPolicy'
+import { actionableWillCard, cardWaitsForWill, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -95,30 +95,23 @@ export class WorkflowOperations {
       const { card, blocks } = await load()
       const hasAnswer = (block: CardContextRead['blocks'][number]) => block.type === 'comment' && block.text.endsWith(`\n${marker}`)
       const recorded = blocks.some(hasAnswer)
-      const next = option.next
-      const desired: Record<string, unknown> = {}
+      const desired: Record<string, unknown> = { Owner: 'Firstmate', Status: 'Queued' }
       if (card.properties['Will action']) desired['Will action'] = []
-      if (next?.owner !== undefined) desired.Owner = next.owner
-      if (next?.status !== undefined) desired.Status = next.status
-      if (card.properties.Status?.value === 'Waiting For' && next?.status && next.status !== 'Waiting For') {
+      if (cardWaitsForWill(card)) {
         for (const name of ['Waiting For', 'Waiting For Type', 'Waiting For ID']) if (card.properties[name]) desired[name] = null
-      } else {
-        if (next?.waiting_for !== undefined) desired['Waiting For'] = next.waiting_for
-        if (next?.waiting_for_type !== undefined) desired['Waiting For Type'] = next.waiting_for_type
-        if (next?.waiting_for_id !== undefined) desired['Waiting For ID'] = next.waiting_for_id
       }
       const matches = (current: WorkCard, name: string) => this.matches(current, name, this.normalized(current, name, desired[name]))
       if (recorded && Object.keys(desired).every(name => matches(card, name))) return { outcome: 'recorded' }
-      const source = decisionCardSource(card, blocks.filter(block => !hasAnswer(block)))
+      const source = decisionCardSource(card, blocks)
       if (!source.actionable || source.revision !== packet.source_revision) {
-        if (recorded) return { outcome: 'recorded', message: 'The answer is on the card. The card changed independently before the option’s workflow changes could be applied.' }
+        if (recorded) return { outcome: 'recorded', message: 'The answer is on the card. The card changed independently before the handoff could be applied.' }
         return { outcome: 'packet-invalidated' }
       }
       let properties: Record<string, unknown>
       try {
         const statuses = this.reader.declarations().data?.schema?.Status?.options ?? []
-        if (!card.source?.synthetic && next?.status && statuses.length && !statuses.includes(next.status)) {
-          return { outcome: 'not-saved', message: `Status: ${next.status} is unavailable on this board.` }
+        if (!card.source?.synthetic && statuses.length && !statuses.includes('Queued')) {
+          return { outcome: 'not-saved', message: 'Status: Queued is unavailable on this board.' }
         }
         properties = Object.fromEntries(Object.keys(desired).filter(name => !matches(card, name))
           .map(name => [name, this.property(card, name, desired[name])]))
