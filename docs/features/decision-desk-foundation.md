@@ -33,7 +33,6 @@ invalidates the packet.
 
 To retract an open card-native request, use the [workflow withdrawal or
 supersession operation](workflow.md). Both invalidate the old prepared packet.
-The next packet uses the remaining open request questions when available.
 
 ### Answer attribution
 

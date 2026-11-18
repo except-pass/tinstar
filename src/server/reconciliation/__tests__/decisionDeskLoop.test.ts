@@ -174,7 +174,7 @@ describe('prepared-card loop', () => {
       expect(after.data.pending).toEqual([])
     } else {
       expect(jobs).toHaveLength(2)
-      expect(jobs[1]!.source_question).toBe(replacement.question)
+      expect(jobs[1]!.source_question).toBe('Throwaway card 1')
       expect(after.data.ready).toHaveLength(1)
       expect(after.data.ready[0].id).not.toBe(oldPacket)
     }
