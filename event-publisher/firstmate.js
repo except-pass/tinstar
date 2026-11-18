@@ -9,8 +9,8 @@ const run = promisify(execFile)
 const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,links,priority'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
 const workerStates = new Set(['working', 'parked', 'done', 'blocked', 'paused', 'failed'])
-const workerSources = new Set(['run-step', 'pane', 'status-log'])
-const reportedWorkerSources = new Set([...workerSources, 'none', 'remote-endpoint'])
+const workerSources = new Set(['run-step', 'pane'])
+const reportedWorkerSources = new Set([...workerSources, 'status-log', 'none', 'remote-endpoint'])
 const historicalStates = new Set([...workerStates, 'needs-decision', 'resolved'])
 const holdKinds = new Set(['captain', 'external', 'load', 'parked', 'future'])
 const dependencyTypes = new Set(['blocked-by', 'parent', 'discovered-from'])
@@ -144,6 +144,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
   if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== home.path ||
       !Array.isArray(data.tasks) || data.complete === false || data.truncated === true ||
+      data.main_inventory?.valid === false ||
       data.secondmate_current?.registry?.present !== false) {
     partial('fleet snapshot lacks verified local inventory')
   }
@@ -154,20 +155,16 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
 
   const entries = []
-  const counts = { remote_excluded: 0, missing_generation: 0, current_state_unavailable: 0 }
+  const counts = { remote_excluded: 0, current_state_unavailable: 0 }
   const ids = new Set()
   for (const row of data.tasks) {
     if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id) ||
-        !Object.hasOwn(row, 'remote') || !Object.hasOwn(row, 'spawn_gen')) {
+        !Object.hasOwn(row, 'remote') || typeof row.spawn_gen !== 'string' || !identifier.test(row.spawn_gen)) {
       partial('invalid or duplicate fleet worker row')
     }
     ids.add(row.id)
     if (row.remote !== null) {
       counts.remote_excluded++
-      continue
-    }
-    if (typeof row.spawn_gen !== 'string' || !identifier.test(row.spawn_gen)) {
-      counts.missing_generation++
       continue
     }
     const current = row.current_state
@@ -286,12 +283,11 @@ export async function observe(home, source, scratch, { now = () => new Date(), t
     })
     const observed_at = now().toISOString()
     const payload = parseWorkers(text, home, started_at, observed_at)
-    const { current_state_unavailable, missing_generation } = payload.counts
-    const incomplete = current_state_unavailable + missing_generation > 0
+    const incomplete = payload.counts.current_state_unavailable > 0
     return {
       source, started_at, observed_at, ...payload,
       health: incomplete ? 'partial' : 'ok',
-      reason: incomplete ? 'some local incarnations have no verified current state or identity' : null,
+      reason: incomplete ? 'some local incarnations have no verified current state' : null,
     }
   } catch (error) {
     if (!(error instanceof ObservationError)) throw error

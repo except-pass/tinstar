@@ -43,10 +43,11 @@ function taskObservation(rows, minute, source = tasks) {
 function workerObservation(samples, minute) {
   const generated = at(minute)
   const text = encodeFleet(generated, samples)
+  const payload = parseWorkers(text, home, generated, at(minute + 1))
   return {
     source: workers, started_at: generated, observed_at: at(minute + 1),
-    health: samples.some(sample => sample.state === 'unknown') ? 'partial' : 'ok',
-    ...parseWorkers(text, home, generated, at(minute + 1)),
+    health: payload.counts.current_state_unavailable > 0 ? 'partial' : 'ok',
+    ...payload,
   }
 }
 
@@ -157,7 +158,7 @@ test('worker reconciliation preserves provenance and keeps incarnations separate
   journal.record(taskObservation([row('sample-worker')], 0))
   const sample = { id: 'sample-worker', gen: 'gen-1', last: 'paused' }
   journal.record(workerObservation([{ ...sample, state: 'parked' }], 0))
-  equal(journal.record(workerObservation([{ ...sample, state: 'unknown' }], 1)), 0)
+  equal(journal.record(workerObservation([{ ...sample, state: 'done', source: 'status-log' }], 1)), 0)
   equal(journal.record(workerObservation([{ ...sample, state: 'working' }], 2)), 1)
   const [changed] = journal.events()
   deepEqual(changed.change, { field: 'current_state', before: 'parked', after: 'working' })
@@ -182,7 +183,7 @@ test('a worker with unknown state does not hold back another verified worker tra
   t.after(() => journal.close())
   journal.register(workers)
   const active = { id: 'active-example', gen: 'gen-1', state: 'working' }
-  const unknown = { id: 'unknown-example', gen: 'gen-2', state: 'unknown', source: 'run-step' }
+  const unknown = { id: 'unknown-example', gen: 'gen-2', state: 'failed', source: 'status-log' }
   equal(journal.record(workerObservation([active, unknown], 0)), 0)
   equal(journal.record(workerObservation([{ ...active, state: 'parked' }, unknown], 1)), 1)
   const [event] = journal.events()
@@ -201,10 +202,49 @@ test('a worker with unknown state does not hold back another verified worker tra
     equal(row.current_state, 'unknown')
     equal(row.snapshot_id, health.last_snapshot_id)
     equal(row.reason, 'current state could not be verified')
-    equal(JSON.parse(row.evidence).state_source, 'run-step')
+    equal(JSON.parse(row.evidence).state_source, 'status-log')
   } finally {
     reader.close()
   }
+})
+
+test('incomplete worker inventories do not advance the journal', async t => {
+  const path = await temp(t)
+  const fixture = { ...home, path, codeRoot: path }
+  await mkdir(join(path, 'bin'))
+  const command = join(path, 'bin', 'fm-fleet-snapshot.sh')
+  const journal = new Journal(join(path, 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(workers)
+  const first = { id: 'first-worker', gen: 'gen-1', state: 'working' }
+  const second = { id: 'second-worker', gen: 'gen-2', state: 'working' }
+  const poll = async (minute, change) => {
+    const fleet = JSON.parse(encodeFleet(at(minute), [first, second]))
+    fleet.fm_home = path
+    change(fleet)
+    await writeFile(command, `#!/bin/sh
+cat <<'FLEET'
+${JSON.stringify(fleet)}
+FLEET
+`, { mode: 0o700 })
+    return observe(fixture, workers, path, { now: () => new Date(at(minute)) })
+  }
+  const failures = [
+    fleet => { fleet.tasks[1].id = null },
+    fleet => { fleet.tasks[1].spawn_gen = null },
+    fleet => { Object.assign(fleet.tasks[1], { spawn_gen: null, remote: {} }) },
+    fleet => { fleet.main_inventory = { valid: false } },
+  ]
+  for (const [minute, fail] of failures.entries()) {
+    equal(journal.record(await poll(minute, fail)), 0)
+    const [health] = journal.sources()
+    equal(health.health, 'partial')
+    equal(health.last_generated_at, null)
+    equal(health.last_snapshot_id, null)
+  }
+  equal(journal.record(await poll(4, () => {})), 0)
+  equal(journal.record(await poll(5, fleet => { fleet.tasks[1].current_state.state = 'parked' })), 1)
+  equal(journal.events()[0].change.before, 'working')
 })
 
 test('unchanged markdown uses the fast path and a new local date reevaluates the hold', async t => {

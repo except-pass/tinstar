@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.13.0" },
-  "bin": { "events": "./events" },
   "scripts": { "test": "node --test" },
   "dependencies": { "@toon-format/toon": "^2.3.1" }
 }
