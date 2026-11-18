@@ -439,6 +439,37 @@ test('fleet backlog absence requires an explicit false presence marker', () => {
   }
 })
 
+test('confirmed backlog absence advances freshness without worker inventory', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  const pr = 'https://github.com/example/repo/pull/12'
+  journal.record(taskObservation([task], 0, tasks, [{ id: task.id, pr_url: pr }]))
+  const generation = at(2)
+  const text = JSON.stringify({
+    schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated: generation,
+    backlog: { present: false },
+  })
+  const observe = (priority, time) => journal.recordAttempts([
+    {
+      ...taskObservation([{ ...task, priority }], 2), started_at: time, observed_at: time,
+      pullRequests: fleetPullRequests(text, home.path, time, time),
+    },
+    { source: workers, started_at: time, observed_at: time, health: 'partial' },
+  ])
+  const taskStatus = () => journal.sources().find(source => source.type === 'task')
+  observe(1, generation)
+  deepEqual(taskStatus().counts, { pr_links_unobserved: 1, fleet_backlog_absent: 1 })
+  const repeated = new Date(Date.parse(generation) + 500).toISOString()
+  observe(2, repeated)
+  deepEqual(taskStatus().counts, { pr_links_unobserved: 1 })
+  equal(taskStatus().last_success_at, repeated)
+  deepEqual(journal.events().map(event => event.change.field), ['priority', 'priority'])
+  const stored = journal.db.prepare('SELECT fields FROM entities WHERE source_id = ?').get(tasks.source_id)
+  deepEqual(JSON.parse(stored.fields).pull_requests, [pr])
+})
+
 test('rejected and unavailable reads cannot lower the accepted window floor', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())

@@ -258,7 +258,7 @@ export class Journal {
           ...(pr_links_unobserved ? { pr_links_unobserved } : {}),
           ...(backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
         } : null
-        if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
+        if (fresh && (backlogAbsent || pr_links_unobserved < entries.length)) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
       written = this.recordEntries(observation, previous, snapshotId, batchIds)
