@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok, rejects, throws } from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -557,28 +557,47 @@ test('task readiness requires a valid kind', () => {
   equal(parseTasks(encode({ count: 1, tasks: [{ ...task, kind }] }), home.id)[0].fields.ready, true)
 })
 
-test('a PR coverage outage preserves task inventory acceptance across passes', async t => {
+test('the live list projection and real home backlog drive independent coverage', async t => {
   const path = await temp(t)
   const bin = join(path, 'bin')
+  const data = join(path, 'data')
+  const backlog = join(data, 'backlog.md')
   const calls = join(path, 'fleet-calls')
   const config = join(path, 'config.json')
   const db = join(path, 'journal.sqlite')
   await mkdir(bin)
+  await mkdir(data)
+  const pr = 'https://github.com/example/repo/pull/12'
+  await writeFile(backlog, JSON.stringify({ present: true, records: [{ id: 'sample-task', links: [pr] }] }))
   await writeFile(config, JSON.stringify({ homes: [{ ...home, path }] }))
   const writeTasks = state => writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
+[ "$#" -eq 3 ] && [ "$1" = list ] && [ "$2" = --fields ] || exit 2
+IFS=,
+for field in $3; do
+  case "$field" in
+    blocked|blocked_by|body|closed|created|delivery_state|deps|held|hold_kind|hold_reason|hold_until|links|priority) ;;
+    *) exit 2 ;;
+  esac
+done
 cat <<'TASKS'
-${encode({ count: 1, tasks: [row('sample-task', { state })] })}
+${encode({ count: 1, tasks: [row('sample-task', { state, kind: 'public-followup' })] })}
 TASKS
 `, { mode: 0o700 })
   await writeTasks('queued')
   await writeFile(join(bin, 'fm-fleet-snapshot.sh'), `#!/bin/sh
+[ "$1" = --json ] && [ -z "${'$'}{FM_DATA_OVERRIDE+x}" ] || exit 2
 echo call >> '${calls}'
-printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HOME\\",\\"generated\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\",\\"main_inventory\\":{\\"valid\\":true},\\"secondmate_current\\":{\\"registry\\":{\\"present\\":false}},\\"tasks\\":[]}"
+if [ -f "$FM_HOME/data/backlog.md" ]; then
+  backlog=$(cat "$FM_HOME/data/backlog.md")
+else
+  backlog='{"present":false,"records":[]}'
+fi
+printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_inventory":{"valid":true},"secondmate_current":{"registry":{"present":false}},"tasks":[],"backlog":%s}\\n' "$FM_HOME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backlog"
 `, { mode: 0o700 })
-  await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
+  await exec(cli, ['observe', '--config', config, '--db', db])
   equal(await readFile(calls, 'utf8'), 'call\n')
   const { stdout } = await exec(cli, ['sources', '--db', db])
-  match(stdout, /:task .*ok.*pr_links_unobserved=1/)
+  match(stdout, /:task .*ok/)
   match(stdout, /:worker .*ok/)
   const journal = new Journal(db, { readOnly: true })
   t.after(() => journal.close())
@@ -587,17 +606,21 @@ printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HO
   ok(taskBefore.last_snapshot_id)
 
   await writeTasks('done')
+  await unlink(backlog)
   await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
   equal(await readFile(calls, 'utf8'), 'call\ncall\n')
+  const missing = await exec(cli, ['sources', '--db', db])
+  match(missing.stdout, /:task .*partial.*fleet snapshot backlog absent/)
   const taskAfter = journal.sources().find(source => source.type === 'task')
-  equal(taskAfter.health, 'ok')
-  deepEqual(taskAfter.counts, { pr_links_unobserved: 1 })
+  equal(taskAfter.health, 'partial')
+  deepEqual(taskAfter.counts, { pr_links_unobserved: 1, fleet_backlog_absent: 1 })
   ok(taskAfter.last_snapshot_id !== taskBefore.last_snapshot_id)
   deepEqual(journal.events().map(event => event.change), [
     { field: 'state', before: 'queued', after: 'done' },
-    { field: 'ready', before: true, after: false },
   ])
   equal(journal.events()[0].evidence.pr_link_coverage, 'unobserved')
+  const stored = journal.db.prepare('SELECT fields FROM entities WHERE source_id = ?').get(taskAfter.source_id)
+  deepEqual(JSON.parse(stored.fields).pull_requests, [pr])
 })
 
 test('observe reports unavailable reads behind the accepted journal watermark', async t => {

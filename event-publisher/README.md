@@ -95,18 +95,21 @@ the next scheduled pass.
   `bin/fm-tasks-axi.sh` and read its backlog, and that `tasks-axi` is on PATH.
   With `FM_HOME` explicitly set to that home, check the wrapper's `--help` and
   `list --help`. The observer runs an unfiltered `list` and validates its
-  advertised count against the decoded rows.
+  advertised count against the decoded rows. The default list projection
+  supplies the task kind used to derive readiness.
 - For an unavailable worker source, check the local installation's
   `bin/fm-fleet-snapshot.sh --help` and the service account's access to its local
-  worker-state reads. The collector sets `FM_HOME` explicitly. It gives the
-  fleet command an empty temporary data root, which leaves the secondmate
-  registry and its cross-home collectors out of the observation. It disables
+  worker-state reads. The collector uses the configured `FM_HOME` and its
+  real data root. It skips fleet collection for a home with a secondmate
+  registry because the fleet reader would traverse other homes. It disables
   the fleet snapshot's remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
 - `events sources` reports the last attempt and the last accepted inventory.
   The task verdict reflects the tasks-axi inventory. The
   `pr_links_unobserved` count reports missing PR coverage even when no event
-  is emitted. Each home uses one fleet snapshot per pass for worker state
+  is emitted. An absent fleet backlog is displayed as partial task source
+  coverage while a complete tasks-axi read can still advance task fields.
+  Each home uses one fleet snapshot per pass for worker state
   and PR link coverage.
   Accepted inventories report remote exclusions and unverifiable local
   current states. An inventory with a missing local execution identity or

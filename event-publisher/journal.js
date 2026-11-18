@@ -253,12 +253,15 @@ export class Journal {
           pr.generated_at > (worker?.last_generated_at ?? '')
         const projected = withPullRequests(entries, fresh ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-        counts = pr_links_unobserved ? { pr_links_unobserved } : null
+        counts = pr_links_unobserved || pr?.backlogAbsent ? {
+          ...(pr_links_unobserved ? { pr_links_unobserved } : {}),
+          ...(pr?.backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
+        } : null
         if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
       written = this.recordEntries(observation, previous, snapshotId, batchIds)
-      complete = health === 'ok' && !counts?.pr_links_unobserved
+      complete = health === 'ok' && !counts?.pr_links_unobserved && !counts?.fleet_backlog_absent
     }
     if (acceptedFleet) {
       this.db.prepare(`
@@ -390,11 +393,14 @@ export class Journal {
         last_generated_at, health, reason
       FROM sources ORDER BY source_id
     `).all().map(row => {
-      const { description, counts, ...health } = row
+      const { description, counts: rawCounts, ...health } = row
       const { configured = 1, ...source } = JSON.parse(description)
-      return configured
-        ? { ...source, ...health, counts: counts ? JSON.parse(counts) : null }
-        : { ...source, ...health, health: 'deconfigured', reason: null, counts: null }
+      if (!configured) return { ...source, ...health, health: 'deconfigured', reason: null, counts: null }
+      const counts = rawCounts ? JSON.parse(rawCounts) : null
+      if (health.health === 'ok' && counts?.fleet_backlog_absent) {
+        return { ...source, ...health, health: 'partial', reason: 'fleet snapshot backlog absent', counts }
+      }
+      return { ...source, ...health, counts }
     })
   }
 

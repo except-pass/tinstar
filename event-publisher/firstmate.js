@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { decode } from '@toon-format/toon'
 
 const run = promisify(execFile)
-const taskFields = 'kind,blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,priority'
+const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,priority'
 export const fleetCommand = 'bin/fm-fleet-snapshot.sh --json'
 export const prLinkSource = 'fleet-snapshot backlog'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
@@ -84,10 +84,12 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
   }
   const generated = Date.parse(data?.generated)
   if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== homePath ||
-      data.complete === false || data.truncated === true || data.main_inventory?.valid !== true ||
+      data.complete === false || data.truncated === true ||
       !Number.isFinite(generated) || generated < Date.parse(startedAt) - 1000 ||
-      generated > Date.parse(observedAt) || data.backlog?.present !== true ||
-      !Array.isArray(data.backlog.records)) return null
+      generated > Date.parse(observedAt)) return null
+  const window = { links, generated_at: new Date(generated).toISOString(), started_at: startedAt, observed_at: observedAt }
+  if (data.backlog?.present !== true) return { ...window, backlogAbsent: true }
+  if (data.main_inventory?.valid !== true || !Array.isArray(data.backlog.records)) return null
 
   const ids = new Set()
   for (const row of data.backlog.records) {
@@ -110,7 +112,7 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     }
     links.set(row.id, canonicalPullRequests(urls))
   }
-  return { links, generated_at: new Date(generated).toISOString(), started_at: startedAt, observed_at: observedAt }
+  return window
 }
 
 export function withPullRequests(entries, links) {
@@ -354,8 +356,14 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
   let text
   let fleetObservedAt
   const workers = await attempt(worker, fleetStartedAt, async () => {
+    // This producer follows registry entries to other homes. This collector
+    // is scoped to the configured local home and its own backlog.
+    const registry = await lstat(join(home.path, 'data', 'secondmates.md')).catch(error => {
+      if (error.code === 'ENOENT') return null
+      throw new ObservationError('unavailable', 'could not verify the local fleet registry')
+    })
+    if (registry?.isFile() || registry?.isSymbolicLink()) partial('fleet snapshot would read registered secondmate homes')
     text = await runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
-      FM_DATA_OVERRIDE: scratch,
       FM_SNAPSHOT_CACHE_DIR: join(scratch, 'disabled', 'cache'),
       FM_CREW_STATE_NO_FORGE: '1',
     })
@@ -368,7 +376,7 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
       reason: incomplete ? 'some local incarnations have no verified current state' : null,
     }
   })
-  if (tasks.entries?.length) {
+  if (tasks.entries && text !== undefined) {
     tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
   }
   return [tasks, workers]
