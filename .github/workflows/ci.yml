@@ -20,6 +20,8 @@ jobs:
           node-version-file: '.nvmrc'
           cache: 'npm'
       - name: Install dependencies
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
       - name: Build PR server
         run: npm run build:server
@@ -75,6 +77,8 @@ jobs:
           PROFILE
 
       - name: Install dependencies
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
 
       - *ubuntu-mirror-fallback
@@ -140,6 +144,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ttyd tmux lsof
 
       - name: Install dependencies
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
 
       - *ubuntu-mirror-fallback
