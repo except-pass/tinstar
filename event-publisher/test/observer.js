@@ -239,6 +239,32 @@ test('an older PR projection with the same fleet generation cannot reverse links
   }
 })
 
+test('a rejected explicit PR URL leaves coverage unobserved', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const task = row('sample-task')
+  const pr = 'https://github.com/example/repo/pull/12'
+  journal.record(taskObservation([task], 0, tasks, [{ id: task.id, pr_url: pr }]))
+
+  for (const minute of [1, 2]) {
+    const record = { id: task.id, pr_url: `${pr}?diff=split`, ...(minute === 2 ? { links: [pr] } : {}) }
+    equal(journal.record(taskObservation([{ ...task, priority: minute }], minute, tasks, [record])), 1)
+    const event = journal.events().at(-1)
+    equal(event.change.field, 'priority')
+    equal(event.evidence.pr_link_coverage, 'unobserved')
+    equal(journal.sources()[0].last_generated_at, at(0))
+  }
+  const reader = new DatabaseSync(path, { readOnly: true })
+  try {
+    const { fields } = reader.prepare('SELECT fields FROM entities').get()
+    deepEqual(JSON.parse(fields).pull_requests, [pr])
+  } finally {
+    reader.close()
+  }
+})
+
 test('explicit null PR data witnesses removal while an absent projection preserves task timing', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())

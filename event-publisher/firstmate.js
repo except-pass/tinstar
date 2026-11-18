@@ -95,9 +95,11 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     ids.add(row.id)
     if (!Array.isArray(row.links) && (row.links !== undefined || !Object.hasOwn(row, 'pr_url'))) continue
     const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
-    if (urls.some(url => typeof url !== 'string' || !url.trim()) ||
-        row.pr_url != null && (typeof row.pr_url !== 'string' || !row.pr_url.trim())) continue
-    if (row.pr_url != null) urls.push(row.pr_url)
+    if (urls.some(url => typeof url !== 'string' || !url.trim())) continue
+    if (row.pr_url != null) {
+      if (!canonicalPullRequests([row.pr_url]).length) continue
+      urls.push(row.pr_url)
+    }
     links.set(row.id, canonicalPullRequests(urls))
   }
   return { links, generated_at: new Date(generated).toISOString(), observed_at: observedAt }
