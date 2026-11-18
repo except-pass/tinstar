@@ -249,7 +249,7 @@ async function main() {
     } else if (command === 'sources') {
       for (const source of journal.sources()) {
         console.log(values.json ? JSON.stringify(source)
-          : `${healthText(source)} · last attempt ${age(source.last_attempt_at)} · last complete ${age(source.last_success_at)}`)
+          : `${healthText(source)} · last attempt ${age(source.last_attempt_at)} · last accepted inventory ${age(source.last_success_at)}`)
       }
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))

@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS entities (
   evidence TEXT,
   PRIMARY KEY (source_id, entity_id)
 );
+CREATE TABLE IF NOT EXISTS worker_samples (
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  entity_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  current_state TEXT NOT NULL,
+  reason TEXT,
+  evidence TEXT NOT NULL,
+  PRIMARY KEY (source_id, entity_id)
+);
 CREATE TABLE IF NOT EXISTS events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -119,7 +129,7 @@ export class Journal {
             last_generated_at = COALESCE(?, last_generated_at)
           WHERE source_id = ?
         `).run(started_at, observed_at, health, reason, JSON.stringify(observation.counts ?? null),
-          snapshotId, health === 'ok' && snapshotId ? observed_at : null,
+          snapshotId, snapshotId ? observed_at : null,
           snapshotId ? generated_at ?? null : null, source.source_id)
       }
       this.db.exec('COMMIT')
@@ -145,13 +155,23 @@ export class Journal {
     const append = this.db.prepare(`
       INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)
     `)
+    const saveWorker = source.type === 'worker' ? this.db.prepare(`
+      INSERT INTO worker_samples (source_id, entity_id, snapshot_id, observed_at, current_state, reason, evidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, entity_id) DO UPDATE SET snapshot_id = excluded.snapshot_id,
+        observed_at = excluded.observed_at, current_state = excluded.current_state,
+        reason = excluded.reason, evidence = excluded.evidence
+    `) : null
     let count = 0
     const entries = [...observation.entries].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     for (const entry of entries) {
       const prior = select.get(source.source_id, entry.id)
       const fields = entry.fields ? JSON.stringify(entry.fields) : null
+      const evidence = JSON.stringify(entry.evidence)
       // Unavailable worker states count toward inventory coverage. Only a
       // verified per-incarnation observation may advance its state snapshot.
+      saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
+        entry.sample.current_state, entry.sample.reason, evidence)
       if (previousSnapshot && fields && fields !== prior?.fields) {
         const before = prior?.fields ? JSON.parse(prior.fields) : null
         const firstVerified = prior && !before
@@ -195,7 +215,7 @@ export class Journal {
       }
       save.run(source.source_id, entry.id, snapshotId, fields ? snapshotId : null,
         fields ? started_at : null, fields ? observed_at : null, fields,
-        fields ? JSON.stringify(entry.evidence) : null)
+        fields ? evidence : null)
     }
     // Missing entities are retained. Only an observed field value can change
     // their last known state and inventory absence never asserts deletion.

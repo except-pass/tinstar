@@ -10,6 +10,7 @@ const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed
 const taskStates = new Set(['queued', 'in_flight', 'done'])
 const workerStates = new Set(['working', 'parked', 'done', 'blocked', 'paused', 'failed'])
 const workerSources = new Set(['run-step', 'pane', 'status-log'])
+const reportedWorkerSources = new Set([...workerSources, 'none', 'remote-endpoint'])
 const historicalStates = new Set([...workerStates, 'needs-decision', 'resolved'])
 const holdKinds = new Set(['captain', 'external', 'load', 'parked', 'future'])
 const dependencyTypes = new Set(['blocked-by', 'parent', 'discovered-from'])
@@ -170,18 +171,23 @@ export function parseWorkers(text, home, startedAt, observedAt) {
       continue
     }
     const current = row.current_state
-    const valid = current?.freshness === 'fresh' && Date.parse(current.observed_at) === generated &&
+    const fresh = current?.freshness === 'fresh' && Date.parse(current.observed_at) === generated
+    const valid = fresh &&
       workerStates.has(current.state) && workerSources.has(current.source)
     if (!valid) counts.current_state_unavailable++
     const historicalState = row.paths?.status_log?.last_event?.state
     entries.push({
       id: entityId('worker', home.id, row.id, row.spawn_gen),
       fields: valid ? { current_state: current.state } : null,
+      sample: {
+        current_state: valid ? current.state : 'unknown',
+        reason: valid ? null : fresh ? 'current state could not be verified' : 'missing or stale current-state read',
+      },
       related: [], // A same-named worker alone does not prove a tasks-axi row exists.
       evidence: {
         task_id: row.id,
         spawn_gen: row.spawn_gen,
-        state_source: valid ? current.source : null,
+        state_source: reportedWorkerSources.has(current?.source) ? current.source : null,
         historical_last_event: historicalStates.has(historicalState) ? historicalState : null,
       },
     })

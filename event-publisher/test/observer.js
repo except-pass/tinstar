@@ -176,6 +176,37 @@ test('worker reconciliation preserves provenance and keeps incarnations separate
   throws(() => parseWorkers(encodeFleet(at(0), [sample]), home, at(1), at(2)), /outside this collection window/)
 })
 
+test('a worker with unknown state does not hold back another verified worker transition', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  journal.register(workers)
+  const active = { id: 'active-example', gen: 'gen-1', state: 'working' }
+  const unknown = { id: 'unknown-example', gen: 'gen-2', state: 'unknown', source: 'run-step' }
+  equal(journal.record(workerObservation([active, unknown], 0)), 0)
+  equal(journal.record(workerObservation([{ ...active, state: 'parked' }, unknown], 1)), 1)
+  const [event] = journal.events()
+  equal(event.subject.id, entityId('worker', home.id, active.id, active.gen))
+  deepEqual(event.change, { field: 'current_state', before: 'working', after: 'parked' })
+  equal(journal.record(workerObservation([{ ...active, state: 'parked' }, unknown], 2)), 0)
+  const [health] = journal.sources()
+  equal(health.last_success_at, at(3))
+  equal(health.health, 'partial')
+  equal(health.counts.current_state_unavailable, 1)
+
+  const reader = new DatabaseSync(path, { readOnly: true })
+  try {
+    const row = reader.prepare('SELECT * FROM worker_samples WHERE entity_id = ?')
+      .get(entityId('worker', home.id, unknown.id, unknown.gen))
+    equal(row.current_state, 'unknown')
+    equal(row.snapshot_id, health.last_snapshot_id)
+    equal(row.reason, 'current state could not be verified')
+    equal(JSON.parse(row.evidence).state_source, 'run-step')
+  } finally {
+    reader.close()
+  }
+})
+
 test('unchanged markdown uses the fast path and a new local date reevaluates the hold', async t => {
   const path = await temp(t)
   const fixture = { ...home, path, codeRoot: path, markdownFastPath: true }

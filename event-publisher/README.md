@@ -88,11 +88,12 @@ with status 1. The continuous collector retries on the next scheduled pass.
   registry and its cross-home collectors out of the observation. It disables
   the fleet snapshot's remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
-- `events sources` reports the last attempt and the last fully covered read.
-  A partial worker read counts remote exclusions, missing generations, and
+- `events sources` reports the last attempt and the last accepted inventory.
+  Worker coverage counts remote exclusions, missing generations, and
   unverifiable local current states. A timed-out, stale, or malformed read
-  keeps prior snapshots. Existing workers with unavailable current state keep
-  their last verified state and observation time.
+  keeps prior snapshots. Within an accepted inventory, an unavailable worker
+  state is recorded as unknown with its source and reason. Each incarnation
+  keeps its last verified state and time for comparison with future reads.
 - On a home you have verified uses the wrapper's pinned
   `<home>/data/backlog.md` Markdown backend, you can set
   `"markdownFastPath": true`. Matching file fingerprints reuse that day's last
