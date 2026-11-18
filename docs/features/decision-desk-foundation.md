@@ -461,8 +461,9 @@ first-pass screenshots and mobile/desktop visual state proof belong to P5/P6.
 
 The preparer is the Tinstar Decision Prep bot. Tin Star posts one job per eligible
 decision to the bot's webhook and does not run a Codex preparer. Each JSON body
-carries `request_id` (the Tin Star decision/request id), `card_url` (the Notion
-card URL), and `publish.tool` / `publish.job_id` for `publish_prepared_packet`.
+carries `card_id`, `card_url` (the Notion card URL), `request_id` (the Tin Star
+decision/request ID), `source_question`, `source_revision`, `options` (each
+with an `id` and `label`), and `publish.tool` / `publish.job_id`.
 The sender key is sent only as `Authorization: Bearer`. It is never logged,
 returned, or stored in the job row.
 
@@ -487,10 +488,21 @@ whose semantic dependencies still match is revalidated without dispatching it
 again; freshness expiry alone does not permit recomputation. There is no token
 limit or spend record.
 
-`publish_prepared_packet` stores the packet through the P1 store. The packet is
-Ready only when that validation passes. The tool does not answer, claim a lease,
-or change card status. A mismatched card, request, or revision is rejected
-before anything is stored.
+`publish_prepared_packet` accepts `job_id` from `publish.job_id` and a `packet`
+containing `recommended_option_id`, `background`, `risk`, and `references`.
+Choose a recommendation ID from the webhook options. Supply `risk.rating` as
+`Low`, `Medium`, or `High`, with `likelihood`, `explanation`, and `blast_radius`
+text. Each reference has a `label` and an HTTPS `url`. The job supplies the
+operation ID when omitted. Full packet submissions may still provide the other
+research fields. The title and question default to the exact request question.
+An omitted rollback assessment requires the stricter approval confirmation.
+The default follow-up records the reviewer's answer and queues the card for Firstmate.
+
+The server binds the packet and its dependencies to current evidence for the
+job. The callback returns `source changed; job superseded` if the request or
+revision has changed or the request has gained an answer. Invalid packet fields
+are returned as `issue_paths`. The packet becomes Ready only after source
+validation passes. Publishing leaves the source card and its lease untouched.
 
 The Desk also imports the bot's fallback card comments headed
 `Prepared packet (Tinstar Decision Prep)`. The `Decision:` line must identify

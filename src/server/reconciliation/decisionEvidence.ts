@@ -10,6 +10,7 @@ import { buildQueue } from './queue'
 import { deferredDecisionCard } from './claimPolicy'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
+export const decisionHistoryUnavailable = 'Complete cached decision history is unavailable'
 
 /** No I/O, refresh, reconciliation or source writes. A future preparer can
  * inspect already-observed evidence without accidentally repairing an answer.
@@ -24,7 +25,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   if (deferred) reasons.push('Source card is deferred or closed')
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
-  if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
+  if (!freshHistory) reasons.push(decisionHistoryUnavailable)
   const notes = history?.context.blocks ?? []
   const rows = decisionRequests(notes)
   if (freshHistory && !rows.length) reasons.push('No decision request is recorded in the complete card history')
