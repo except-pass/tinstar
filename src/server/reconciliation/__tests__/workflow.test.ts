@@ -1006,6 +1006,12 @@ describe('remaining shared workflow operations', () => {
       { id: 'sibling', answered: false },
       { id: 'replacement', requestedFrom: 'Will', question: replacement.question, options: replacement.options, answered: false },
     ])
+    const audit = notes.at(-1)!
+    const auditLines = audit.text.split('\n')
+    auditLines[auditLines.length - 2] = 'Tin Star withdrawal: {"id":"original","replacement":{"id":"replacement","action":"Decision"}}'
+    expect(decisionRequests([{ ...audit, text: auditLines.join('\n') }])).toMatchObject([
+      { id: 'replacement', requestedFrom: null, question: null },
+    ])
     expect(decisionRequests([{
       id: 'legacy',
       text: 'Tin Star request: {"id":"legacy","action":"Decision","requested_from":"Other","question":"Hidden"}\nRequested from: Will\nQuestion: Visible',
