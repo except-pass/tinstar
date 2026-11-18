@@ -207,17 +207,24 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
 
-Existing workflow write access grants withdrawal and supersession. The audit
-records the authenticated actor for both operations. Withdrawal removes the
-named request from active views and invalidates the
-prepared Desk packet. Supersession records the withdrawal and replacement in
-one history comment with the timestamp and reason.
+<a id="decision-retractions"></a>
+
+Existing workflow write access grants withdrawal and supersession. Both
+remove the named request from active views and retire the card's prepared
+Desk packet. The audit comment records the authenticated actor, timestamp,
+and reason. Supersession records the replacement in the same comment.
 Other requests, waits, worker links, owner, and status stay in place. A plain
 withdrawal removes an action tag introduced for the request once no other open
 request shares it. A separate Will action, owner assignment, or wait can still
-bring the card to the Desk. An absent, answered, or already withdrawn request
-cannot be withdrawn or superseded. Close a First Mate-bound request at its
-authoritative source. Retry an uncertain save with the same operation ID and
+bring the card to the Desk. These operations require the published request ID
+from a structured Notion card request. An absent, answered, or already
+withdrawn request cannot be withdrawn or superseded. Close a First Mate-bound
+request at its authoritative source.
+
+Tin Star recognizes these audits by the configured Notion integration's bot
+ID. Changing to an integration with a different bot ID can make earlier
+withdrawals and supersessions stop taking effect. If a save is uncertain or
+returns `packet-retirement-unconfirmed`, retry with the same operation ID and
 input.
 
 <a id="waiting-for-writes"></a>
@@ -732,9 +739,8 @@ proposals as disabled evidence until a complete refresh. Resolving a contextual
 Ask scopes the existing queue projection to that request so unrelated card
 histories do not delay the turn.
 
-The MCP catalog changes only by the additive optional `request_decision.proposal`
-field; refresh the connector once to discover it. No tools are added.
-`search_work` owner/status filters and `coverage.intentions` are unchanged.
+Refresh the MCP connector's tool catalog to discover the optional
+`request_decision.proposal` field.
 
 ## One-call approved implementation handoffs
 

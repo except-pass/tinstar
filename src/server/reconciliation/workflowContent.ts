@@ -22,7 +22,7 @@ export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'c
 export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
-export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string; type?: 'comment'; workflowWriter?: boolean }
+export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string; type?: string; workflowWriter?: boolean }
 const matchesNote = (note: WorkflowNote, text: unknown) => note.text === text &&
   (!isDecisionRetraction(note.text) || note.workflowWriter === true)
 export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`

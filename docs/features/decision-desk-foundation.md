@@ -31,13 +31,8 @@ Jobs expire after 15 minutes without publication. Published packets have no
 age limit. Editing decision properties, card text, or substantive discussion
 invalidates the packet.
 
-To retract an open card-native Notion request, use the [workflow withdrawal or
-supersession operation](workflow.md) with the card-native request ID. Both
-invalidate the old prepared packet. Cards prepared without a card-native
-request are outside the scope of these operations.
-Tin Star recognizes these audit comments by the configured Notion integration’s
-bot ID. Switching to an integration with a different bot ID can make earlier
-withdrawals and supersessions stop taking effect.
+For a prepared card with an open Notion request, see
+[withdrawing or superseding a decision request](workflow.md#decision-retractions).
 
 ### Answer attribution
 

@@ -205,6 +205,7 @@ describe('prepared-card loop', () => {
 
   it('omits redacted replacement IDs from answer choices while accepting the exact ID', async () => {
     const card = page(1)
+    card.properties.Area = select('Engineering')
     const { sources, tool } = await setup([card])
     const requestId = 'fixture-original'
     const replacementId = 'secret_rotation_approval_stage'
