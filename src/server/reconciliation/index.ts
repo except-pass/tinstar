@@ -96,14 +96,15 @@ export class ReconciliationSources {
     this.decisionPackets = new DecisionPackets(this.leases, decisionScope)
     this.preparation = new DecisionPreparation(this.decisionPackets, {
       refreshQueue: async () => {
+        await this.preparedSubmissions.completeSavedAnswers()
         await this.workReader.query({}, false, true)
         return this.decisionQueue().cards
       },
       read: (card, background) => this.readDecisionCard(card, background),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
-    this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation) =>
-      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false)))
+    this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation, requireComment) =>
+      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), requireComment))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
@@ -153,7 +154,7 @@ export class ReconciliationSources {
     const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
     const [card, context] = await Promise.all([
       this.workReader.card(id, true, background, signal),
-      this.context.decisionDetails(id, true, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch),
+      this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch),
     ])
     this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')

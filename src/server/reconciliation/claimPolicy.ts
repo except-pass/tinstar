@@ -1,3 +1,4 @@
+import { waitEntries, waitState } from '../../shared/waitingForPolicy'
 import type { WorkCard } from './workReader'
 import { parseWorkerLinks, FIRST_MATE_TASKS } from './workerLinks'
 import { decisionRequests, workflowReceipt } from '../../shared/workflowRequests'
@@ -14,10 +15,17 @@ export function actionableWillCard(card: WorkCard) {
   return !deferredDecisionCard(card) && (isWill(value(card, 'Owner')) || tagged || cardWaitsForWill(card))
 }
 
+export function isWillWait(entry: ReturnType<typeof waitEntries>[number]) {
+  const { type, id } = entry.fields
+  if ((!id?.trim() || entry.implicitIdentity) &&
+    /^\s*(?:will(?:\s*:|\s*$|\s+to\b)|waiting for will\b)/i.test(entry.text)) return true
+  return isWill(id) && (!type?.trim() || /^(actor|person)$/i.test(type.trim()))
+}
+
 export function cardWaitsForWill(card: WorkCard) {
-  if (String(value(card, 'Status')).trim().toLowerCase() !== 'waiting for') return false
-  return isWill(value(card, 'Waiting For ID')) ||
-    /^\s*(?:will(?:\s*:|\s*$|\s+to\b)|waiting for will\b)/im.test(String(value(card, 'Waiting For') ?? ''))
+  const wait = waitState(card)
+  return wait.status.trim().toLowerCase() === 'waiting for' &&
+    (isWillWait({ text: '', fields: wait }) || waitEntries(wait.waitingFor, wait).some(isWillWait))
 }
 
 export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown) {

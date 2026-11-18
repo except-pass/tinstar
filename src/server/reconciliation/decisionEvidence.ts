@@ -4,8 +4,6 @@ import type { CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { actionableWillCard } from './claimPolicy'
 
-export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
-
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
 const canonical = (value: unknown) => JSON.stringify(value, (_key, entry: unknown) =>

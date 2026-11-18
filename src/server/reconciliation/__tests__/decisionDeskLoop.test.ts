@@ -10,6 +10,7 @@ import { DecisionDeskApi } from '../decisionDeskApi'
 import { ReconciliationMcp } from '../mcp'
 import { NotionApi } from '../notionApi'
 import { deskAnswerMarker } from '../decisionEvidence'
+import { waitLine } from '../../../shared/waitingForPolicy'
 import type { PacketContents } from '../../../shared/decisionPacket'
 import type { PreparedClaimResult } from '../preparedReviews'
 
@@ -57,7 +58,7 @@ afterEach(async () => {
   for (const cleanup of fixtures.splice(0).reverse()) await cleanup()
 })
 
-async function setup(cards: ReturnType<typeof page>[], autoPublish = true, losePatch = false) {
+async function setup(cards: ReturnType<typeof page>[], autoPublish = true, firstPatchFailure?: 'lost' | 'rejected') {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-decision-loop-'))
   fixtures.push(() => rm(root, { recursive: true, force: true }))
   const published: unknown[] = []
@@ -103,8 +104,12 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, loseP
       has_more: false,
     })
     if (method === 'PATCH') {
+      if (firstPatchFailure === 'rejected') {
+        firstPatchFailure = undefined
+        return new Response(null, { status: 400 })
+      }
       for (const [name, change] of Object.entries(body.properties)) Object.assign(card.properties[name]!, change)
-      if (losePatch) { losePatch = false; throw new TypeError('Response lost after applying the properties') }
+      if (firstPatchFailure === 'lost') { firstPatchFailure = undefined; throw new TypeError('Response lost after applying the properties') }
     }
     return Response.json(card)
   }
@@ -285,11 +290,46 @@ describe('prepared-card loop', () => {
     expect(card.comments).toHaveLength(2)
   })
 
+  it.each(['retry', 'released retry', 'released refill'] as const)('completes a saved answer through %s and retains independent waits', async recovery => {
+    const will = waitLine({ type: 'Actor', id: 'Will', dependency: 'Approve the release',
+      unblocks_when: 'Will decides', follow_up_by: 'Firstmate' })
+    const deploy = waitLine({ type: 'Event', id: 'deploy', dependency: 'Production deployment',
+      unblocks_when: 'Deployment completes', follow_up_by: 'Firstmate' })
+    const willPrimary = recovery === 'retry'
+    const card = page(1, { status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
+      wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
+    card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
+    const { sources, tool, writes, jobs } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'wait-claim', card_id: card.id })
+    expect(held).toMatchObject({ outcome: 'claimed' })
+    const answer = { operation_id: 'wait-answer', lease_token: held.lease_token, option_id: '1', answer: 'Proceed when deployed.' }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
+    expect(card.comments).toHaveLength(1)
+    card.comments.push('Deployment is still pending.')
+    if (recovery !== 'retry') {
+      expect(await sources.leases.ownerRelease(card.id, held.lease.generation, 'Release fixture lease')).toMatchObject({ outcome: 'released' })
+      expect(await tool('claim_card', { operation_id: 'competing-wait', card_id: card.id })).not.toHaveProperty('packet')
+    }
+
+    if (recovery === 'released refill') await sources.preparation.replenish()
+    else expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.properties).toMatchObject({ Owner: { select: { name: 'Firstmate' } }, Status: { status: { name: 'Waiting For' } },
+      'Waiting For': { rich_text: text(deploy) }, 'Waiting For Type': { select: { name: 'Event' } },
+      'Waiting For ID': { rich_text: text('deploy') } })
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.comments).toHaveLength(2)
+    expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
+    expect(sources.leases.status(card.id)).toBeNull()
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+  })
+
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const card = page(1, { owner: 'Will', tag: 'Decision' })
-    const { sources, tool, writes } = await setup([card], true, true)
+    const { sources, tool, writes } = await setup([card], true, 'lost')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'before-interrupted-write', card_id: card.id })
     const answer = { operation_id: 'interrupted-write', lease_token: held.lease_token, option_id: '1', answer: 'Keep my answer exactly.' }

@@ -14,7 +14,8 @@ options, recommendation, and links for the card held by this browser. Select
 an option and enter the words to record. **Record answer & next** saves one card
 comment with the chosen option and the exact answer. Tin Star uses its own
 integration identity. It clears the Will action tag and any wait for Will,
-assigns the card to Firstmate, and sets its status to Queued. **Skip** releases the card while keeping its packet available.
+assigns the card to Firstmate, and keeps it Waiting For while an independent
+blocker remains. It sets the status to Queued when all waits are clear. **Skip** releases the card while keeping its packet available.
 
 Preparation shows how many cards are ready, being prepared, and leased.
 When fewer than ten cards are claimable, Tin Star sends enough eligible cards
@@ -75,5 +76,8 @@ writes renew the lease. Background preparation never owns a review lease.
 Source mutations acquire per-card reservations. An interrupted write is
 checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
-Other cards remain available while a write is resolved. Reminder reservations
+If the answer comment saves before the property handoff completes, retrying
+the same operation or the next refill pass completes the handoff. The answer
+is retained if the lease is released. Other cards remain available while a
+write is resolved. Reminder reservations
 can coexist with a review claim and continue to serialize actual source writes.

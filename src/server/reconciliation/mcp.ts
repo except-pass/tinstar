@@ -1,7 +1,7 @@
 import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
 import { DecisionDeskConflict } from './decisionPackets'
-import type { DecisionPreparation } from './decisionPrep'
+import { publishPacketInput, type DecisionPreparation } from './decisionPrep'
 import { CardLeases, CardLeaseError, leaseCaller, leaseFailure, withLeaseCaller } from './cardLeases'
 import { renderedObservationSchema, deliverySchema } from '../../shared/presentationObservation'
 import { organizedGroups } from '../../shared/floorOrganization'
@@ -143,7 +143,7 @@ export class ReconciliationMcp {
       try { return result(await this.readers.preparedSubmissions.recover(caller, input)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    catalog.registerTool('submit_prepared_decision', { description: 'Record Will’s exact answer and selected option on the held card, apply that option’s changes, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
+    catalog.registerTool('submit_prepared_decision', { description: 'Record Will’s exact answer and selected option on the held card, hand the card to Firstmate, clear Will’s tag and waits, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
       try { return result(await this.readers.preparedSubmissions.submit(caller, actor, input)) }
       catch (error) {
@@ -156,7 +156,7 @@ export class ReconciliationMcp {
     catalog.registerTool('claim_next_prepared_decision', nextClaim, claim)
     catalog.registerTool('claim_prepared_decision', exactClaim, claim)
     catalog.registerTool('release_prepared_decision', { description: 'Release the held card, or skip it and claim the next prepared card. ' + preparedInstructions, inputSchema: preparedReleaseInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.release(caller, actor, input))))
-    catalog.registerTool('publish_prepared_packet', { description: 'Publish research for the webhook job_id. Send packet with summary, options (each with label and optional next fields status, owner, waiting_for, waiting_for_type, waiting_for_id), recommendation and links (label and url). Tin Star adds the card, revision and option IDs. Missing fields are reported by name.', inputSchema: { job_id: z.string().uuid(), packet: z.unknown() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
+    catalog.registerTool('publish_prepared_packet', { description: 'Publish research for the webhook job_id. Send packet with summary, options (each with a label), recommendation and links (label and url). Tin Star adds the card, revision and option IDs. Missing fields are reported by name.', inputSchema: { job_id: z.string().uuid(), packet: z.unknown() }, discoverySchema: publishPacketInput, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
       if (!this.readers.preparation) return result({ outcome: 'unavailable', message: 'Preparation dispatcher unavailable' })
       try { return result(await this.readers.preparation.publish(input)) }
       catch (error) {

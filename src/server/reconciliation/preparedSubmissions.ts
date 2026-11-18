@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { DatabaseSync } from 'node:sqlite'
 import { leaseHash, CardLeaseError, SourceWritePending, withLeaseCaller } from './cardLeases'
 import { DecisionDeskConflict, type StoredDecisionPacket } from './decisionPackets'
 import { type PreparedBinding, type PreparedClaimResult, type PreparedReviews } from './preparedReviews'
@@ -31,13 +32,65 @@ export interface PreparedSubmitResult {
   message: string
   next?: PreparedClaimResult
 }
-export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string) =>
-  Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved'; message?: string }>
+export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, requireComment: boolean) =>
+  Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string }>
 
 export class PreparedSubmissions {
   constructor(private reviews: PreparedReviews, private writeAnswer: RecordDeskAnswer, private now = Date.now) {}
   private get leases() { return this.reviews.packets.leases }
   private get scope() { return this.reviews.scope }
+
+  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, requireComment: boolean) {
+    return withLeaseCaller(attempt.caller, token, () =>
+      this.writeAnswer(stored, JSON.parse(attempt.input) as Selection,
+        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, requireComment))
+  }
+
+  private invalidate(db: DatabaseSync, card: string, packetId: string) {
+    if (this.reviews.packets.currentInStorage(db, card)?.id === packetId) this.reviews.packets.invalidateInStorage(db, card)
+  }
+
+  private discard(db: DatabaseSync, attempt: Attempt, binding: PreparedBinding, outcome: string) {
+    if (outcome === 'save-unconfirmed') return
+    if (outcome === 'answer-missing' && (this.leases.rowInStorage(db, attempt.card)?.generation === binding.generation ||
+      this.leases.reservedInStorage(db, attempt.card))) return
+    const removed = db.prepare("DELETE FROM decision_card_answers WHERE scope = ? AND caller = ? AND operation = ? AND state = 'saving'")
+      .run(this.scope, attempt.caller, attempt.operation)
+    if (removed.changes && outcome !== 'not-saved') this.invalidate(db, attempt.card, binding.packet_id)
+  }
+
+  private finish(db: DatabaseSync, attempt: Attempt, binding: PreparedBinding) {
+    db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?) WHERE scope = ? AND caller = ? AND operation = ?")
+      .run(new Date(this.now()).toISOString(), this.scope, attempt.caller, attempt.operation)
+    this.invalidate(db, attempt.card, binding.packet_id)
+    this.reviews.finishInStorage(db, attempt.caller, binding, 'Decision answer recorded')
+  }
+
+  async completeSavedAnswers() {
+    await this.reviews.initialize()
+    const attempts = this.leases.readStorage(db => db.prepare("SELECT * FROM decision_card_answers WHERE scope = ? AND state = 'saving'")
+      .all(this.scope) as unknown as Attempt[])
+    for (const attempt of attempts) {
+      try {
+        const binding = JSON.parse(attempt.binding) as PreparedBinding
+        const { stored, token } = this.leases.readStorage(db => {
+          const lease = this.leases.rowInStorage(db, attempt.card)
+          const token = this.leases.activeInStorage(lease) && lease.generation === binding.generation &&
+            lease.caller === attempt.caller && lease.token_hash === binding.token_hash
+            ? this.leases.capability(attempt.caller, binding.claim_operation) : undefined
+          return { stored: this.reviews.packets.readInStorage(db, binding.packet_id), token }
+        })
+        if (!stored) continue
+        const result = await this.apply(attempt, stored, token, true)
+        await this.leases.writeStorage(db => {
+          if (result.outcome === 'recorded') this.finish(db, attempt, binding)
+          else this.discard(db, attempt, binding, result.outcome)
+        })
+      } catch {
+        continue
+      }
+    }
+  }
 
   async submit(caller: string, holder: string, input: unknown): Promise<PreparedSubmitResult> {
     const parsed = preparedSubmitInput.parse(input)
@@ -47,15 +100,16 @@ export class PreparedSubmissions {
     await this.reviews.initialize()
     try {
       const selected = JSON.stringify({ option_id, answer })
-      const { attempt, stored } = await this.leases.writeStorage(db => {
+      const { attempt, stored, token } = await this.leases.writeStorage(db => {
         const previous = db.prepare('SELECT * FROM decision_card_answers WHERE scope = ? AND caller = ? AND operation = ?')
           .get(this.scope, caller, operation_id) as unknown as Attempt | undefined
         if (previous) {
           const binding = JSON.parse(previous.binding) as PreparedBinding
           if (binding.token_hash !== leaseHash(parsed.lease_token)) throw new CardLeaseError(null)
           if (previous.input !== selected) throw new DecisionDeskConflict('operation_id already has a different answer')
-          if (previous.state !== 'recorded') this.leases.resumeDeskWriteInStorage(db, caller, binding)
-          return { attempt: previous, stored: this.reviews.packets.readInStorage(db, binding.packet_id)! }
+          const token = previous.state !== 'recorded' && this.leases.resumeDeskWriteInStorage(db, caller, binding)
+            ? parsed.lease_token : undefined
+          return { attempt: previous, stored: this.reviews.packets.readInStorage(db, binding.packet_id), token }
         }
         const { binding } = this.reviews.submissionInStorage(db, caller, parsed)
         const stored = this.reviews.packets.currentInStorage(db, binding.card)
@@ -65,33 +119,22 @@ export class PreparedSubmissions {
         const attempt: Attempt = { card: binding.card, caller, operation: operation_id, binding: JSON.stringify(binding), input: selected, state: 'saving' }
         db.prepare('INSERT INTO decision_card_answers (scope,card,caller,operation,binding,input,state) VALUES (?,?,?,?,?,?,?)')
           .run(this.scope, attempt.card, caller, operation_id, attempt.binding, attempt.input, attempt.state)
-        return { attempt, stored }
+        return { attempt, stored, token: parsed.lease_token }
       })
       if (!attempt || !stored) return outcome('packet-invalidated', 'The card changed. Release it to continue.')
       const binding = JSON.parse(attempt.binding) as PreparedBinding
       let message = 'Decision recorded on the card.'
       if (attempt.state !== 'recorded') {
-        const result = await withLeaseCaller(caller, parsed.lease_token,
-          () => this.writeAnswer(stored, { option_id, answer }, `desk:${leaseHash(JSON.stringify([caller, operation_id]))}`))
+        const result = await this.apply(attempt, stored, token, !token)
         message = result.message ?? message
         if (result.outcome !== 'recorded') {
-          await this.leases.writeStorage(db => {
-            if (result.outcome === 'packet-invalidated' && this.reviews.packets.currentInStorage(db, attempt.card)?.id === stored.id) {
-              this.reviews.packets.invalidateInStorage(db, attempt.card)
-            }
-            db.prepare("DELETE FROM decision_card_answers WHERE scope = ? AND caller = ? AND operation = ? AND state = 'saving'")
-              .run(this.scope, caller, operation_id)
-          })
+          await this.leases.writeStorage(db => this.discard(db, attempt, binding, result.outcome))
+          if (result.outcome === 'answer-missing') throw new CardLeaseError(null)
           return outcome(result.outcome, result.message ?? 'The card changed. Release it to continue.')
         }
       }
       const next = await this.leases.writeStorage(db => {
-        db.prepare("UPDATE decision_card_answers SET state = 'recorded', confirmed_at = coalesce(confirmed_at,?) WHERE scope = ? AND caller = ? AND operation = ?")
-          .run(new Date(this.now()).toISOString(), this.scope, caller, operation_id)
-        if (this.reviews.packets.currentInStorage(db, attempt.card)?.id === stored.id) {
-          this.reviews.packets.invalidateInStorage(db, attempt.card)
-        }
-        this.reviews.finishInStorage(db, caller, binding, 'Decision answer recorded')
+        this.finish(db, attempt, binding)
         const cardScope = this.reviews.claimScopeInStorage(db, caller, binding)
         return this.reviews.tryContinueInStorage(db, caller, holder, binding.session_id, `submit-next:${leaseHash(operation_id)}`, attempt.card, cardScope)
       })

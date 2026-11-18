@@ -288,17 +288,16 @@ export class CardLeases {
     }
     return { outcome: 'no-unclaimed-card', message: 'No currently unclaimed actionable card in the covered queue; inspect source coverage and waiting requests' }
   }
-  /** Only a recorded in-flight Desk submission may renew its own generation
-   * after expiry. A different lease or an owner release fences that retry. */
   resumeDeskWriteInStorage(db: SqliteDatabase, caller: string, binding: { card: string; generation: number; token_hash: string }) {
     const row = this.rowInStorage(db, binding.card)
     if (!row || row.generation !== binding.generation || row.token_hash !== binding.token_hash || row.caller !== caller) {
-      throw new CardLeaseError(null)
+      return false
     }
     if (!this.activeInStorage(row)) {
       db.prepare('UPDATE leases SET expires = ? WHERE card = ? AND generation = ?').run(this.now() + leaseDuration, row.card, row.generation)
       this.auditInStorage(db, row.card, 'desk-answer-resumed', { generation: row.generation })
     }
+    return true
   }
   async release(caller: string, token: string, reason: string) {
     return this.transaction(db => {
@@ -329,12 +328,6 @@ export class CardLeases {
       if (!this.activeInStorage(row)) return { outcome: 'already-released' }
       if (row.generation !== generation) return { outcome: 'claim-changed', message: 'Holder changed; reload before releasing' }
       this.releaseInStorage(db, row, reason, 'owner')
-      // An explicit owner release abandons a retained Desk attempt after the
-      // provider reservation is settled. Force a new source read before reuse.
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'decision_card_answers'").get()) {
-        const abandoned = db.prepare("DELETE FROM decision_card_answers WHERE card = ? AND state = 'saving'").run(card)
-        if (abandoned.changes) db.prepare('UPDATE decision_card_packets SET invalidated = 1 WHERE card = ?').run(card)
-      }
       return { outcome: 'released', card_id: card }
     })
   }
