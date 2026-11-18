@@ -364,7 +364,7 @@ describe('Waiting on main', () => {
     await publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     expect((await service.refresh(value)).items.some(row => row.key === 'approve-api')).toBe(false)
   })
-  it('recovers a note-leading correlation only for saved rows without a correlation field', async () => {
+  it('waits for refreshed child correlations when saved rows lack them', async () => {
     const directory = await root(), value = snapshot()
     const child = value.fleet[1]!.observation.data!
     const text = 'corr=8940e5f6dad58120 Card needs a publication route'
@@ -377,8 +377,13 @@ describe('Waiting on main', () => {
     const state = JSON.parse(await readFile(path, 'utf8'))
     delete state.rows.find((row: { item: MainWaitItem }) => row.item.key === 'legacy').corr
     await writeFile(path, JSON.stringify(state))
+    const asks = child.parent_asks!
     delete child.parent_asks
     await publishResolutions(value, [], { corrs: [{ corr: '8940e5f6dad58120', at: askAt + 1 }] })
+    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['legacy', 'explicit-null'])
+    child.parent_asks = { ...asks, items: asks.items.map(ask => ({
+      ...ask, corr: ask.key === 'legacy' ? '8940e5f6dad58120' : 'overriding-header',
+    })) }
     expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['explicit-null'])
   })
   it.each(['unknown', 'stale', 'failed', 'missing'] as const)('closes saved resolved asks with %s child coverage', async coverage => {

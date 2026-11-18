@@ -159,10 +159,8 @@ def parent_event(line):
         return None
     state, content = match.groups()
     metadata, separator, note = content.partition(':')
-    if state == 'done':
-        bare_header = re.sub(r'\[[^\]]*\]', ' ', metadata)
-        if any(not re.fullmatch(r'at=\d+', word) for word in bare_header.split()):
-            return None
+    if state == 'done' and (not separator or not re.fullmatch(r'\s*(?:\[[^\s=\[\]]+=[^\[\]]+\]\s*)+', metadata)):
+        return None
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']
     header_corrs = [value for field, value in fields if field == 'corr']
