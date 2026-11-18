@@ -225,11 +225,13 @@ test('a worker with unknown state does not hold back another verified worker tra
   const active = { id: 'active-example', gen: 'gen-1', state: 'working' }
   const unknown = { id: 'unknown-example', gen: 'gen-2', state: 'failed', source: 'status-log' }
   equal(journal.record(workerObservation([active, unknown], 0)), 0)
-  equal(journal.record(workerObservation([{ ...active, state: 'parked' }, unknown], 1)), 1)
+  equal(journal.record(workerObservation([{ ...active, state: 'idle', last: 'idle' }, unknown], 1)), 1)
   const [event] = journal.events()
   equal(event.subject.id, entityId('worker', home.id, active.id, active.gen))
-  deepEqual(event.change, { field: 'current_state', before: 'working', after: 'parked' })
-  equal(journal.record(workerObservation([{ ...active, state: 'parked' }, unknown], 2)), 0)
+  deepEqual(event.change, { field: 'current_state', before: 'working', after: 'idle' })
+  equal(event.evidence.historical_last_event, null)
+  equal(journal.record(workerObservation([active, unknown], 2)), 1)
+  deepEqual(journal.events()[1].change, { field: 'current_state', before: 'idle', after: 'working' })
   const [health] = journal.sources()
   equal(health.last_success_at, at(3))
   equal(health.health, 'partial')
@@ -345,7 +347,7 @@ test('watch resumes after a cursor and prints each event once across multiple pa
   journal.register(tasks)
   journal.record(taskObservation([row('sample-a')], 0))
   journal.record(taskObservation([row('sample-a', { priority: 1 })], 1))
-  const child = spawn(process.execPath, [cli, 'watch', '--db', path, '--after', '0', '--type', 'task'])
+  const child = spawn(process.execPath, [cli, 'watch', '--db', path, '--after', '0', '--type', 'task', '--source', 'firstmate'])
   const done = new Promise(resolve => child.once('exit', resolve))
   t.after(() => {
     child.kill('SIGTERM')
@@ -364,5 +366,9 @@ test('watch resumes after a cursor and prints each event once across multiple pa
   equal(stdout.split('#1 ').length, 2)
   child.kill('SIGTERM')
   equal(await done, 0)
+  for (const command of ['watch', 'replay']) {
+    await rejects(exec(process.execPath, [cli, command, '--db', path, '--source', tasks.source_id]),
+      error => error.code === 2 && /--source must be firstmate/.test(error.stderr))
+  }
   await rejects(exec(process.execPath, [cli, 'watch', '--db', path, '--after', '-1']), { code: 2 })
 })

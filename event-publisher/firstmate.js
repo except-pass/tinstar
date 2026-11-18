@@ -8,10 +8,10 @@ import { decode } from '@toon-format/toon'
 const run = promisify(execFile)
 const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,links,priority'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
-const workerStates = new Set(['working', 'parked', 'done', 'blocked', 'paused', 'failed'])
+const workerStates = new Set(['working', 'idle', 'parked', 'done', 'blocked', 'paused', 'failed'])
 const workerSources = new Set(['run-step', 'pane'])
 const reportedWorkerSources = new Set([...workerSources, 'status-log', 'none', 'remote-endpoint'])
-const historicalStates = new Set([...workerStates, 'needs-decision', 'resolved'])
+const historicalStates = new Set(['working', 'parked', 'done', 'blocked', 'paused', 'failed', 'needs-decision', 'resolved'])
 const holdKinds = new Set(['captain', 'external', 'load', 'parked', 'future'])
 const dependencyTypes = new Set(['blocked-by', 'parent', 'discovered-from'])
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._-]*$/

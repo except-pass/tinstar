@@ -259,18 +259,15 @@ export class Journal {
     return readEvent(this.db.prepare('SELECT sequence, envelope FROM events WHERE event_id = ?').get(id))
   }
 
-  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, latest = false, source, type, entity } = {}) {
-    if (source && source !== 'firstmate' && !source.startsWith('firstmate:home:')) return []
+  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, latest = false, type, entity } = {}) {
     const order = latest ? 'DESC' : 'ASC'
     const rows = this.db.prepare(`
       SELECT sequence, envelope FROM events
       WHERE sequence > ? AND sequence <= ?
-        AND (? IS NULL OR source_id = ?)
         AND (? IS NULL OR subject_type = ?)
         AND (? IS NULL OR subject_id = ?)
       ORDER BY sequence ${order} LIMIT ?
-    `).all(after, through, !source || source === 'firstmate' ? null : source, source ?? null,
-      type ?? null, type ?? null, entity ?? null, entity ?? null, limit)
+    `).all(after, through, type ?? null, type ?? null, entity ?? null, entity ?? null, limit)
     if (latest) rows.reverse()
     return rows.map(readEvent)
   }

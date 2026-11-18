@@ -16,7 +16,7 @@ const usage = `Usage
   events sources
 
 Filters
-  --source firstmate|<source-id>    --type task|worker    --entity <entity-id>
+  --source firstmate    --type task|worker    --entity <entity-id>
 All commands accept --db <path>. The default is ~/srv/event-publisher/journal.sqlite.
 EVENTS_DB and EVENTS_CONFIG provide defaults for --db and --config.`
 
@@ -126,11 +126,6 @@ async function collect(journal, homes, interval) {
   }
 }
 
-function sourceMatches(item, filters) {
-  return (!filters.source || filters.source === 'firstmate' || filters.source === item.source_id) &&
-    (!filters.type || filters.type === item.type)
-}
-
 function age(timestamp) {
   if (!timestamp) return 'never'
   const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(timestamp)) / 1000))
@@ -188,7 +183,7 @@ async function watch(journal, after, filters, json) {
   console.error(`Watching from sequence ${cursor}${after !== undefined ? ` (replay through ${attach})` : ''}`)
   try {
     while (!controller.signal.aborted) {
-      const statuses = new Map(journal.sources().filter(source => sourceMatches(source, filters))
+      const statuses = new Map(journal.sources().filter(source => !filters.type || filters.type === source.type)
         .map(source => [source.source_id, source]))
       for (const [id, source] of statuses) {
         const summary = healthText(source)
@@ -230,7 +225,8 @@ async function main() {
   if (values.after !== undefined && values.last !== undefined) throw new UsageError('choose --after or --last')
   const after = values.after === undefined ? undefined : integer(values.after, '--after', 0)
   const last = integer(values.last ?? '100', '--last', 1)
-  const filters = { source: values.source, type: values.type, entity: values.entity }
+  if (values.source !== undefined && values.source !== 'firstmate') throw new UsageError('--source must be firstmate')
+  const filters = { type: values.type, entity: values.entity }
   const path = resolve(values.db ?? process.env.EVENTS_DB ?? join(homedir(), 'srv/event-publisher/journal.sqlite'))
   const writer = command === 'serve' || command === 'observe'
   const interval = command === 'serve' ? integer(values.interval ?? '20', '--interval', 15) : null
