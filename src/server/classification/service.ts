@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { CardContextReader } from '../reconciliation/cardContext'
 import type { CardLeases } from '../reconciliation/cardLeases'
 import type { ReconciliationConfig } from '../reconciliation/config'
 import { notionObservation } from '../reconciliation/notion'
@@ -77,17 +76,15 @@ export class ClassificationService {
   private readonly board
   private readonly history
   private readonly reader
-  private readonly context
   private readonly taxonomy
   private readonly ledger
   private running?: Promise<DryRun>
 
   constructor(config: NonNullable<ReconciliationConfig['notion']>, api: NotionApi,
     leases: CardLeases, private jev = new OpenRouterJev(), notes: TaxonomyNotes = {}) {
-    this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch, true)
-    this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch, true)
+    this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch)
+    this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch)
     this.reader = new WorkReader(config, api)
-    this.context = new CardContextReader(config, api.parallelFetch)
     this.taxonomy = new ClassificationCatalog(notes)
     this.ledger = new ClassificationLedger(leases)
   }
@@ -128,7 +125,6 @@ export class ClassificationService {
     await this.ledger.start(batchId, board.dataSourceId, catalog.revision, entries)
     const source = {
       parent: async (id: string) => cards.get(id) ?? this.reader.card(id),
-      excerpt: (id: string) => this.context.classificationExcerpt(id),
     }
     const rows: DryRunRow[] = new Array(entries.length)
     const pendingUnassigned = entries.filter(entry => entry.cohort === 'unassigned').length
@@ -147,7 +143,7 @@ export class ClassificationService {
         onProgress?.(++done, entries.length)
       }
     }
-    // The same bounded group limits both model inference and queued context reads.
+    // The same bounded group limits both model inference and queued parent reads.
     await Promise.all(Array.from({ length: Math.min(4, entries.length) }, worker))
     return { batchId, catalog, activeCards: activeCards.length, historicalCards: labeled.length,
       rows, wallMs: Math.round(performance.now() - start), unassignedWallMs }

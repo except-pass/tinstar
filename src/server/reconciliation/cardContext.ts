@@ -189,12 +189,7 @@ export class CardContextReader {
     void value.finally(() => { entry.pending = false }).catch(() => {})
     return value
   }
-  /** Classification uses the opening brief only and never reads comments, files or nested blocks. */
-  async classificationExcerpt(id: string): Promise<CardContextRead> {
-    try { return await this.read(id, undefined, this.fetcher, true) }
-    catch { return { outcome: 'unavailable', blocks: [] } }
-  }
-  async read(id: string, historySignal?: AbortSignal, fetcher = this.fetcher, excerpt = false): Promise<CardContextRead> {
+  async read(id: string, historySignal?: AbortSignal, fetcher = this.fetcher): Promise<CardContextRead> {
     if (isJiraCard(id)) {
       if (!this.jira) return { outcome: 'unavailable', blocks: [], message: 'Jira is not configured' }
       return { outcome: 'available', observedAt: new Date().toISOString(), blocks: workReadback(await this.jira.sections(id, false, historySignal, fetcher === this.fetcher)),
@@ -211,7 +206,7 @@ export class CardContextReader {
       do {
         if (!historySignal && (++requests > 10 || depth > 4)) { partial = true; return }
         const url = new URL(`https://api.notion.com/v1/blocks/${blockId}/children`)
-        url.searchParams.set('page_size', excerpt ? '12' : '100')
+        url.searchParams.set('page_size', '100')
         if (cursor) url.searchParams.set('start_cursor', cursor)
         const res = await this.fetchContext(url, { signal, redirect: 'error', headers: { Authorization: `Bearer ${this.config!.token}`, 'Notion-Version': '2025-09-03' } }, !!historySignal, fetcher)
         if (!res.ok || !res.body) throw new CardHistoryReadError(`Card body history read failed (HTTP ${res.status}).`)
@@ -239,15 +234,14 @@ export class CardContextReader {
             blocks.push({ id: String(b.id), type,
               created_time: typeof b.created_time === 'string' ? b.created_time : undefined,
               last_edited_time: typeof b.last_edited_time === 'string' ? b.last_edited_time : undefined,
-              text: excerpt ? text : text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+              text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
           } else if (!historySignal) partial = true
-          if (!excerpt && b.has_children === true) {
+          if (b.has_children === true) {
             if (safeTypes.has(type) || type === 'table' || type === 'column_list' || type === 'column') await visit(String(b.id), depth + 1)
             else if (!historySignal) partial = true
           }
         }
         if (typeof body.has_more !== 'boolean') throw new Error('Invalid body pagination')
-        if (excerpt) return
         cursor = body.has_more === true && typeof body.next_cursor === 'string' ? body.next_cursor : undefined
         if (body.has_more === true && (!cursor || cursors.has(cursor))) throw new Error('Invalid body cursor')
         if (cursor) cursors.add(cursor)
@@ -257,6 +251,6 @@ export class CardContextReader {
       if (!historySignal) throw error
       return { outcome: 'partial', blocks, omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }
     }
-    return { outcome: partial && !excerpt ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: excerpt ? 'Opening top-level prose only.' : historySignal ? 'Paginated card text and page comments. Files and embeds are omitted.' : 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
+    return { outcome: partial ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: historySignal ? 'Paginated card text and page comments. Files and embeds are omitted.' : 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
   }
 }

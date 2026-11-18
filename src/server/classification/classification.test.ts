@@ -61,8 +61,6 @@ describe('classifier catalog and policy', () => {
   const catalog = cache.get(board)
   const source = {
     parent: async (value: string) => board.data.cards.find(card => card.id === value),
-    excerpt: async () => ({ outcome: 'available' as const, blocks: [{ id: 'brief', type: 'paragraph',
-      text: 'Close the gap in session rotation. api_key=privateabcdefghijkl A reference https://test.invalid/?pwd=private' }] }),
   }
 
   it('keeps select options, disambiguates same-name epics and excludes retired destinations', async () => {
@@ -75,7 +73,7 @@ describe('classifier catalog and policy', () => {
       outcome: 'candidate', destination: { initiative: 'Platform', epic: 'Operations' },
     })
     const request = ask.mock.calls[0]![0]
-    expect(JSON.stringify(request)).not.toMatch(/privateabcdefghijkl|test\.invalid|Rotate service sessions.+Update panel status/)
+    expect(JSON.stringify(request)).not.toMatch(/Rotate service sessions.+Update panel status/)
     expect(Object.keys(request.questions.destination!.criteria)).toContain('none')
     expect(request.state).not.toHaveProperty('catalog')
     expect(cache.get(board)).toBe(catalog)
@@ -94,16 +92,14 @@ describe('classifier catalog and policy', () => {
     expect(refreshed.revision).toBe(initial.revision)
   })
 
-  it('abstains for parent conflict, novelty and missing body, and skips an existing pair', async () => {
+  it('abstains for parent conflict, novelty and incomplete hierarchy, and skips an existing pair', async () => {
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
     const result = await classifyCard(notionCard(card(4, 'Rotation', null, null, 'In Progress', 2)), catalog, source, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ reason: 'parent-conflict' })
     const novel = await classifyCard(notionCard(card(4, 'Novel work', null, null)), catalog, source,
       async request => modelDecision(request, ...candidates(catalog, 'Platform'), { [`epic_fit_${candidates(catalog, 'Platform')[0]}`]: 0.02 }))
     expect(assess(novel, thresholds.conservative)).toMatchObject({ reason: 'epic-no-fit' })
-    const incomplete = await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
-      ...source, excerpt: async () => ({ outcome: 'unavailable', blocks: [] }),
-    }, ask)
+    const incomplete = await classifyCard(notionCard(card(4, 'Rotation', null, null, 'In Progress', 999)), catalog, source, ask)
     expect(assess(incomplete, thresholds.conservative)).toMatchObject({ reason: 'incomplete-source' })
     const done = await classifyCard(notionCard(card(4, 'Rotation', 'Platform', 'Operations')), catalog, source, ask)
     expect(done.state).toBe('skipped')
@@ -133,62 +129,30 @@ describe('classifier catalog and policy', () => {
     expect(ask).toHaveBeenCalledTimes(1)
   })
 
-  it('redacts complete quoted passwords from model titles, body and catalog examples', async () => {
-    const example = notionCard(card(1, `Example password='example secret fragments' confirmed`, 'Platform', 'Operations'))
+  it('sends only sanitized allowed card fields and taxonomy examples', async () => {
+    const example = notionCard(card(1, "Example password='example secret fragments' confirmed", 'Platform', 'Operations'))
     const privateCatalog = cache.get({ ...board, data: { ...board.data, cards: [example, ...board.data.cards.slice(1)] } })
+    const page = card(4, 'Rotation database_password="rotate this phrase" confirmed', 'Platform', null, 'In Progress', 1)
+    const work = notionCard({ ...page, properties: {
+      ...page.properties,
+      Area: prop('Platform api_key=privateabcdefghijkl A reference https://test.invalid'),
+      'Next Action': { type: 'rich_text', rich_text: [{ plain_text: 'Verify rotation. password=!?.,:;\nRetry with (Bearer opaqueCredential12345), [Basic dXNlcjpwYXNzd29yZA==], and sk-abcdefghijklmnop.' }] },
+    } })
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(privateCatalog, 'Platform')))
-    const result = await classifyCard(notionCard(card(4, 'Rotation database_password="rotate this phrase" confirmed', null, null)),
-      privateCatalog, {
-        ...source, excerpt: async () => ({ outcome: 'available', blocks: [{ id: 'brief', type: 'paragraph',
-          text: String.raw`Rotate password="body \"quoted\" secret fragments" today
-Initiative: password="another
-multiline fragment"` }, {
-          id: 'start', type: 'paragraph', text: 'Then password="first half',
-        }, {
-          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment more secret text\ncontinue token: Bearer opaqueCredential12345\nauthorization: Basic YWJjOmRlZg==\npassword=!?.,:;\nthen [Basic dXNlcjpwYXNzd29yZA==] and (Bearer opaqueCredential12345)',
-        }] }),
-      }, ask)
+    const result = await classifyCard(work, privateCatalog, { parent: async () => example }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
-    expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] [credential omitted] [credential omitted] then [[credential omitted]] and ([credential omitted])',
-    } })
+    expect(request.state).toEqual({
+      card: {
+        title: 'Rotation [credential omitted] confirmed',
+        area: 'Platform [credential omitted]',
+        next_action: 'Verify rotation. [credential omitted] Retry with ([credential omitted]), [[credential omitted]], and [credential omitted].',
+      },
+      ancestors: ['Example [credential omitted] confirmed'],
+    })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg|dXNlcjpwYXNzd29yZA|more secret text/)
-    expect(JSON.stringify(request)).not.toContain('!?.,:;')
-  })
-
-  it('redacts bare and quoted credential values that begin on continuation lines', async () => {
-    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
-    const texts = [
-      'Rotate service sessions. password:  \n\n  rotation phrase for production\nKeep the rollout scoped.',
-      'Legacy NODEKEY=\r\n  "legacy continuation value" Retain this prose.',
-      'Then password:',
-      '"quoted continuation',
-      'secret ending" Verify session rotation.',
-    ]
-    await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
-      ...source, excerpt: async () => ({ outcome: 'available', blocks: texts.map((text, index) => ({
-        id: String(index), type: 'paragraph', text,
-      })) }),
-    }, ask)
-    expect(ask.mock.calls[0]![0].state).toMatchObject({ card: {
-      brief: 'Rotate service sessions. [credential omitted] Keep the rollout scoped. Legacy [credential omitted] Retain this prose. Then [credential omitted] Verify session rotation.',
-    } })
-  })
-
-  it('keeps at most five body snippets and clips each to 450 characters', async () => {
-    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
-    const texts = ['a'.repeat(450) + ' omitted tail', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh']
-    await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
-      ...source, excerpt: async () => ({ outcome: 'available', blocks: texts.map((text, index) => ({
-        id: String(index), type: 'paragraph', text,
-      })) }),
-    }, ask)
-    expect(ask.mock.calls[0]![0].state).toMatchObject({ card: {
-      brief: ['a'.repeat(450), ...texts.slice(1, 5)].join(' '),
-    } })
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|rotate this phrase|privateabcdefghijkl|opaqueCredential12345|dXNlcjpwYXNzd29yZA/)
   })
 
   it('supports an explicitly allowed initiative-only destination', async () => {
@@ -253,7 +217,12 @@ describe('OpenRouter Decisions transport', () => {
 it('reads the configured board through NotionApi and persists replay results in the shared database', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-classifier-test-'))
   roots.push(root)
-  const unassigned = card(4, 'Fix basic authentication', null, null)
+  const page = card(4, 'Fix basic authentication', null, null)
+  const unassigned = { ...page, properties: {
+    ...page.properties,
+    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Private brief text' }] },
+    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Private description text' }] },
+  } }
   const historical = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
   const notion = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input))
@@ -270,9 +239,8 @@ it('reads the configured board through NotionApi and persists replay results in 
   const model = vi.fn<typeof fetch>(async (_url, init) => {
     const request = JSON.parse(String(init?.body)) as DecisionRequest
     expect(JSON.stringify(request.state)).not.toContain('Prior panel update / Operations')
-    expect(request.state).toMatchObject({
-      existing_classification: { initiative: '', epic: '' },
-      card: { brief: 'Work on panel status support [credential omitted] Then [credential omitted].' },
+    expect(request.state).toEqual({
+      card: { title: expect.any(String), area: 'Platform', next_action: '' }, ancestors: [],
     })
     return Response.json(modelDecision(request, 'initiative_1', 'pair_1'))
   })
@@ -291,10 +259,10 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Fix basic authentication' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toContain('opaqueTail')
+  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|Private brief text|Private description text/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
-  expect(api.diagnostics.requests['GET blocks']).toBe(3)
+  expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)
   const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT state, result, write_receipt FROM classification_jobs').all())
   expect(rows).toHaveLength(3)
   expect(rows.every(row => row.state === 'examined' && row.write_receipt === null)).toBe(true)

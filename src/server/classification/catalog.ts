@@ -46,7 +46,7 @@ const knownCredential = new RegExp(
 const sameLineSpace = String.raw`[^\S\r\n\u2028\u2029]`
 const credentialValue = String.raw`(?:(?:(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])${sameLineSpace}+)?${quotedCredential}|[^\r\n\u2028\u2029]*)`
 const assignmentWithValue = (key: string, flags: string) =>
-  new RegExp(String.raw`(?:${key})\s*${credentialValue}`, flags)
+  new RegExp(String.raw`(?:${key})${sameLineSpace}*${credentialValue}`, flags)
 
 const credentialAssignment = assignmentWithValue(
   String.raw`(?<![\w-])(?:${credentialKey}["']?${sameLineSpace}*[:=]|--${credentialKey}${sameLineSpace}+)`,
@@ -57,7 +57,7 @@ const legacyCredentialAssignment = assignmentWithValue(
   'g',
 )
 
-export function redactClassificationText(text: unknown) {
+function redactClassificationText(text: unknown) {
   return (typeof text === 'string' ? text : '')
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, omittedCredential)
     .replace(credentialAssignment, omittedCredential)
@@ -70,7 +70,7 @@ export function redactClassificationText(text: unknown) {
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
 }
 
-export const compact = (text: string, limit: number) => text.replace(/\s+/g, ' ').trim().slice(0, limit)
+const compact = (text: string, limit: number) => text.replace(/\s+/g, ' ').trim().slice(0, limit)
 export const clean = (text: unknown, limit: number) => compact(redactClassificationText(text), limit)
 
 const unique = (values: string[]) => [...new Set(values)].sort()

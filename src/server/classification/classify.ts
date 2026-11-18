@@ -1,12 +1,10 @@
-import type { CardContextRead } from '../reconciliation/cardContext'
 import type { WorkCard } from '../reconciliation/workReader'
-import { clean, compact, eligible, fingerprint, label, property, redactClassificationText, type Catalog, type Destination } from './catalog'
+import { clean, eligible, fingerprint, label, property, type Catalog, type Destination } from './catalog'
 import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, type Question } from './openRouter'
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
 export type ClassifierSource = {
   parent(id: string): Promise<WorkCard | undefined>
-  excerpt(id: string): Promise<CardContextRead>
 }
 type Rank = { id: string; probability: number }
 export type Evidence = {
@@ -23,7 +21,6 @@ export type Evidence = {
   parentConflict: boolean
   sourceComplete: boolean
   parentCount: number
-  bodyAvailable: boolean
 }
 export type Classification = {
   cardId: string
@@ -73,27 +70,6 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
   return { parents, complete }
 }
 
-function openingProse(context: CardContextRead) {
-  const blockSeparator = '\u2029'
-  const blocks: string[] = []
-  for (const block of context.blocks) {
-    // Coordination and generated logs are outside the classification brief.
-    if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
-    blocks.push(block.text.replaceAll(blockSeparator, '\n'))
-  }
-
-  const snippets: string[] = []
-  let size = 0
-  for (const block of redactClassificationText(blocks.join(blockSeparator)).split(blockSeparator)) {
-    const snippet = compact(block.replace(/^\s*(?:initiative|epic)\s*:.*$/gim, ''), 450)
-    if (!snippet) continue
-    snippets.push(snippet)
-    size += snippet.length
-    if (size >= 1_050 || snippets.length >= 5) break
-  }
-  return snippets.join(' ').slice(0, 1_100)
-}
-
 const noul = (instructions: string, yes: string, no: string): Question => ({
   type: 'noul', instructions, criteria: { true: yes, false: no },
 })
@@ -120,24 +96,15 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
   if (!initiatives.length) return { ...base, ...timing(), state: 'needs-review', reason: 'no-existing-initiative' }
 
   const title = clean(property(card, 'Name'), 250)
-  const [hierarchy, body] = await Promise.all([readParents(card, source), source.excerpt(card.id)])
-  const brief = openingProse(body)
-  const description = clean(property(card, 'Brief') ?? property(card, 'Description'), 500)
-  const area = [clean(property(card, 'Area'), 100), clean(property(card, 'Sub-area'), 100)].filter(Boolean).join(' / ')
-  const parentFacts = hierarchy.parents.map(parent => ({
-    title: clean(property(parent, 'Name'), 120),
-    initiative: clean(label(parent, 'Initiative'), 100),
-    epic: clean(label(parent, 'Epic'), 100),
-  }))
+  const hierarchy = await readParents(card, source)
+  const area = clean(property(card, 'Area'), 100)
+  const nextAction = clean(property(card, 'Next action'), 500) || clean(property(card, 'Next Action'), 500)
+  const ancestors = hierarchy.parents.map(parent => clean(property(parent, 'Name'), 120)).filter(Boolean)
   const initiativeCriteria = Object.fromEntries(initiatives.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
   const pairCriteria = Object.fromEntries(destinations.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
-  const state = {
-    card: { title, description, area, brief },
-    existing_classification: { initiative: clean(initiative, 100), epic: clean(epic, 100) },
-    ancestors: parentFacts,
-  }
+  const state = { card: { title, area, next_action: nextAction }, ancestors }
   const questions: Record<string, Question> = {
-    initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use the parent chain as supporting context. A child can belong to a different initiative.',
+    initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use ancestor titles as supporting context. A child can belong to a different initiative.',
       criteria: { ...initiativeCriteria, [none]: 'No listed initiative is supported by the work.' } },
     initiative_fit: noul('Does any initiative in the initiative Choice criteria substantively fit this work card? Ignore the none option.',
       'At least one listed initiative clearly owns the actual work.',
@@ -190,8 +157,8 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
       initiativeConfidence: initiativeAnswer.confidence, destinationConfidence: destinationAnswer?.confidence ?? 0,
       initiativeFit: probability('initiative_fit'), epicFit, ambiguous: probability('ambiguous'),
       initiativeOnly: questions[initiativeOnlyKey] ? probability(initiativeOnlyKey) : null,
-      parentConflict, sourceComplete: !!title && !!(brief || description || area || parentFacts.length) && hierarchy.complete && body.outcome === 'available',
-      parentCount: hierarchy.parents.length, bodyAvailable: body.outcome === 'available',
+      parentConflict, sourceComplete: !!title && !!(area || nextAction || ancestors.length) && hierarchy.complete,
+      parentCount: hierarchy.parents.length,
     } }
   } catch (error) {
     return { ...base, ...timing(), fingerprint: input, state: 'failed',
