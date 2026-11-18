@@ -91,14 +91,18 @@ it('refreshes cached request history after another process answers a decision', 
   for (const [name, value] of Object.entries({ 'Waiting For': 'Will: Approve the exception', 'Waiting For Type': 'Actor', 'Waiting For ID': 'Will' })) card.properties[name] = { id: name, type: 'rich_text', value, hasMore: false }
   card.properties['Will action'] = { id: 'action', type: 'multi_select', value: ['Decision'], hasMore: false }
   card.properties['Next action'] = { id: 'next', type: 'rich_text', value: '', hasMore: false }
-  const notes = [{ id: 'request', rich_text: [{ plain_text: 'Tin Star request: {"id":"approval","action":"Decision"}\nRequested from: Will\nQuestion: Approve the exception?' }] }]
+  const notes = [{ id: 'request', rich_text: [{
+    plain_text: 'Tin Star request: {"id":"approval","action":"Decision","requested_from":"Other","question":"Different question"}\nRequested from: Will\nQuestion: Approve the exception?',
+  }] }]
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ results: notes, has_more: false })))
   const sources = new ReconciliationSources({ fleet: [], warnings: [], notion: { token: 'fixture-token', dataSourceId: 'a'.repeat(32) } }, fetcher, undefined, root)
   vi.spyOn(sources, 'snapshot').mockResolvedValue({ ...snapshot, diagnostics: { notion: sources.notionApi.diagnostics } })
   vi.spyOn(sources.workflow, 'reconcileReviews').mockImplementation(() => new Promise(() => {}))
   try {
     const first = await sources.workViews()
-    expect(first.needsWill![0]!.requests).toMatchObject([{ id: 'approval', answered: false }])
+    expect(first.needsWill![0]!.requests).toMatchObject([{
+      id: 'approval', requestedFrom: 'Will', question: 'Approve the exception?', answered: false,
+    }])
     const other = new CardLeases(root)
     await other.mutate(card.id, async () => {
       notes.push({ id: 'answer', rich_text: [{ plain_text: 'Tin Star answer: "approval"' }] })

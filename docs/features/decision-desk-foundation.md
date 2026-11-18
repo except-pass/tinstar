@@ -33,6 +33,9 @@ invalidates the packet.
 
 To retract an open card-native Notion request, use the [workflow withdrawal or
 supersession operation](workflow.md). Both invalidate the old prepared packet.
+Tin Star recognizes these audit comments by the configured Notion integration’s
+bot ID. Switching to an integration with a different bot ID can make earlier
+withdrawals and supersessions stop taking effect.
 
 ### Answer attribution
 
