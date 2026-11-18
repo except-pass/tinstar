@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { entityId, fleetCommand, prLinkSource } from './firstmate.js'
+import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
 
 const schema = `
 CREATE TABLE IF NOT EXISTS homes (
@@ -135,8 +135,9 @@ export class Journal {
       if (!previous) throw new Error('observation source was not registered')
       let written = 0
       if (!previous.last_attempt_started || started_at > previous.last_attempt_started) {
-        let { health, reason = null } = observation
+        let { health, reason = null, counts = null } = observation
         let snapshotId = null
+        let acceptedGeneration = null
         if (entries && previous.last_attempt_at && started_at < previous.last_attempt_at) {
           health = 'stale'
           reason = 'read overlaps the previous collection window'
@@ -145,6 +146,16 @@ export class Journal {
           reason = 'fleet watermark did not advance'
         } else if (entries && (source.type !== 'task' || health === 'ok')) {
           snapshotId = randomUUID()
+          acceptedGeneration = generated_at ?? null
+          if (source.type === 'task') {
+            const pr = observation.pullRequests
+            const fresh = pr && (!previous.last_generated_at || pr.generated_at > previous.last_generated_at)
+            const projected = withPullRequests(entries, fresh ? pr.links : null)
+            const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
+            counts = pr_links_unobserved ? { pr_links_unobserved } : null
+            acceptedGeneration = fresh ? pr.generated_at : null
+            observation = { ...observation, entries: projected }
+          }
           written = this.recordEntries(observation, previous, snapshotId)
         }
         this.db.prepare(`
@@ -153,9 +164,9 @@ export class Journal {
             last_success_at = COALESCE(?, last_success_at),
             last_generated_at = COALESCE(?, last_generated_at)
           WHERE source_id = ?
-        `).run(started_at, observed_at, health, reason, JSON.stringify(observation.counts ?? null),
+        `).run(started_at, observed_at, health, reason, JSON.stringify(counts),
           snapshotId, snapshotId ? observed_at : null,
-          snapshotId ? generated_at ?? null : null, source.source_id)
+          acceptedGeneration, source.source_id)
       }
       this.db.exec('COMMIT')
       return written

@@ -66,18 +66,18 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
   try {
     data = JSON.parse(text)
   } catch {
-    return links
+    return null
   }
   const generated = Date.parse(data?.generated)
   if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== homePath ||
       data.complete === false || data.truncated === true || data.main_inventory?.valid !== true ||
       !Number.isFinite(generated) || generated < Date.parse(startedAt) - 1000 ||
       generated > Date.parse(observedAt) || data.backlog?.present !== true ||
-      !Array.isArray(data.backlog.records)) return links
+      !Array.isArray(data.backlog.records)) return null
 
   const ids = new Set()
   for (const row of data.backlog.records) {
-    if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id)) return new Map()
+    if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id)) return null
     ids.add(row.id)
     if (!Array.isArray(row.links) && (row.links !== undefined || typeof row.pr_url !== 'string')) continue
     const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
@@ -88,12 +88,12 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
       /^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(url))
     links.set(row.id, [...new Set(exact.map(url => url.replace(/\/$/, '')))].sort(compare))
   }
-  return links
+  return { links, generated_at: new Date(generated).toISOString() }
 }
 
 export function withPullRequests(entries, links) {
   return entries.map(entry => {
-    const urls = links.get(entry.evidence.task_id)
+    const urls = links?.get(entry.evidence.task_id)
     return urls === undefined
       ? { ...entry, evidence: { ...entry.evidence, pr_link_coverage: 'unobserved' } }
       : { ...entry, fields: { ...entry.fields, pull_requests: urls },
@@ -343,13 +343,8 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
     }
   })
   if (tasks.entries?.length) {
-    const links = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
-    tasks.entries = withPullRequests(tasks.entries, links)
-    const pr_links_unobserved = tasks.entries.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-    if (pr_links_unobserved) {
-      tasks.counts = { pr_links_unobserved }
-    }
-    if (pr_links_unobserved < tasks.entries.length) tasks.observed_at = fleetObservedAt
+    tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
+    if (tasks.pullRequests) tasks.observed_at = fleetObservedAt
   }
   return [tasks, workers]
 }

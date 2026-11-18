@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { encode } from '@toon-format/toon'
-import { entityId, fleetPullRequests, observeHome, parseTasks, parseWorkers, sourcesFor, withPullRequests } from '../firstmate.js'
+import { entityId, fleetPullRequests, observeHome, parseTasks, parseWorkers, sourcesFor } from '../firstmate.js'
 import { Journal } from '../journal.js'
 
 const exec = promisify(execFile)
@@ -32,13 +32,14 @@ function row(id, fields = {}) {
   }
 }
 
-function taskObservation(rows, minute, source = tasks, records = rows.map(({ id }) => ({ id, links: [] }))) {
+function taskObservation(rows, minute, source = tasks, records = rows.map(({ id }) => ({ id, links: [] })), generated = at(minute)) {
   const text = encode({ count: rows.length, tasks: rows })
-  const fleet = JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated: at(minute),
+  const fleet = JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated,
     main_inventory: { valid: true }, backlog: { present: true, records } })
   return {
     source, started_at: at(minute), observed_at: at(minute + 1), health: 'ok',
-    entries: withPullRequests(parseTasks(text, source.home_id), fleetPullRequests(fleet, home.path, at(minute), at(minute + 1))),
+    entries: parseTasks(text, source.home_id),
+    pullRequests: fleetPullRequests(fleet, home.path, at(minute), at(minute + 1)),
   }
 }
 
@@ -151,6 +152,36 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
   const observed = journal.events().at(-1)
   equal(observed.evidence.source_reference.interface, tasks.command)
   equal(observed.evidence.source_reference.pr_link_interface, 'bin/fm-fleet-snapshot.sh --json')
+})
+
+test('an older PR projection with the same fleet generation cannot reverse links after restart', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const task = row('sample-task')
+  const accepted = 'https://github.com/example/repo/pull/13'
+  const older = 'https://github.com/example/repo/pull/12'
+  const baseline = new Journal(path)
+  baseline.register(tasks)
+  equal(baseline.record(taskObservation([task], 0, tasks, [{ id: task.id, pr_url: accepted }], at(1))), 0)
+  baseline.close()
+
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  equal(journal.record(taskObservation([{ ...task, priority: 2 }], 1, tasks, [{ id: task.id, pr_url: older }])), 1)
+  const [event] = journal.events()
+  equal(event.change.field, 'priority')
+  equal(event.evidence.pr_link_coverage, 'unobserved')
+  const [status] = journal.sources()
+  equal(status.health, 'ok')
+  equal(status.last_generated_at, at(1))
+  deepEqual(status.counts, { pr_links_unobserved: 1 })
+
+  const reader = new DatabaseSync(path, { readOnly: true })
+  try {
+    const { fields } = reader.prepare('SELECT fields FROM entities WHERE source_id = ?').get(tasks.source_id)
+    deepEqual(JSON.parse(fields).pull_requests, [accepted])
+  } finally {
+    reader.close()
+  }
 })
 
 test('task readiness requires a valid kind', () => {
