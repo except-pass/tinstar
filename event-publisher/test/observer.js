@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok, rejects, throws } from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -66,6 +66,18 @@ function encodeFleet(generated, samples) {
     })),
   })
 }
+
+test('journal writer rejects public database and sidecar files', async t => {
+  const directory = await temp(t)
+  for (const [index, suffix] of ['', '-wal', '-shm', '-journal'].entries()) {
+    const path = join(directory, `journal-${index}.sqlite`)
+    const exposed = path + suffix
+    await writeFile(exposed, '')
+    await chmod(exposed, 0o644)
+    throws(() => new Journal(path), /owner-only access/)
+    equal((await stat(exposed)).size, 0)
+  }
+})
 
 test('home binding survives restart and is shared by task and worker sources', async t => {
   const path = await temp(t)
@@ -182,6 +194,33 @@ test('an older PR projection with the same fleet generation cannot reverse links
   } finally {
     reader.close()
   }
+})
+
+test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const initial = row('initial-task')
+  const next = row('new-task')
+  const pr = 'https://github.com/example/repo/pull/13'
+  const baseline = new Journal(path)
+  baseline.registerSources([tasks, workers])
+  baseline.record(taskObservation([initial], 0, tasks, []))
+  baseline.record({ source: tasks, started_at: at(1), observed_at: at(2), health: 'unavailable' })
+  baseline.record(workerObservation([], 2))
+  baseline.close()
+
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  equal(journal.record(taskObservation([initial, next], 2, tasks, [{ id: next.id, pr_url: pr }])), 1)
+  const [observed] = journal.events()
+  equal(observed.event_type, 'task.observed')
+  equal(observed.evidence.pr_link_coverage, 'unobserved')
+  equal(Object.hasOwn(observed.change.after, 'pull_requests'), false)
+  equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(0))
+
+  equal(journal.record(taskObservation([initial, next, row('fresh-task')], 3, tasks, [{ id: 'fresh-task', pr_url: pr }])), 1)
+  deepEqual(journal.events().at(-1).change.after.pull_requests, [pr])
+  equal(journal.record(workerObservation([], 3)), 0)
+  equal(journal.sources().find(source => source.type === 'worker').last_generated_at, at(3))
 })
 
 test('task readiness requires a valid kind', () => {

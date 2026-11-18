@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, mkdirSync, openSync } from 'node:fs'
+import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS events (
 function openJournal(path, readOnly) {
   if (!readOnly) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      const file = lstatSync(path + suffix, { throwIfNoEntry: false })
+      if (file && (!file.isFile() || file.uid !== process.geteuid() || (file.mode & 0o077) !== 0)) {
+        throw new JournalConfigurationError('journal and SQLite sidecars must be regular files with owner-only access')
+      }
+    }
     closeSync(openSync(path, 'a', 0o600))
   }
   const db = new DatabaseSync(path, { readOnly })
@@ -149,7 +155,10 @@ export class Journal {
           acceptedGeneration = generated_at ?? null
           if (source.type === 'task') {
             const pr = observation.pullRequests
-            const fresh = pr && (!previous.last_generated_at || pr.generated_at > previous.last_generated_at)
+            const worker = this.db.prepare('SELECT last_generated_at FROM sources WHERE source_id = ?')
+              .get(entityId('home', source.home_id, 'worker'))
+            const fresh = pr && pr.generated_at > (previous.last_generated_at ?? '') &&
+              pr.generated_at > (worker?.last_generated_at ?? '')
             const projected = withPullRequests(entries, fresh ? pr.links : null)
             const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
             counts = pr_links_unobserved ? { pr_links_unobserved } : null
