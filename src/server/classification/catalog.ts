@@ -32,14 +32,26 @@ export const pairKey = (initiative: string, epic: string | null) => JSON.stringi
 export const eligible = (card: WorkCard) => !card.source && !card.archived && !card.in_trash
 export const active = (card: WorkCard) => eligible(card) && !['Done', 'Archived'].includes(label(card, 'Status') ?? '')
 
+const credentialKey = String.raw`(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret)(?:[_-]+[\da-z]+)*`
+const quotedCredential = String.raw`(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))`
+const credentialValue = String.raw`(?:${quotedCredential}|[^\s"',;]+)`
+const credentialAssignment = new RegExp(
+  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)(?:${quotedCredential}|\S+)|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
+  'gi',
+)
+
+const legacyCredentialAssignment = new RegExp(
+  String.raw`\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)\s*=\s*${credentialValue}`,
+  'g',
+)
+
 export function clean(text: unknown, limit: number, omitLines?: RegExp) {
   const prose = typeof text === 'string' ? text : ''
   const redacted = redactSourceText(prose
-    .replace(/(?:--(?:api[-_]key|token|password|secret)(?:=|\s+)|\b(?:password|passwd|token|api[_-]?key|secret)["']?\s*[:=]\s*)(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))/gi, '[credential omitted]')
+    .replace(credentialAssignment, '[credential omitted]')
+    .replace(legacyCredentialAssignment, '[credential omitted]')
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, '[credential omitted]')
     .replace(/```[\s\S]*?(?:```|$)/g, '')
-    .replace(/^.*\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)\s*=.*$/gm, '[credential omitted]')
-    .replace(/--(?:api[-_]key|token|password|secret)(?:=|\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '[credential omitted]')
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
     .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, '[credential omitted]'))
   return (omitLines ? redacted.replace(omitLines, '') : redacted).replace(/\s+/g, ' ').trim().slice(0, limit)
@@ -105,7 +117,6 @@ function buildCatalog(data: WorkData, notes: TaxonomyNotes): Catalog {
 export class ClassificationCatalog {
   private cached?: { source: WorkData; catalog: Catalog; until: number }
   constructor(private notes: TaxonomyNotes = {}, private now = Date.now) {}
-  invalidate() { this.cached = undefined }
   get(observation: Observation<WorkData>) {
     const source = requireBoard(observation)
     if (this.cached?.source === source && this.cached.until > this.now()) return this.cached.catalog

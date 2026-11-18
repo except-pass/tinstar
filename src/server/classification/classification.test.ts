@@ -78,9 +78,19 @@ describe('classifier catalog and policy', () => {
     expect(JSON.stringify(request)).not.toMatch(/privateabcdefghijkl|test\.invalid|Rotate service sessions.+Update panel status/)
     expect(Object.keys(request.questions.destination!.criteria)).toContain('none')
     expect(cache.get(board)).toBe(catalog)
-    cache.invalidate()
-    expect(cache.get(board)).not.toBe(catalog)
     expect(() => cache.get({ ...board, status: 'stale' })).toThrow(/fresh, complete/)
+  })
+
+  it('refreshes the catalog after its expiry', () => {
+    let now = 0
+    const expiring = new ClassificationCatalog({}, () => now)
+    const initial = expiring.get(board)
+    now = 59_999
+    expect(expiring.get(board)).toBe(initial)
+    now = 60_000
+    const refreshed = expiring.get(board)
+    expect(refreshed).not.toBe(initial)
+    expect(refreshed.revision).toBe(initial.revision)
   })
 
   it('abstains for parent conflict, novelty and missing body, and skips an existing pair', async () => {
@@ -116,21 +126,25 @@ describe('classifier catalog and policy', () => {
     const example = notionCard(card(1, `Example password='example secret fragments' confirmed`, 'Platform', 'Operations'))
     const privateCatalog = cache.get({ ...board, data: { ...board.data, cards: [example, ...board.data.cards.slice(1)] } })
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(privateCatalog, 'Platform')))
-    const result = await classifyCard(notionCard(card(4, 'Rotation password="title secret fragments" confirmed', null, null)),
+    const result = await classifyCard(notionCard(card(4, 'Rotation database_password="rotate this phrase" confirmed', null, null)),
       privateCatalog, {
         ...source, excerpt: async () => ({ outcome: 'available', blocks: [{ id: 'brief', type: 'paragraph',
           text: String.raw`Rotate password="body \"quoted\" secret fragments" today
 Initiative: password="another
-multiline fragment"` }] }),
+multiline fragment"` }, {
+          id: 'start', type: 'paragraph', text: 'Then password="first half',
+        }, {
+          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue',
+        }] }),
       }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today',
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue',
     } })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment/)
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment/)
   })
 
   it('supports an explicitly allowed initiative-only destination', async () => {

@@ -74,18 +74,13 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
 }
 
 function openingProse(context: CardContextRead) {
-  const snippets: string[] = []
-  let size = 0
+  const blocks: string[] = []
   for (const block of context.blocks) {
     // Coordination and generated logs are outside the classification brief.
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
-    const snippet = clean(block.text, 450, /^\s*(?:initiative|epic)\s*:.*$/gim)
-    if (!snippet) continue
-    snippets.push(snippet)
-    size += snippet.length
-    if (size >= 1_050 || snippets.length >= 5) break
+    blocks.push(block.text)
   }
-  return snippets.join(' ').slice(0, 1_100)
+  return clean(blocks.join('\n'), 1_100, /^\s*(?:initiative|epic)\s*:.*$/gim)
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({

@@ -82,7 +82,7 @@ export class ClassificationService {
   private readonly ledger
   private running?: Promise<DryRun>
 
-  constructor(private config: NonNullable<ReconciliationConfig['notion']>, private api: NotionApi,
+  constructor(config: NonNullable<ReconciliationConfig['notion']>, api: NotionApi,
     leases: CardLeases, private jev = new OpenRouterJev(), notes: TaxonomyNotes = {}) {
     this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch, true)
     this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch, true)
@@ -90,11 +90,6 @@ export class ClassificationService {
     this.context = new CardContextReader(config, api.parallelFetch)
     this.taxonomy = new ClassificationCatalog(notes)
     this.ledger = new ClassificationLedger(leases)
-  }
-
-  invalidateCatalog() {
-    this.taxonomy.invalidate()
-    this.api.invalidateSchema(this.config.dataSourceId)
   }
 
   dryRun(historicalLimit: number, onProgress?: (done: number, total: number) => void) {
