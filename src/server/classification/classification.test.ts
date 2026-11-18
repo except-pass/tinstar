@@ -129,6 +129,27 @@ describe('classifier catalog and policy', () => {
     expect(ask).toHaveBeenCalledTimes(1)
   })
 
+  it('excludes a long replay title from both sets of taxonomy examples', async () => {
+    const title = 'Long title for the follow-up work on rotation and session-expiry behavior across several services'
+    const replacement = notionCard(card(7, title, 'Platform', 'Operations'))
+    const replayCatalog = new ClassificationCatalog().get({
+      ...board, data: { ...board.data, cards: [...board.data.cards, replacement] },
+    })
+    const [initiative, pair] = candidates(replayCatalog, 'Platform')
+    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, initiative, pair))
+    const closed = notionCard(card(8, title, 'Platform', 'Operations', 'Done'))
+
+    await classifyCard(closed, replayCatalog, source, ask, 'historical')
+
+    const request = ask.mock.calls[0]![0]
+    expect(request.state).toMatchObject({ card: { title } })
+    for (const [question, id] of [['initiative', initiative], ['destination', pair]] as const) {
+      const criteria = request.questions[question]?.criteria[id]
+      expect(criteria).toContain('Rotate service sessions')
+      expect(criteria).not.toContain('Long title for the follow-up')
+    }
+  })
+
   it('sends only sanitized allowed card fields and taxonomy examples', async () => {
     const example = notionCard(card(1, "Example password='example secret fragments' confirmed", 'Platform', 'Operations'))
     const privateCatalog = cache.get({ ...board, data: { ...board.data, cards: [example, ...board.data.cards.slice(1)] } })
@@ -225,7 +246,7 @@ it('reads the configured board through NotionApi and persists replay results in 
   const unassigned = { ...page, properties: {
     ...page.properties,
     Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication.\n-----BEGIN PRIVATE KEY-----\nU1lOVEhFVElDUEtDUzg=\n-----END PRIVATE KEY-----\nVerify the rollout.' }] },
-    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies.\n-----BEGIN RSA PRIVATE KEY-----\nU1lOVEhFVElDUlNB\n-----END RSA PRIVATE KEY-----\nCheck session expiry via https://svc:(syntheticUrlPassword)@example.invalid/path then verify.' }] },
+    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies.\n-----BEGIN RSA PRIVATE KEY-----\nU1lOVEhFVElDUlNB\n-----END RSA PRIVATE KEY-----\nCheck session expiry via https://svc:(syntheticUrlPassword)@example.invalid/path and postgresql://svc:(syntheticDbPassword)@db.invalid/app and ssh://svc:(syntheticSshPassword)@host.invalid then verify.' }] },
   } }
   const closedPage = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
   const historical = { ...closedPage, properties: {
@@ -266,12 +287,12 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(model).toHaveBeenCalledTimes(3)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] then verify.' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)

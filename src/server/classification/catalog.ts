@@ -63,7 +63,7 @@ function redactClassificationText(text: string) {
     .replace(credentialAssignment, omittedCredential)
     .replace(legacyCredentialAssignment, omittedCredential)
     .replace(/```[\s\S]*?(?:```|$)/g, '')
-    .replace(/https?:\/\/\S+/gi, '[link omitted]')
+    .replace(/(?<![a-z\d+.-])[a-z][a-z\d+.-]*:\/\/\S+/gi, '[link omitted]')
     .replace(bearerCredential, omittedCredential)
     .replace(basicCredential, (match, token: string) =>
       Buffer.from(token, 'base64').toString('latin1').includes(':') ? omittedCredential : match)
@@ -75,6 +75,8 @@ export function clean(text: unknown, limit: number) {
   return redactClassificationText(oneLine).trim().slice(0, limit)
 }
 
+export const exampleTitleLimit = 85
+
 const unique = (values: string[]) => [...new Set(values)].sort()
 
 function describe(cards: readonly WorkCard[], notes?: { scope?: string; aliases?: string[] }): Description {
@@ -82,7 +84,7 @@ function describe(cards: readonly WorkCard[], notes?: { scope?: string; aliases?
     scope: clean(notes?.scope, 300),
     aliases: unique((notes?.aliases ?? []).map(value => clean(value, 80)).filter(Boolean)),
     areas: unique(cards.map(card => clean(property(card, 'Area'), 45)).filter(Boolean)).slice(0, 3),
-    examples: unique(cards.map(card => clean(property(card, 'Name'), 85)).filter(Boolean)).slice(0, 3),
+    examples: unique(cards.map(card => clean(property(card, 'Name'), exampleTitleLimit)).filter(Boolean)).slice(0, 3),
   }
 }
 

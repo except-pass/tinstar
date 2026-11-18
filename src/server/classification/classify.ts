@@ -1,5 +1,5 @@
 import type { WorkCard } from '../reconciliation/workReader'
-import { clean, eligible, fingerprint, label, property, type Catalog, type Destination } from './catalog'
+import { clean, eligible, exampleTitleLimit, fingerprint, label, property, type Catalog, type Destination } from './catalog'
 import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, type Question } from './openRouter'
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
@@ -40,7 +40,8 @@ function describeCandidate(candidate: Catalog['initiatives'][number] | Catalog['
   const name = epic === undefined ? clean(candidate.initiative, 100)
     : epic === null ? `${clean(candidate.initiative, 100)} — intentionally initiative-only`
       : `${clean(candidate.initiative, 100)} / ${clean(epic, 100)}`
-  const examples = candidate.examples.filter(example => exampleKey(example) !== exampleKey(title)).slice(0, 2)
+  const targetExampleKey = exampleKey(title.slice(0, exampleTitleLimit))
+  const examples = candidate.examples.filter(example => exampleKey(example) !== targetExampleKey).slice(0, 2)
   return [name, candidate.scope, candidate.aliases.length && `Also known as ${candidate.aliases.join(', ')}`,
     candidate.areas.length && `Areas ${candidate.areas.join(', ')}`, examples.length && `Examples: ${examples.join(' | ')}`].filter(Boolean).join('. ')
 }
