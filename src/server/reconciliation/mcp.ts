@@ -145,7 +145,8 @@ export class ReconciliationMcp {
     })
     catalog.registerTool('submit_prepared_decision', { description: 'Record Will’s exact answer and selected option on the held card, clear Will’s tag, complete any Waiting For handoff, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
-      try { return result(await this.readers.preparedSubmissions.submit(caller, actor, input)) }
+      const answerer = actor === 'owner-chatgpt' ? 'Will' : actor === 'Firstmate' ? 'Firstmate' : 'other'
+      try { return result(await this.readers.preparedSubmissions.submit(caller, actor, input, answerer)) }
       catch (error) {
         if (error instanceof DecisionDeskConflict) return result({ outcome: 'operation-conflict', message: error.message })
         throw error

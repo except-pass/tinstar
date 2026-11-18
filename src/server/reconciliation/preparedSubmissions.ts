@@ -32,7 +32,8 @@ export interface PreparedSubmitResult {
   message: string
   next?: PreparedClaimResult
 }
-export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, answerer?: string) =>
+export type DeskAnswerer = 'Will' | 'Firstmate' | 'other'
+export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, answerer?: DeskAnswerer) =>
   Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string; settledRevision?: string }>
 
 export class PreparedSubmissions {
@@ -40,7 +41,7 @@ export class PreparedSubmissions {
   private get leases() { return this.reviews.packets.leases }
   private get scope() { return this.reviews.scope }
 
-  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, answerer?: string) {
+  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, answerer?: DeskAnswerer) {
     return withLeaseCaller(attempt.caller, token, () =>
       this.writeAnswer(stored, JSON.parse(attempt.input) as Selection,
         `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, answerer))
@@ -92,7 +93,7 @@ export class PreparedSubmissions {
     }
   }
 
-  async submit(caller: string, holder: string, input: unknown, answerer = holder): Promise<PreparedSubmitResult> {
+  async submit(caller: string, holder: string, input: unknown, answerer: DeskAnswerer): Promise<PreparedSubmitResult> {
     const parsed = preparedSubmitInput.parse(input)
     const { operation_id, option_id, answer } = parsed
     const outcome = (state: string, message: string, next?: PreparedClaimResult) =>
