@@ -64,10 +64,12 @@ export function canonicalPullRequests(urls) {
   const locators = new Set()
   for (const value of urls) {
     if (typeof value !== 'string' || /\s/u.test(value)) continue
-    const url = URL.parse(value)
-    if (url?.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password) continue
-    const match = /^(\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)\/?$/u.exec(url.pathname)
-    if (match) locators.add(url.origin + match[1].toLowerCase())
+    const match = /^([A-Za-z]+:\/\/[A-Za-z.]+)(\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*)$/u.exec(value)
+    if (!match) continue
+    const origin = URL.parse(match[1])
+    if (origin?.protocol === 'https:' && origin.hostname === 'github.com') {
+      locators.add(origin.origin + match[2].toLowerCase())
+    }
   }
   return [...locators].sort(compare)
 }

@@ -138,8 +138,7 @@ incarnation was previously seen with unknown state. The historical status verb i
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR links
 come from the fleet snapshot's structured backlog records and require exact
-GitHub pull URLs without credentials. Query strings and fragments are removed
-from the canonical locator. When the
+GitHub pull URLs without credentials, query strings, or fragments. When the
 backlog link data is unavailable, the journal keeps the last verified links.
 The next verified read establishes a new PR baseline without a link-change
 event. Task events from those reads include the PR coverage in their evidence.
