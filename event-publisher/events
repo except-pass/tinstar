@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtemp, readFile, rmdir } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rmdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -66,20 +66,23 @@ async function readConfig(path) {
   const paths = new Set()
   const safeText = value => typeof value === 'string' && value.trim() === value && value.length > 0 &&
     !/[\u0000-\u001f\u007f]/u.test(value) && String.prototype.isWellFormed.call(value)
-  return config.homes.map(home => {
+  const homes = []
+  for (const home of config.homes) {
     if (!safeText(home?.id) || !safeText(home.path) || !isAbsolute(home.path) ||
         home.codeRoot !== undefined && (!safeText(home.codeRoot) || !isAbsolute(home.codeRoot)) ||
         home.mode !== undefined && !['live', 'fixture'].includes(home.mode) ||
         home.markdownFastPath !== undefined && typeof home.markdownFastPath !== 'boolean') {
       throw new UsageError('each home needs a stable id and absolute path; check codeRoot, mode and markdownFastPath if supplied')
     }
-    const path = resolve(home.path)
-    if (ids.has(home.id) || paths.has(path)) throw new UsageError('home ids and paths must be unique')
+    const path = await realpath(home.path).catch(() => null)
+    const configuredPath = path ?? resolve(home.path)
+    if (ids.has(home.id) || paths.has(configuredPath)) throw new UsageError('home ids and paths must be unique')
     ids.add(home.id)
-    paths.add(path)
-    return { id: home.id, path, codeRoot: resolve(home.codeRoot ?? path), mode: home.mode ?? 'live',
-      markdownFastPath: home.markdownFastPath ?? false }
-  })
+    paths.add(configuredPath)
+    homes.push({ id: home.id, path, codeRoot: resolve(home.codeRoot ?? configuredPath), mode: home.mode ?? 'live',
+      markdownFastPath: home.markdownFastPath ?? false })
+  }
+  return homes
 }
 
 function signalController() {
@@ -109,7 +112,7 @@ async function collect(journal, homes, interval) {
   const scratch = await mkdtemp(join(tmpdir(), 'event-publisher-'))
   try {
     const sources = homes.flatMap(home => sourcesFor(home).map(source => ({ source, home, taskCache: {} })))
-    for (const { source } of sources) journal.register(source)
+    journal.registerSources(sources.map(({ source }) => source))
     if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
     do {
       const start = Date.now()
@@ -120,6 +123,10 @@ async function collect(journal, homes, interval) {
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (Date.now() - start), 5000), controller.signal)
     } while (interval && !controller.signal.aborted)
+    if (!interval) {
+      const statuses = new Map(journal.sources().map(source => [source.source_id, source.health]))
+      return !controller.signal.aborted && sources.every(({ source }) => statuses.get(source.source_id) === 'ok')
+    }
   } finally {
     controller.close()
     await rmdir(scratch)
@@ -144,7 +151,7 @@ function healthText(source) {
 
 function valueText(value) {
   if (value === null) return '—'
-  if (Array.isArray(value)) return value.length ? value.map(item => item.id ?? item).join(', ') : '—'
+  if (Array.isArray(value)) return value.length ? value.map(item => item.id ? `${item.type} ${item.id}` : item).join(', ') : '—'
   return String(value)
 }
 
@@ -235,8 +242,8 @@ async function main() {
   const journal = new Journal(path, { readOnly: !writer })
   try {
     if (writer) {
-      await collect(journal, homes, interval)
-      if (command === 'observe' && journal.sources().some(source => source.health !== 'ok')) process.exitCode = 1
+      const healthy = await collect(journal, homes, interval)
+      if (command === 'observe' && !healthy) process.exitCode = 1
     } else if (command === 'watch') {
       await watch(journal, after, filters, values.json)
     } else if (command === 'inspect') {

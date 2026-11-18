@@ -36,9 +36,10 @@ independently readable home. The paths and ID below are synthetic.
 `bin/` read interfaces. A home defaults to live mode. For synthetic inputs, set
 `"mode": "fixture"` and use a separate journal. Keep the database and its SQLite
 sidecars in a private directory outside the checkout.
-The journal binds each home ID to its configured path on first registration.
+The journal binds each home ID to its resolved path on first registration.
 Existing journals retain that binding. Start a new journal to use the same ID
-with a different path.
+with a different path. If a home path cannot be resolved at startup, restart
+the collector after restoring it.
 
 ```sh
 events serve --interval 20
@@ -94,9 +95,10 @@ with status 1. The continuous collector retries on the next scheduled pass.
   the fleet snapshot's remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
 - `events sources` reports the last attempt and the last accepted inventory.
-  Worker coverage counts remote exclusions, missing generations, and
-  unverifiable local current states. A timed-out, stale, or malformed read
-  keeps prior snapshots. Within an accepted inventory, an unavailable worker
+  Accepted inventories report remote exclusions and unverifiable local
+  current states. An inventory with a missing local execution identity or
+  an unconfirmed producer verdict is rejected. A timed-out, stale, or
+  malformed read keeps prior snapshots. Within an accepted inventory, an unavailable worker
   state is recorded as unknown with its source and reason. Each incarnation
   keeps its last verified state and time for comparison with future reads.
 - On a home you have verified uses the wrapper's pinned

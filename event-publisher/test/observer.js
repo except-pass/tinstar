@@ -1,6 +1,6 @@
 import { deepEqual, equal, match, ok, rejects, throws } from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -67,24 +67,36 @@ function encodeFleet(generated, samples) {
 test('home binding survives restart and is shared by task and worker sources', async t => {
   const path = await temp(t)
   const db = join(path, 'journal.sqlite')
+  const original = { ...home, path: join(path, 'original-home') }
+  const [originalTasks, originalWorkers] = sourcesFor(original)
+  await mkdir(original.path)
   const baseline = new Journal(db)
-  baseline.register(tasks)
+  baseline.register(originalTasks)
   baseline.record(taskObservation([row('sample-a')], 0))
   baseline.close()
 
   const journal = new Journal(db)
   t.after(() => journal.close())
   const rebound = { ...home, path: join(path, 'different-home') }
+  await mkdir(rebound.path)
   throws(() => journal.register(sourcesFor(rebound)[1]), /already bound/)
 
+  const alias = join(path, 'current')
+  await symlink(original.path, alias)
+  await rm(alias)
+  await symlink(rebound.path, alias)
+  const added = { ...home, id: 'example:east', path: join(path, 'new-home') }
+  await mkdir(added.path)
   const config = join(path, 'config.json')
-  await writeFile(config, JSON.stringify({ homes: [rebound] }))
+  await writeFile(config, JSON.stringify({ homes: [added, { ...rebound, path: alias }] }))
   for (const command of ['serve', 'observe']) {
     await rejects(exec(cli, [command, '--config', config, '--db', db]),
       error => error.code === 1 && /already bound/.test(error.stderr))
   }
-  journal.register(tasks)
-  journal.register(workers)
+  deepEqual(journal.sources().map(source => source.source_id), [tasks.source_id])
+  journal.register(sourcesFor({ ...added, path: rebound.path })[0])
+  journal.register(originalTasks)
+  journal.register(originalWorkers)
   equal(journal.tail(), 0)
 })
 
@@ -286,7 +298,16 @@ FLEET
     equal(health.last_snapshot_id, null)
   }
   equal(journal.record(await poll(failures.length, () => {})), 0)
-  equal(journal.record(await poll(failures.length + 1, fleet => { fleet.tasks[1].current_state.state = 'parked' })), 1)
+  equal(journal.record(await poll(failures.length + 1, fleet => {
+    fleet.tasks[1].current_state.state = 'parked'
+    fleet.tasks.push(
+      { id: 'kind-mate', kind: 'secondmate', remote: null },
+      { id: 'role-mate', role: 'secondmate', remote: null },
+      { id: 'listed-mate', remote: null },
+      { id: 'remote-worker', remote: { host: 'example', root: '/example' } },
+    )
+    fleet.secondmate_current.records = [{ id: 'listed-mate' }]
+  })), 1)
   equal(journal.events()[0].change.before, 'working')
 })
 
@@ -329,7 +350,11 @@ fi
   const cached = await observe(fixture, tasks, path, options(new Date(2026, 0, 1, 23, 59, 40)))
   equal(cached.method, 'markdown-fingerprint')
   equal(journal.record(cached), 0)
-  const after = await observe(fixture, tasks, path, options(new Date(2026, 0, 2, 0, 0, 0)))
+  let clockReads = 0
+  const after = await observe(fixture, tasks, path, {
+    taskCache,
+    now: () => clockReads++ < 2 ? new Date(2026, 0, 1, 23, 59, 59) : new Date(2026, 0, 2, 0, 0, 0),
+  })
   equal(after.method, 'tasks-axi-list')
   equal(journal.record(after), 2)
   deepEqual(journal.events().map(event => event.change), [

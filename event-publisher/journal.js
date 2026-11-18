@@ -96,13 +96,24 @@ export class Journal {
     this.db.close()
   }
 
+  registerSources(sources) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const source of sources) this.register(source)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   register({ home_path, ...source }) {
-    const binding = this.db.prepare(`
+    const binding = home_path === null ? null : this.db.prepare(`
       INSERT INTO homes (home_id, path) VALUES (?, ?)
       ON CONFLICT(home_id) DO UPDATE SET path = excluded.path
       WHERE homes.path = excluded.path
     `).run(source.home_id, home_path)
-    if (!binding.changes) {
+    if (binding && !binding.changes) {
       throw new JournalConfigurationError(`home id ${source.home_id} is already bound to a different FM_HOME path`)
     }
     const result = this.db.prepare(`

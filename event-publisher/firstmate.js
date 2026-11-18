@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, lstat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, lstat, realpath } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { decode } from '@toon-format/toon'
 
@@ -158,15 +158,25 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   const entries = []
   const counts = { remote_excluded: 0, current_state_unavailable: 0 }
   const ids = new Set()
+  const mates = new Set(Array.isArray(data.secondmate_current.records)
+    ? data.secondmate_current.records.map(record => record?.id) : [])
   for (const row of data.tasks) {
     if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id) ||
-        !Object.hasOwn(row, 'remote') || typeof row.spawn_gen !== 'string' || !identifier.test(row.spawn_gen)) {
+        !Object.hasOwn(row, 'remote')) {
       partial('invalid or duplicate fleet worker row')
     }
     ids.add(row.id)
     if (row.remote !== null) {
+      if (typeof row.remote?.host !== 'string' || !row.remote.host.trim() ||
+          typeof row.remote.root !== 'string' || !isAbsolute(row.remote.root)) {
+        partial('invalid remote fleet worker descriptor')
+      }
       counts.remote_excluded++
       continue
+    }
+    if (row.kind === 'secondmate' || row.role === 'secondmate' || mates.has(row.id)) continue
+    if (typeof row.spawn_gen !== 'string' || !identifier.test(row.spawn_gen)) {
+      partial('local fleet worker lacks a valid spawn generation')
     }
     const current = row.current_state
     const fresh = current?.freshness === 'fresh' && Date.parse(current.observed_at) === generated
@@ -224,11 +234,13 @@ async function readTasks(home, cache, now) {
   const day = localDay(now())
   const before = await backlogFingerprint(dataPath)
   const config = home.markdownFastPath ? await fingerprintConfig(home) : null
+  const checkedAt = now()
   if (cache && config && config === cache.config && before && before === cache.fingerprint &&
-      day === cache.day && Date.parse(cache.refreshed_at) + 60_000 > now().getTime()) {
+      day === cache.day && day === localDay(checkedAt) && Date.parse(cache.refreshed_at) + 60_000 > checkedAt.getTime()) {
     return { entries: cache.entries, method: 'markdown-fingerprint' }
   }
 
+  const readDay = localDay(checkedAt)
   if (cache) cache.fingerprint = null
   const text = await runRead(home, 'fm-tasks-axi.sh', ['list', '--fields', taskFields], {})
   const entries = parseTasks(text, home.id)
@@ -237,10 +249,12 @@ async function readTasks(home, cache, now) {
   if (!entries.length && (!before || before !== after)) {
     partial('empty task list without a stable, readable local backlog')
   }
-  if (day !== localDay(now())) partial('local date changed during the task read')
-  if (cache && config && (cache.config === undefined || cache.config === config) &&
-      before && before === after && config === await fingerprintConfig(home)) {
-    Object.assign(cache, { config, fingerprint: after, day, entries, refreshed_at: now().toISOString() })
+  const cacheable = cache && config && (cache.config === undefined || cache.config === config) &&
+    before && before === after && config === await fingerprintConfig(home)
+  const finishedAt = now()
+  if (readDay !== localDay(finishedAt)) partial('local date changed during the task read')
+  if (cacheable) {
+    Object.assign(cache, { config, fingerprint: after, day: readDay, entries, refreshed_at: finishedAt.toISOString() })
   }
   return { entries, method: 'tasks-axi-list' }
 }
@@ -269,6 +283,9 @@ async function runRead(home, script, args, overrides) {
 export async function observe(home, source, scratch, { now = () => new Date(), taskCache } = {}) {
   const started_at = now().toISOString()
   try {
+    if (!home.path || await realpath(home.path).catch(() => null) !== home.path) {
+      throw new ObservationError('unavailable', 'configured FM_HOME could not be verified')
+    }
     if (source.type === 'task') {
       const payload = await readTasks(home, taskCache, now)
       return { source, started_at, observed_at: now().toISOString(), health: 'ok', ...payload }
