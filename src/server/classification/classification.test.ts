@@ -159,6 +159,25 @@ multiline fragment"` }, {
     expect(JSON.stringify(request)).not.toContain('!?.,:;')
   })
 
+  it('redacts bare and quoted credential values that begin on continuation lines', async () => {
+    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
+    const texts = [
+      'Rotate service sessions. password:  \n\n  rotation phrase for production\nKeep the rollout scoped.',
+      'Legacy NODEKEY=\r\n  "legacy continuation value" Retain this prose.',
+      'Then password:',
+      '"quoted continuation',
+      'secret ending" Verify session rotation.',
+    ]
+    await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
+      ...source, excerpt: async () => ({ outcome: 'available', blocks: texts.map((text, index) => ({
+        id: String(index), type: 'paragraph', text,
+      })) }),
+    }, ask)
+    expect(ask.mock.calls[0]![0].state).toMatchObject({ card: {
+      brief: 'Rotate service sessions. [credential omitted] Keep the rollout scoped. Legacy [credential omitted] Retain this prose. Then [credential omitted] Verify session rotation.',
+    } })
+  })
+
   it('keeps at most five body snippets and clips each to 450 characters', async () => {
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
     const texts = ['a'.repeat(450) + ' omitted tail', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh']
