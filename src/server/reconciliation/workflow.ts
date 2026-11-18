@@ -5,7 +5,7 @@ import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { actionableWillCard, cardHasWillAction, cardOwnedByWill, cardWaitsForWill, isWillWait, responsibleMate } from './claimPolicy'
+import { actionableWillCard, isWillWait, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -99,8 +99,7 @@ export class WorkflowOperations {
       const revisionMatches = recorded && recoveryRevision
         ? source.recoveryRevision === recoveryRevision
         : source.revision === packet.source_revision
-      const canRecover = cardOwnedByWill(card) && (cardHasWillAction(card) || cardWaitsForWill(card))
-      if (!source.actionable || !revisionMatches || recorded && !canRecover) {
+      if (!source.actionable || !revisionMatches) {
         return recorded
           ? { outcome: 'recorded', message: 'The answer is on the card. Current card properties were preserved.' }
           : { outcome: 'packet-invalidated' }

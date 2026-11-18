@@ -10,7 +10,7 @@ const isWill = (value: unknown) => typeof value === 'string' && value.trim().toL
 
 export const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
 
-export function cardHasWillAction(card: WorkCard) {
+function cardHasWillAction(card: WorkCard) {
   const actions = value(card, 'Will action')
   return (Array.isArray(actions) ? actions : [actions]).some(action =>
     typeof action === 'string' && !!action.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(action.trim()))

@@ -342,7 +342,7 @@ describe('prepared-card loop', () => {
     const deploy = waitLine({ type: 'Event', id: 'deploy', dependency: 'Production deployment',
       unblocks_when: 'Deployment completes', follow_up_by: 'Firstmate' })
     const willPrimary = recovery === 'retry'
-    const card = page(1, { owner: 'Will', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
+    const card = page(1, { owner: 'Firstmate', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
       wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
     card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
     const { sources, tool, writes, jobs } = await setup([card], true, 'rejected')
@@ -369,6 +369,23 @@ describe('prepared-card loop', () => {
     expect(sources.leases.status(card.id)).toBeNull()
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
+  })
+
+  it.each(['retry', 'refill'] as const)('recovers a tag-only Firstmate card through %s', async recovery => {
+    const card = page(1, { owner: 'Firstmate', tag: 'Decision' })
+    const { sources, tool, writes } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'tag-only-claim', card_id: card.id })
+    const answer = { operation_id: 'tag-only-answer', lease_token: held.lease_token, option_id: '1', answer: 'Proceed.' }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
+    if (recovery === 'refill') {
+      await sources.preparation.replenish()
+      expect(card.properties['Will action']).toEqual(tags(''))
+    }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.properties).toMatchObject({ Owner: select('Firstmate'), 'Will action': tags('') })
+    expect(card.comments).toHaveLength(1)
+    expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
   })
 
   it.each(['retry', 'refill'] as const)('preserves a later assignment during %s recovery', async recovery => {
