@@ -9,7 +9,7 @@ import { promisify } from 'node:util'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { encode } from '@toon-format/toon'
-import { entityId, observe, parseTasks, parseWorkers, sourcesFor } from '../firstmate.js'
+import { entityId, fleetPullRequests, observe, parseTasks, parseWorkers, sourcesFor, withPullRequests } from '../firstmate.js'
 import { Journal } from '../journal.js'
 
 const exec = promisify(execFile)
@@ -32,11 +32,13 @@ function row(id, fields = {}) {
   }
 }
 
-function taskObservation(rows, minute, source = tasks) {
+function taskObservation(rows, minute, source = tasks, records = rows.map(({ id }) => ({ id, links: [] }))) {
   const text = encode({ count: rows.length, tasks: rows })
+  const fleet = JSON.stringify({ schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated: at(minute),
+    main_inventory: { valid: true }, backlog: { present: true, records } })
   return {
     source, started_at: at(minute), observed_at: at(minute + 1), health: 'ok',
-    entries: parseTasks(text, source.home_id),
+    entries: withPullRequests(parseTasks(text, source.home_id), fleetPullRequests(fleet, home.path, at(minute), at(minute + 1))),
   }
 }
 
@@ -109,29 +111,26 @@ test('CLI rejects oversized intervals and JSON source health output', async () =
     error => error.code === 2 && /--json is unsupported for sources/.test(error.stderr))
 })
 
-test('ambiguous PR link lists preserve the last verified links', async t => {
+test('fleet PR links rebaseline silently after a coverage gap', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())
   journal.register(tasks)
-  const first = row('sample-a', { links: 'pr:https://github.com/example/repo/pull/12' })
-  journal.record(taskObservation([first], 0))
-  const ambiguous = [
-    'pr:https://github.com/example/repo/pull/12?next=x,pr:https://github.com/other/repo/pull/9',
-    'doc:https://example.test/page#x,pr:https://github.com/other/repo/pull/9',
-  ]
-  for (const [index, links] of ambiguous.entries()) {
-    equal(journal.record(taskObservation([{ ...first, links, priority: index }], index + 1)), 1)
-    const event = journal.events().at(-1)
-    equal(event.change.field, 'priority')
-    equal(event.evidence.pr_link_coverage, 'ambiguous')
-    ok(!JSON.stringify(event).includes('github.com/other/repo'))
-  }
-  equal(journal.record(taskObservation([{ ...first, links: 'none', priority: 1 }], 3)), 1)
-  const removed = journal.events().at(-1)
-  deepEqual(removed.change, {
-    field: 'pull_requests', before: ['https://github.com/example/repo/pull/12'], after: [],
+  const first = row('sample-a', { links: 'pr:https://github.com/example/repo/pull/12,pr:https://github.com/other/repo/pull/9' })
+  const pr = 'https://github.com/example/repo/pull/12'
+  const next = 'https://github.com/example/repo/pull/13'
+  journal.record(taskObservation([first], 0, tasks, [{ id: first.id, pr_url: pr }]))
+  equal(journal.record(taskObservation([{ ...first, priority: 1 }], 1, tasks, [])), 1)
+  equal(journal.events().at(-1).evidence.pr_link_coverage, 'unobserved')
+  equal(journal.record(taskObservation([{ ...first, priority: 2 }], 2, tasks, [{ id: first.id, links: [] }])), 1)
+  equal(journal.events().at(-1).evidence.pr_link_coverage, 'rebaselined')
+  equal(journal.record(taskObservation([{ ...first, priority: 2 }], 3, tasks, [{
+    id: first.id, links: [{ url: next }, { url: `${pr},pr:https://github.com/other/repo/pull/9` }], pr_url: next,
+  }])), 1)
+  const changed = journal.events().at(-1)
+  deepEqual(changed.change, {
+    field: 'pull_requests', before: [], after: [next],
   })
-  equal(removed.observation.observed_between.after, null)
+  equal(changed.observation.observed_between.after, at(2))
 })
 
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {
@@ -139,7 +138,6 @@ test('baseline, direct Queued to Done, exact task fields, dedup and immutable re
   const before = row('sample-a', { title: 'one, "two"', priority: 2 })
   const after = row('sample-a', {
     state: 'done', priority: 1, closed: '2026-01-02',
-    links: 'pr:https://github.com/example/repo/pull/12',
   })
   const baseline = new Journal(path)
   baseline.register(tasks)
@@ -148,22 +146,23 @@ test('baseline, direct Queued to Done, exact task fields, dedup and immutable re
 
   // The source changed while the collector was stopped.
   const journal = new Journal(path)
-  const updated = taskObservation([after], 2)
+  const records = [{ id: after.id, links: [{ url: 'https://github.com/example/repo/pull/12' }] }]
+  const updated = taskObservation([after], 2, tasks, records)
   equal(journal.record(updated), 5)
   equal(journal.record(updated), 0)
-  equal(journal.record(taskObservation([after], 3)), 0)
+  equal(journal.record(taskObservation([after], 3, tasks, records)), 0)
   const events = journal.events()
   const state = events[0]
-  deepEqual(events.map(event => event.change.field), ['state', 'closed', 'pull_requests', 'priority', 'ready'])
+  deepEqual(events.map(event => event.change.field), ['state', 'closed', 'priority', 'ready', 'pull_requests'])
   deepEqual(state.change, { field: 'state', before: 'queued', after: 'done' })
   equal(state.occurred_at, null)
   deepEqual(state.observation.observed_between, { after: at(0), by: at(3) })
   equal(new Set(events.map(event => event.observation.batch_id)).size, 1)
-  equal(events[2].change.after[0], 'https://github.com/example/repo/pull/12')
+  equal(events[4].change.after[0], 'https://github.com/example/repo/pull/12')
   journal.close()
 
   const restart = new Journal(path)
-  equal(restart.record(taskObservation([after], 4)), 0)
+  equal(restart.record(taskObservation([after], 4, tasks, records)), 0)
   deepEqual(restart.events({ after: 1 }), events.slice(1))
   deepEqual(restart.inspect(state.event_id), state)
   restart.close()

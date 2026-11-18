@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { decode } from '@toon-format/toon'
 
 const run = promisify(execFile)
-const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,links,priority'
+const taskFields = 'blocked,held,hold_reason,hold_kind,hold_until,created,closed,deps,priority'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
 const workerStates = new Set(['working', 'idle', 'parked', 'done', 'blocked', 'paused', 'failed'])
 const workerSources = new Set(['run-step', 'pane'])
@@ -58,16 +58,42 @@ function normalizedDependencies(value, home) {
   })
 }
 
-function normalizedPullRequests(value) {
-  if (value === 'none') return []
-  if (typeof value !== 'string' || !value) return null
-  const links = []
-  for (const link of value.split(/,(?=(?:pr|doc|report):)/)) {
-    if (link !== link.trim() ||
-        !/^pr:https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(link)) return null
-    links.push(link.slice(3).replace(/\/$/, ''))
+export function fleetPullRequests(text, homePath, startedAt, observedAt) {
+  const links = new Map()
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return links
   }
-  return [...new Set(links)].sort(compare)
+  const generated = Date.parse(data?.generated)
+  if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== homePath ||
+      data.complete === false || data.truncated === true || data.main_inventory?.valid !== true ||
+      !Number.isFinite(generated) || generated < Date.parse(startedAt) - 1000 ||
+      generated > Date.parse(observedAt) || data.backlog?.present !== true ||
+      !Array.isArray(data.backlog.records)) return links
+
+  const ids = new Set()
+  for (const row of data.backlog.records) {
+    if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id)) return new Map()
+    ids.add(row.id)
+    if (!Array.isArray(row.links) && (row.links !== undefined || typeof row.pr_url !== 'string')) continue
+    const urls = [...(row.links ?? []).map(link => typeof link === 'string' ? link : link?.url), row.pr_url]
+    const exact = urls.filter(url => typeof url === 'string' && url === url.trim() &&
+      /^https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(url))
+    links.set(row.id, [...new Set(exact.map(url => url.replace(/\/$/, '')))].sort(compare))
+  }
+  return links
+}
+
+export function withPullRequests(entries, links) {
+  return entries.map(entry => {
+    const urls = links.get(entry.evidence.task_id)
+    return urls === undefined
+      ? { ...entry, evidence: { ...entry.evidence, pr_link_coverage: 'unobserved' } }
+      : { ...entry, fields: { ...entry.fields, pull_requests: urls },
+          evidence: { ...entry.evidence, pr_link_source: 'fleet-snapshot backlog' } }
+  })
 }
 
 function sourceDate(value) {
@@ -102,7 +128,6 @@ export function parseTasks(text, homeId) {
     }
     ids.add(row.id)
     const dependencies = normalizedDependencies(row.deps, homeId)
-    const pullRequests = normalizedPullRequests(row.links)
     const held = row.held === 'yes'
     const blocked = row.blocked === 'yes'
     return {
@@ -115,15 +140,13 @@ export function parseTasks(text, homeId) {
         hold_kind: holdKinds.has(row.hold_kind) ? row.hold_kind : null,
         hold_until: sourceDate(row.hold_until),
         dependencies,
-        ...(pullRequests === null ? {} : { pull_requests: pullRequests }),
         priority: row.priority === '-' ? null : row.priority,
         blocked,
         held,
         ready: row.state === 'queued' && row.kind !== 'public-followup' && !blocked && !held,
       },
       related: dependencies.map(dep => ({ relation: dep.type, subject: { type: 'task', id: dep.id } })),
-      evidence: { task_id: row.id, state_source: 'tasks-axi list',
-        ...(pullRequests === null ? { pr_link_coverage: 'ambiguous' } : {}) },
+      evidence: { task_id: row.id, state_source: 'tasks-axi list' },
     }
   })
 }
@@ -278,19 +301,27 @@ export async function observe(home, source, scratch, { now = () => new Date(), t
     if (!home.path || await realpath(home.path).catch(() => null) !== home.path) {
       throw new ObservationError('unavailable', 'configured FM_HOME could not be verified')
     }
-    if (source.type === 'task') {
-      const payload = await readTasks(home, taskCache, now)
-      return { source, started_at, observed_at: now().toISOString(), health: 'ok', ...payload }
-    }
-
     // The fleet command uses FM_DATA_OVERRIDE for the secondmate registry and
     // auxiliary projections. An empty data root keeps the read local. Worker
     // metadata and the crew-state reconciler still use the configured home.
-    const text = await runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
+    const readFleet = () => runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
       FM_DATA_OVERRIDE: scratch,
       FM_SNAPSHOT_CACHE_DIR: join(scratch, 'disabled', 'cache'),
       FM_CREW_STATE_NO_FORGE: '1',
     })
+    if (source.type === 'task') {
+      const payload = await readTasks(home, taskCache, now)
+      const fleetStartedAt = now().toISOString()
+      const text = await readFleet().catch(error => {
+        if (!(error instanceof ObservationError)) throw error
+        return null
+      })
+      const observed_at = now().toISOString()
+      const links = fleetPullRequests(text, home.path, fleetStartedAt, observed_at)
+      return { source, started_at, observed_at, health: 'ok', ...payload,
+        entries: withPullRequests(payload.entries, links) }
+    }
+    const text = await readFleet()
     const observed_at = now().toISOString()
     const payload = parseWorkers(text, home, started_at, observed_at)
     const incomplete = payload.counts.current_state_unavailable > 0

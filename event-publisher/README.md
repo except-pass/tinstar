@@ -127,10 +127,12 @@ separate coverage. After initial attach, the first verified state of an
 incarnation appears as `worker.observed`. Its evidence records whether the
 incarnation was previously seen with unknown state. The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
-titles, hold reasons and status messages stay out of the journal. PR coverage
-requires exact GitHub pull URLs without credentials, query strings or fragments.
-Ambiguous link lists leave the prior verified PR links in place and appear as
-ambiguous coverage in any task events from that read.
+titles, hold reasons and status messages stay out of the journal. PR links
+come from the fleet snapshot's structured backlog records and require exact
+GitHub pull URLs without credentials, query strings or fragments. When the
+backlog link data is unavailable, the journal keeps the last verified links.
+The next verified read establishes a new PR baseline without a link-change
+event. Task events from those reads include the PR coverage in their evidence.
 
 Each accepted snapshot and its events commit in one SQLite transaction.
 An event's `sequence` is the local journal cursor and `observation.batch_id`

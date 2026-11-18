@@ -193,15 +193,21 @@ export class Journal {
       const prior = select.get(source.source_id, entry.id)
       const before = prior?.fields ? JSON.parse(prior.fields) : null
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
-      const evidence = JSON.stringify(entry.evidence)
+      const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
+      const rebaselinePullRequests = source.type === 'task' && before && Object.hasOwn(entry.fields, 'pull_requests') &&
+        (!Object.hasOwn(before, 'pull_requests') || previousEvidence?.pr_link_source !== 'fleet-snapshot backlog')
+      const evidence = {
+        ...entry.evidence,
+        ...(rebaselinePullRequests ? { pr_link_coverage: 'rebaselined' } : {}),
+      }
       // Unavailable worker states count toward inventory coverage. Only a
       // verified per-incarnation observation may advance its state snapshot.
       saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
-        entry.sample.current_state, entry.sample.reason, evidence)
+        entry.sample.current_state, entry.sample.reason, JSON.stringify(evidence))
       if (previousSnapshot && fields && fields !== prior?.fields) {
-        const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
         const related = this.relationships(source, entry)
         for (const difference of eventChanges(source.type, before, entry.fields)) {
+          if (rebaselinePullRequests && difference.change.field === 'pull_requests') continue
           const envelope = {
             schema: 'event-publisher.event.v1',
             event_id: `event:${randomUUID()}`,
@@ -217,11 +223,7 @@ export class Journal {
               batch_id: snapshotId,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
               current_snapshot: snapshotId,
-              observed_between: {
-                after: difference.change.field === 'pull_requests' && previousEvidence?.pr_link_coverage === 'ambiguous'
-                  ? null : prior?.started_at ?? null,
-                by: observed_at,
-              },
+              observed_between: { after: prior?.started_at ?? null, by: observed_at },
             },
             related,
             evidence: {
@@ -229,7 +231,8 @@ export class Journal {
                 ...(entry.evidence.spawn_gen ? { spawn_gen: entry.evidence.spawn_gen } : {}) },
               state_source: entry.evidence.state_source,
               ...(previousEvidence ? { previous_state_source: previousEvidence.state_source } : {}),
-              ...(entry.evidence.pr_link_coverage ? { pr_link_coverage: entry.evidence.pr_link_coverage } : {}),
+              ...(evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
+              ...(evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
               ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
               confidence_basis: before ? 'field differs across verified observations'
                 : prior ? 'first verified state for a previously seen incarnation'
@@ -242,7 +245,7 @@ export class Journal {
       }
       save.run(source.source_id, entry.id, snapshotId, fields ? snapshotId : null,
         fields ? started_at : null, fields ? observed_at : null, fields,
-        fields ? evidence : null)
+        fields ? JSON.stringify(evidence) : null)
     }
     // Missing entities are retained. Only an observed field value can change
     // their last known state and inventory absence never asserts deletion.
