@@ -161,7 +161,7 @@ def parent_event(line):
     metadata, separator, note = content.partition(':')
     if state == 'done':
         prefix = metadata.partition('[')[0]
-        if any(not re.fullmatch(r'at=\d+|corr=\S*', word) for word in prefix.split()):
+        if any(not re.fullmatch(r'at=\d+', word) for word in prefix.split()):
             return None
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']

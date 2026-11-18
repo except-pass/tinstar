@@ -593,7 +593,7 @@ describe('config and HTTP boundary', () => {
     expect(config.warnings).toEqual([])
   })
 
-  it('keeps historical parent resolutions out of the sources response', async () => {
+  it('exposes keyed parent resolutions and keeps close correlations internal', async () => {
     const home = await temp()
     const snapshotFile = join(home, 'fleet.json')
     const parent_resolutions = { status: 'known', observed_at: timestamp, mates: { mate: {
@@ -608,7 +608,9 @@ describe('config and HTTP boundary', () => {
       const res = await fetch(`http://127.0.0.1:${address.port}/api/reconciliation/sources`)
       const body = await res.json()
       expect(body).toMatchObject({ ok: true, data: { fleet: [{ observation: { data: { fm_home: home } } }] } })
-      expect(body.data.fleet[0].observation.data).not.toHaveProperty('parent_resolutions')
+      expect(body.data.fleet[0].observation.data.parent_resolutions).toEqual({
+        status: 'known', observed_at: timestamp, mates: { mate: { status: 'known', keys: [{ key: 'api', at: 200 }] } },
+      })
       expect((await sources.snapshot()).fleet[0]?.observation.data?.parent_resolutions).toEqual(parent_resolutions)
     } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
   })

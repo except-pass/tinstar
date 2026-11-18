@@ -738,10 +738,13 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
   const snapshot = await sources.snapshot()
   const fleet = snapshot.fleet.map(row => {
     const { observation } = row
-    if (!observation.data) return row
-    const data = { ...observation.data }
-    delete data.parent_resolutions
-    return { ...row, observation: { ...observation, data } }
+    const data = observation.data
+    if (!data?.parent_resolutions) return row
+    const { status, observed_at, mates } = data.parent_resolutions
+    const parent_resolutions = { status, observed_at, mates: Object.fromEntries(
+      Object.entries(mates).map(([id, mate]) => [id, { status: mate.status, keys: mate.keys }]),
+    ) }
+    return { ...row, observation: { ...observation, data: { ...data, parent_resolutions } } }
   })
   return ok(res, { ...snapshot, fleet }, { headers })
 }
