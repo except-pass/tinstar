@@ -40,6 +40,13 @@ schema caches for ten minutes; details for 30 seconds. Active scans omit hierarc
 expansion and body/comment reads. The existing search index’s bounded background
 prose collection remains independent of these property-only scans.
 
+Both reads recognize serialized waits and source text with labeled Dependency,
+Unblocks when and Follow-up by lines. They return field diagnostics in
+`waiting_for_issues`, the first issue in `waiting_for_exception`, and exact
+Work references with their resolution state in `waiting_for_work`. The reads
+preserve source records. See [Overview](overview.md#waiting-for-dependency-groups)
+for how the UI displays these issues.
+
 All application Notion requests share a minimum 350 ms between request starts
 and honor Retry-After. Foreground requests start ahead of queued background
 work. Passive reads, interactive board queries, and bounded card details can
@@ -154,17 +161,34 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `edit` | Optional ordinary `properties`, `content` (brief/acceptance), `note`. No raw Owner, Status, worker link, checkpoint or Will action bypass. |
 | `assign` | Declared `owner`, optional queued/planned `status`, optional handoff `note`, optional exact `resolve_wait`. Firstmate is always Queued. Leaving Waiting For requires that exact wait; another remaining wait keeps the card Waiting For. |
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
-| `wait` | `type` (Actor, Event or Work), `id`, `dependency`, `unblocks_when`, `follow_up_by`, future `next_check_in`, optional `note`. Writes Status, Type, ID, the dependency line and Next check-in together. Appends another wait while retaining a different primary blocker. For Notion, Tin Star saves the requested minute or the next minute if the requested minute has already started. |
+| `wait` | See [Waiting For writes](#waiting-for-writes). |
 | `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. For source binding and published choices, see [First Mate decision reconciliation](#first-mate-decision-reconciliation). |
 | `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires the full wait; Done/Archived requires disposition/evidence. Resolving one wait requeues only when no other wait remains. |
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
 
-A wait is an independent blocker. Actor identifies the named person, team or service responsible for the dependency. Event identifies a condition with a stable description or reference. Work identifies another unfinished card by its exact Notion or Jira ID. Tin Star looks up that ID through the configured source when it is outside the current read. A failed lookup leaves the reference unknown and a Work write requires a verified blocker. Worker assignment, First Mate pickup, queue position and a check-in date alone stay Queued. Waiting for Prod Release uses the release lifecycle.
+<a id="waiting-for-writes"></a>
 
-Overview groups active waits by their recorded type and ID. Needs classification counts cards with invalid identities. A canonical wait can still need description fields or reference verification. A Work blocker can also have a wait of its own. MCP returns the same field diagnostics in `waiting_for_issues`, keeps the first issue in `waiting_for_exception`, and reports exact Work links and their state in `waiting_for_work`. These reads preserve source records. They recognize both serialized waits and source text with labeled Dependency, Unblocks when and Follow-up by lines.
+`update_work` with `kind: "wait"` requires `type`, `id`, `dependency`,
+`unblocks_when`, `follow_up_by` and a future `next_check_in`. The `note` and
+`replace_wait` fields are optional. Adding a wait sets Waiting For and
+retains a different primary blocker. A date-only check-in means 9 AM
+America/New_York. Notion stores the requested minute or the next minute if
+the requested minute has already started.
 
-To correct a wait, call `update_work` with `kind: "wait"`, the exact current entry in `replace_wait`, and the explicit new Type and ID. Include every line of a multiline entry. Preserve the recorded dependency, unblock condition and follow-up owner, and supply a future Next check-in. For free-form text, use the original line as the dependency. Use Actor for a legacy Person while retaining the named blocker. Use Work for a legacy Card after confirming its exact card ID. If a Work ID is an alias, confirm the actual blocker before choosing the type. Other entries retain their identities, and their existing defects remain diagnostics. Replacing a secondary entry preserves the primary blocker and cannot defer the Next check-in. Omit `replace_wait` to add an independent wait.
+A wait is an independent blocker. Actor identifies the named person, team or service responsible for the dependency. Event identifies a condition with a stable description or reference. Work identifies another unfinished card by its exact Notion or Jira ID. Tin Star looks up that ID through the configured source when it is outside the current read. A failed lookup leaves the reference unknown and a Work write requires a verified blocker. Waiting for Prod Release uses the release lifecycle.
+
+To correct a wait, supply `replace_wait` with the exact text of one current
+entry, including every line of a multiline entry, and supply the corrected
+`type` and `id`. Preserve any recorded dependency, unblock condition and
+follow-up owner. For free-form text, use the original line as the dependency.
+Use Actor for a legacy Person while retaining the named blocker. Use Work
+for a legacy Card after confirming its exact card ID. If a Work ID is an
+alias, confirm the actual blocker before choosing the type. Other entries
+retain their identities and their existing defects remain diagnostics.
+Replacing a secondary entry preserves the primary blocker and keeps the
+existing check-in when it is valid and at or before the requested appointment.
+Omit `replace_wait` to add an independent wait.
 
 The dispatch phrase set is case-insensitive: worker assignment/start/attachment
 (including “A worker is assigned to this card”), First Mate pickup, queue position
