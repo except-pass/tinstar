@@ -88,7 +88,8 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
       !Number.isFinite(generated) || generated < Date.parse(startedAt) - 1000 ||
       generated > Date.parse(observedAt)) return null
   const window = { links, generated_at: new Date(generated).toISOString(), started_at: startedAt, observed_at: observedAt }
-  if (data.backlog?.present !== true) return { ...window, backlogAbsent: true }
+  if (data.backlog?.present === false) return { ...window, backlogAbsent: true }
+  if (data.backlog?.present !== true) return null
   if (data.main_inventory?.valid !== true || !Array.isArray(data.backlog.records)) return null
 
   const ids = new Set()

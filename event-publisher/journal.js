@@ -253,9 +253,10 @@ export class Journal {
           pr.generated_at > (worker?.last_generated_at ?? '')
         const projected = withPullRequests(entries, fresh ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-        counts = pr_links_unobserved || pr?.backlogAbsent ? {
+        const backlogAbsent = fresh && pr.backlogAbsent
+        counts = pr_links_unobserved || backlogAbsent ? {
           ...(pr_links_unobserved ? { pr_links_unobserved } : {}),
-          ...(pr?.backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
+          ...(backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
         } : null
         if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }

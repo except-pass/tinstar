@@ -416,8 +416,9 @@ test('invalid fleet windows leave valid task fields observable', async t => {
   for (const [minute, window] of [
     [2, { started_at: at(4), observed_at: at(3) }],
     [4, { started_at: at(4), observed_at: at(4) }],
+    [6, { generated_at: at(0), links: new Map(), backlogAbsent: true }],
   ]) {
-    const attempt = taskObservation([{ ...task, priority: minute }], minute, tasks, [{ id: task.id, pr_url: pr }])
+    const attempt = taskObservation([{ ...task, priority: minute / 2 }], minute, tasks, [{ id: task.id, pr_url: pr }])
     const pullRequests = { ...attempt.pullRequests, ...window }
     deepEqual(journal.recordAttempt({ ...attempt, pullRequests }), { written: 1, complete: false })
     const event = journal.events().at(-1)
@@ -427,6 +428,14 @@ test('invalid fleet windows leave valid task fields observable', async t => {
     const [status] = journal.sources()
     equal(status.last_success_at, attempt.observed_at)
     equal(status.last_generated_at, at(0))
+    deepEqual(status.counts, { pr_links_unobserved: 1 })
+  }
+})
+
+test('fleet backlog absence requires an explicit false presence marker', () => {
+  const envelope = { schema: 'fm-fleet-snapshot.v1', fm_home: home.path, generated: at(0), main_inventory: { valid: true } }
+  for (const backlog of [undefined, {}, { present: 'false' }]) {
+    equal(fleetPullRequests(JSON.stringify({ ...envelope, backlog }), home.path, at(0), at(1)), null)
   }
 })
 
@@ -568,7 +577,7 @@ test('the live list and real home fleet projections work with a secondmate regis
   await mkdir(bin)
   await mkdir(data)
   const pr = 'https://github.com/example/repo/pull/12'
-  await writeFile(join(data, 'secondmates.md'), '')
+  await writeFile(join(data, 'secondmates.md'), '# Secondmates\n')
   await writeFile(backlog, JSON.stringify({ present: true, records: [{ id: 'sample-task', links: [pr] }] }))
   await writeFile(config, JSON.stringify({ homes: [{ ...home, path }] }))
   const writeTasks = state => writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
@@ -590,10 +599,13 @@ TASKS
 echo call >> '${calls}'
 if [ -f "$FM_HOME/data/backlog.md" ]; then
   backlog=$(cat "$FM_HOME/data/backlog.md")
+  state=working
 else
   backlog='{"present":false,"records":[]}'
+  state=parked
 fi
-printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_inventory":{"valid":true},"secondmate_current":{"registry":{"present":true}},"tasks":[],"backlog":%s}\\n' "$FM_HOME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backlog"
+generated=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_inventory":{"valid":true},"secondmate_current":{"registry":{"present":true}},"tasks":[{"id":"sample-task","spawn_gen":"gen-1","remote":null,"current_state":{"state":"%s","source":"pane","observed_at":"%s","freshness":"fresh"}}],"backlog":%s}\\n' "$FM_HOME" "$generated" "$state" "$generated" "$backlog"
 `, { mode: 0o700 })
   await exec(cli, ['observe', '--config', config, '--db', db])
   equal(await readFile(calls, 'utf8'), 'call\n')
@@ -618,7 +630,12 @@ printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_i
   ok(taskAfter.last_snapshot_id !== taskBefore.last_snapshot_id)
   deepEqual(journal.events().map(event => event.change), [
     { field: 'state', before: 'queued', after: 'done' },
+    { field: 'current_state', before: 'working', after: 'parked' },
   ])
+  const replay = await exec(cli, ['replay', '--db', db, '--type', 'worker', '--json'])
+  const transition = JSON.parse(replay.stdout)
+  deepEqual(transition.subject, { type: 'worker', id: entityId('worker', home.id, 'sample-task', 'gen-1') })
+  deepEqual(transition.change, { field: 'current_state', before: 'working', after: 'parked' })
   equal(journal.events()[0].evidence.pr_link_coverage, 'unobserved')
   const stored = journal.db.prepare('SELECT fields FROM entities WHERE source_id = ?').get(taskAfter.source_id)
   deepEqual(JSON.parse(stored.fields).pull_requests, [pr])
