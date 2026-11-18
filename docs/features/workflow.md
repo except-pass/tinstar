@@ -40,10 +40,10 @@ schema caches for ten minutes; details for 30 seconds. Active scans omit hierarc
 expansion and body/comment reads. The existing search index’s bounded background
 prose collection remains independent of these property-only scans.
 
-Both reads recognize serialized waits and source text with labeled Dependency,
-Unblocks when and Follow-up by lines. They return field diagnostics in
-`waiting_for_issues`, the first issue in `waiting_for_exception`, and exact
-Work references with their resolution state in `waiting_for_work`. The reads
+Both reads recognize serialized waits and the [authored wait format](#waiting-for-writes).
+They return field diagnostics in `waiting_for_issues`, the first issue in
+`waiting_for_exception`, and exact Work references with their resolution state in
+`waiting_for_work`. The reads
 preserve source records. See [Overview](overview.md#waiting-for-dependency-groups)
 for how the UI displays these issues.
 
@@ -176,7 +176,14 @@ retains a different primary blocker. A date-only check-in means 9 AM
 America/New_York. Notion stores the requested minute or the next minute if
 the requested minute has already started.
 
-A wait is an independent blocker. Actor identifies the named person, team or service responsible for the dependency. Event identifies a condition with a stable description or reference. Work identifies another unfinished card by its exact Notion or Jira ID. Tin Star looks up that ID through the configured source when it is outside the current read. A failed lookup leaves the reference unknown and a Work write requires a verified blocker. Waiting for Prod Release uses the release lifecycle.
+For a wait entered directly on the card, set Waiting For Type and ID and put the
+dependency on the first line of Waiting For, as plain text or with a
+`Dependency:` label. Add an `Unblocks when: <condition>` line with an observable
+condition. An authored wait can include an optional `Follow-up by: <owner>` line.
+Labels are case-insensitive, and blank lines between the description and labels
+are allowed. Keep unrelated blocker text outside the entry.
+
+A wait is an independent blocker. Actor identifies the named person, team or service responsible for the dependency. Event identifies a condition with a stable description or non-card reference. Work identifies another unfinished card by its exact Notion or Jira ID. Tin Star looks up that ID through the configured source when it is outside the current read. A failed lookup leaves the reference unknown and a Work write requires a verified blocker. Waiting for Prod Release uses the release lifecycle.
 
 To correct a wait, supply `replace_wait` with the exact text of one current
 entry, including every line of a multiline entry, and supply the corrected
@@ -189,6 +196,8 @@ retain their identities and their existing defects remain diagnostics.
 Replacing a secondary entry preserves the primary blocker and keeps the
 existing check-in when it is valid and at or before the requested appointment.
 Omit `replace_wait` to add an independent wait.
+If a checkpoint returns `wait-invalid`, use the error's field diagnostic to
+correct the authored entry or replace it with a structured wait before retrying.
 
 The dispatch phrase set is case-insensitive: worker assignment/start/attachment
 (including “A worker is assigned to this card”), First Mate pickup, queue position

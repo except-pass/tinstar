@@ -525,8 +525,10 @@ export class WorkflowOperations {
     const references = await this.reader.waitingForWork([state], [], { refresh: true })
     const [issue] = waitingForIssues({ ...state, coverage: 'complete' }, references)
     if (issue) {
-      const code = issue.category === 'reference' ? issue.code : 'wait-invalid'
-      throw new WorkflowError(code, `${issue.field}: ${issue.reason} Repair the active wait fields before this transition. Nothing was written.`)
+      if (issue.category === 'reference') {
+        throw new WorkflowError(issue.code, `${issue.field}: ${issue.reason} Repair the active wait fields before this transition. Nothing was written.`)
+      }
+      throw new WorkflowError('wait-invalid', `${issue.field}: ${issue.reason} Describe the dependency in Waiting For and add a line 'Unblocks when: <condition>', or use kind=wait with type, id, dependency, unblocks_when, follow_up_by and next_check_in (set replace_wait to the exact entry when repairing an existing wait). Nothing was written.`)
     }
   }
   private async updatePlan(card: WorkCard, input: UpdateWorkInput, actor: string, notes: Awaited<ReturnType<WorkflowContent['notes']>>) {
