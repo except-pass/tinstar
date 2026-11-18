@@ -476,12 +476,20 @@ test('worker inventory respects accepted PR fleet windows and can share a fresh 
   journal.record(taskObservation([task], 0))
   const prOnly = taskObservation([task], 1, tasks, [{ id: task.id, links: [] }])
   journal.record({ ...prOnly, pullRequests: { ...prOnly.pullRequests, observed_at: at(5) } })
+  const changedTask = { ...task, priority: 1 }
+  const pr = 'https://github.com/example/repo/pull/13'
+  const overlap = taskObservation([changedTask], 3, tasks, [{ id: task.id, pr_url: pr }])
+  deepEqual(journal.recordAttempt(overlap), { written: 1, complete: false })
+  const [event] = journal.events()
+  equal(event.change.field, 'priority')
+  equal(event.evidence.pr_link_coverage, 'unobserved')
+  equal(journal.sources().find(source => source.type === 'task').last_success_at, at(4))
   journal.record({ ...workerObservation([], 2), entries: undefined, health: 'unavailable' })
   deepEqual(journal.recordAttempt(workerObservation([], 3)), { written: 0, complete: false })
   equal(journal.sources().find(source => source.type === 'worker').last_generated_at, null)
 
-  const fresh = taskObservation([task], 5)
-  equal(journal.recordAttempt(fresh).complete, true)
+  const fresh = taskObservation([changedTask], 5, tasks, [{ id: task.id, pr_url: pr }])
+  deepEqual(journal.recordAttempt(fresh), { written: 0, complete: true })
   equal(journal.recordAttempt(workerObservation([], 5)).complete, true)
   equal(journal.recordAttempt(workerObservation([], 5)).complete, false)
 })
