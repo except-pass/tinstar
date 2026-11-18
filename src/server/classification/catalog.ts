@@ -62,12 +62,12 @@ function redactClassificationText(text: string) {
     .replace(/-----BEGIN (?:[^-\r\n]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[^-\r\n]+ )?PRIVATE KEY-----|$)/g, omittedCredential)
     .replace(credentialAssignment, omittedCredential)
     .replace(legacyCredentialAssignment, omittedCredential)
+    .replace(/```[\s\S]*?(?:```|$)/g, '')
+    .replace(/https?:\/\/\S+/gi, '[link omitted]')
     .replace(bearerCredential, omittedCredential)
     .replace(basicCredential, (match, token: string) =>
       Buffer.from(token, 'base64').toString('latin1').includes(':') ? omittedCredential : match)
     .replace(knownCredential, omittedCredential)
-    .replace(/```[\s\S]*?(?:```|$)/g, '')
-    .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
 }
 
 export function clean(text: unknown, limit: number) {

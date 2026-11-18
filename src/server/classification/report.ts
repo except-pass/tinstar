@@ -90,7 +90,7 @@ export function dryRunReport(report: DryRun, notion: { requests: Record<string, 
       `${value.calibration.correct} / ${value.calibration.accepted}`, `${value.holdout.correct} / ${value.holdout.accepted}`,
       pct(value.holdout.correct, value.holdout.accepted), value.holdout.accepted ? pct(value.holdout.lower, 1) : '—',
     ])),
-    `Detailed results use the **${policy.name}** profile. Calibration and holdout were split by card ID hash before inference. Coverage and precision use exact Initiative/Epic pair agreement. Existing historical destinations absent from today's active catalog serve as a novelty proxy.`,
+    `Detailed results use the **${policy.name}** profile. The ledger records a separate conservative baseline assessment. Calibration and holdout were split by card ID hash before inference. Coverage and precision use exact Initiative/Epic pair agreement. Existing historical destinations absent from today's active catalog serve as a novelty proxy.`,
     table(['Cohort', 'Out of catalog', 'Explicit no-fit recall', 'Incorrectly accepted'], [policy.calibration, policy.holdout].map((value, index) => [
       index ? 'Holdout' : 'Calibration', value.novel, `${value.detected} / ${value.novel} (${pct(value.detected, value.novel)})`, value.falseAcceptedNovel,
     ])),

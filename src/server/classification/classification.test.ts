@@ -225,7 +225,7 @@ it('reads the configured board through NotionApi and persists replay results in 
   const unassigned = { ...page, properties: {
     ...page.properties,
     Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication.\n-----BEGIN PRIVATE KEY-----\nU1lOVEhFVElDUEtDUzg=\n-----END PRIVATE KEY-----\nVerify the rollout.' }] },
-    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies.\n-----BEGIN RSA PRIVATE KEY-----\nU1lOVEhFVElDUlNB\n-----END RSA PRIVATE KEY-----\nCheck session expiry.' }] },
+    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies.\n-----BEGIN RSA PRIVATE KEY-----\nU1lOVEhFVElDUlNB\n-----END RSA PRIVATE KEY-----\nCheck session expiry via https://svc:(syntheticUrlPassword)@example.invalid/path then verify.' }] },
   } }
   const closedPage = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
   const historical = { ...closedPage, properties: {
@@ -266,18 +266,26 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(model).toHaveBeenCalledTimes(3)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry.' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)
-  const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT state, result, write_receipt FROM classification_jobs').all())
+  const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT card_id, state, result, write_receipt FROM classification_jobs').all())
   expect(rows).toHaveLength(3)
   expect(rows.every(row => row.state === 'examined' && row.write_receipt === null)).toBe(true)
+  for (const row of report.rows) {
+    const stored = rows.find(record => record.card_id === row.result.cardId)
+    const payload = JSON.parse(String(stored?.result))
+    expect(payload).toMatchObject({
+      baselineAssessment: { profile: 'conservative', outcome: assess(row.result, thresholds.conservative).outcome },
+    })
+    expect(payload).not.toHaveProperty('decision')
+  }
   expect(JSON.stringify(rows)).not.toMatch(/test-notion-token|test-openrouter-credential|Work on panel status support/)
   expect(dryRunReport(report, api.diagnostics)).toContain('Historical confusion matrix')
 })

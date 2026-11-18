@@ -62,7 +62,9 @@ class ClassificationLedger {
   }
   finish(batchId: string, result: Classification) {
     return this.leases.writeStorage(db => {
-      const payload = { ...publicResult(result), decision: assess(result, thresholds.conservative).outcome, finishedAt: Date.now() }
+      const profile = 'conservative'
+      const baselineAssessment = { profile, outcome: assess(result, thresholds[profile]).outcome }
+      const payload = { ...publicResult(result), baselineAssessment, finishedAt: Date.now() }
       db.prepare('UPDATE classification_jobs SET state = ?, result = ? WHERE batch_id = ? AND card_id = ?')
         .run(result.state, JSON.stringify(payload), batchId, result.cardId)
     })
