@@ -1,7 +1,7 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
 import type { RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
-import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
+import { decisionCardSource, decisionPropertyRevision, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
@@ -85,7 +85,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
-    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment: boolean, recoveryRevision?: string | null): ReturnType<RecordDeskAnswer> {
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment: boolean): ReturnType<RecordDeskAnswer> {
     const id = packet.card_id
     const actor = 'Tin Star Decision Desk'
     const marker = deskAnswerMarker + operation
@@ -96,10 +96,7 @@ export class WorkflowOperations {
       const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
       if (!recorded && requireComment) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
-      const revisionMatches = recorded && recoveryRevision
-        ? source.recoveryRevision === recoveryRevision
-        : source.revision === packet.source_revision
-      if (!source.actionable || !revisionMatches) {
+      if (!source.actionable || source.revision !== packet.source_revision) {
         return recorded
           ? { outcome: 'recorded', message: 'The answer is on the card. Current card properties were preserved.' }
           : { outcome: 'packet-invalidated' }
@@ -141,6 +138,9 @@ export class WorkflowOperations {
       if (Object.keys(properties).length) {
         await this.content.patchProperties(id, properties, async () => {
           const latest = await this.reader.card(id, true)
+          if (recorded && decisionPropertyRevision(latest) !== source.propertyRevision) {
+            throw new Error('The card changed before the answer handoff could be applied')
+          }
           for (const name of Object.keys(properties)) {
             if (!matches(latest, name) && !this.matches(latest, name, card.properties[name]?.value ?? null)) {
               throw new Error(`${name} changed before the answer could be applied`)

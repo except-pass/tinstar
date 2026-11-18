@@ -81,8 +81,8 @@ checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
 If the answer comment saves before the property handoff completes, retrying
 the same operation or the next refill pass completes the handoff while the
-same substantive revision and owner remain, and the card is still owned by
-Will, tagged with a Will action, or waiting for Will. Otherwise Tin Star
+same decision revision remains, including its owner, Will action tags, and
+wait fields, and the card still needs Will. Otherwise Tin Star
 preserves the saved answer and the current card properties. Releasing the lease
 keeps the saved answer. Other cards remain available while a
 write is resolved. Reminder reservations

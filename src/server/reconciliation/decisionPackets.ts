@@ -32,9 +32,6 @@ export class DecisionPackets {
           binding TEXT NOT NULL, input TEXT NOT NULL, state TEXT NOT NULL, confirmed_at TEXT,
           PRIMARY KEY(scope,caller,operation)
         );`)
-      if (!db.prepare("SELECT 1 FROM pragma_table_info('decision_card_packets') WHERE name = 'recovery_revision'").get()) {
-        db.exec('ALTER TABLE decision_card_packets ADD COLUMN recovery_revision TEXT')
-      }
       if (oldKey) db.exec(`
         INSERT INTO decision_card_answers SELECT * FROM decision_card_answers_previous;
         DROP TABLE decision_card_answers_previous;`)
@@ -56,11 +53,6 @@ export class DecisionPackets {
       .get(this.scope, card) as { id: string } | undefined
     const stored = row ? this.readInStorage(db, row.id) : null
     return revision === undefined || stored?.packet.source_revision === revision ? stored : null
-  }
-
-  recoveryRevision(id: string) {
-    return this.leases.readStorage(db => (db.prepare('SELECT recovery_revision FROM decision_card_packets WHERE scope = ? AND id = ?')
-      .get(this.scope, id) as { recovery_revision: string | null } | undefined)?.recovery_revision)
   }
 
   answeredInStorage(db: DatabaseSync, card: string, revision: string) {
@@ -97,8 +89,8 @@ export class DecisionPackets {
     const packet: DecisionPacket = { ...contents, card_id, source_revision: source.revision, title: source.title,
       options: contents.options.map((option, index) => ({ ...option, id: String(index + 1) })) }
     const id = randomUUID(), published_at = new Date(this.now()).toISOString()
-    db.prepare('INSERT INTO decision_card_packets (id,scope,card,body,published_at,property_revision,recovery_revision) VALUES (?,?,?,?,?,?,?)')
-      .run(id, this.scope, card_id, JSON.stringify(packet), published_at, source.propertyRevision, source.recoveryRevision)
+    db.prepare('INSERT INTO decision_card_packets (id,scope,card,body,published_at,property_revision) VALUES (?,?,?,?,?,?)')
+      .run(id, this.scope, card_id, JSON.stringify(packet), published_at, source.propertyRevision)
     return { id, packet, published_at }
   }
 

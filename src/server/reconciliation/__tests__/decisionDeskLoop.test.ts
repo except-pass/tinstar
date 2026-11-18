@@ -243,23 +243,24 @@ describe('prepared-card loop', () => {
     expect((await web('snapshot')).data).toMatchObject({ counts: { ready: 1 }, ready: [{ card_id: card.id }] })
   })
 
-  it('excludes synthetic cards from Desk eligibility and webhook dispatch', async () => {
+  it.each([
+    { displayKey: 'TSSPIKE-1', synthetic: false, eligible: false },
+    { displayKey: 'FIXTURE-1', synthetic: true, eligible: false },
+    { displayKey: 'LIVE-1', synthetic: false, eligible: true },
+  ])('dispatches $displayKey only when eligible ($eligible)', async ({ displayKey, synthetic, eligible }) => {
     const card = page(1, { tag: 'Decision' })
     const { sources } = await setup([card])
     const live = await sources.currentCard(card.id)
-    const pilot = { ...live, id: jiraCardPrefix + '1' }
-    const marked = { ...live, id: id(2), source: { provider: 'jira', instanceId: 'fixture', collectionId: '2',
-      itemId: '2', displayKey: 'FIXTURE-2', synthetic: true } as const }
-    const rows = [pilot, marked, live]
-    expect(rows.filter(actionableDecisionCard)).toEqual([live])
+    const jira = { ...live, id: jiraCardPrefix + '1', source: { provider: 'jira', instanceId: 'fixture',
+      collectionId: 'fixture', itemId: '1', displayKey, synthetic } as const }
+    expect(actionableDecisionCard(jira)).toBe(eligible)
     const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
     const prep = new DecisionPreparation(sources.decisionPackets, {
-      refreshQueue: async () => rows,
-      read: async cardId => decisionCardSource(rows.find(row => row.id === cardId)!, []),
+      refreshQueue: async () => [jira],
+      read: async () => decisionCardSource(jira, []),
     }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
     await prep.replenish()
-    expect(push).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(String(push.mock.calls[0]![1]?.body)).card_url).toContain(live.id)
+    expect(push).toHaveBeenCalledTimes(eligible ? 1 : 0)
   })
 
   it('names missing publication fields, keeps packets across time, and invalidates changed card content', async () => {
@@ -404,6 +405,20 @@ describe('prepared-card loop', () => {
     }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties).toEqual(properties)
+    expect(card.comments).toHaveLength(1)
+    expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
+  })
+
+  it('preserves a replacement Merge tag when recovering a saved Decision answer', async () => {
+    const card = page(1, { owner: 'Firstmate', tag: 'Decision' })
+    const { sources, tool, writes } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'claim-decision-tag', card_id: card.id })
+    const answer = { operation_id: 'answer-decision-tag', lease_token: held.lease_token, option_id: '1', answer: 'Proceed.' }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
+    card.properties['Will action'] = tags('Merge')
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.properties['Will action']).toEqual(tags('Merge'))
     expect(card.comments).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
