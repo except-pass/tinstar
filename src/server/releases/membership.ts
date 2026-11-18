@@ -23,21 +23,21 @@ export class ReleaseMembershipReader {
   private ranges = new Map<string, Range>()
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
-  async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag) {
-    const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`
+  async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag, onMain = false) {
+    const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}:${onMain}`
     const current = this.ranges.get(key)
     if (current && (current.membership.status === 'complete' || current.retryAt > this.now())) return current
     const existing = this.pending.get(key)
     if (existing) return existing
-    const work = this.advance(repository, source, tag, current, tags, baseline).finally(() => this.pending.delete(key))
+    const work = this.advance(key, repository, source, tag, onMain, current, tags, baseline).finally(() => this.pending.delete(key))
     this.pending.set(key, work)
     return work
   }
-  since(repository: string, source: string, baseline: Tag) { return this.get(repository, source, 'main', [baseline], baseline) }
-  private readCommitPulls(repository: string, commit: string) {
+  since(repository: string, source: string, baseline: Tag) { return this.get(repository, source, 'main', [baseline], baseline, true) }
+  private readCommitPulls(repository: string, commit: string, onMain: boolean) {
     const key = `${repository.toLowerCase()}:${commit}`
     const cached = this.commitPulls.get(key)
-    if (cached) return cached.work
+    if (cached && cached.until > this.now()) return cached.work
     const entry: { until: number; work: Promise<CommitPull[]> } = {
       until: Infinity,
       work: this.read(`/repos/${repository}/commits/${commit}/pulls?per_page=100`, '[.[]|{number,title,html_url,merged_at,merge_commit_sha,head:{sha:.head.sha},base:{ref:.base.ref}}]')
@@ -46,16 +46,21 @@ export class ReleaseMembershipReader {
           const merged = (response as CommitPull[]).filter(row =>
             typeof row.merged_at === 'string' && Number.isFinite(Date.parse(row.merged_at)) &&
             sha(row.merge_commit_sha) && typeof row.html_url === 'string' && releasePull(row.html_url)?.repository === repository)
-          if (merged.length > 0 && merged.length === response.length) entry.until = this.now() + commitTtl
-          else this.commitPulls.delete(key)
+          if (onMain) {
+            if (merged.length > 0 && merged.length === response.length) entry.until = this.now() + commitTtl
+            else this.commitPulls.delete(key)
+          }
           return merged
         })
-        .catch(error => { this.commitPulls.delete(key); throw error }),
+        .catch(error => {
+          if (onMain) this.commitPulls.delete(key)
+          throw error
+        }),
     }
-    this.commitPulls.set(key, entry)
+    if (onMain) this.commitPulls.set(key, entry)
     return entry.work
   }
-  private async advance(repository: string, source: string | null, tag: string, previous?: Range, tags?: Tag[], baseline?: Tag) {
+  private async advance(key: string, repository: string, source: string | null, tag: string, onMain: boolean, previous?: Range, tags?: Tag[], baseline?: Tag) {
     const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
     try {
       if (!/^[\w.-]+\/[\w.-]+$/.test(repository) || !sha(source)) throw new Error('Release source SHA is missing; Changes cannot be determined')
@@ -86,7 +91,7 @@ export class ReleaseMembershipReader {
       // Advance only whole successful batches: failed reads retry without dropping known members.
       for (let batch = 0; batch < 2 && range.cursor < range.commits.length; batch++) {
         const commits = range.commits.slice(range.cursor, range.cursor + 4)
-        const responses = await Promise.all(commits.map(commit => this.readCommitPulls(repository, commit)))
+        const responses = await Promise.all(commits.map(commit => this.readCommitPulls(repository, commit, onMain)))
         for (const response of responses) {
           for (const raw of response) {
             const identity = releasePull(raw.html_url)
@@ -107,7 +112,7 @@ export class ReleaseMembershipReader {
       range.membership.reason = error instanceof Error ? error.message : 'Git release membership unavailable'
       range.retryAt = this.now() + 60_000
     }
-    this.ranges.set(`${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`, range)
+    this.ranges.set(key, range)
     // Retain only recently used immutable ranges, without a new on-disk release ledger.
     if (this.ranges.size > 32) this.ranges.delete(this.ranges.keys().next().value!)
     return range

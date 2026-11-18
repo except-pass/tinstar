@@ -12,7 +12,7 @@ beforeEach(async () => {
   github = await import('../github')
   exec.mockReset()
 })
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 
 function answer(status: number, body: unknown = null, headers = '') {
   const stdout = `HTTP/2.0 ${status} Example\n${headers}\r\n${body === null ? '' : JSON.stringify(body)}`
@@ -147,4 +147,13 @@ it('applies the header hold while the body is pending and retains it after inter
   expect(next).not.toHaveBeenCalled()
   vi.setSystemTime(clock + 120_000)
   await expect(budget.send(next)).resolves.toMatchObject({ status: 200 })
+})
+
+it('honors GH_BIN for legacy-backed reads and uses PATH gh for native-only reads', async () => {
+  vi.stubEnv('GH_BIN', '/configured/gh')
+  answer(200, { payload: ['configured'] }, 'Etag: "configured"\n')
+  await expect(github.githubJson(pulls)).resolves.toEqual(['configured'])
+  answer(200, { payload: ['path'] })
+  await expect(github.githubCliJson(pulls, '.', undefined, false)).resolves.toEqual(['path'])
+  expect(exec.mock.calls.map(call => call[0])).toEqual(['/configured/gh', 'gh'])
 })

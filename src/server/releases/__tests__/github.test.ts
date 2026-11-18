@@ -273,3 +273,29 @@ it.each(['empty', 'open', 'mixed'])('refreshes a %s commit association when a PR
   expect(main.membership.status).toBe('complete')
   expect([...main.pulls.values()].map(row => row.number)).toEqual(initial === 'mixed' ? [123, 124] : [123])
 })
+
+it('refreshes a merged association first observed outside main', async () => {
+  const first = 'c'.repeat(40), merge = 'd'.repeat(40), later = 'e'.repeat(40)
+  let onMain = false
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) {
+      const commits = (path.includes(later) ? [first, merge, later] : onMain ? [first, merge] : [first]).map(sha => ({ sha }))
+      return { status: 'ahead', merge_base_commit: { sha: nativeBase }, total_commits: commits.length, commits }
+    }
+    if (!path.includes(`/commits/${first}/pulls`)) return []
+    const number = onMain ? 124 : 123
+    return [{ html_url: `https://github.com/${nativeRepo}/pull/${number}`, merged_at: nativeTime, merge_commit_sha: onMain ? merge : first }]
+  })
+  const reader = new ReleaseMembershipReader(read, () => now)
+  const baseline = { name: 'v1.0.0', commit: { sha: nativeBase } }
+  const tagged = await reader.get(nativeRepo, first, 'v1.1.0', [baseline])
+  expect([...tagged.pulls.values()].map(row => row.number)).toEqual([123])
+
+  onMain = true
+  for (const head of [merge, later]) {
+    const main = await reader.since(nativeRepo, head, baseline)
+    expect(main.membership.status).toBe('complete')
+    expect([...main.pulls.values()].map(row => row.number)).toEqual([124])
+  }
+  expect(read.mock.calls.filter(([path]) => path.includes(`/commits/${first}/pulls`))).toHaveLength(2)
+})
