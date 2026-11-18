@@ -9,6 +9,8 @@ type Tag = { name: string; commit: { sha: string } }
 const sha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value)
 const version = (value: string) => /^v(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number)
 const compareVersions = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!
+const commitTtl = 24 * 60 * 60_000
+type CommitPull = { html_url: string; title: unknown; merged_at: string; merge_commit_sha: string; head?: { sha?: unknown }; base?: { ref?: string } }
 interface Range {
   membership: ReleaseObject['membership']; pulls: Map<string, ReleasePull>
   files: string[]; commits: string[]; cursor: number; page: number; total: number; retryAt: number
@@ -17,6 +19,7 @@ interface Range {
  * Commit-associated PRs must have their effective merge in the exact Git range.
  * Tags delimit Changes only; they never certify deployment or acceptance. */
 export class ReleaseMembershipReader {
+  private commitPulls = new Map<string, { until: number; work: Promise<CommitPull[]> }>()
   private ranges = new Map<string, Range>()
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
@@ -31,6 +34,23 @@ export class ReleaseMembershipReader {
     return work
   }
   since(repository: string, source: string, baseline: Tag) { return this.get(repository, source, 'main', [baseline], baseline) }
+  private readCommitPulls(repository: string, commit: string) {
+    const key = `${repository.toLowerCase()}:${commit}`
+    const cached = this.commitPulls.get(key)
+    if (cached) return cached.work
+    const entry: { until: number; work: Promise<CommitPull[]> } = {
+      until: Infinity,
+      work: this.read(`/repos/${repository}/commits/${commit}/pulls?per_page=100`, '[.[]|{number,title,html_url,merged_at,merge_commit_sha,head:{sha:.head.sha},base:{ref:.base.ref}}]')
+        .then(response => {
+          if (!Array.isArray(response) || response.length >= 100 || response.some(row => !row || typeof row !== 'object')) throw new Error('Commit-associated PR history is incomplete')
+          entry.until = this.now() + commitTtl
+          return (response as CommitPull[]).filter(row => row.merged_at && sha(row.merge_commit_sha))
+        })
+        .catch(error => { this.commitPulls.delete(key); throw error }),
+    }
+    this.commitPulls.set(key, entry)
+    return entry.work
+  }
   private async advance(repository: string, source: string | null, tag: string, previous?: Range, tags?: Tag[], baseline?: Tag) {
     const range: Range = previous ?? { membership: { status: 'pending', baseline: null, baselineSha: null, observedAt: null, reason: 'Reading Git release membership' }, pulls: new Map(), files: [], commits: [], cursor: 0, page: 0, total: 0, retryAt: 0 }
     try {
@@ -57,16 +77,16 @@ export class ReleaseMembershipReader {
         if (!Array.isArray(page.commits) || !page.commits.length || !page.commits.every((row: { sha: unknown }) => sha(row.sha))) throw new Error('Additional Git release history is unavailable; observed Changes are partial')
         range.page++; range.commits.push(...page.commits.map((row: { sha: string }) => row.sha))
       }
+      for (const [key, entry] of this.commitPulls) if (entry.until <= this.now()) this.commitPulls.delete(key)
       const commitSet = new Set(range.commits)
       // Advance only whole successful batches: failed reads retry without dropping known members.
       for (let batch = 0; batch < 2 && range.cursor < range.commits.length; batch++) {
         const commits = range.commits.slice(range.cursor, range.cursor + 4)
-        const responses = await Promise.all(commits.map(commit => this.read(`/repos/${repository}/commits/${commit}/pulls?per_page=100`, '[.[]|{number,title,html_url,merged_at,merge_commit_sha,head:{sha:.head.sha},base:{ref:.base.ref}}]')))
+        const responses = await Promise.all(commits.map(commit => this.readCommitPulls(repository, commit)))
         for (const response of responses) {
-          if (!Array.isArray(response) || response.length === 100) throw new Error('Commit-associated PR history is incomplete')
           for (const raw of response) {
             const identity = releasePull(raw.html_url)
-            if (!identity || identity.repository !== repository || !raw.merged_at || !commitSet.has(raw.merge_commit_sha)) continue
+            if (!identity || identity.repository !== repository || !commitSet.has(raw.merge_commit_sha)) continue
             range.pulls.set(identity.id, { ...identity, title: typeof raw.title === 'string' ? raw.title : null, state: 'merged', mergedAt: raw.merged_at,
               mergeSha: raw.merge_commit_sha, head: sha(raw.head?.sha) ? raw.head.sha : null, base: raw.base?.ref ?? null,
               observedAt: new Date(this.now()).toISOString(), freshness: 'fresh', links: [], exceptions: [] })

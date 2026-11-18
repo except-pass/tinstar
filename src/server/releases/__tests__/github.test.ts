@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { GithubReleaseReader, nativeReleaseSummary } from '../github'
+import { ReleaseMembershipReader } from '../membership'
 import { releaseAssociations } from '../../../shared/releases'
 import { releaseChanges } from '../../../shared/releaseChanges'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
@@ -222,4 +223,26 @@ it('revalidates containment for a changed effective merge immediately before a s
   await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()
   expect(transition).not.toHaveBeenCalled()
   expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
+})
+
+it('reuses completed commit observations across overlapping ranges for 24 hours', async () => {
+  const first = 'c'.repeat(40), second = 'd'.repeat(40), third = 'e'.repeat(40)
+  let clock = now
+  const read = vi.fn(async (path: string) => {
+    if (path.includes('/compare/')) {
+      const commits = path.includes(third) ? [first, second, third] : path.includes(second) ? [first, second] : [first]
+      return { status: 'ahead', merge_base_commit: { sha: nativeBase }, total_commits: commits.length, commits: commits.map(sha => ({ sha })) }
+    }
+    return path.includes(first) ? [{ html_url: `https://github.com/${nativeRepo}/pull/123`, merged_at: nativeTime, merge_commit_sha: second }] : []
+  })
+  const reader = new ReleaseMembershipReader(read, () => clock)
+  const baseline = { name: 'v1.0.0', commit: { sha: nativeBase } }
+  expect((await reader.since(nativeRepo, first, baseline)).pulls.size).toBe(0)
+  clock += 24 * 60 * 60_000 - 1
+  expect((await reader.since(nativeRepo, second, baseline)).pulls.size).toBe(1)
+  const readsOfFirst = () => read.mock.calls.filter(([path]) => path.includes(`/commits/${first}/pulls`)).length
+  expect(readsOfFirst()).toBe(1)
+  clock++
+  expect((await reader.since(nativeRepo, third, baseline)).pulls.size).toBe(1)
+  expect(readsOfFirst()).toBe(2)
 })

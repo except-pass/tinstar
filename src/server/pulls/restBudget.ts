@@ -9,12 +9,13 @@ export interface GithubRestResponse {
   headers?: { etag?: string; remaining?: string; reset?: string; retryAfter?: string }
 }
 
+export type GithubRestHeaders = Pick<GithubRestResponse, 'status' | 'headers'>
+
 export function isGithubRateLimit(error: unknown): error is Error {
   return error instanceof Error && error.message === rateLimitMessage
 }
 
-function holdUntil(response: GithubRestResponse, now: number) {
-  const { status, headers, data } = response
+function holdUntil({ status, headers }: GithubRestHeaders, now: number, data?: unknown) {
   if (status !== 403 && status !== 429) return 0
   const message = (data as { message?: unknown } | null)?.message
   const retryAfter = headers?.retryAfter
@@ -40,7 +41,7 @@ export class GithubRestBudget {
     if (this.blockedUntil > this.now()) throw new Error(rateLimitMessage)
   }
 
-  async send(send: (received: (status: number) => void) => Promise<GithubRestResponse>) {
+  async send(send: (received: (response: GithubRestHeaders) => void) => Promise<GithubRestResponse>) {
     this.assertAvailable()
     if (!this.reporting) {
       this.reporting = true
@@ -51,21 +52,31 @@ export class GithubRestBudget {
       }, hour).unref()
     }
     let observed = false
-    const received = (status: number) => {
-      if (observed || status < 100 || status > 599) return
-      observed = true
-      this.hourly.requests++
-      if (status === 304) this.hourly.notModified++
-    }
-    const response = await send(received)
-    if (response.statusObserved !== false) received(response.status)
-    const now = this.now()
-    const until = holdUntil(response, now)
-    if (until) {
+    let held = false
+    const hold = (response: GithubRestHeaders, data?: unknown) => {
+      const now = this.now()
+      const until = holdUntil(response, now, data)
+      if (!until) return
       if (this.blockedUntil <= now) this.hourly.holds++
       this.blockedUntil = Math.max(this.blockedUntil, until)
-      this.assertAvailable()
+      held = true
     }
+    const received = (response: GithubRestHeaders) => {
+      if (observed || response.status < 100 || response.status > 599) return
+      observed = true
+      this.hourly.requests++
+      if (response.status === 304) this.hourly.notModified++
+      hold(response)
+    }
+    let response: GithubRestResponse
+    try { response = await send(received) }
+    catch (error) {
+      if (held) throw new Error(rateLimitMessage)
+      throw error
+    }
+    if (response.statusObserved !== false) received(response)
+    if (!held) hold(response, response.data)
+    if (held) throw new Error(rateLimitMessage)
     return response
   }
 

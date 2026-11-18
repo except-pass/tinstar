@@ -128,3 +128,23 @@ it('refuses a legacy 304 diagnostic even with a cached response', async () => {
   exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('legacy failure'), { stderr: 'HTTP 304' })))
   await expect(github.githubCliJson(pulls)).rejects.toThrow('GitHub request failed')
 })
+
+it('applies the header hold while the body is pending and retains it after interruption', async () => {
+  const { GithubRestBudget } = await import('../restBudget')
+  const budget = new GithubRestBudget('test')
+  const interruption = new Error('body interrupted')
+  let interrupt!: (error: Error) => void
+  const pending = budget.send(received => {
+    received({ status: 429, headers: { retryAfter: '120' } })
+    return new Promise((_resolve, reject) => { interrupt = reject })
+  })
+  const next = vi.fn(async () => ({ status: 200, data: null }))
+  await expect(budget.send(next)).rejects.toThrow('GitHub REST rate limited')
+  interrupt(interruption)
+  await expect(pending).rejects.toThrow('GitHub REST rate limited')
+  vi.setSystemTime(clock + 119_999)
+  await expect(budget.send(next)).rejects.toThrow('GitHub REST rate limited')
+  expect(next).not.toHaveBeenCalled()
+  vi.setSystemTime(clock + 120_000)
+  await expect(budget.send(next)).resolves.toMatchObject({ status: 200 })
+})

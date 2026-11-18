@@ -9,7 +9,7 @@ import { operationSchema, readerRepositories, type ActionOperation, type ActionS
 import { readActionJob, readActionSnapshot } from './evidence'
 import { BrokerEffectError, simulatedRequest } from './broker'
 import type { RunnerResource } from './sandbox'
-import { GithubRestBudget, isGithubRateLimit, type GithubRestResponse } from '../pulls/restBudget'
+import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
 
 const id = z.number().int().positive().safe()
 const app = z.object({ appId: id, installations: z.array(z.object({ installationId: id, repositories: z.record(id) }).strict()).min(1) }).strict()
@@ -25,7 +25,7 @@ export type BrokerConfig = z.infer<typeof brokerConfigSchema>
 type Profile = 'reader' | 'repair'
 type Permissions = Record<string, 'read' | 'write'>
 export type ProviderRequest = { method: 'GET' | 'POST' | 'PUT'; path: string; authorization: string; body?: unknown; etag?: string }
-export type ProviderTransport = (input: ProviderRequest, received?: (status: number) => void) => Promise<GithubRestResponse>
+export type ProviderTransport = (input: ProviderRequest, received?: (response: GithubRestHeaders) => void) => Promise<GithubRestResponse>
 /** No subprocess, env or argv receives authentication. HTTPS stays inside the
  * broker process; gh-axi has no secret-in-memory input interface. No redirects,
  * arbitrary origins, automatic retries or provider diagnostics leave custody. */
@@ -34,7 +34,9 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
     headers: { Authorization: `Bearer ${input.authorization}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'tinstar-action-broker', ...(input.body ? { 'Content-Type': 'application/json' } : {}), ...(input.etag ? { 'If-None-Match': input.etag } : {}) }, timeout: 12_000,
   }, response => {
     const status = response.statusCode ?? 0
-    received?.(status)
+    const headers = { etag: response.headers.etag, remaining: response.headers['x-ratelimit-remaining']?.toString(),
+      reset: response.headers['x-ratelimit-reset']?.toString(), retryAfter: response.headers['retry-after'] }
+    received?.({ status, headers })
     let bytes = 0; const chunks: Buffer[] = []
     response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) request.destroy(); else chunks.push(chunk) })
     response.on('error', () => reject(new Error('GitHub broker request failed')))
@@ -44,8 +46,7 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
       catch {
         if (status >= 200 && status < 300) { reject(new Error('GitHub broker response was not JSON')); return }
       }
-      resolveResponse({ status, data, headers: { etag: response.headers.etag, remaining: response.headers['x-ratelimit-remaining']?.toString(),
-        reset: response.headers['x-ratelimit-reset']?.toString(), retryAfter: response.headers['retry-after'] } })
+      resolveResponse({ status, data, headers })
     })
   })
   request.on('timeout', () => request.destroy())

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
-import { GithubRestBudget, isGithubRateLimit, type GithubRestResponse } from './restBudget'
+import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from './restBudget'
 
 const exec = promisify(execFile)
 const budget = new GithubRestBudget('cli')
@@ -30,7 +30,7 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
 type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string }
 type CliLimits = typeof options
 
-async function includedRequest(path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (status: number) => void) {
+async function includedRequest(path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (response: GithubRestHeaders) => void) {
   const args = ['api', path, '--method', 'GET', '--include', '--jq', `{payload:(${projection})}`]
   if (etag) args.push('--header', `If-None-Match:${etag}`)
   let stdout: string
@@ -43,7 +43,7 @@ async function includedRequest(path: string, projection: string, etag: string | 
     stdout = failure.stdout
   }
   const response = includedResponse(stdout)
-  if (response) received(response.status)
+  if (response) received(response)
   if (failure && (!response || response.status < 300)) throw failure
   if (!response) throw new Error('GitHub response metadata unavailable')
   return response
