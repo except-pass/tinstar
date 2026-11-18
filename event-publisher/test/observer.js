@@ -252,13 +252,21 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   deepEqual(event.change, { field: 'pull_requests', before: [pr], after: [] })
   equal(event.observed_at, at(2))
 
-  const missing = taskObservation([{ ...task, priority: 1 }], 2, tasks, [{ id: task.id }])
+  const missing = taskObservation([{ ...task, priority: 1 }], 2, tasks, [{ id: task.id }], at(3))
   equal(journal.record({ ...missing, observed_at: at(2) }), 1)
   const changed = journal.events().at(-1)
   equal(changed.change.field, 'priority')
   equal(changed.observed_at, at(2))
   equal(changed.evidence.pr_link_coverage, 'unobserved')
   equal(journal.sources()[0].last_attempt_at, at(2))
+  equal(journal.sources()[0].last_generated_at, at(1))
+
+  const added = row('new-task')
+  equal(journal.record(taskObservation([{ ...task, priority: 1 }, added], 3, tasks, [
+    { id: added.id, pr_url: pr },
+  ])), 1)
+  deepEqual(journal.events().at(-1).change.after.pull_requests, [pr])
+  equal(journal.sources()[0].last_generated_at, at(3))
 })
 
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
@@ -280,7 +288,7 @@ test('PR projection rejects a fleet generation accepted by workers in a prior pa
   equal(observed.event_type, 'task.observed')
   equal(observed.evidence.pr_link_coverage, 'unobserved')
   equal(Object.hasOwn(observed.change.after, 'pull_requests'), false)
-  equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(0))
+  equal(journal.sources().find(source => source.type === 'task').last_generated_at, null)
 
   equal(journal.record(taskObservation([initial, next, row('fresh-task')], 3, tasks, [{ id: 'fresh-task', pr_url: pr }])), 1)
   deepEqual(journal.events().at(-1).change.after.pull_requests, [pr])

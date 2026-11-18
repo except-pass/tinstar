@@ -195,8 +195,9 @@ export class Journal {
             const projected = withPullRequests(entries, fresh ? pr.links : null)
             const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
             counts = pr_links_unobserved ? { pr_links_unobserved } : null
-            acceptedGeneration = fresh ? pr.generated_at : null
-            if (fresh && pr_links_unobserved < entries.length) observed_at = pr.observed_at
+            const contributesPullRequests = fresh && pr_links_unobserved < entries.length
+            acceptedGeneration = contributesPullRequests ? pr.generated_at : null
+            if (contributesPullRequests) observed_at = pr.observed_at
             observation = { ...observation, observed_at, entries: projected }
           }
           written = this.recordEntries(observation, previous, snapshotId)
