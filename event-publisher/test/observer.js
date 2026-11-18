@@ -641,7 +641,8 @@ test('baseline, direct Queued to Done, exact task fields, dedup and immutable re
   deepEqual(state.change, { field: 'state', before: 'queued', after: 'done' })
   equal(state.occurred_at, null)
   deepEqual(state.observation.observed_between, { after: at(0), by: at(3) })
-  equal(new Set(events.map(event => event.observation.batch_id)).size, 1)
+  equal(new Set(events.slice(0, 4).map(event => event.observation.batch_id)).size, 1)
+  ok(events[4].observation.batch_id !== state.observation.batch_id)
   equal(events[4].change.after[0], 'https://github.com/example/repo/pull/12')
   journal.close()
 
@@ -690,7 +691,7 @@ test('a crash between fleet projections leaves neither projection committed', as
   const before = baseline.sources()
   baseline.close()
 
-  const taskRead = taskObservation([task], 2, tasks, [{
+  const taskRead = taskObservation([{ ...task, priority: 1 }], 2, tasks, [{
     id: task.id, pr_url: 'https://github.com/example/repo/pull/13',
   }])
   const workerRead = workerObservation([{ ...worker, state: 'parked' }], 2)
@@ -717,12 +718,14 @@ test('a crash between fleet projections leaves neither projection committed', as
   deepEqual(restarted.sources(), before)
   equal(restarted.tail(), 0)
   deepEqual(restarted.recordAttempts([taskRead, workerRead]), [
-    { written: 1, complete: true },
+    { written: 2, complete: true },
     { written: 1, complete: true },
   ])
   const events = restarted.events()
-  deepEqual(events.map(event => event.change.field), ['pull_requests', 'current_state'])
-  equal(new Set(events.map(event => event.observation.batch_id)).size, 1)
+  deepEqual(events.map(event => event.change.field).sort(), ['current_state', 'priority', 'pull_requests'])
+  const batchByField = new Map(events.map(event => [event.change.field, event.observation.batch_id]))
+  equal(batchByField.get('pull_requests'), batchByField.get('current_state'))
+  ok(batchByField.get('priority') !== batchByField.get('pull_requests'))
   equal(new Set(events.map(event => event.observation.current_snapshot)).size, 2)
 })
 
