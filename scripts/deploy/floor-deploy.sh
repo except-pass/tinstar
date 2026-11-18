@@ -19,14 +19,16 @@ phase=preflight
 check_only=false
 clear=false
 reason=''
+skip_gate=''
 overridden=false
-block_overridden=false
+sha=unknown
+latch_failure=false
 
 alert() { printf 'ALERT Tin Star deploy: %s (block: %s)\n' "$1" "$block" >&2; }
-audit() { node "$support" audit "$1" "$2" "$3"; }
+audit() { node "$support" audit "$@"; }
 allow_failure() {
-  if [[ -z "$reason" ]]; then return 1; fi
-  audit override "$1" "$reason" || exit 1 # Never proceed with an unlogged exception.
+  if [[ -z "$reason" || ( -n "$skip_gate" && "$skip_gate" != "$1" ) ]]; then return 1; fi
+  audit override "$1" "$reason" "${2:-}" || exit 1 # Never proceed with an unlogged exception.
   overridden=true
   printf 'WARNING Tin Star deploy: overriding %s for this invocation\n' "$1" >&2
 }
@@ -47,12 +49,32 @@ failed() {
   local code=$?
   if [[ "$code" == 0 ]]; then return; fi
   trap - EXIT INT TERM
-  if ! printf 'failed_at=%s\nphase=%s\n' "$(date -u +%FT%TZ)" "$phase" > "$block"; then
-    alert "FAILED during $phase; could not persist deploy block"
+  if $latch_failure && [[ "$sha" =~ ^[a-f0-9]{40}$ ]]; then
+    local marker
+    if marker=$(mktemp -- "$block.XXXXXX") &&
+      printf 'failed_at=%s\nphase=%s\nsha=%s\n' "$(date -u +%FT%TZ)" "$phase" "$sha" > "$marker" &&
+      mv -fT -- "$marker" "$block"; then
+      alert "FAILED during $phase for $sha; use --clear-block or --skip-gate block --reason <reason> to retry this revision"
+    else
+      if [[ -n "$marker" ]]; then rm -f -- "$marker" || true; fi
+      alert "FAILED during $phase for $sha; could not persist deploy block"
+    fi
   else
-    alert "FAILED during $phase; use --clear-block or --override with a reason to recover"
+    alert "FAILED during $phase for $sha"
   fi
   exit "$code"
+}
+check_block() {
+  phase=block
+  blocked_sha=''
+  if [[ ! -e "$block" ]]; then return; fi
+  blocked_sha=$(sed -n 's/^sha=//p' "$block") || blocked_sha=''
+  if [[ ! "$blocked_sha" =~ ^[a-f0-9]{40}$ ]]; then
+    printf 'WARNING Tin Star deploy: existing block has no exact SHA; see %s\n' "$block" >&2
+  elif [[ "$blocked_sha" == "$1" ]] && ! allow_failure block "$1"; then
+    printf 'Revision %s is blocked; use --clear-block or --skip-gate block --reason <reason>\n' "$1" >&2
+    return 1
+  fi
 }
 
 while (($#)); do
@@ -66,12 +88,21 @@ while (($#)); do
       reason=$2
       if [[ "$option" == --clear-block ]]; then clear=true; fi
       shift 2 ;;
+    --skip-gate)
+      if [[ $# -lt 4 || ( "$2" != unit-tests && "$2" != block ) || "$3" != --reason ||
+            ! "$4" =~ [^[:space:]] || "$4" == --* || -n "$reason" ]]; then
+        printf '%s\n' '--skip-gate requires unit-tests or block followed by --reason and one nonempty reason' >&2; exit 2
+      fi
+      skip_gate=$2
+      reason=$4
+      shift 4 ;;
     --help)
-      printf 'Usage: floor-deploy.sh [--check-only] [--override "reason"]\n       floor-deploy.sh --clear-block "reason"\nSee docs/features/floor-deploy.md for configuration and recovery.\n'; exit 0 ;;
+      printf 'Usage: floor-deploy.sh [--check-only] [--skip-gate {unit-tests|block} --reason "reason" | --override "reason"]\n       floor-deploy.sh --clear-block "reason"\nSee docs/features/floor-deploy.md for configuration and recovery.\n'; exit 0 ;;
     *) printf 'Unknown option\n' >&2; exit 2 ;;
   esac
 done
 if $clear && $check_only; then printf 'clear-block is a separate recovery command\n' >&2; exit 2; fi
+if $check_only && [[ "$skip_gate" == unit-tests ]]; then printf 'check-only has no unit-tests gate\n' >&2; exit 2; fi
 mkdir -p -- "$TINSTAR_CONFIG_HOME" "$(dirname -- "$block")"
 
 # Recovery needs neither working services nor credentials. Serialize it with deploys.
@@ -84,14 +115,11 @@ if $clear; then
   exit 0
 fi
 
-if [[ -n "$reason" ]]; then audit override-request invocation "$reason"; fi
+if [[ -n "$reason" ]]; then audit override-request "${skip_gate:-invocation}" "$reason"; fi
 
 # All cheap checks run before the lock, dependency install or full suite. Collect
 # failures so the operator sees every prerequisite in one attempt.
 preflight_failed=false
-if [[ -e "$block" ]]; then
-  if allow_failure block; then block_overridden=true; else alert 'existing block; use --clear-block or --override with a reason'; preflight_failed=true; fi
-fi
 if ! gate preflight node "$support" preflight "$($check_only && printf '%s' --check-only || true)"; then preflight_failed=true; fi
 if ! $check_only; then
   for command in git npm flock systemctl sudo; do
@@ -111,26 +139,46 @@ if ! flock -n 9; then
   printf 'Tin Star deploy: waiting for the active deploy lock\n' >&2
   flock 9 # An override permits waiting, never concurrent mutation of the checkout.
 fi
-# Recheck under the lock in case an earlier deploy failed during preflight.
-if [[ -e "$block" && "$block_overridden" == false ]]; then
-  if ! allow_failure block; then alert 'existing block; use --clear-block or --override with a reason'; exit 1; fi
-fi
 trap failed EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if ! $check_only; then
-  export TINSTAR_PREVIOUS_DEPLOYED_SHA
-  if ! TINSTAR_PREVIOUS_DEPLOYED_SHA=$(node "$support" old-sha); then
-    TINSTAR_PREVIOUS_DEPLOYED_SHA=unknown
-  fi
+running_sha=$(node "$support" old-sha) || running_sha=unknown
+if $check_only; then
+  sha=$running_sha
+  check_block "$sha"
+else
+  export TINSTAR_PREVIOUS_DEPLOYED_SHA=$running_sha
   cd -- "$source_dir"
   gate source-clean source_clean # A deploy we waited for may have changed the checkout.
-  gate fetch git fetch origin main
-  gate checkout git checkout --detach origin/main
+  phase=fetch
+  fetched_sha=''
+  if git fetch origin main; then
+    fetched_sha=$(git rev-parse --verify FETCH_HEAD)
+    target=$fetched_sha
+  else
+    allow_failure fetch
+    target=$(git rev-parse --verify origin/main)
+  fi
+  # Read the marker under the lock, against the exact commit we would check out.
+  sha=$target
+  check_block "$sha"
+  gate checkout git checkout --detach "$target"
+  sha=$(git rev-parse --verify HEAD)
+  # A broad override of a checkout failure can leave a different HEAD in place.
+  if [[ "$sha" != "$target" ]]; then check_block "$sha"; fi
+  unit_receipt=false
+  if [[ "$skip_gate" != unit-tests && -n "$fetched_sha" && "$sha" == "$fetched_sha" ]] &&
+    node "$support" unit-ci "$fetched_sha"; then
+    unit_receipt=true
+  fi
   gate install env -u NODE_ENV npm ci --include=dev
   gate typecheck env -u NODE_ENV npm run typecheck
-  gate unit-tests node "$support" unit-tests
+  if [[ "$skip_gate" == unit-tests ]]; then
+    allow_failure unit-tests
+  elif ! $unit_receipt; then
+    gate unit-tests node "$support" unit-tests
+  fi
   gate build env -u NODE_ENV npm run build:all
   # Voice is provisioned on every normal deploy, including first installations.
   # A download outage must not block shipping unrelated fixes or restart recovery.
@@ -144,21 +192,27 @@ if ! $check_only; then
   if ! node "$script_dir/review-handoff.mjs" record; then
     printf 'WARNING review handoff audit unavailable; deploy health checks continue\n' >&2
   fi
+  latch_failure=true
   gate "restart:$floor_unit" sudo -n systemctl restart "$floor_unit"
   gate "restart:$facade_unit" sudo -n systemctl restart "$facade_unit"
   if [[ -n "$shim_unit" ]]; then gate "restart:$shim_unit" sudo -n systemctl restart "$shim_unit"; fi
   gate "restart:$tunnel_unit" sudo -n systemctl restart "$tunnel_unit"
 fi
 phase=post-deploy-smoke
+latch_failure=false
 if node "$script_dir/post-deploy-smoke.mjs"; then
   if ! node "$script_dir/review-handoff.mjs" smoke; then
     printf 'WARNING review handoff incomplete; healthy floor retained, inspect deploy audit\n' >&2
   fi
 else
-  if ! allow_failure "$phase"; then exit 1; fi
+  code=$?
+  # Startup read deadlines are retryable; a failed smoke contract still latches.
+  if [[ "$code" != 75 ]]; then latch_failure=true; fi
+  if ! allow_failure "$phase"; then exit "$code"; fi
 fi
-# Clear an old latch only after this invocation completed; failures reinstate it.
-if [[ -e "$block" ]]; then rm -- "$block"; fi
+latch_failure=false
+# A check of the running floor cannot clear a marker for a different revision.
+if [[ -e "$block" ]] && { ! $check_only || [[ "$sha" == "$blocked_sha" ]]; }; then rm -- "$block"; fi
 if $overridden; then
   printf 'WARNING Tin Star deploy completed with audited overrides; inspect the audit log\n' >&2
 else

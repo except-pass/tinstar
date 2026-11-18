@@ -51,7 +51,7 @@ export async function askSmoke({ ownerBase, bridgeBase, configHome }) {
     if (desk.some(item => item.request_id === row.request_id)) throw new Error('Synthetic work leaked to Desk')
   } finally {
     // The client-chosen partition is known even if the create response was lost.
-    // A cleanup failure fails the smoke and leaves the deploy block for recovery.
+    // A cleanup failure fails the smoke even if the round trip succeeded.
     await data(bridgeUrl, { method: 'DELETE', headers: auth })
   }
 }
@@ -75,6 +75,7 @@ export async function toolsList(url, authorization) {
 }
 // Only messages constructed here may be printed; SDK/network errors can contain secrets.
 class CatalogMismatch extends Error {}
+class StartupUnavailable extends Error {}
 export function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]))
@@ -153,7 +154,7 @@ async function main() {
     while (true) {
       try { await http(`${e.TINSTAR_OWNER_URL ?? 'https://hulk.taile890bc.ts.net:8450'}/api/ask/requests`, {
         headers: { 'Tailscale-User-Login': JSON.parse(await readFile(resolve(e.TINSTAR_CONFIG_HOME, 'config.json'), 'utf8')).ask.ownerLogins[0], 'X-Tinstar-UI': '1' }, timeout: 3000,
-      }); break } catch { if (Date.now() >= deadline) throw new Error('Owner route unavailable'); await new Promise(resolve => setTimeout(resolve, 500)) }
+      }); break } catch { if (Date.now() >= deadline) throw new StartupUnavailable('Owner route unavailable'); await new Promise(resolve => setTimeout(resolve, 500)) }
     }
     await askSmoke({ ownerBase: e.TINSTAR_OWNER_URL ?? 'https://hulk.taile890bc.ts.net:8450', bridgeBase: e.TINSTAR_BRIDGE_URL ?? 'http://127.0.0.1:5281', configHome: e.TINSTAR_CONFIG_HOME })
     console.log('Ask smoke passed; synthetic record removed')
@@ -167,15 +168,15 @@ async function main() {
         break
       } catch (error) {
         if (error instanceof CatalogMismatch) throw error
-        if (Date.now() >= deadline) throw new Error('MCP startup checks unavailable')
+        if (Date.now() >= deadline) throw new StartupUnavailable('MCP startup checks unavailable')
         await new Promise(resolve => setTimeout(resolve, 500))
       }
     }
     console.log('MCP smoke passed; ready, approved target catalog matches facade, fresh startup poll verified')
   } catch (error) {
     console.error(`${phase} post-deploy smoke failed (credentials and response bodies withheld)`)
-    if (error instanceof CatalogMismatch) console.error(error.message)
-    process.exitCode = 1
+    if (error instanceof CatalogMismatch || error instanceof StartupUnavailable) console.error(error.message)
+    process.exitCode = error instanceof StartupUnavailable ? 75 : 1
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main()

@@ -2,14 +2,19 @@
 
 Use `scripts/deploy/floor-deploy.sh` for each floor deploy, including unattended
 invocations. It replaces the manual fetch/checkout/install/test/build/restart
-sequence. It fetches `origin/main`, checks it out detached, installs dev dependencies,
-runs **typecheck and the complete unit suite**, builds the shipped client/server,
-then idempotently installs the English voice model and prints voice status using
-the service’s `TINSTAR_CONFIG_HOME`, before restarting the floor, facade and
-tunnel in that order. Voice install/status failures print a warning and continue;
+sequence. It fetches `origin/main`, checks out the fetched commit detached,
+installs dev dependencies, runs typecheck, verifies the unit suite, and builds
+the shipped client/server. It then idempotently installs the English voice
+model and prints voice status using the service’s `TINSTAR_CONFIG_HOME`, before
+restarting the floor, facade and tunnel in that order.
+Voice install/status failures print a warning and continue;
 they never latch a deploy block or roll back a deployment. No unit
 is restarted if a build gate fails, unless an operator supplies an audited override.
-The source checkout must be clean. If the full suite fails, the wrapper uses the
+The source checkout must be clean. The wrapper makes one GitHub check-run read
+through `gh-axi` for the fetched commit. A completed, successful
+`typecheck-and-test` job from GitHub Actions supplies an audited unit check
+receipt. An unavailable read or missing green receipt prints a warning and runs
+the complete unit suite locally. If the local suite fails, the wrapper uses the
 Vitest JSON report to rerun **only failed files**, once each in fresh processes,
 with one worker and no file parallelism. If every rerun passes, it prints a
 WARNING listing the files, logs the warning, and continues. A persistent failure
@@ -19,7 +24,7 @@ The script gives owner availability and MCP read checks a shared retry deadline
 (60 seconds after the helper starts by default); individual HTTP requests can
 finish after that deadline. It performs one synthetic Ask round trip and
 read-only MCP checks.
-Before acquiring the lock or starting expensive work, it checks the block,
+Before acquiring the lock or starting expensive work, it checks
 readable Ask/caller credentials and approved tools, source package files and
 cleanliness, available configured endpoint ports, at least 256 MiB free on the
 config/source filesystems, loaded units and noninteractive restart permission.
@@ -28,15 +33,17 @@ by deliberately deploying with an override. These checks make no HTTP writes.
 `--check-only` skips source/unit/restart-permission checks; it checks its smoke
 prerequisites. Preflight failures leave services untouched and create no marker.
 
-After acquiring the lock and rechecking the existing block, an unhandled failure exits
-nonzero, prints an `ALERT Tin Star deploy:` line to stderr, and attempts to write
-`deploy.blocked`. Failure to persist the marker is reported in the alert and
-requires operator intervention. Earlier failures, including lock contention,
-do not create a marker. Subsequent invocations refuse an existing marker before
-fetching or restarting, unless explicitly overridden.
-A config-directory `flock` serializes deploys so concurrent invocations cannot
-race past the block. No daemon, monitoring service, notification credential or
-production infrastructure is installed. The calling CI/scheduler must retain
+Under the deploy lock, the wrapper checks the fetched SHA against
+`deploy.blocked` before checkout or build. An unhandled restart or smoke
+failure writes a marker with the failed phase and exact SHA to prevent repeated
+restarts of that revision. Another fetched SHA goes through the normal checks.
+Legacy markers without a SHA print a warning. Prerequisite and build-gate
+failures, lock contention, and owner or MCP startup read timeouts can be retried
+without clearing a marker. Smoke contract failures, including an Ask round trip
+or cleanup failure and a tool catalog mismatch, still latch.
+An unhandled failure prints an `ALERT Tin Star deploy:` line to stderr, including
+any failure to persist the marker. A config-directory `flock` serializes deploys
+so concurrent invocations cannot race past the block. The calling CI/scheduler must retain
 stderr and notify its operator on a nonzero exit. The marker cannot prevent an
 operator bypassing the wrapper and deploying by hand.
 
@@ -57,7 +64,7 @@ arguments or printed, even on errors. HTTP requests reject redirects.
 | --- | --- | --- |
 | `TINSTAR_DEPLOY_SOURCE` | `/home/farm/srv/tinstar-src` | Dedicated deploy checkout, clean before deploy |
 | `TINSTAR_CONFIG_HOME` | `/home/farm/srv/tinstar-config` | Floor state; `config.json` contains `ask.ownerLogins` and `ask.bridgeToken` |
-| `TINSTAR_DEPLOY_BLOCK` | `$TINSTAR_CONFIG_HOME/deploy.blocked` | Durable failure latch; use the same path on every deploy |
+| `TINSTAR_DEPLOY_BLOCK` | `$TINSTAR_CONFIG_HOME/deploy.blocked` | Durable per-revision failure marker; use the same path on every deploy |
 | `TINSTAR_FLOOR_UNIT` | `tinstar-floor` | systemd unit |
 | `TINSTAR_FACADE_UNIT` | `tinstar-mcp-facade` | systemd unit; also queried for last start time |
 | `TINSTAR_SHIM_UNIT` | empty | Optional legacy shim unit; no shim restart by default |
@@ -89,9 +96,10 @@ so timezone rendering does not change freshness.
 
 Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
 
-`--check-only` runs the same post-deploy checks and failure latch without checkout,
-build or restart. It still creates/removes a synthetic Ask record and acquires the
-deploy lock. Block handling and audited exceptions follow the
+`--check-only` runs the same post-deploy checks without checkout, build or
+restart. It still creates/removes a synthetic Ask record and acquires the
+deploy lock. It uses the running build's reported SHA for block handling
+and can only clear a marker that matches that SHA. Audited exceptions follow the
 [failure recovery rules](#failure-recovery). It is useful for a preview or an
 operator verifying recovery.
 
@@ -175,36 +183,40 @@ After diagnosis, use either supported recovery command; never hand-edit the latc
 
 `--clear-block` only clears the configured marker under the deploy lock; it needs
 no working services or credentials. It also works when the marker is already
-absent. A failed recovery check reinstates the block. It cannot clear a marker
-while a deploy owns the lock; retry after that deploy finishes.
+absent. A hard smoke failure during recovery reinstates the block when the running
+SHA is known. If a deploy owns the lock, retry the clear after that deploy finishes.
 
-To proceed past the current block and failed gates for **one invocation**:
+Use a scoped override for **one invocation** when retrying a blocked SHA or
+skipping the unit gate in an emergency:
 
 ```sh
-/home/farm/srv/tinstar-src/scripts/deploy/floor-deploy.sh --override "Owner accepts the known test failure to restore service"
-# Or verify already repaired units without checkout/build/restart:
-/home/farm/srv/tinstar-src/scripts/deploy/floor-deploy.sh --check-only --override "Verify repaired service despite prior block"
+/home/farm/srv/tinstar-src/scripts/deploy/floor-deploy.sh --skip-gate block --reason "Restart permission repaired"
+/home/farm/srv/tinstar-src/scripts/deploy/floor-deploy.sh --skip-gate unit-tests --reason "Emergency service repair"
 ```
 
-Every override request, actual gate bypass and clear appends a JSON line to
-`${TINSTAR_DEPLOY_BLOCK}.audit.jsonl` (default
-`$TINSTAR_CONFIG_HOME/deploy.blocked.audit.jsonl`) and prints that same record to
-stderr. Records contain UTC time, OS user, action, gate, reason and checkout HEAD
-(or `unavailable` for a broken checkout). Reasons must contain non-whitespace
-text. Automatic recovery from load-induced test failures uses the same log with
-`action: "warning"` and the failed-file list. Keep stderr and the audit file as
-operator evidence. An audit-write failure stops the command rather than allowing
-an invisible exception; repair its directory permissions and retry.
+`--skip-gate block` permits retrying a marked SHA, including with
+`--check-only`. The remaining gates still apply. `--skip-gate unit-tests`
+skips both the GitHub check lookup and the local suite, including failed-file
+reruns. Install, typecheck, build and smoke still run.
 
-An override covers every failed gate encountered by that invocation, including
-smoke and restart failures, so inspect its warnings and audit log. It does not
-persist permission for future deploys or claim the smoke passed. A completed
-override removes the previous block; a later unhandled failure recreates it.
-Lock contention with an override is logged and waits for the existing deploy,
-then continues under the lock; it never runs concurrent deploys. Without an
-override, lock contention exits immediately and can be retried. The wrapper does
-not bypass missing executables or OS filesystem permissions: fix the reported
-prerequisite and retry. Automated callers must never supply recovery reasons or
+Every GitHub unit receipt, override request, actual gate bypass and clear appends
+a JSON line to `${TINSTAR_DEPLOY_BLOCK}.audit.jsonl` (default
+`$TINSTAR_CONFIG_HOME/deploy.blocked.audit.jsonl`) and prints that same record to
+stderr. Records contain UTC time, OS user, action, gate, reason and revision.
+Unit receipts and block bypasses record the applicable SHA. Other entries
+record checkout HEAD (or `unavailable` for a broken checkout). Operator reasons
+must contain non-whitespace text. Automatic recovery from local test failures
+logs `action: "warning"` with the failed-file list. Keep stderr and the audit
+file as operator evidence. An override or clear requires a successful audit
+write. An unrecordable GitHub receipt falls back to the local suite.
+
+The existing `--override "reason"` covers every failed gate in that invocation,
+including smoke and restart. Inspect its warnings and audit log before relying
+on the result. The override applies once. A later unhandled restart or smoke
+failure can recreate the block. With the broad override, lock contention is
+logged and waits for the active deploy. By default contention exits immediately
+and can be retried. Fix missing executables or OS filesystem permissions before
+retrying. Automated callers must never supply recovery reasons or
 clear the latch on their own.
 
 ## Preview proof
@@ -220,11 +232,12 @@ tools and a preview facade start timestamp; never reuse live tunnel config.
 Deploy tests clear ambient `TINSTAR_*` settings and related shell/Node startup
 hooks, then explicitly configure each isolated fixture. Exporting deploy URLs or
 unit names when running the suite cannot redirect its requests or restarts.
-Behavioral shell tests use executable git/npm/systemctl command doubles and real
-HTTP Ask routes in isolated temp configs. They verify restart ordering, isolated failed-file reruns, audited recovery and
-overrides, early prerequisite checks, no restart after persistent test failure, no credentials in output, smoke cleanup, durable
-blocking and refusal of the next deploy. Server tests prove partition isolation
-across reloads. CI also runs ShellCheck on the wrapper.
+Behavioral shell tests use executable git/npm/systemctl/gh-axi command doubles and real
+HTTP Ask routes in isolated temp configs. They verify restart ordering, exact-SHA
+receipts, isolated failed-file reruns, scoped overrides, early prerequisites, smoke
+cleanup and same-revision blocking. They also check that credentials stay out of
+output. Server tests prove partition isolation across reloads. CI also runs
+ShellCheck on the wrapper.
 
 ## Tin Star review handoff
 
