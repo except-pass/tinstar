@@ -994,6 +994,12 @@ describe('remaining shared workflow operations', () => {
     expect(f.comments).toHaveLength(5)
 
     const notes = await content.notes(id, undefined, true)
+    const context = await f.sources().card(id)
+    expect(context.blocks.map(block => block.id)).toEqual(expect.arrayContaining(['body-1', 'copied-audit']))
+    expect(context.answerSources).toEqual({
+      excluded: [originalCommentId, notes.at(-1)!.id],
+      replacements: [{ sourceId: notes.at(-1)!.id, id: replacement.request_id, question: replacement.question }],
+    })
     expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
     expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
     expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([

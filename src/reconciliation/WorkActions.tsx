@@ -3,7 +3,7 @@ import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
-import { decisionRequests, isDecisionRetraction, type RetractionAnswerSources } from '../shared/workflowRequests'
+import { decisionRequests, type RetractionAnswerSources } from '../shared/workflowRequests'
 import { workflowSaved } from './workflowSaved'
 import { displayRequestText } from '../shared/requestText'
 
@@ -52,7 +52,7 @@ export function WorkActions({ card, onSaved, sources = [], answerSources, answer
   const requests = decisionRequests(sources)
   const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
   const excluded = new Set(answerSources?.excluded)
-  const choices = sources.filter(source => !isDecisionRetraction(source.text) && !excluded.has(source.id) && !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
+  const choices = sources.filter(source => !excluded.has(source.id) && !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }
