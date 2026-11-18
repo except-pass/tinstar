@@ -148,7 +148,7 @@ def parent_ask_stamp(metadata):
     return bare[1] if bare else ''
 
 
-_PARENT_EVENT = re.compile(r'^(blocked|needs-decision|resolved|done)(?=[:\s\[]|$)(.*)$')
+_PARENT_EVENT = re.compile(r'^(blocked|needs-decision|resolved|done)\b(.*)$')
 _PARENT_HEADER_FIELDS = re.compile(r'\[(key|corr|at)=([^\]]+)\]')
 _PARENT_CORR = re.compile(r'(?<!\w)corr=([0-9A-Fa-f]{16})(?!\w)')
 
@@ -159,10 +159,10 @@ def parent_event(line):
         return None
     state, content = match.groups()
     metadata, separator, note = content.partition(':')
-    # Extra prose before the first tag does not declare a status verb.
-    prefix = metadata.partition('[')[0]
-    if any(not re.fullmatch(r'at=\d+|corr=\S*', word) for word in prefix.split()):
-        return None
+    if state == 'done':
+        prefix = metadata.partition('[')[0]
+        if any(not re.fullmatch(r'at=\d+|corr=\S*', word) for word in prefix.split()):
+            return None
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']
     header_corrs = [value for field, value in fields if field == 'corr']

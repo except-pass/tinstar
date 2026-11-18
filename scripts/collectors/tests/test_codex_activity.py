@@ -191,6 +191,12 @@ class CollectorTests(unittest.TestCase):
                                  '8940e5f6dad58120')
                 self.assertEqual(collector.fold_parent_asks(ask + unrelated + close)['items'], [])
 
+    def test_parent_ask_with_malformed_bare_timestamp_retains_unknown_age(self):
+        self.assertEqual(collector.fold_parent_asks('blocked at=bad [key=api]: choose\n'), {
+            'status': 'unknown',
+            'items': [{'key': 'api', 'corr': None, 'state': 'blocked', 'at': None, 'text': 'choose'}],
+        })
+
     def test_parent_asks_missing_malformed_and_partial_append_stay_unknown(self):
         self.assertEqual(collector.parent_asks(str(self.root), NOW)['status'], 'unknown')
         state = self.root / 'state'
