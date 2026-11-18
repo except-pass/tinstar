@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -109,8 +110,8 @@ it('posts one job per eligible decision, dedupes the revision, and skips leased,
   expect(posts).toHaveLength(1)
   expect(posts[0]!.authorized).toBe(true)
   expect(posts[0]!.body).toEqual({
-    card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, card_url: `https://www.notion.so/${fixture.cardId}`,
-    source_question: fixture.packet.question, source_revision: fixture.packet.binding.source_revision, options: fixture.packet.binding.options,
+    card_url: `https://www.notion.so/${fixture.cardId}`,
+    source_question: fixture.packet.question, source_revision: createHash('sha256').update(fixture.packet.binding.source_revision).digest('hex'), options: fixture.packet.binding.options,
     publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
   })
   expect(JSON.stringify(posts.map(post => post.body))).not.toContain(key)
@@ -141,7 +142,7 @@ it('fills only below the ready target and stops at the preparer cap', async () =
   await packets.updatePolicy('board', { expected_version: 1, values: { target_ready: 2, max_preparers: 1, automatic_replenishment: true } }, 'Will')
   await prep.replenish()
   expect(posts).toHaveLength(1)
-  expect(posts[0]!.body).toMatchObject({ card_id: secondId })
+  expect(posts[0]!.body).toMatchObject({ card_url: `https://www.notion.so/${secondId}` })
 })
 
 it('prepare now dispatches one audited job while automatic replenishment is off', async () => {
@@ -201,7 +202,7 @@ it('reports only invalid field paths when the callback omits references or sends
   try {
     const result = await publish({ job_id: job.job_id, operation_id: 'invalid-fields', packet: { recommended_option_id: 'preview', background: 'Research',
       risk: { ...fixture.packet.risk, rating: key }, [key]: key } })
-    expect(result).toMatchObject({ outcome: 'not-saved', issue_paths: expect.arrayContaining(['references', 'risk.rating']) })
+    expect(result).toMatchObject({ outcome: 'not-saved', issue_paths: expect.arrayContaining(['schema', 'rationale', 'references', 'reversibility', 'authorization', 'risk.rating']) })
     expect(result.message).toContain('references')
     expect(result.message).toContain('risk.rating')
     expect(JSON.stringify(result)).not.toContain(key)
@@ -209,25 +210,40 @@ it('reports only invalid field paths when the callback omits references or sends
   } finally { await client.close() }
 })
 
-it.each(['changed revision', 'answered', 'ambiguous', 'removed'])('supersedes a dispatched job when its source is %s', async change => {
+it.each(['changed revision', 'changed card dependency', 'answered', 'ambiguous', 'removed'])('supersedes a dispatched job when its source is %s', async change => {
   const { prep, fixture, packets, leases, root } = await harness()
   const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Check callback revision' })
   const source = fixture.evidence.requests[0]!
   if (change === 'changed revision') source.binding!.source_revision = 'new-revision'
+  if (change === 'changed card dependency') source.dependencies.find(dependency => dependency.kind === 'card')!.revision = 'changed-evidence'
   if (change === 'answered') source.answered = true
   if (change === 'ambiguous') fixture.evidence.requests.push(structuredClone(source))
   if (change === 'removed') {
     fixture.evidence.requests = []
     fixture.evidence.reasons = ['No decision request is recorded in the complete card history']
   }
-  const { client, publish } = await connectPreparer(root, leases, prep)
+  const restarted = new DecisionPreparation(packets, 'board', { candidates: () => [], coverage: () => 'complete' }, () => fixture.evidence, async () => null, () => now)
+  const { client, publish } = await connectPreparer(root, leases, restarted)
   try {
-    const args = { job_id: job.job_id, packet: fixture.packet }
+    const args = { job_id: job.job_id, operation_id: 'superseded-packet', packet: fixture.packet }
     const refusal = { outcome: 'operation-conflict', message: 'source changed; job superseded' }
     expect(await publish(args)).toEqual(refusal)
     expect(await publish(args)).toEqual(refusal)
     expect(await packets.ids()).toEqual([])
     expect(await prep.status()).toMatchObject({ preparing: 0, jobs: [{ id: job.job_id, state: 'superseded', reason: refusal.message }] })
+  } finally { await client.close() }
+})
+
+it('requires an operation ID at both publication entry points', async () => {
+  const { prep, fixture, packets, leases, root } = await harness()
+  const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Check callback operation identity' })
+  const args = { job_id: job.job_id, packet: fixture.packet }
+  const { client, publish } = await connectPreparer(root, leases, prep)
+  try {
+    await expect(prep.publish(args)).rejects.toThrow('operation_id')
+    await expect(publish(args)).rejects.toThrow('operation_id')
+    expect(await packets.ids()).toEqual([])
+    await expect(publish({ ...args, operation_id: 'explicit-operation' })).resolves.toMatchObject({ outcome: 'ready' })
   } finally { await client.close() }
 })
 
@@ -237,7 +253,7 @@ it('allows retrying the same job after unavailable evidence recovers', async () 
   const requests = fixture.evidence.requests
   fixture.evidence.requests = []
   fixture.evidence.reasons = ['Complete cached decision history is unavailable']
-  const args = { job_id: job.job_id, packet: fixture.packet }
+  const args = { job_id: job.job_id, operation_id: 'retry-unavailable', packet: fixture.packet }
   await expect(prep.publish(args)).rejects.toThrow('retry this job')
   expect((await prep.status()).jobs[0]).toMatchObject({ state: 'dispatched' })
   fixture.evidence.requests = requests
@@ -250,14 +266,14 @@ it('publishes through MCP from the webhook with only the job and research fields
   const { prep, packets, leases, fixture, root } = await harness({ onPost: body => onPost(body) })
   const { client, publish } = await connectPreparer(root, leases, prep)
   try {
+    const { binding: _binding, dependencies: _dependencies, title: _title, question: _question, ...research } = fixture.packet
     let publication: ReturnType<typeof publish> | undefined
     let args: Record<string, unknown>
     let tool: string
     onPost = body => {
       const job = body as { options: Array<{ id: string }>; publish: { tool: string; job_id: string } }
       tool = job.publish.tool
-      args = { job_id: job.publish.job_id, packet: { recommended_option_id: job.options?.[0]?.id, background: fixture.packet.background,
-        risk: fixture.packet.risk, references: fixture.packet.references } }
+      args = { job_id: job.publish.job_id, operation_id: 'webhook-packet', packet: { ...research, recommended_option_id: job.options[0]!.id } }
       publication = publish(args)
     }
     const prepared = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare through the webhook' })
