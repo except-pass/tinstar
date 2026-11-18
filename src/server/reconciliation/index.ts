@@ -109,7 +109,13 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
-    this.workflow.onDecisionRetracted = async id => { await this.readDecisionCard(id, false).catch(() => {}) }
+    this.workflow.onDecisionRetracted = async (id, auditTime) => {
+      await this.decisionPackets.initialize()
+      await this.leases.writeStorage(db => {
+        const packet = this.decisionPackets.currentInStorage(db, id)
+        if (packet && (!auditTime || Date.parse(packet.published_at) <= Date.parse(auditTime))) this.decisionPackets.invalidateInStorage(db, id)
+      })
+    }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -239,7 +245,11 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string) { return { ...workReadback(await this.context.details(id, false, this.notionApi.parallelFetch)), lease: this.leases.status(id) } }
+  async card(id: string, includeAnswerSources = false) {
+    const context = await this.context.details(id, false, this.notionApi.parallelFetch)
+    const answerSources = includeAnswerSources ? await this.context.retractionAnswerSources(context) : undefined
+    return { ...workReadback({ ...context, ...(answerSources ? { answerSources } : {}) }), lease: this.leases.status(id) }
+  }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */
@@ -564,11 +574,12 @@ export async function handleReconciliationRequest(sources: ReconciliationSources
     return ok(res, await sources.reviews(new URL(req.url!, 'http://localhost').searchParams.get('refresh') === '1'), { headers })
   }
   if (path === '/api/reconciliation/card-context') {
-    const id = new URL(req.url!, 'http://localhost').searchParams.get('id')
+    const params = new URL(req.url!, 'http://localhost').searchParams
+    const id = params.get('id')
     if (!id) return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers })
     try { await sources.currentCard(id) }
     catch { return fail(res, 'NOT_FOUND', 'Unknown authorized card', { headers }) }
-    return ok(res, await sources.card(id), { headers })
+    return ok(res, await sources.card(id, params.get('answerSources') === '1'), { headers })
   }
   const query = new URL(req.url!, 'http://localhost').searchParams
   const refresh = query.get('refresh') === '1'

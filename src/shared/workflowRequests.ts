@@ -69,6 +69,13 @@ export function workflowReceipt(note: WorkflowRecordSource): string | null {
 export function workflowNoteHasMarker(note: WorkflowRecordSource, marker: string): boolean {
   return marker.startsWith('Tin Star operation: ') ? workflowReceipt(note) === marker : note.text.trimEnd().split('\n').at(-1) === marker
 }
+export const isVerifiedDecisionRetraction = (note: WorkflowRecordSource) =>
+  isDecisionRetraction(note.text) && workflowReceipt(note) !== null
+
+export interface RetractionAnswerSources {
+  excluded: string[]
+  replacements: Array<{ sourceId: string; id: string; question: string | null }>
+}
 export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
 
 export function decisionRequests(notes: RequestNote[]) {

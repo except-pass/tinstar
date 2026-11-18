@@ -151,8 +151,9 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
 
 describe('prepared-card loop', () => {
   it.each([
-    ['withdraw_decision', false], ['withdraw_decision', true], ['supersede_decision', false],
-  ] as const)('%s retires the old prepared packet with sibling %s', async (kind, sibling) => {
+    ['withdraw_decision', false, false], ['withdraw_decision', true, false],
+    ['supersede_decision', false, false], ['supersede_decision', false, true],
+  ] as const)('%s retires the old prepared packet with sibling %s and storage failure %s', async (kind, sibling, failRetirement) => {
     const card = page(1)
     const { sources, jobs, tool, web } = await setup([card])
     const request_id = 'fixture-original'
@@ -166,10 +167,27 @@ describe('prepared-card loop', () => {
     expect(before.data.ready).toHaveLength(1)
     const oldPacket = before.data.ready[0].id
 
-    expect(await tool('update_work', { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction: Tin Star prepared packet:',
-      ...(kind === 'supersede_decision' ? { replacement } : {}) })).toMatchObject({ outcome: 'saved' })
+    const retraction = { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction: Tin Star prepared packet:',
+      ...(kind === 'supersede_decision' ? { replacement } : {}) }
+    if (failRetirement) {
+      vi.spyOn(sources.decisionPackets, 'invalidateInStorage').mockImplementationOnce(() => { throw new Error('Fixture storage failure') })
+      expect(await tool('update_work', retraction)).toMatchObject({
+        outcome: 'partially-saved', code: 'packet-retirement-unconfirmed', saved_fields: expect.arrayContaining(['note']),
+      })
+    }
+    expect(await tool('update_work', retraction)).toMatchObject({ outcome: 'saved' })
     expect((await web('snapshot')).data.ready).toEqual([])
     expect(sources.leases.readStorage(db => sources.decisionPackets.currentInStorage(db, card.id))).toBeNull()
+    const context = await sources.card(card.id, true)
+    const auditId = context.blocks.find(block => block.text.includes(`Operation: ${kind}`))!.id
+    expect(context.answerSources).toMatchObject({
+      excluded: expect.arrayContaining(['comment-0', auditId]),
+      replacements: kind === 'supersede_decision' ? [{ sourceId: auditId, id: replacement.request_id, question: replacement.question }] : [],
+    })
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'answer-audit', kind: 'answer_decision',
+      request_id: auditId, answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } })).toMatchObject({
+      outcome: 'not-saved', code: 'decision-not-open',
+    })
 
     await sources.preparation.replenish()
     const after = await web('snapshot')

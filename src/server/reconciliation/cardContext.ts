@@ -1,6 +1,6 @@
 import { readNotionCard } from './notion'
 import { cachedNotionWorkflowWriter, notionWorkflowWriter, type NotionFetch } from './notionApi'
-import { isDecisionRetraction } from '../../shared/workflowRequests'
+import { decisionRecordRows, decisionRequests, isDecisionRetraction, withdrawnDecisionIds, type RetractionAnswerSources } from '../../shared/workflowRequests'
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
@@ -52,6 +52,19 @@ export class CardContextReader {
       for (const block of retractions) block.workflowWriter = block.author === writer
     }
     return context
+  }
+  async retractionAnswerSources(context: CardContextRead): Promise<RetractionAnswerSources | undefined> {
+    if (!context.blocks.some(block => block.type === 'comment' && isDecisionRetraction(originalCommentText.get(block) ?? block.text))) return
+    await this.verifyRetractions(context).catch(() => {})
+    const history = requestHistory(context.blocks)
+    const incomplete = hasUnverifiedRetractions(context) || (context.commentsOutcome ?? context.outcome) !== 'available'
+    const withdrawn = withdrawnDecisionIds(history)
+    const audits = new Set(history.filter(note => isDecisionRetraction(note.text)).map(note => note.id))
+    const excluded = history.filter(note => audits.has(note.id) ||
+      decisionRecordRows([note], 'Tin Star request: ').some(row => incomplete || withdrawn.has(row?.id))).map(note => note.id)
+    const replacements = incomplete ? [] : decisionRequests(history).filter(request => !request.answered && audits.has(request.sourceId))
+      .map(({ sourceId, id, question }) => ({ sourceId, id, question }))
+    return { excluded, replacements }
   }
   /** Read the card text and comments used for the decision revision. */
   decisionDetails(id: string, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher): Promise<CardContextRead> {
