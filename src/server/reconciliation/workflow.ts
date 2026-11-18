@@ -715,7 +715,7 @@ export class WorkflowOperations {
         }
         if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select to publish the replacement.')
         if (!tags.includes(request.action)) set('Will action', [...tags, request.action])
-        note += `\n${decisionMarker(request_id)}\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
+        note += `\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
           id: input.request_id,
           replacement: { id: request_id, action: request.action, preserve_action: request.preserveAction, requested_from, question, options },
         })}`
