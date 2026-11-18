@@ -78,8 +78,9 @@ const entryText = (text: string) => /[\r\n]/.test(text) || text.startsWith('"') 
   ? JSON.stringify(text).replaceAll('|', '\\u007c') : text
 
 /** The exact Waiting For line a later resolve must match. */
-export function waitLine(value: { dependency: string; unblocks_when: string; follow_up_by: string; type: string; id: string }): string {
-  return `${value.type === 'Actor' && value.id === 'Will' ? 'Will: ' : ''}Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)} | Follow-up: ${entryText(value.follow_up_by)} | Type: ${value.type} | ID: ${entryText(value.id)}`
+export function waitLine(value: { dependency: string; unblocks_when: string; follow_up_by?: string; type: string; id: string }): string {
+  const followUp = value.follow_up_by === undefined ? '' : ` | Follow-up: ${entryText(value.follow_up_by)}`
+  return `${value.type === 'Actor' && value.id === 'Will' ? 'Will: ' : ''}Dependency: ${entryText(value.dependency)} | Unblocks when: ${entryText(value.unblocks_when)}${followUp} | Type: ${value.type} | ID: ${entryText(value.id)}`
 }
 
 const decode = (text: string) => {
@@ -87,10 +88,10 @@ const decode = (text: string) => {
   try { const value: unknown = JSON.parse(text); return typeof value === 'string' ? value : text } catch { return text }
 }
 
-function inlineWait(line: string): WaitFields | null {
-  const match = /^(?:Will: )?Dependency: (.*) \| Unblocks when: (.*) \| Follow-up: (.*) \| Type: (.*) \| ID: (.*)$/.exec(line)
+function inlineWait(line: string): (Omit<WaitFields, 'follow_up_by'> & { follow_up_by?: string }) | null {
+  const match = /^(?:Will: )?Dependency: (.*) \| Unblocks when: (.*?)(?: \| Follow-up: (.*))? \| Type: (.*) \| ID: (.*)$/.exec(line)
   if (!match) return null
-  return { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4]!, id: decode(match[5]!) }
+  return { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: match[3] === undefined ? undefined : decode(match[3]), type: match[4]!, id: decode(match[5]!) }
 }
 
 function typedWait(fields: Partial<WaitFields>, authored = false): (WaitFields & { type: WaitingForType }) | null {
@@ -101,7 +102,8 @@ function typedWait(fields: Partial<WaitFields>, authored = false): (WaitFields &
 }
 
 export function parseWaitLine(line: string) {
-  return typedWait(inlineWait(line) ?? {})
+  const fields = inlineWait(line)
+  return fields && typedWait(fields, fields.follow_up_by === undefined)
 }
 
 const descriptionFields = {
@@ -118,6 +120,7 @@ interface WaitEntry { text: string; fields: Partial<WaitFields>; authored?: bool
 export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   const entries: WaitEntry[] = []
   let prose: string[] = []
+  let trailing: string[] = []
   let leadingProse = 0
   let block: WaitEntry | undefined
   let implicitIdentityUsed = false
@@ -129,6 +132,11 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
     const prefix = prose.slice(0, leadingProse)
     if (block.fields.dependency?.trim()) addFreeForm(prefix)
     else {
+      if (!prose.some(line => line.trim()) && trailing.some(line => line.trim())) {
+        prose.push(...trailing)
+        block.text = [block.text, ...trailing].join('\n')
+        trailing = []
+      }
       const dependency = prose.join('\n').trim()
       if (dependency) block.fields.dependency = dependency
       if (prefix.length) block.text = [...prefix, block.text].join('\n')
@@ -140,7 +148,8 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
     }
     entries.push(block)
     block = undefined
-    prose = []
+    prose = trailing
+    trailing = []
   }
   for (const line of text.split('\n')) {
     const inline = inlineWait(line.replace(/\r$/, ''))
@@ -149,12 +158,12 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
       finish()
       addFreeForm(prose)
       prose = []
-      entries.push({ text: line, fields: inline })
+      entries.push({ text: line, fields: inline, authored: inline.follow_up_by === undefined })
       continue
     }
     if (!labeled) {
-      if (block) block.text += '\n' + line
-      if (block || line.trim() || prose.length) prose.push(line)
+      if (block) trailing.push(line)
+      else if (line.trim() || prose.length) prose.push(line)
       continue
     }
     const field = labels[labeled[1]!.toLowerCase()]!
@@ -162,7 +171,11 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
       finish()
       leadingProse = prose.length
       block = { text: line, fields: {}, authored: true }
-    } else block.text += '\n' + line
+    } else {
+      prose.push(...trailing)
+      block.text = [block.text, ...trailing, line].join('\n')
+      trailing = []
+    }
     block.fields[field] = labeled[2]!
   }
   finish()
@@ -170,10 +183,10 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   return entries
 }
 
-export function retainedWaitText({ text, fields, implicitIdentity }: WaitEntry, primary: WaitIdentity): string {
+export function retainedWaitText({ text, fields, implicitIdentity, authored }: WaitEntry, primary: WaitIdentity): string {
   const { type = '', id = '', dependency = '', unblocks_when = '', follow_up_by = '' } = fields
   if (!implicitIdentity || (!type && !id) || (type === primary.type && id === primary.id)) return text
-  return waitLine({ type, id, dependency, unblocks_when, follow_up_by })
+  return waitLine({ type, id, dependency, unblocks_when, follow_up_by: authored && !follow_up_by.trim() ? undefined : follow_up_by })
 }
 
 export const typedWaitEntry = (entry: WaitEntry) => typedWait(entry.fields, entry.authored)
