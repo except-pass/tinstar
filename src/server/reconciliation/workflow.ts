@@ -12,7 +12,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { decisionRequests, isDecisionRetraction, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequests, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -187,12 +187,7 @@ export class WorkflowOperations {
       exclusive: (id, perform) => this.exclusive(id, perform),
       create: (create, caller) => this.serialize('create', create, caller, () => this.performCreate(create, caller, { signature: JSON.stringify(create), properties: { Status: 'Backlog' } })),
       update: (update, caller) => this.performUpdate(update, caller),
-      hasNote: async (id, caller, operationId) => {
-        const marker = receiptMarker(caller, operationId)
-        return (await this.content.notes(id)).some(note => isDecisionRetraction(note.text)
-          ? workflowNoteHasMarker(note, marker)
-          : note.text.split('\n').includes(marker))
-      },
+      hasNote: async (id, caller, operationId) => (await this.content.notes(id)).some(note => note.text.split('\n').includes(receiptMarker(caller, operationId))),
       matches: (card, desired) => Object.entries(desired).every(([name, value]) => this.matches(card, name, this.normalized(card, name, value))),
       notify: async change => { if (change.card.source?.synthetic) return; if (!this.onChange) throw new Error('Firstmate bridge unavailable'); await this.onChange(change) },
       delivery: (id, operationId) => this.reader.jira && id.startsWith('jira:') ? Promise.resolve({ state: 'disabled', reason: 'Synthetic Jira pilot; no live pickup or inbox delivery' }) : this.deliveryStatus?.(id, operationId) ?? Promise.resolve({ state: 'unknown', reason: 'Firstmate bridge observation unavailable' }),
