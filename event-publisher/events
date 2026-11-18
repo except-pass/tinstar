@@ -248,7 +248,7 @@ async function main() {
       throw new UsageError(`--${key} is unsupported for ${command}`)
     }
   }
-  if (values.type && !['task', 'worker'].includes(values.type)) throw new UsageError('--type must be task or worker')
+  if (values.type !== undefined && !['task', 'worker'].includes(values.type)) throw new UsageError('--type must be task or worker')
   if (values.after !== undefined && values.last !== undefined) throw new UsageError('choose --after or --last')
   const after = values.after === undefined ? undefined : integer(values.after, '--after', 0)
   const last = integer(values.last ?? '100', '--last', 1)

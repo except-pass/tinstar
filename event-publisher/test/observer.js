@@ -155,6 +155,10 @@ test('home binding survives restart and is shared by task and worker sources', a
 })
 
 test('CLI rejects oversized intervals and JSON source health output', async () => {
+  for (const command of ['watch', 'replay']) {
+    await rejects(exec(cli, [command, '--type', '']),
+      error => error.code === 2 && /--type must be task or worker/.test(error.stderr))
+  }
   for (const interval of ['3601', '2147484']) {
     await rejects(exec(cli, ['serve', '--interval', interval]),
       error => error.code === 2 && /--interval must be at most 3600/.test(error.stderr))
@@ -178,7 +182,7 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
   equal(journal.record(taskObservation([{ ...first, priority: 2 }], 2, tasks, [{ id: first.id, links: [] }])), 1)
   equal(journal.events().at(-1).evidence.pr_link_coverage, 'rebaselined')
   equal(journal.record(taskObservation([{ ...first, priority: 2 }], 3, tasks, [{
-    id: first.id, links: [{ url: next }, { url: `${pr},pr:https://github.com/other/repo/pull/9` }], pr_url: next,
+    id: first.id, links: [{ url: next }, { url: 'https://github.com/example/repo/issues/9' }], pr_url: next,
   }])), 1)
   const changed = journal.events().at(-1)
   deepEqual(changed.change, {
@@ -262,6 +266,35 @@ test('a rejected explicit PR URL leaves coverage unobserved', async t => {
     deepEqual(JSON.parse(fields).pull_requests, [pr])
   } finally {
     reader.close()
+  }
+})
+
+test('rejected structured PR candidates leave coverage unobserved', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const task = row('sample-task')
+  const pr = 'https://github.com/example/repo/pull/12'
+  journal.record(taskObservation([task], 0, tasks, [{ id: task.id, links: [pr] }]))
+  const rejected = [
+    'https://user:secret@github.com/owner/repo/pull/99',
+    'https://github.com/owner/repo/PULL/99',
+    'https:github.com/owner/repo/pull/99',
+    'https://github.com/owner/repo/issues/../pull/99',
+    'https://github.com/owner/./pull/99',
+    'https://github.com/owner/../pull/99',
+    'https://github.com/owner/repo/pull/99?diff=split',
+    'https://github.com/owner/repo/pull/99#files',
+    `${pr},pr:https://github.com/other/repo/pull/9`,
+  ]
+  for (const [index, url] of rejected.entries()) {
+    const minute = index + 1
+    equal(journal.record(taskObservation([{ ...task, priority: minute % 5 }], minute, tasks, [
+      { id: task.id, links: [{ url }] },
+    ])), 1)
+    equal(journal.events().at(-1).change.field, 'priority')
+    equal(journal.events().at(-1).evidence.pr_link_coverage, 'unobserved')
+    equal(journal.sources()[0].last_generated_at, at(0))
   }
 })
 
@@ -504,9 +537,13 @@ test('verified active worker states advance the journal without trusting histori
   equal(journal.record(workerObservation([{ ...worker, state: 'running', source: 'status-log' }], 1)), 0)
   equal(journal.record(workerObservation([{ ...worker, state: 'running' }], 2)), 1)
   equal(journal.record(workerObservation([{ ...worker, state: 'executing' }], 3)), 1)
+  equal(journal.record(workerObservation([{ ...worker, state: 'waiting', source: 'pane' }], 4)), 1)
+  equal(journal.record(workerObservation([{ ...worker, state: 'needs-decision', source: 'pane' }], 5)), 1)
   deepEqual(journal.events().map(event => event.change), [
     { field: 'current_state', before: 'parked', after: 'running' },
     { field: 'current_state', before: 'running', after: 'executing' },
+    { field: 'current_state', before: 'executing', after: 'waiting' },
+    { field: 'current_state', before: 'waiting', after: 'needs-decision' },
   ])
 })
 
@@ -714,17 +751,7 @@ test('PR link casing is canonical across both structured inputs', async t => {
   const canonical = 'https://github.com/owner/.github/pull/12'
   journal.record(taskObservation([], 0))
   equal(journal.record(taskObservation([task], 1, tasks, [{
-    id: task.id, links: [
-      { url: 'HTTPS://GitHub.com/Owner/.GitHub/pull/12' },
-      { url: 'https://user:secret@github.com/owner/repo/pull/99' },
-      { url: 'https://github.com/owner/repo/PULL/99' },
-      { url: 'https:github.com/owner/repo/pull/99' },
-      { url: 'https://github.com/owner/repo/issues/../pull/99' },
-      { url: 'https://github.com/owner/./pull/99' },
-      { url: 'https://github.com/owner/../pull/99' },
-      { url: 'https://github.com/owner/repo/pull/99?diff=split' },
-      { url: 'https://github.com/owner/repo/pull/99#files' },
-    ],
+    id: task.id, links: [{ url: 'HTTPS://GitHub.com/Owner/.GitHub/pull/12' }],
   }])), 1)
   deepEqual(journal.events()[0].change.after.pull_requests, [canonical])
   equal(journal.record(taskObservation([task], 2, tasks, [{

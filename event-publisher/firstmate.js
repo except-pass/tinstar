@@ -10,7 +10,7 @@ const taskFields = 'kind,blocked,held,hold_reason,hold_kind,hold_until,created,c
 export const fleetCommand = 'bin/fm-fleet-snapshot.sh --json'
 export const prLinkSource = 'fleet-snapshot backlog'
 const taskStates = new Set(['queued', 'in_flight', 'done'])
-const workerStates = new Set(['working', 'running', 'executing', 'idle', 'parked', 'done', 'blocked', 'paused', 'failed'])
+const workerStates = new Set(['working', 'running', 'executing', 'idle', 'parked', 'waiting', 'needs-decision', 'done', 'blocked', 'paused', 'failed'])
 const workerSources = new Set(['run-step', 'pane'])
 const reportedWorkerSources = new Set([...workerSources, 'status-log', 'none', 'remote-endpoint'])
 const historicalStates = new Set(['working', 'parked', 'done', 'blocked', 'paused', 'failed', 'needs-decision', 'resolved'])
@@ -96,6 +96,14 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     if (!Array.isArray(row.links) && (row.links !== undefined || !Object.hasOwn(row, 'pr_url'))) continue
     const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
     if (urls.some(url => typeof url !== 'string' || !url.trim())) continue
+    if (urls.some(value => {
+      const url = URL.parse(value)
+      const literalPath = /github\.com(?::\d+)?(\/[^?#]*)/i.exec(value)?.[1]
+      const pullPath = /^\/[^/]+\/[^/]+\/pull(?:\/|$)/i
+      return url?.hostname === 'github.com' &&
+        (pullPath.test(literalPath ?? '') || pullPath.test(url.pathname)) &&
+        !canonicalPullRequests([value]).length
+    })) continue
     if (row.pr_url != null) {
       if (!canonicalPullRequests([row.pr_url]).length) continue
       urls.push(row.pr_url)
