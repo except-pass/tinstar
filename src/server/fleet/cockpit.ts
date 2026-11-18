@@ -51,6 +51,7 @@ export interface CockpitWorker {
   worktree: string
   branch: string
   prUrl: string | null
+  prStatus?: ReviewStatus
   terminalAvailable: boolean
   direct: boolean
 }
@@ -109,7 +110,11 @@ export class CockpitFleet {
   }
 
   list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: Array<AttentionCard & { home: string | null }>; errors: string[] } {
-    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
+    const workers = this.workers.map(worker => ({
+      ...worker, terminalPid: this.views.pidOf(worker.key),
+      prStatus: worker.prUrl ? this.reviews.get(worker.prUrl)?.status ?? 'unknown' as const : undefined,
+    }))
+    return { ready: this.ready, workers, attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
