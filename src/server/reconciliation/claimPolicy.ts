@@ -8,11 +8,16 @@ export const deferredDecisionStatus = (status: unknown) => ['todo', 'backlog', '
 export const deferredDecisionCard = (card: WorkCard) => card.archived || card.in_trash || deferredDecisionStatus(value(card, 'Status'))
 const isWill = (value: unknown) => typeof value === 'string' && value.trim().toLowerCase() === 'will'
 
-export function actionableWillCard(card: WorkCard) {
+export const cardOwnedByWill = (card: WorkCard) => isWill(value(card, 'Owner'))
+
+export function cardHasWillAction(card: WorkCard) {
   const actions = value(card, 'Will action')
-  const tagged = (Array.isArray(actions) ? actions : [actions]).some(action =>
+  return (Array.isArray(actions) ? actions : [actions]).some(action =>
     typeof action === 'string' && !!action.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(action.trim()))
-  return !deferredDecisionCard(card) && (isWill(value(card, 'Owner')) || tagged || cardWaitsForWill(card))
+}
+
+export function actionableWillCard(card: WorkCard) {
+  return !deferredDecisionCard(card) && (cardOwnedByWill(card) || cardHasWillAction(card) || cardWaitsForWill(card))
 }
 
 export function isWillWait(entry: ReturnType<typeof waitEntries>[number]) {

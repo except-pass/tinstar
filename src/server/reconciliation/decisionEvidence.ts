@@ -3,21 +3,21 @@ import type { WorkCard } from './workReader'
 import type { CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { actionableWillCard } from './claimPolicy'
+import { actionableWillCard, cardOwnedByWill } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
 const canonical = (value: unknown) => JSON.stringify(value, (_key, entry: unknown) =>
   entry && typeof entry === 'object' && !Array.isArray(entry) ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))) : entry)
 
-const handoffFields = new Set(['Owner', 'Status', 'Will action', 'Waiting For', 'Waiting For Type', 'Waiting For ID'])
-const decisionFields = ['Name', ...handoffFields,
+const handoffFields = new Set(['Status', 'Will action', 'Waiting For', 'Waiting For Type', 'Waiting For ID'])
+const decisionFields = ['Name', 'Owner', ...handoffFields,
   'Next action', 'Next Action', 'Link', 'Evidence', 'GitHub', 'GitHub PRs', 'Pull requests',
   'Initiative', 'Epic', 'Area', 'Sub-area', 'Parent item', 'Requires production verification']
 
 function decisionProperties(card: WorkCard, recovery = false) {
   return Object.fromEntries(decisionFields.filter(name => !recovery || !handoffFields.has(name)).map(name => {
-    const raw = value(card, name)
+    const raw = recovery && name === 'Owner' && cardOwnedByWill(card) ? 'Will' : value(card, name)
     return [name, Array.isArray(raw) ? [...raw].sort() : raw ?? null]
   }))
 }
@@ -34,8 +34,7 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'],
   return createHash('sha256').update(canonical([decisionProperties(card, recovery), body, comments])).digest('hex')
 }
 
-export const liveDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id)
-export const actionableDecisionCard = (card: WorkCard) => liveDecisionCard(card) && actionableWillCard(card)
+export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')

@@ -1,11 +1,11 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
 import type { RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
-import { decisionCardSource, deskAnswerMarker, liveDecisionCard } from './decisionEvidence'
+import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { actionableWillCard, deferredDecisionCard, isWillWait, responsibleMate } from './claimPolicy'
+import { actionableWillCard, cardHasWillAction, cardOwnedByWill, cardWaitsForWill, isWillWait, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -96,10 +96,11 @@ export class WorkflowOperations {
       const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
       if (!recorded && requireComment) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
-      const current = recorded && recoveryRevision
-        ? liveDecisionCard(card) && !deferredDecisionCard(card) && source.recoveryRevision === recoveryRevision
-        : source.actionable && source.revision === packet.source_revision
-      if (!current) {
+      const revisionMatches = recorded && recoveryRevision
+        ? source.recoveryRevision === recoveryRevision
+        : source.revision === packet.source_revision
+      const canRecover = cardOwnedByWill(card) && (cardHasWillAction(card) || cardWaitsForWill(card))
+      if (!source.actionable || !revisionMatches || recorded && !canRecover) {
         return recorded
           ? { outcome: 'recorded', message: 'The answer is on the card. Current card properties were preserved.' }
           : { outcome: 'packet-invalidated' }

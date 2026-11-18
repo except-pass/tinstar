@@ -342,7 +342,7 @@ describe('prepared-card loop', () => {
     const deploy = waitLine({ type: 'Event', id: 'deploy', dependency: 'Production deployment',
       unblocks_when: 'Deployment completes', follow_up_by: 'Firstmate' })
     const willPrimary = recovery === 'retry'
-    const card = page(1, { status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
+    const card = page(1, { owner: 'Will', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
       wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
     card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
     const { sources, tool, writes, jobs } = await setup([card], true, 'rejected')
@@ -358,8 +358,6 @@ describe('prepared-card loop', () => {
     }
 
     if (recovery === 'released refill') {
-      card.properties.Owner = select('Firstmate')
-      card.properties['Will action'] = tags('')
       await sources.preparation.replenish()
     } else expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties).toMatchObject({ Owner: { select: { name: 'Firstmate' } }, Status: { status: { name: 'Waiting For' } },
@@ -371,6 +369,26 @@ describe('prepared-card loop', () => {
     expect(sources.leases.status(card.id)).toBeNull()
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
+  })
+
+  it.each(['retry', 'refill'] as const)('preserves a later assignment during %s recovery', async recovery => {
+    const card = page(1, { owner: 'Will', tag: 'Decision', status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' })
+    const { sources, tool, writes } = await setup([card], true, 'rejected')
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'claim-before-reassignment', card_id: card.id })
+    const answer = { operation_id: 'answer-before-reassignment', lease_token: held.lease_token, option_id: '1', answer: 'Proceed.' }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
+    expect(await sources.leases.ownerRelease(card.id, held.lease.generation, 'Release fixture lease')).toMatchObject({ outcome: 'released' })
+    card.properties.Owner = select('Alice')
+    const properties = structuredClone(card.properties)
+    if (recovery === 'refill') {
+      await sources.preparation.replenish()
+      expect((await sources.preparedSubmissions.metrics()).reviewed_today_utc).toBe(1)
+    }
+    expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
+    expect(card.properties).toEqual(properties)
+    expect(card.comments).toHaveLength(1)
+    expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
 
   it.each(['closed', 'new discussion'] as const)('preserves a saved answer and leaves properties alone after %s', async change => {

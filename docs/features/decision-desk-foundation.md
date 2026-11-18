@@ -81,8 +81,9 @@ checked against the card before any retry, and ambiguous provider writes can
 be inspected and reconciled through the existing audited source-write API.
 If the answer comment saves before the property handoff completes, retrying
 the same operation or the next refill pass completes the handoff while the
-same substantive revision remains, excluding fields written by the handoff. If the card changes, Tin Star preserves
-the saved answer and the current card properties. Releasing the lease
+same substantive revision remains, Will still owns the card, and a Will action
+tag or wait is still present. Otherwise Tin Star preserves the saved answer
+and the current card properties. Releasing the lease
 keeps the saved answer. Other cards remain available while a
 write is resolved. Reminder reservations
 can coexist with a review claim and continue to serialize actual source writes.
