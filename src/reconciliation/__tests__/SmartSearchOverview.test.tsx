@@ -378,7 +378,7 @@ describe('worker facts in existing card metadata', () => {
     expect(card).not.toHaveTextContent(/codex pane|state unknown/i)
     const shownWorkers = [...container.querySelectorAll<HTMLElement>('.ov-execution')]
     const shown = shownWorkers.find(element => element.dataset.entityId === worker.id)!
-    expect(shown).toHaveTextContent(/No update since/)
+    expect(shown.querySelector('.ov-compact-status, .ov-worker-status')).toHaveTextContent('Unknown')
     expect(shownWorkers.some(element => element.dataset.entityId === finished.id)).toBe(false)
     expect(container.querySelector('.ov-pattern-summary')).toBeNull()
     expect(card).not.toHaveTextContent("Can't tell")

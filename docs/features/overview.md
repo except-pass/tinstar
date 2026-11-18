@@ -391,8 +391,27 @@ Cards show known worker facts in their existing metadata, such as
 1 worker running or 1 worker, no update since 2026-11-08 12:22 UTC. Headers,
 worker chips, relationships and pattern counts share the same observed, unfinished
 worker membership; finished tasks and declared links with no observed execution
-are excluded. A stale or missing home reads home unreachable. A wait's report age
-is shown only when the published event reports that same recorded state.
+are excluded. Card worker facts read home unreachable for a stale or missing home.
+Worker badges and the Inspector's worker status use First Mate's structured
+current state and [fleet PR status](firstmate-observer.md#fleet-pr-status).
+The latest report remains visible as activity.
+
+- **Running** requires a fresh, complete home observation, an endpoint with no
+  missing or dead signal, and fresh execution evidence from a native pane or
+  run-step state or an eligible open Codex turn.
+- A fresh blocked state shows **Blocked**, an explicit decision state shows
+  **Needs a decision**, and parked, paused and waiting states show **Waiting**.
+  A wait shows age when the latest structured event reports the same state and
+  provides a usable age. A wait shows **Stalled** when the worker's own backlog
+  row lists dependencies and explicitly lists zero unresolved blockers. A wait
+  older than 45 minutes with unavailable wake evidence adds **wake unknown**.
+  Stalled is amber on worker cards.
+- **PR merged** takes precedence over execution and wait labels. **PR closed**
+  takes precedence over wait labels and appears for other workers when current
+  execution is unconfirmed. Both PR labels retain a matching wait age.
+- Fresh done and failed states show **Done** and **Failed** when no PR label
+  applies. Without usable evidence the badge shows **Unknown**.
+
 No worker requires a supported per-card execution-gap finding and fresh source
 coverage. Fresh configured homes alone do not establish absence on an unknown
 home; when absence remains unknown, the card omits that fact.

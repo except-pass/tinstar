@@ -81,6 +81,48 @@ it('places finished and absent records in history rather than the current worker
   expect(container.querySelector('.ov-history')?.textContent).toContain('Finished')
 })
 
+it.each([
+  ['pane', 'working', 'Running'],
+  ['run-step', 'executing', 'Running'],
+  ['status-log', 'working', 'Unknown'],
+] as const)('renders waits and linked PR outcomes with %s %s execution evidence', (source, state, expected) => {
+  const now = Date.now(), sources = fixtureSources({ now })
+  const tasks = sources.fleet[1]!.observation.data!.tasks
+  const [waiting, decision, stalled, running] = tasks
+  Object.assign(waiting!.current_state, { state: 'parked', source: 'run-step', detail: 'ask-user: authority decision' })
+  Object.assign(waiting!.last_event, { state: 'parked', age_seconds: 46 * 60, note: 'Working now' })
+  Object.assign(decision!.current_state, { state: 'needs-decision', source: 'status-log' })
+  Object.assign(decision!.last_event, { state: 'needs-decision', age_seconds: 60 })
+  Object.assign(stalled!.current_state, { state: 'blocked' })
+  Object.assign(stalled!.last_event, { state: 'blocked', age_seconds: 60 })
+  Object.assign(stalled!.backlog, { id: stalled!.id, blocked_by_ids: ['fixture-blocker', 'second-blocker'], unresolved_blocker_ids: [] })
+  Object.assign(running!.current_state, { state, source })
+  Object.assign(running!.last_event, { state: 'paused', age_seconds: 60 * 60 })
+  const url = 'https://github.com/fixture/tinstar/pull/9'
+  const helper = sources.fleet[2]!.observation.data!.tasks[0]!
+  helper.pr.url = url
+  helper.current_state.state = 'parked'
+  Object.assign(helper.last_event, { state: 'parked', age_seconds: 20 * 60 })
+  const scene = new SceneReconciler().reconcile(sources, now)
+  observed.scene = scene
+  const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[{
+    key: 'fixture', id: String(helper.id), home: sources.fleet[2]!.source.home, kind: 'ship',
+    state: 'working', detail: '', observedAt: null, freshness: 'fresh', objective: '', project: '',
+    direct: false, worktree: '', branch: '', prUrl: url, prStatus: 'merged', terminalAvailable: false, terminalPid: null,
+  }]} />)
+  const stateFor = (id: unknown) => {
+    const execution = scene.executions.find(value => value.identity.task_id === id)!
+    return [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === execution.id)?.querySelector('.ov-worker-status')
+  }
+  expect(stateFor(waiting!.id)).toHaveTextContent('Waiting · 46m · wake unknown')
+  expect(stateFor(waiting!.id)).not.toHaveClass('status-stalled')
+  expect(stateFor(decision!.id)).toHaveTextContent('Needs a decision · 1m')
+  expect(stateFor(stalled!.id)).toHaveTextContent('Stalled · 1m')
+  expect(stateFor(stalled!.id)).toHaveClass('status-stalled')
+  expect(stateFor(running!.id)).toHaveTextContent(expected)
+  expect(stateFor(helper.id)).toHaveTextContent('PR merged · 20m')
+})
+
 const groupings = [
   ['all', 'none', 'none'],
   ['manager', 'manager', 'none'],
@@ -293,5 +335,5 @@ it.each(['done', 'landed'])('shows a worker resumed after a recorded %s outcome'
   const worker = scene.executions.find(value => value.identity.task_id === task.id)!
   const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)
   expect(element).toBeDefined()
-  expect(element).toHaveTextContent(/running/i)
+  expect(element?.querySelector('.ov-worker-status')).toHaveTextContent('Running')
 })

@@ -7,6 +7,15 @@ const fresh = (observation: Observation, now: number) => observation.status === 
   (!observation.expiresAt || Date.parse(observation.expiresAt) > now)
 const terminal = new Set(['done', 'landed', 'failed'])
 
+export function hasCurrentExecution(task: Execution['source'], now: number, state: Partial<Execution['source']['current_state']> = task.current_state): boolean {
+  const alive = task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' && task.endpoint.status !== 'dead'
+  return task.kind !== 'secondmate' && alive && (
+    (state.source === 'pane' || state.source === 'run-step') && state.freshness === 'fresh' &&
+    ['working', 'running', 'executing'].includes(String(state.state)) ||
+    codexTurn({ ...task, current_state: state }, now) === true
+  )
+}
+
 function recordedOutcome(worker: Execution, now: number): string | null {
   const activity = recordedActivity(worker, now)
   const state = recordedState(worker, now)

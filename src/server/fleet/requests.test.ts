@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import { join } from 'node:path'
 import { requestAnchor } from '../../shared/deskSource'
 
 const fixtures = vi.hoisted(() => ({ snapshot: {} as Record<string, unknown>, get: vi.fn(), submit: vi.fn(), dismiss: vi.fn() }))
@@ -9,12 +13,55 @@ vi.mock('../firstmate/views', () => ({ FirstmateViews: class { pidOf() { return 
 vi.mock('./marks', () => ({ directSet: () => new Set(), directKey: () => '', WorkerMarksUnreadable: class extends Error {}, WorkerMarks: class { read() { return [] } queue<T>(work: () => T) { return work() } } }))
 vi.mock('./inbox', () => ({ FleetOutbox: class { get = fixtures.get; submit = fixtures.submit; list(_homes: string[], callOpen: (message: unknown) => boolean) { return callOpen } } }))
 vi.mock('./dismiss', () => ({ dismissDirect: fixtures.dismiss }))
-import { CockpitFleet } from './cockpit'
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  execFile: vi.fn((_file, _args, _options, callback) => callback(null, { stdout: '{"state":"closed","merged_at":"2026-11-17T21:40:00Z"}' })),
+}))
+import { CockpitFleet, handleCockpitRequest } from './cockpit'
+import { PullsApi } from '../pulls/routes'
+import { AssociationStore } from '../releases/associations'
 
 const home = '/test/home'
 const source = (taskId: string | null, id: string, kind: 'hold' | 'decision' = 'decision') => requestAnchor({ home, taskId, id, kind })
 const task = (id: string) => ({ id, hints: { open_decisions: [{ key: 'choose', verb: 'needs-decision', summary: 'Choose A or B' }] } })
 beforeEach(() => { fixtures.get.mockReset(); fixtures.submit.mockReset().mockResolvedValue({ saved: true }); fixtures.dismiss.mockReset().mockResolvedValue({ dismissed: true }) })
+
+it.each([
+  { scenario: 'with owner access', login: 'owner@example.test', hasAuthorizer: true, allowed: true },
+  { scenario: 'without an owner login', login: undefined, hasAuthorizer: true, allowed: false },
+  { scenario: 'without an authorizer', login: 'owner@example.test', hasAuthorizer: false, allowed: false },
+])('projects fleet data $scenario', async ({ login, hasAuthorizer, allowed }) => {
+  const url = 'https://github.com/owner/repo/pull/1'
+  fixtures.snapshot = { schema: 'fm-fleet-snapshot.v1', tasks: [{ id: 'alpha', pr: { url } }] }
+  const fleet = new CockpitFleet()
+  await fleet.refresh()
+  await vi.waitFor(() => expect(fleet.list(true).workers[0]?.prStatus).toBe('merged'))
+  const root = await mkdtemp(join(process.cwd(), '.fleet-auth-test-'))
+  try {
+    await writeFile(join(root, 'config.json'), JSON.stringify({ ask: { ownerLogins: ['owner@example.test'], bridgeToken: 'x'.repeat(32) } }))
+    const pulls = new PullsApi({ scene: vi.fn() }, new AssociationStore(root), root)
+    const server = createServer((req, res) => {
+      void handleCockpitRequest(fleet, req, res, hasAuthorizer ? request => pulls.authorized(request) : undefined)
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const { port } = server.address() as { port: number }
+      const response = await fetch(`http://127.0.0.1:${port}/api/fleet`, { headers: login ? { 'Tailscale-User-Login': login } : {} })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      const { data } = await response.json()
+      expect(data.workers[0]).toMatchObject({ id: 'alpha', prUrl: url })
+      if (allowed) expect(data.workers[0]).toHaveProperty('prStatus', 'merged')
+      else expect(data.workers[0]).not.toHaveProperty('prStatus')
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 describe('Desk source anchors on the existing fleet response routes', () => {
   it('does not route two workers sharing a key through an unbound captain hold', async () => {

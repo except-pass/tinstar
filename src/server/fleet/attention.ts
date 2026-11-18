@@ -1,5 +1,6 @@
 export type AttentionType = 'decision' | 'blocked' | 'failure' | 'review'
-export type ReviewStatus = 'open' | 'merged' | 'closed' | 'unknown'
+export type FinishedPullStatus = 'merged' | 'closed'
+export type ReviewStatus = 'open' | FinishedPullStatus | 'unknown'
 /** `null` keeps today's inbox note. The other two close in the Tin Star server. */
 export type AttentionDismissal = 'captain-hold' | 'resolve-key' | null
 

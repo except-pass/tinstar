@@ -13,7 +13,7 @@ import { FirstmateViews } from '../firstmate/views'
 import { log } from '../logger'
 import { resolveCorsHeaders } from '../api/cors'
 import { currentOriginAllowlist } from '../api/originAllowlist'
-import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type ReviewStatus } from './attention'
+import { buildAttentionCards, parsePullUrl, type AttentionBacklogRow, type AttentionCard, type AttentionTask, type FinishedPullStatus, type ReviewStatus } from './attention'
 import { sourceRequests } from './requests'
 import { dismissDirect } from './dismiss'
 import { FleetOutbox, type OutboxMessage, type SubmitResult } from './inbox'
@@ -108,8 +108,15 @@ export class CockpitFleet {
     this.views.stop()
   }
 
-  list(): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null }>; attention: Array<AttentionCard & { home: string | null }>; errors: string[] } {
-    return { ready: this.ready, workers: this.workers.map(worker => ({ ...worker, terminalPid: this.views.pidOf(worker.key) })), attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
+  list(includePullStatus = false): { ready: boolean; workers: Array<CockpitWorker & { terminalPid: number | null; prStatus?: FinishedPullStatus }>; attention: Array<AttentionCard & { home: string | null }>; errors: string[] } {
+    const workers = this.workers.map(worker => {
+      const prStatus = includePullStatus && worker.prUrl ? this.reviews.get(worker.prUrl)?.status : undefined
+      return {
+        ...worker, terminalPid: this.views.pidOf(worker.key),
+        ...((prStatus === 'merged' || prStatus === 'closed') && { prStatus }),
+      }
+    })
+    return { ready: this.ready, workers, attention: this.attention.map(card => ({ ...card, home: this.homes[card.homeIndex] ?? null })), errors: this.marksUnreadable ? [...this.errors, 'Worker marks could not be read'] : this.errors }
   }
 
   portOf(key: string): number | null { return this.views.portOf(key) }
@@ -399,7 +406,7 @@ export class CockpitFleet {
   }
 }
 
-export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMessage, res: ServerResponse, authorizePulls?: (req: IncomingMessage) => Promise<boolean>): Promise<boolean> {
   const path = (req.url ?? '').split('?')[0]
   const terminalMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal$/)
   const leaveMatch = path?.match(/^\/api\/fleet\/([^/]+)\/terminal\/leave$/)
@@ -414,7 +421,12 @@ export async function handleCockpitRequest(fleet: CockpitFleet, req: IncomingMes
     res.end()
     return true
   }
-  if (path === '/api/fleet' && req.method === 'GET') return ok(res, fleet.list(), { headers })
+  if (path === '/api/fleet' && req.method === 'GET') {
+    const includePullStatus = (!req.headers.origin || allowedOrigins.includes(req.headers.origin)) && (await authorizePulls?.(req)) === true
+    return ok(res, fleet.list(includePullStatus), {
+      headers: { ...headers, 'Cache-Control': 'no-store', Vary: 'Tailscale-User-Login, Origin' },
+    })
+  }
   if (path === '/api/fleet/messages' && req.method === 'GET') {
     try { return ok(res, await fleet.messages(), { headers }) }
     catch { return fail(res, 'BACKEND_UNAVAILABLE', 'Messages unavailable', { headers }) }
