@@ -217,13 +217,17 @@ test('an older PR projection with the same fleet generation cannot reverse links
 
   const journal = new Journal(path)
   t.after(() => journal.close())
-  equal(journal.record(taskObservation([{ ...task, priority: 2 }], 1, tasks, [{ id: task.id, pr_url: older }])), 1)
+  const retry = taskObservation([{ ...task, priority: 2 }], 1, tasks, [{ id: task.id, pr_url: older }])
+  equal(journal.record({ ...retry, observed_at: at(1) }), 1)
   const [event] = journal.events()
   equal(event.change.field, 'priority')
   equal(event.evidence.pr_link_coverage, 'unobserved')
+  equal(event.observed_at, at(1))
+  equal(event.observation.observed_between.by, at(1))
   const [status] = journal.sources()
   equal(status.health, 'ok')
   equal(status.last_generated_at, at(1))
+  equal(status.last_success_at, at(1))
   deepEqual(status.counts, { pr_links_unobserved: 1 })
 
   const reader = new DatabaseSync(path, { readOnly: true })
@@ -233,6 +237,28 @@ test('an older PR projection with the same fleet generation cannot reverse links
   } finally {
     reader.close()
   }
+})
+
+test('explicit null PR data witnesses removal while an absent projection preserves task timing', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const task = row('sample-task')
+  const pr = 'https://github.com/example/repo/pull/12'
+  journal.record(taskObservation([task], 0, tasks, [{ id: task.id, pr_url: pr }]))
+  const removed = taskObservation([task], 1, tasks, [{ id: task.id, pr_url: null }])
+  equal(journal.record({ ...removed, observed_at: at(1) }), 1)
+  const [event] = journal.events()
+  deepEqual(event.change, { field: 'pull_requests', before: [pr], after: [] })
+  equal(event.observed_at, at(2))
+
+  const missing = taskObservation([{ ...task, priority: 1 }], 2, tasks, [{ id: task.id }])
+  equal(journal.record({ ...missing, observed_at: at(2) }), 1)
+  const changed = journal.events().at(-1)
+  equal(changed.change.field, 'priority')
+  equal(changed.observed_at, at(2))
+  equal(changed.evidence.pr_link_coverage, 'unobserved')
+  equal(journal.sources()[0].last_attempt_at, at(2))
 })
 
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {

@@ -164,7 +164,8 @@ export class Journal {
   }
 
   record(observation) {
-    const { source, started_at, observed_at, entries, generated_at } = observation
+    const { source, started_at, entries, generated_at } = observation
+    let { observed_at } = observation
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const previous = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(source.source_id)
@@ -195,7 +196,8 @@ export class Journal {
             const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
             counts = pr_links_unobserved ? { pr_links_unobserved } : null
             acceptedGeneration = fresh ? pr.generated_at : null
-            observation = { ...observation, entries: projected }
+            if (fresh && pr_links_unobserved < entries.length) observed_at = pr.observed_at
+            observation = { ...observation, observed_at, entries: projected }
           }
           written = this.recordEntries(observation, previous, snapshotId)
         }

@@ -93,14 +93,14 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
   for (const row of data.backlog.records) {
     if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id)) return null
     ids.add(row.id)
-    if (!Array.isArray(row.links) && (row.links !== undefined || typeof row.pr_url !== 'string')) continue
+    if (!Array.isArray(row.links) && (row.links !== undefined || !Object.hasOwn(row, 'pr_url'))) continue
     const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
     if (urls.some(url => typeof url !== 'string' || !url.trim()) ||
         row.pr_url != null && (typeof row.pr_url !== 'string' || !row.pr_url.trim())) continue
     if (row.pr_url != null) urls.push(row.pr_url)
     links.set(row.id, canonicalPullRequests(urls))
   }
-  return { links, generated_at: new Date(generated).toISOString() }
+  return { links, generated_at: new Date(generated).toISOString(), observed_at: observedAt }
 }
 
 export function withPullRequests(entries, links) {
@@ -356,7 +356,6 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
   })
   if (tasks.entries?.length) {
     tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
-    if (tasks.pullRequests) tasks.observed_at = fleetObservedAt
   }
   return [tasks, workers]
 }
