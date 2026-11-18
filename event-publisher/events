@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { once } from 'node:events'
 import { mkdtemp, readFile, realpath, rmdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -174,11 +175,7 @@ function valueText(value) {
   return String(value)
 }
 
-function render(event, json, replay, health) {
-  if (json) {
-    console.log(JSON.stringify(event))
-    return
-  }
+function eventText(event, replay, health) {
   const time = new Date(event.observed_at).toLocaleTimeString()
   const { source, subject, change, evidence } = event
   const reference = evidence.source_reference
@@ -186,14 +183,16 @@ function render(event, json, replay, health) {
   const meaning = change.field
     ? `${change.field} ${valueText(change.before)} → ${valueText(change.after)}`
     : `first observed · ${change.after.state ?? change.after.current_state}`
-  console.log(`${time} [${replay ? 'replay/' : ''}${source.mode}] firstmate/${subject.type} ${source.home_id}/${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`)
+  return `${time} [${replay ? 'replay/' : ''}${source.mode}] firstmate/${subject.type} ${source.home_id}/${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
 }
 
-function showThrough(journal, cursor, through, filters, json, replay, statuses) {
-  while (cursor < through) {
+async function showThrough(journal, cursor, through, filters, json, replay, statuses, signal) {
+  while (cursor < through && !signal?.aborted) {
     const rows = journal.events({ after: cursor, through, limit: pageSize, ...filters })
     for (const event of rows) {
-      render(event, json, replay, statuses.get(event.source.source_id)?.health)
+      if (signal?.aborted) return cursor
+      const line = json ? JSON.stringify(event) : eventText(event, replay, statuses.get(event.source.source_id)?.health)
+      if (!process.stdout.write(line + '\n')) await once(process.stdout, 'drain', { signal })
       cursor = event.sequence
     }
     if (rows.length < pageSize) break
@@ -218,10 +217,12 @@ async function watch(journal, after, filters, json) {
           signatures.set(id, summary)
         }
       }
-      cursor = showThrough(journal, cursor, attach, filters, json, true, statuses)
-      cursor = showThrough(journal, cursor, journal.tail(), filters, json, false, statuses)
+      cursor = await showThrough(journal, cursor, attach, filters, json, true, statuses, controller.signal)
+      cursor = await showThrough(journal, cursor, journal.tail(), filters, json, false, statuses, controller.signal)
       await pause(1000, controller.signal)
     }
+  } catch (error) {
+    if (!controller.signal.aborted || error.name !== 'AbortError') throw error
   } finally {
     controller.close()
   }
@@ -276,13 +277,9 @@ async function main() {
     } else {
       const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
       if (values.json) console.error('Replay from the journal')
-      if (after !== undefined) {
-        showThrough(journal, after, journal.tail(), filters, values.json, true, statuses)
-      } else {
-        for (const event of journal.events({ latest: true, limit: last, ...filters })) {
-          render(event, values.json, true, statuses.get(event.source.source_id)?.health)
-        }
-      }
+      const through = journal.tail()
+      const cursor = after ?? journal.cursorBeforeLast(through, last, filters)
+      await showThrough(journal, cursor, through, filters, values.json, true, statuses)
     }
   } finally {
     journal.close()

@@ -37,8 +37,8 @@ independently readable home. The paths and ID below are synthetic.
 `"mode": "fixture"` and use a separate journal. Keep the database and its SQLite
 sidecars in a private directory outside the checkout. The writer requires a
 directory owned by the service account, with group and other write access
-disabled. The path to that directory must also prevent other users from
-replacing its directories. This prevents another account from replacing the
+disabled. Use a path with no directory symlinks and with parent directories
+protected from replacement by other users. This prevents another account from replacing the
 checked journal or planting SQLite sidecars before SQLite opens them.
 The journal binds each home ID to its resolved path on first registration.
 Existing journals retain that binding. Start a new journal to use the same ID

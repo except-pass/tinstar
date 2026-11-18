@@ -97,6 +97,17 @@ test('journal writer rejects directories that allow file replacement', async t =
   throws(() => new Journal(path), /service-owned journal directory/)
 })
 
+test('journal writer validates directory aliases before creating missing components', async t => {
+  const root = await temp(t)
+  const shared = join(root, 'shared')
+  const target = join(root, 'target')
+  await mkdir(shared)
+  await mkdir(target)
+  await symlink(target, join(shared, 'alias'), 'dir')
+  throws(() => new Journal(join(shared, 'alias', 'missing', 'journal.sqlite')), /service-owned journal directory/)
+  await rejects(stat(join(target, 'missing')), { code: 'ENOENT' })
+})
+
 test('home binding survives restart and is shared by task and worker sources', async t => {
   const path = await temp(t)
   const db = join(path, 'journal.sqlite')
@@ -550,6 +561,24 @@ fi
   ])
   equal((await stat(backlog, { bigint: true })).mtimeNs, fingerprint.mtimeNs)
   equal(await readFile(backlog, 'utf8'), 'Synthetic immutable backlog\n')
+})
+
+test('replay preserves ascending order and filters across multiple pages', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  journal.registerSources([tasks, workers])
+  journal.record(taskObservation([], 0))
+  journal.record(workerObservation([], 0))
+  journal.record(taskObservation(Array.from({ length: 410 }, (_, i) => row(`task-${i}`)), 1))
+  journal.record(workerObservation([{ id: 'worker-a', gen: 'gen-1', state: 'working' }], 1))
+  journal.close()
+  const replay = async args => {
+    const { stdout } = await exec(cli, ['replay', '--db', path, '--type', 'task', '--json', ...args])
+    return stdout.trim().split('\n').map(line => JSON.parse(line).sequence)
+  }
+  const expected = Array.from({ length: 405 }, (_, i) => i + 6)
+  deepEqual(await replay(['--last', '405']), expected)
+  deepEqual(await replay(['--after', '5']), expected)
 })
 
 test('watch resumes after a cursor and prints each event once across multiple passes', async t => {

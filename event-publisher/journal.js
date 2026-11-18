@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
 
@@ -53,12 +53,24 @@ CREATE TABLE IF NOT EXISTS events (
 `
 
 function writerPath(path) {
-  const requestedDirectory = dirname(path)
-  mkdirSync(requestedDirectory, { recursive: true, mode: 0o700 })
-  const directory = realpathSync(requestedDirectory)
-  const owner = process.geteuid()
+  path = resolve(path)
+  const directory = dirname(path)
+  const components = []
   for (let current = directory; ; current = dirname(current)) {
-    const info = lstatSync(current)
+    components.push(current)
+    if (current === dirname(current)) break
+  }
+  const owner = process.geteuid()
+  for (const current of components.reverse()) {
+    let info = lstatSync(current, { throwIfNoEntry: false })
+    if (!info) {
+      try {
+        mkdirSync(current, { mode: 0o700 })
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error
+      }
+      info = lstatSync(current)
+    }
     const direct = current === directory
     const trustedOwner = info.uid === owner || (!direct && info.uid === 0)
     const writable = (info.mode & 0o022) !== 0
@@ -66,9 +78,8 @@ function writerPath(path) {
     if (!info.isDirectory() || !trustedOwner || (writable && !stickyAncestor)) {
       throw new JournalConfigurationError('use a service-owned journal directory protected from file replacement and sidecar creation by other users')
     }
-    if (current === dirname(current)) break
   }
-  return join(directory, basename(path))
+  return path
 }
 
 function openJournal(path, readOnly) {
@@ -324,16 +335,25 @@ export class Journal {
     return readEvent(this.db.prepare('SELECT sequence, envelope FROM events WHERE event_id = ?').get(id))
   }
 
-  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, latest = false, type, entity } = {}) {
-    const order = latest ? 'DESC' : 'ASC'
+  cursorBeforeLast(through, count, { type, entity }) {
+    const row = this.db.prepare(`
+      SELECT sequence FROM events
+      WHERE sequence <= ?
+        AND (? IS NULL OR subject_type = ?)
+        AND (? IS NULL OR subject_id = ?)
+      ORDER BY sequence DESC LIMIT 1 OFFSET ?
+    `).get(through, type ?? null, type ?? null, entity ?? null, entity ?? null, count - 1)
+    return row ? row.sequence - 1 : 0
+  }
+
+  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, type, entity } = {}) {
     const rows = this.db.prepare(`
       SELECT sequence, envelope FROM events
       WHERE sequence > ? AND sequence <= ?
         AND (? IS NULL OR subject_type = ?)
         AND (? IS NULL OR subject_id = ?)
-      ORDER BY sequence ${order} LIMIT ?
+      ORDER BY sequence LIMIT ?
     `).all(after, through, type ?? null, type ?? null, entity ?? null, entity ?? null, limit)
-    if (latest) rows.reverse()
     return rows.map(readEvent)
   }
 }
