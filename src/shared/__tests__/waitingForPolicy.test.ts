@@ -1,6 +1,6 @@
 import { updateWorkSchema, waitSchema } from '../workflow'
 import { describe, expect, it } from 'vitest'
-import { dispatchOnlyWait, independentWaitIssue, waitingForIssues, type WorkBlocker, type WaitState, type SourceCoverage, workIdShape, waitLine, parseWaitLine } from '../waitingForPolicy'
+import { dispatchOnlyWait, independentWaitIssue, waitingForIssues, type WorkBlocker, type WaitState, type SourceCoverage, workIdShape, waitLine, parseWaitLine, waitEntries, typedWaitEntry } from '../waitingForPolicy'
 
 const id = 'a'.repeat(32)
 const other = 'e'.repeat(32)
@@ -100,10 +100,45 @@ it.each(['Queued', 'Todo', 'Backlog', 'In Progress'])('reports unresolved typed 
   expect(waitingForException({ ...base, waitingFor: '' })?.reason).toMatch(/unresolved typed blocker/)
 })
 
-it.each(['dependency', 'unblocks_when', 'follow_up_by'] as const)('reports missing %s on directly edited waits', field => {
+it.each(['dependency', 'unblocks_when', 'follow_up_by'] as const)('reports missing %s on serialized waits', field => {
   const wait = { type: 'Actor', id: 'Will', dependency: 'Security approval', unblocks_when: 'Security approves', follow_up_by: 'Consumer', [field]: '' }
   const fields = { dependency: 'Dependency', unblocks_when: 'Unblocks when', follow_up_by: 'Follow-up by' }
-  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor: waitLine(wait), nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ field: fields[field], category: 'description' })
+  const waitingFor = waitLine(wait)
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: wait.type, id: wait.id, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ field: fields[field], category: 'description' })
+  expect(parseWaitLine(waitingFor)).toBeNull()
+  expect(waitEntries(waitingFor, wait).map(typedWaitEntry)).toEqual([null])
+})
+
+it.each([
+  { labels: ['Follow-up by: Firstmate', 'Unblocks when: Receipt verified'] },
+  { labels: ['Follow-up by: Firstmate', '', 'Unblocks when: Receipt verified'] },
+  { labels: ['Dependency:   ', 'Unblocks when: Receipt verified', 'Follow-up by: Firstmate'] },
+])('preserves the full authored entry with $labels', ({ labels }) => {
+  const waitingFor = ['Firmware rollout', ...labels].join('\n')
+  const identity = { type: 'Event', id: 'firmware-rollout' }
+  const entries = waitEntries(waitingFor, identity)
+  expect(entries.map(entry => entry.text)).toEqual([waitingFor])
+  expect(entries.map(typedWaitEntry)).toEqual([{ ...identity, dependency: 'Firmware rollout', unblocks_when: 'Receipt verified', follow_up_by: 'Firstmate' }])
+  expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toBeNull()
+})
+
+it.each([
+  ['Dependency: Firmware rollout', 'Unblocks when: Receipt verified', 'Follow-up by: Firstmate'],
+  ['Follow-up by: Firstmate', 'The verification team has the rollout logs.', '', 'Unblocks when: Receipt verified', 'Dependency: Firmware rollout'],
+])('keeps prose before an explicit dependency as a separate blocker (%s)', (...lines) => {
+  const authored = lines.join('\n')
+  const waitingFor = `Security approval\n${authored}`
+  const identity = { type: 'Event', id: 'firmware-rollout' }
+  const entries = waitEntries(waitingFor, identity)
+  expect(entries.map(entry => entry.text)).toEqual(['Security approval', authored])
+  expect(entries[0]?.fields.dependency).toBe('Security approval')
+  expect(entries.map(typedWaitEntry)).toEqual([null, { ...identity, dependency: 'Firmware rollout', unblocks_when: 'Receipt verified', follow_up_by: 'Firstmate' }])
+  expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ code: 'missing-unblocks_when' })
+})
+
+it.each(['', 'dEpEnDeNcY: '])('accepts a case-insensitive authored unblock condition with dependency prefix %j', prefix => {
+  const waitingFor = `${prefix}Firmware rollout\r\n  uNbLoCkS wHeN: The receipt is verified`
+  expect(waitingForException({ cardId: id, status: 'Waiting For', type: 'Event', id: 'firmware-rollout', waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toBeNull()
 })
 
 describe('wait text round trips', () => {

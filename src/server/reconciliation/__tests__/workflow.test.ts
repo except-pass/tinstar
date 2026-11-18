@@ -2658,6 +2658,107 @@ describe('Waiting For status semantics', () => {
   const op = (kind: string, extra: Record<string, unknown> = {}) => ({ card_id: id, operation_id: `sem-${kind}-${JSON.stringify(extra).length}`, kind, ...extra }) as UpdateWorkInput
   const actor = (extra: Record<string, unknown> = {}) => ({ type: 'Actor' as const, id: 'Will', dependency: 'Owner acceptance of the tariff', unblocks_when: 'Will sends the acceptance', follow_up_by: 'Consumer', next_check_in: checkIn(), ...extra })
 
+  it('saves a prose event checkpoint and accepts a structured replacement for the same wait', async () => {
+    const f = readyFixture()
+    const card_id = 'b'.repeat(32)
+    const request_id = '00000000-0000-4000-8000-000000000001'
+    const fields = {
+      type: 'Event' as const,
+      id: 'build-proof:pr42:0123456789abcdef0123456789abcdef01234567',
+      dependency: 'Build verification run 2 of https://github.com/example/firmware/pull/42 at 0123456789abcdef0123456789abcdef01234567 (running since 10.00Z), plus two lab devices reporting telemetry (no reports as of 09.59Z).',
+      unblocks_when: 'the build verification passes and the merge request is posted; lab telemetry appears in the release report.',
+      follow_up_by: 'Firstmate (release desk)',
+      next_check_in: checkIn(),
+    }
+    const text = `${fields.dependency}\nUnblocks when: ${fields.unblocks_when}\nFollow-up by: ${fields.follow_up_by}`
+    f.pages.delete(id)
+    f.pages.set(card_id, f.raw)
+    f.raw.id = card_id
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: fields.type }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: fields.id }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+
+    const sources = f.sources()
+    const checkpoint = {
+      request_id, assessment: 'Build verification and lab telemetry are pending', evidence: 'The build check is running and the lab devices have yet to report',
+      next_action: 'Check the build result and lab telemetry', next_check_in: fields.next_check_in, confirmation: 'provisional' as const,
+    }
+    const result = await sources.updateWork({ card_id, operation_id: 'reported-checkpoint', kind: 'checkpoint', checkpoint }, 'Tin Star MCP')
+    expect(result.outcome, result.message).toBe('saved')
+    expect((await f.reader.card(card_id, true)).properties['Waiting For']?.value).toBe(text)
+    expect(await sources.updateWork({ card_id, operation_id: 'structured-replacement', kind: 'wait', replace_wait: text, ...fields }, 'Tin Star MCP'))
+      .toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(card_id, true)).properties['Waiting For']?.value).toBe(waitLine(fields))
+  })
+
+  it('requires a card ID for structured Work waits and accepts the same reference as an Event', async () => {
+    const f = readyFixture()
+    const event = { ...actor(), type: 'Event' as const, id: 'proof:firmware:release' }
+    const sources = f.sources()
+    const before = patches(f)
+    expect(await sources.updateWork({ ...op('wait'), kind: 'wait', ...event, type: 'Work' }, 'Tin Star MCP'))
+      .toMatchObject({ outcome: 'not-saved', code: 'invalid-work-id', message: expect.stringMatching(/Work needs a card ID.*Type=Event/) })
+    expect(patches(f)).toBe(before)
+    expect(await sources.updateWork({ ...op('wait'), kind: 'wait', ...event, operation_id: 'external-event' }, 'Tin Star MCP'))
+      .toMatchObject({ outcome: 'saved' })
+    const card = await f.reader.card(id, true)
+    expect(card.properties['Waiting For Type']?.value).toBe('Event')
+    expect(card.properties['Waiting For ID']?.value).toBe(event.id)
+    expect(card.properties['Waiting For']?.value).toBe(waitLine(event))
+  })
+
+  it.each([
+    { kind: 'wait', middle: 'Follow-up by: Firstmate\n' },
+    { kind: 'assign', middle: 'Follow-up by: Firstmate\n' },
+    { kind: 'wait', middle: 'Dependency:' },
+    { kind: 'assign', middle: 'Dependency:' },
+  ] as const)('matches the entire authored wait with $middle for $kind', async ({ kind, middle }) => {
+    const f = readyFixture()
+    const fields = { type: 'Event' as const, id: 'firmware-rollout', dependency: 'Firmware rollout', follow_up_by: 'Firstmate', unblocks_when: 'Receipt verified', next_check_in: checkIn() }
+    const text = `Firmware rollout\n${middle}\nUnblocks when: Receipt verified`
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: fields.type }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: fields.id }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+    const sources = f.sources()
+    const checkpoint = { assessment: 'Rollout pending', evidence: 'No receipt yet', next_action: 'Check receipt', next_check_in: fields.next_check_in, confirmation: 'provisional' as const }
+    const result = await sources.updateWork({ ...op('checkpoint'), kind: 'checkpoint', checkpoint }, 'Tin Star MCP')
+    expect(result.outcome, result.message).toBe('saved')
+    if (kind === 'wait' && middle === 'Dependency:') {
+      expect(await sources.updateWork({ ...op('wait', { dependency: 'different' }), kind, replace_wait: text, ...fields, dependency: 'Different blocker' }, 'Tin Star MCP'))
+        .toMatchObject({ outcome: 'not-saved', code: 'wait-conflict' })
+    }
+    const transition = kind === 'wait'
+      ? await sources.updateWork({ ...op(kind), kind, replace_wait: text, ...fields }, 'Tin Star MCP')
+      : await sources.updateWork({ ...op(kind), kind, owner: 'Firstmate', status: 'Queued', resolve_wait: text }, 'Tin Star MCP')
+    expect(transition.outcome, transition.message).toBe('saved')
+    const card = await f.reader.card(id, true)
+    expect(card.properties['Waiting For']?.value).toBe(kind === 'wait' ? waitLine(fields) : '')
+    expect(card.properties.Status?.value).toBe(kind === 'wait' ? 'Waiting For' : 'Queued')
+  })
+
+  it.each([
+    ['Event', 'Firmware rollout', 'Waiting for the publication receipt', 'Unblocks when: <condition>'],
+    ['Work', 'proof:firmware:release', 'Firmware rollout\nUnblocks when: The receipt is verified', 'Work needs a card ID'],
+  ])('explains how to repair an invalid %s wait during a checkpoint', async (type, reference, text, reason) => {
+    const f = readyFixture()
+    f.raw.properties.Status.status.name = 'Waiting For'
+    f.raw.properties['Waiting For Type'].select = { name: type }
+    f.raw.properties['Waiting For ID'].rich_text = [{ plain_text: reference }]
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: text }]
+    const result = await f.sources().updateWork({
+      card_id: id, operation_id: 'invalid-wait-checkpoint', kind: 'checkpoint',
+      checkpoint: { assessment: 'Rollout pending', evidence: 'No receipt yet', next_action: 'Check receipt', next_check_in: checkIn(), confirmation: 'provisional' },
+    }, 'Tin Star MCP')
+    expect(result).toMatchObject({ outcome: 'not-saved', code: 'wait-invalid', saved_fields: [] })
+    expect(result.message).toContain(reason)
+    expect(result.message).toContain('Unblocks when: <condition>')
+    expect(result.message).toContain('unblocks_when')
+    if (type === 'Work') expect(result.message).toContain('Type=Event')
+    expect(patches(f)).toBe(0)
+  })
+
   it('reads multiline source fields and resolves the exact Work card outside the search scope', async () => {
     const f = readyFixture()
     const blockerId = '41b50ce6d422814c8edbd29f321f94e8'

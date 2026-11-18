@@ -93,10 +93,10 @@ function inlineWait(line: string): WaitFields | null {
   return { dependency: decode(match[1]!), unblocks_when: decode(match[2]!), follow_up_by: decode(match[3]!), type: match[4]!, id: decode(match[5]!) }
 }
 
-function typedWait(fields: Partial<WaitFields>): (WaitFields & { type: WaitingForType }) | null {
-  const { type, id, dependency, unblocks_when, follow_up_by } = fields
+function typedWait(fields: Partial<WaitFields>, authored = false): (WaitFields & { type: WaitingForType }) | null {
+  const { type, id, dependency, unblocks_when, follow_up_by = '' } = fields
   const canonical = type?.trim() ?? ''
-  if (!canonicalType(canonical) || !id?.trim() || !dependency?.trim() || !unblocks_when?.trim() || !follow_up_by?.trim()) return null
+  if (!canonicalType(canonical) || !id?.trim() || !dependency?.trim() || !unblocks_when?.trim() || (!authored && !follow_up_by.trim())) return null
   return { type: canonical, id, dependency, unblocks_when, follow_up_by }
 }
 
@@ -112,15 +112,27 @@ const descriptionFields = {
 const labels: Record<string, keyof WaitDescription> = {
   dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by',
 }
-interface WaitEntry { text: string; fields: Partial<WaitFields>; implicitIdentity?: boolean; freeForm?: boolean }
+interface WaitEntry { text: string; fields: Partial<WaitFields>; authored?: boolean; implicitIdentity?: boolean; freeForm?: boolean }
 
 /** Read the authored text and the generated entries without changing what an exact resolution matches. */
 export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   const entries: WaitEntry[] = []
+  let prose: string[] = []
+  let leadingProse = 0
   let block: WaitEntry | undefined
   let implicitIdentityUsed = false
+  const addFreeForm = (lines: string[]) => {
+    for (const text of lines) if (text.trim()) entries.push({ text, fields: { dependency: text }, freeForm: true })
+  }
   const finish = () => {
     if (!block) return
+    const prefix = prose.slice(0, leadingProse)
+    if (block.fields.dependency?.trim()) addFreeForm(prefix)
+    else {
+      const dependency = prose.join('\n').trim()
+      if (dependency) block.fields.dependency = dependency
+      if (prefix.length) block.text = [...prefix, block.text].join('\n')
+    }
     if (!implicitIdentityUsed) {
       Object.assign(block.fields, { type: primary.type, id: primary.id })
       block.implicitIdentity = true
@@ -128,23 +140,33 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
     }
     entries.push(block)
     block = undefined
+    prose = []
   }
   for (const line of text.split('\n')) {
     const inline = inlineWait(line.replace(/\r$/, ''))
     const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up by):[ \t]*(.*)$/i.exec(line.trim())
-    if (inline || !labeled) {
+    if (inline) {
       finish()
-      if (line.trim()) entries.push(inline ? { text: line, fields: inline } : { text: line, fields: { dependency: line }, freeForm: true })
+      addFreeForm(prose)
+      prose = []
+      entries.push({ text: line, fields: inline })
+      continue
+    }
+    if (!labeled) {
+      if (block) block.text += '\n' + line
+      if (block || line.trim() || prose.length) prose.push(line)
       continue
     }
     const field = labels[labeled[1]!.toLowerCase()]!
     if (!block || field in block.fields) {
       finish()
-      block = { text: line, fields: {} }
+      leadingProse = prose.length
+      block = { text: line, fields: {}, authored: true }
     } else block.text += '\n' + line
     block.fields[field] = labeled[2]!
   }
   finish()
+  addFreeForm(prose)
   return entries
 }
 
@@ -154,7 +176,7 @@ export function retainedWaitText({ text, fields, implicitIdentity }: WaitEntry, 
   return waitLine({ type, id, dependency, unblocks_when, follow_up_by })
 }
 
-export const typedWaitEntry = (entry: WaitEntry) => typedWait(entry.fields)
+export const typedWaitEntry = (entry: WaitEntry) => typedWait(entry.fields, entry.authored)
 
 function scheduleOnly(text: string): boolean {
   const trimmed = text.trim()
@@ -189,7 +211,7 @@ const comparableWaitId = (type: string, id: string) => type === 'Work' ? canonic
 
 export function workIdShape(cardId: string, workId: string): WaitIssue | null {
   const canonical = canonicalWorkId(workId)
-  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Use the exact Notion or Jira card ID for a Work dependency. Use Actor with the named identity for a person, team or service, or Event with a stable reference for an external condition.' }
+  if (!canonical) return { code: 'invalid-work-id', field: 'id', message: 'Work needs a card ID. Use the exact Notion or Jira card ID, or use Type=Event for a non-card reference.' }
   if (canonical === canonicalWorkId(cardId)) return { code: 'work-self', field: 'id', message: 'Choose the exact ID of the other card that blocks this work.' }
   return null
 }
@@ -233,22 +255,24 @@ export function waitingForIssues(input: WaitObservation, work: ReadonlyMap<strin
   if (status === 'Waiting For') {
     identityIssues(cardId, input, add)
     const entries = waitEntries(waitingFor, input)
-    const descriptions = entries.length ? entries.map(entry => entry.fields) : [{}]
+    const descriptions: Pick<WaitEntry, 'fields' | 'authored'>[] = entries.length ? entries : [{ fields: {} }]
     let hasPrimary = false
-    for (const fields of descriptions) {
+    for (const { fields, authored } of descriptions) {
       const { type, id, dependency, unblocks_when } = fields
       if (type !== undefined || id !== undefined) {
         identityIssues(cardId, { type: type ?? '', id: id ?? '' }, add)
         hasPrimary ||= !!type && type.trim() === input.type.trim() && comparableWaitId(type.trim(), id ?? '') === comparableWaitId(type.trim(), input.id)
       }
-      for (const [key, label] of Object.entries(descriptionFields)) {
-        if (!fields[key as keyof WaitDescription]?.trim()) add('description', `missing-${key}`, label, `Add ${label} to the active Waiting For description.`)
+      for (const key of Object.keys(descriptionFields) as (keyof WaitDescription)[]) {
+        if (key === 'follow_up_by' && authored) continue
+        const label = descriptionFields[key]
+        if (!fields[key]?.trim()) add('description', `missing-${key}`, label, `Add ${label} to the active Waiting For description.`)
       }
       if (dependency && unblocks_when && dispatchOnlyWait(dependency, unblocks_when)) {
         add('description', 'not-independent', 'Unblocks when', DISPATCH_WAIT_REASON)
       }
     }
-    if (entries.length && descriptions.every(fields => fields.type && fields.id) && !hasPrimary) {
+    if (entries.length && entries.every(({ fields }) => fields.type && fields.id) && !hasPrimary) {
       add('classification', 'primary-mismatch', 'Waiting For Type / ID', 'Match Waiting For Type and ID to one of the active wait entries.')
     }
     for (const id of waitingForWorkIds(input)) {
