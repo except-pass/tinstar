@@ -680,6 +680,49 @@ test('journal rolls back events and watermark if writing fails after the first a
   restarted.close()
 })
 
+test('a crash between fleet projections leaves neither projection committed', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const task = row('sample-a')
+  const worker = { id: task.id, gen: 'gen-1', state: 'working' }
+  const baseline = new Journal(path)
+  baseline.registerSources([tasks, workers])
+  baseline.recordAttempts([taskObservation([task], 0), workerObservation([worker], 0)])
+  const before = baseline.sources()
+  baseline.close()
+
+  const taskRead = taskObservation([task], 2, tasks, [{
+    id: task.id, pr_url: 'https://github.com/example/repo/pull/13',
+  }])
+  const workerRead = workerObservation([{ ...worker, state: 'parked' }], 2)
+  const encoded = JSON.stringify([
+    { ...taskRead, pullRequests: { ...taskRead.pullRequests, links: [...taskRead.pullRequests.links] } },
+    workerRead,
+  ])
+  await rejects(exec(process.execPath, ['--input-type=module', '-e', `
+    import { Journal } from ${JSON.stringify(new URL('../journal.js', import.meta.url).href)}
+    class InterruptedJournal extends Journal {
+      recordEntries(observation, ...args) {
+        if (observation.source.type === 'worker') process.exit(42)
+        return super.recordEntries(observation, ...args)
+      }
+    }
+    const [path, encoded] = process.argv.slice(1)
+    const observations = JSON.parse(encoded)
+    observations[0].pullRequests.links = new Map(observations[0].pullRequests.links)
+    new InterruptedJournal(path).recordAttempts(observations)
+  `, path, encoded]), { code: 42 })
+
+  const restarted = new Journal(path)
+  t.after(() => restarted.close())
+  deepEqual(restarted.sources(), before)
+  equal(restarted.tail(), 0)
+  deepEqual(restarted.recordAttempts([taskRead, workerRead]), [
+    { written: 1, complete: true },
+    { written: 1, complete: true },
+  ])
+  deepEqual(restarted.events().map(event => event.change.field), ['pull_requests', 'current_state'])
+})
+
 test('missing, failed, partial and out-of-order task polls preserve the last witnessed state', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())

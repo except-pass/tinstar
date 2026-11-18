@@ -137,9 +137,7 @@ async function collect(journal, homes, interval) {
       for (const home of homes) {
         if (controller.signal.aborted) break
         const observations = await observeHome(home, scratch, { taskCache: taskCaches.get(home.id) })
-        for (const observation of observations) {
-          if (!journal.recordAttempt(observation).complete) complete = false
-        }
+        if (!journal.recordAttempts(observations).every(result => result.complete)) complete = false
       }
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (performance.now() - start), 5000), controller.signal)
