@@ -364,11 +364,14 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
     })
     fleetObservedAt = now().toISOString()
     const payload = parseWorkers(text, home, fleetStartedAt, fleetObservedAt)
-    const incomplete = payload.counts.current_state_unavailable > 0
+    const { secondmate_without_generation, current_state_unavailable } = payload.counts
+    const reason = secondmate_without_generation > 0
+      ? 'some local second mates have no verified spawn generation'
+      : current_state_unavailable > 0 ? 'some local incarnations have no verified current state' : null
     return {
       ...payload, observed_at: fleetObservedAt,
-      health: incomplete ? 'partial' : 'ok',
-      reason: incomplete ? 'some local incarnations have no verified current state' : null,
+      health: reason ? 'partial' : 'ok',
+      reason,
     }
   })
   if (text !== undefined) {

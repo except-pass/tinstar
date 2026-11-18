@@ -1099,14 +1099,17 @@ FLEET
     fleet.secondmate_current.records = [{ id: 'listed-mate' }, { id: 'listed-worker' }]
   }
   equal(journal.record(await poll(failures.length, fleet => addMates(fleet, 'working'))), 0)
-  equal(journal.record(await poll(failures.length + 1, fleet => addMates(fleet, 'parked'))), 3)
+  deepEqual(journal.recordAttempt(await poll(failures.length + 1, fleet => addMates(fleet, 'parked'))),
+    { written: 3, complete: false })
   deepEqual(journal.events().map(event => event.evidence.source_reference.task_id), ['kind-worker', 'listed-worker', 'role-worker'])
   for (const event of journal.events()) {
     deepEqual(event.change, { field: 'current_state', before: 'working', after: 'parked' })
   }
   const [health] = journal.sources()
-  equal(health.health, 'ok')
+  equal(health.health, 'partial')
+  equal(health.reason, 'some local second mates have no verified spawn generation')
   equal(health.counts.secondmate_without_generation, 3)
+  equal(health.counts.current_state_unavailable, 0)
 
   const loseGenerations = fleet => {
     addMates(fleet, 'working')
