@@ -201,6 +201,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
 
   const entries = []
+  const unresolved_task_ids = []
   const counts = { remote_excluded: 0, secondmate_without_generation: 0, current_state_unavailable: 0 }
   const ids = new Set()
   const mates = new Set(Array.isArray(data.secondmate_current?.records)
@@ -223,6 +224,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
       if ((row.spawn_gen == null || row.spawn_gen === '') &&
           (row.kind === 'secondmate' || row.role === 'secondmate' || mates.has(row.id))) {
         counts.secondmate_without_generation++
+        unresolved_task_ids.push(row.id)
         continue
       }
       partial('local fleet worker lacks a valid spawn generation')
@@ -249,7 +251,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
       },
     })
   }
-  return { entries, counts, inventory_complete: true, generated_at: new Date(generated).toISOString() }
+  return { entries, unresolved_task_ids, counts, inventory_complete: true, generated_at: new Date(generated).toISOString() }
 }
 
 async function backlogFingerprint(dataPath) {

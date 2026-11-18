@@ -607,6 +607,30 @@ test('a fleet window overlapping accepted worker evidence cannot advance PR link
   equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(1))
 })
 
+test('worker arrivals use the matching prior fleet window when PR links share the new read', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  const poll = (minute, samples) => journal.recordAttempts([
+    taskObservation([task], minute - 1),
+    workerObservation(samples, minute, at(minute)),
+  ])
+  const worker = { id: task.id, gen: 'gen-1', state: 'working' }
+  poll(1, [])
+  poll(2, [worker])
+  const [observed] = journal.events()
+  equal(observed.event_type, 'worker.observed')
+  deepEqual(observed.observation.observed_between, { after: at(1), by: at(2) })
+
+  poll(3, [])
+  journal.record(taskObservation([task], 3))
+  poll(5, [worker])
+  const returned = journal.events().at(-1)
+  equal(returned.event_type, 'worker.inventory.entered')
+  deepEqual(returned.observation.observed_between, { after: null, by: at(5) })
+})
+
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const initial = row('initial-task')
@@ -925,7 +949,7 @@ test('worker membership events require accepted inventories and replay after res
   const path = join(await temp(t), 'journal.sqlite')
   const writer = new Journal(path)
   writer.register(workers)
-  const initial = { id: 'initial-worker', gen: 'gen-1', state: 'unknown' }
+  const initial = { id: 'initial-worker', gen: 'gen-1', state: 'working' }
   const arriving = { id: 'arriving-worker', gen: 'gen-2', state: 'unknown' }
   equal(writer.record(workerObservation([initial], 0)), 0)
   const [baseline] = writer.sources()
@@ -953,6 +977,22 @@ test('worker membership events require accepted inventories and replay after res
   match(text, /no longer in the accepted inventory/)
   const { stdout: json } = await exec(process.execPath, [cli, 'replay', '--db', path, '--after', String(observed.sequence), '--json'])
   deepEqual(JSON.parse(json), left)
+  equal(journal.record(workerObservation([arriving, initial], 5)), 1)
+  const returned = journal.events().at(-1)
+  equal(returned.event_type, 'worker.inventory.entered')
+  equal(returned.subject.id, left.subject.id)
+  deepEqual(returned.change, { field: 'inventory_membership', before: 'absent', after: 'present' })
+  equal(journal.record(workerObservation([arriving, initial], 5)), 0)
+  equal(journal.record(workerObservation([], 6)), 2)
+  equal(journal.record(workerObservation([{ ...initial, state: 'parked' }, { ...arriving, state: 'working' }], 7)), 4)
+  deepEqual(journal.events().slice(-4).map(event => [event.event_type, event.change.before, event.change.after]), [
+    ['worker.inventory.entered', 'absent', 'present'],
+    ['worker.current_state.changed', 'unknown', 'working'],
+    ['worker.inventory.entered', 'absent', 'present'],
+    ['worker.current_state.changed', 'working', 'parked'],
+  ])
+  const replay = await exec(process.execPath, [cli, 'replay', '--db', path, '--after', String(left.sequence)])
+  match(replay.stdout, /returned to the accepted inventory/)
 })
 
 test('verified active worker states advance the journal without trusting historical reports', async t => {
@@ -1065,6 +1105,32 @@ FLEET
   const [health] = journal.sources()
   equal(health.health, 'ok')
   equal(health.counts.secondmate_without_generation, 3)
+
+  const loseGenerations = fleet => {
+    addMates(fleet, 'working')
+    for (const mate of fleet.tasks) {
+      if (['kind-worker', 'role-worker', 'listed-worker'].includes(mate.id)) delete mate.spawn_gen
+    }
+    fleet.tasks = fleet.tasks.filter(task => task.id !== second.id)
+  }
+  equal(journal.record(await poll(failures.length + 2, loseGenerations)), 1)
+  const unrelatedDeparture = journal.events().at(-1)
+  equal(unrelatedDeparture.event_type, 'worker.inventory.left')
+  equal(unrelatedDeparture.evidence.source_reference.task_id, second.id)
+  equal(journal.record(await poll(failures.length + 3, loseGenerations)), 0)
+  equal(journal.record(await poll(failures.length + 4, fleet => {
+    addMates(fleet, 'working')
+    fleet.tasks = fleet.tasks.filter(task => task.id !== second.id && task.id !== 'role-worker')
+  })), 3)
+  const [kind, listed, role] = journal.events().slice(-3)
+  for (const [id, event] of [['kind-worker', kind], ['listed-worker', listed]]) {
+    equal(event.event_type, 'worker.current_state.changed')
+    equal(event.evidence.source_reference.task_id, id)
+    deepEqual(event.change, { field: 'current_state', before: 'parked', after: 'working' })
+    equal(event.observation.observed_between.after, at(failures.length + 1))
+  }
+  equal(role.event_type, 'worker.inventory.left')
+  equal(role.evidence.source_reference.task_id, 'role-worker')
 })
 
 test('unchanged markdown uses the fast path and a new local date reevaluates the hold', async t => {

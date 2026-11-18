@@ -182,6 +182,7 @@ function eventText(event, replay, health) {
       : `first observed · ${change.field} ${valueText(change.after)}`
     : `first observed · ${change.after.state ?? change.after.current_state}`
   if (event.event_type === 'worker.inventory.left') meaning = 'no longer in the accepted inventory'
+  if (event.event_type === 'worker.inventory.entered') meaning = 'returned to the accepted inventory'
   if (event.event_type === 'worker.observed' && change.after.reason) meaning += ` (${change.after.reason})`
   return `${time} [${replay ? 'replay/' : ''}${source.mode}] firstmate/${subject.type} ${source.home_id}/${compact} · ${meaning} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
 }

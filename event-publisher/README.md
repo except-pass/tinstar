@@ -153,6 +153,9 @@ It includes the observed state, or `unknown` with the reason. The first later
 verified state appears as `worker.current_state.changed` from `unknown`.
 An incarnation absent from the next complete accepted inventory produces
 `worker.inventory.left`, which records absence within that inventory's coverage.
+The same incarnation returning produces `worker.inventory.entered`. A local
+second-mate row with unresolved generation preserves prior membership for its
+task ID without refreshing incarnation or state evidence.
 Failed, stale, or incomplete inventories preserve the last accepted membership.
 The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,

@@ -205,7 +205,11 @@ export class Journal {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const batchIds = { task: randomUUID(), fleet: randomUUID() }
-      const results = observations.map(observation => this.#recordAttempt(observation, batchIds))
+      const selectFleet = this.db.prepare('SELECT * FROM fleet_windows WHERE home_id = ?')
+      const priorFleetWindows = new Map(observations.filter(({ source }) => source.type === 'worker')
+        .map(({ source }) => [source.home_id, selectFleet.get(source.home_id)]))
+      const results = observations.map(observation =>
+        this.#recordAttempt(observation, batchIds, selectFleet, priorFleetWindows.get(observation.source.home_id)))
       this.db.exec('COMMIT')
       return results
     } catch (error) {
@@ -214,7 +218,7 @@ export class Journal {
     }
   }
 
-  #recordAttempt(observation, batchIds) {
+  #recordAttempt(observation, batchIds, selectFleet, priorFleetWindow) {
     const { source, started_at, observed_at, entries, generated_at } = observation
     let batchObservedAt = observed_at
     const previous = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(source.source_id)
@@ -226,7 +230,7 @@ export class Journal {
     const overlapsAcceptedWindow = started_at < (previous.last_success_at ?? '')
     let { health, reason = null, counts = null } = observation
     let snapshotId = null
-    const fleetWindow = this.db.prepare('SELECT * FROM fleet_windows WHERE home_id = ?').get(source.home_id)
+    const fleetWindow = selectFleet.get(source.home_id)
     const pr = source.type === 'task' ? observation.pullRequests : null
     const worker = pr && this.db.prepare(`
       SELECT last_success_at, last_generated_at
@@ -261,9 +265,10 @@ export class Journal {
         if (canJoinLinks && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
-      const previousWorkerStartedAt = source.type === 'worker' && fleetWindow &&
-        fleetWindow.observed_at === previous.last_success_at && fleetWindow.generated_at === previous.last_generated_at
-        ? fleetWindow.started_at : null
+      const previousWorkerStartedAt = source.type === 'worker'
+        ? [fleetWindow, priorFleetWindow].find(window => window &&
+          window.observed_at === previous.last_success_at && window.generated_at === previous.last_generated_at)?.started_at
+        : null
       written = this.recordEntries(observation, previous, snapshotId, batchIds, previousWorkerStartedAt)
       complete = health === 'ok' && !counts?.pr_links_unobserved && !counts?.fleet_backlog_absent
     }
@@ -311,7 +316,7 @@ export class Journal {
         reason = excluded.reason, evidence = excluded.evidence
     `) : null
     const selectWorker = isWorker ? this.db.prepare(`
-      SELECT evidence FROM worker_samples WHERE source_id = ? AND entity_id = ?
+      SELECT snapshot_id, evidence FROM worker_samples WHERE source_id = ? AND entity_id = ?
     `) : null
     let count = 0
     const publish = (entry, difference, context) => {
@@ -355,6 +360,7 @@ export class Journal {
     const entries = [...observation.entries].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     for (const entry of entries) {
       const prior = select.get(source.source_id, entry.id)
+      const sample = selectWorker?.get(source.source_id, entry.id)
       const before = prior?.fields ? JSON.parse(prior.fields) : null
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
@@ -380,11 +386,17 @@ export class Journal {
             event_type: 'worker.observed',
             change: { after: { current_state, ...(reason ? { reason } : {}) } },
           }, context)
-        } else if (fields && fields !== prior?.fields) {
+        }
+        if (isWorker && prior && (sample?.snapshot_id ?? prior.last_seen_snapshot) !== previousSnapshot) {
+          publish(entry, {
+            event_type: 'worker.inventory.entered',
+            change: { field: 'inventory_membership', before: 'absent', after: 'present' },
+          }, { startedAt: previousWorkerStartedAt, basis: 'present after absence from the accepted worker inventory' })
+        }
+        if ((!isWorker || prior) && fields && fields !== prior?.fields) {
           let previousFields = before
           if (isWorker && !before) {
             previousFields = { current_state: 'unknown' }
-            const sample = selectWorker.get(source.source_id, entry.id)
             context.evidence = sample ? JSON.parse(sample.evidence) : null
             context.startedAt = context.evidence?.started_at ??
               (prior.last_seen_snapshot === previousSnapshot ? previousWorkerStartedAt : null)
@@ -404,14 +416,20 @@ export class Journal {
         fields ? JSON.stringify(evidence) : null)
     }
     if (isWorker && previousSnapshot) {
-      // Current members now reference the new snapshot. Rows still in the previous
-      // snapshot were absent from this complete inventory; retain their last state.
+      const unresolved = new Set(observation.unresolved_task_ids)
+      const retainMembership = this.db.prepare(`
+        UPDATE worker_samples SET snapshot_id = ? WHERE source_id = ? AND entity_id = ?
+      `)
       const departed = this.db.prepare(`
         SELECT entity_id, evidence FROM worker_samples
         WHERE source_id = ? AND snapshot_id = ? ORDER BY entity_id
       `).all(source.source_id, previousSnapshot)
       for (const sample of departed) {
         const evidence = JSON.parse(sample.evidence)
+        if (unresolved.has(evidence.task_id)) {
+          retainMembership.run(snapshotId, source.source_id, sample.entity_id)
+          continue
+        }
         publish({ id: sample.entity_id, evidence: { ...evidence, state_source: null, historical_last_event: null } }, {
           event_type: 'worker.inventory.left',
           change: { field: 'inventory_membership', before: 'present', after: 'absent' },
