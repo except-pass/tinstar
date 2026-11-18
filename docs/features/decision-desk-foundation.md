@@ -31,6 +31,20 @@ Jobs expire after 15 minutes without publication. Published packets have no
 age limit. Editing decision properties, card text, or substantive discussion
 invalidates the packet.
 
+### Answer attribution
+
+The card comment and any corresponding Firstmate update use the Desk caller
+identity to introduce the selected option.
+
+| Desk caller | Wording |
+| --- | --- |
+| Browser owner review or MCP caller `owner-chatgpt` | `Will chose` |
+| MCP caller `Firstmate` | `Firstmate chose on Will's behalf` |
+| Other MCP callers | `Chosen on Will's behalf (not by Will)` |
+
+Tin Star stores the attribution with the answer attempt and reuses it if a
+retry or refill completes the handoff.
+
 ## Webhook publication
 
 Configure the `url` and `key` fields of Clavis secret
@@ -73,7 +87,7 @@ A scoped claim stays within that card when submitting or skipping. To move to
 another card after a scoped review, issue an unscoped claim explicitly.
 
 Keep lease and review session tokens in tool arguments. Call `submit_prepared_decision` with
-`lease_token`, the selected `option_id`, Will's exact `answer`, and a new
+`lease_token`, the selected `option_id`, the exact `answer`, and a new
 `operation_id`. Reuse the same arguments when a save result is uncertain.
 To continue reading an existing hold, call the claim with its lease token.
 For an unscoped review, the answer returns the next prepared card when available.
