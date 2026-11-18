@@ -13,7 +13,7 @@ import { entityId, observe, parseTasks, parseWorkers, sourcesFor } from '../firs
 import { Journal } from '../journal.js'
 
 const exec = promisify(execFile)
-const cli = fileURLToPath(new URL('../events.js', import.meta.url))
+const cli = fileURLToPath(new URL('../events', import.meta.url))
 const at = minutes => new Date(Date.UTC(2026, 0, 2, 12, minutes)).toISOString()
 const home = { id: 'example:west', path: '/example/west', mode: 'fixture' }
 const [tasks, workers] = sourcesFor(home)
