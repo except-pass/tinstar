@@ -101,6 +101,7 @@ it.each([
   const url = 'https://github.com/fixture/tinstar/pull/9'
   const helper = sources.fleet[2]!.observation.data!.tasks[0]!
   helper.pr.url = url
+  helper.current_state.state = 'parked'
   const scene = new SceneReconciler().reconcile(sources, now)
   observed.scene = scene
   const { container } = render(<Overview messages={[]} submit={vi.fn()} workers={[{
