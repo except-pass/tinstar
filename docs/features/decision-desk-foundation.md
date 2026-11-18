@@ -29,9 +29,10 @@ Configure the `url` and `key` fields of Clavis secret
 `grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
 authentication. Its body contains `card_url`, a credential-scrubbed
 `source_question`, an empty `options` array for the preparer to propose choices,
-and an opaque `source_revision` token bound to the job and card revision.
-Call MCP `publish_prepared_packet` with that token as `job_id` and the four
-packet content fields.
+and an opaque `source_revision` token for the card revision. The `publish`
+object names the callback tool in `publish.tool` and provides its job ID in
+`publish.job_id`. Call `publish_prepared_packet` with that job ID and the
+four packet content fields.
 
 ```json
 {

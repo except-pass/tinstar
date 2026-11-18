@@ -62,7 +62,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
   const root = await mkdtemp(join(tmpdir(), 'tinstar-decision-loop-'))
   fixtures.push(() => rm(root, { recursive: true, force: true }))
   const published: unknown[] = []
-  const jobs: Array<{ card_url: string; source_question: string; options: unknown[]; source_revision: string }> = []
+  const jobs: Array<{ card_url: string; source_question: string; options: unknown[]; source_revision: string; publish: { tool: string; job_id: string } }> = []
   const writes: Array<{ card: string; type: string; token: string | null }> = []
   type Call = (name: string, args: Record<string, unknown>) => Promise<any>
   let tool: Call
@@ -74,7 +74,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
       for await (const chunk of req) chunks.push(Buffer.from(chunk))
       const job = JSON.parse(Buffer.concat(chunks).toString('utf8')) as (typeof jobs)[number]
       jobs.push(job)
-      if (autoPublish) published.push(await tool('publish_prepared_packet', { job_id: job.source_revision, packet: contents }))
+      if (autoPublish) published.push(await tool(job.publish.tool, { job_id: job.publish.job_id, packet: contents }))
       res.writeHead(202).end()
     } catch { res.writeHead(500).end() }
   })
@@ -199,8 +199,8 @@ describe('prepared-card loop', () => {
     const { sources, tool, jobs } = await setup(cards, false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(10)
-    for (const { source_revision } of jobs.slice(0, 9)) {
-      expect(await tool('publish_prepared_packet', { job_id: source_revision, packet: contents })).toMatchObject({ outcome: 'published' })
+    for (const { publish } of jobs.slice(0, 9)) {
+      expect(await tool(publish.tool, { job_id: publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
     }
     now += 60_000
     await sources.preparation.replenish()
@@ -213,22 +213,25 @@ describe('prepared-card loop', () => {
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(21)
     expect(jobs[20]!.card_url).toBe(jobs[9]!.card_url)
-    expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.source_revision, packet: contents }))
+    expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
 
-  it('sends only the scrubbed question, options, card URL and revision token', async () => {
+  it('publishes a scrubbed webhook job through its callback and makes it Ready', async () => {
     const card = page(1, { tag: 'Decision' })
     card.properties.Name = rich('Review token=fixture-private-token please')
-    const { sources, jobs, published } = await setup([card])
+    const { sources, jobs, published, web } = await setup([card])
     await sources.preparation.replenish()
     expect(jobs).toEqual([{
       card_url: expect.stringContaining(card.id),
       source_question: 'Review token=[credential omitted] please',
       options: [],
       source_revision: expect.any(String),
+      publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
     }])
-    expect(published).toEqual([{ outcome: 'published', job_id: jobs[0]!.source_revision, packet_id: expect.any(String) }])
+    expect(jobs[0]!.source_revision).not.toBe(jobs[0]!.publish.job_id)
+    expect(published).toEqual([{ outcome: 'published', job_id: jobs[0]!.publish.job_id, packet_id: expect.any(String) }])
+    expect((await web('snapshot')).data).toMatchObject({ counts: { ready: 1 }, ready: [{ card_id: card.id }] })
   })
 
   it('names missing publication fields, keeps packets across time, and invalidates changed card content', async () => {
@@ -237,7 +240,7 @@ describe('prepared-card loop', () => {
     const card = page(1, { tag: 'Decision' })
     const { sources, jobs, tool } = await setup([card], false)
     await sources.preparation.replenish()
-    const job_id = jobs[0]!.source_revision
+    const job_id = jobs[0]!.publish.job_id
     expect(await tool('publish_prepared_packet', { job_id, packet: { ...contents, summary: undefined } }))
       .toMatchObject({ outcome: 'not-saved', issue_paths: ['packet.summary'] })
     expect(await tool('publish_prepared_packet', { job_id, packet: contents })).toMatchObject({ outcome: 'published' })
@@ -253,7 +256,7 @@ describe('prepared-card loop', () => {
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
     card.body.push('Changed body during preparation.')
-    expect(await tool('publish_prepared_packet', { job_id: jobs[1]!.source_revision, packet: contents }))
+    expect(await tool('publish_prepared_packet', { job_id: jobs[1]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
   })
 
@@ -261,8 +264,8 @@ describe('prepared-card loop', () => {
     const card = page(1, { owner: 'Will', tag: 'Decision' }), other = page(2, { tag: 'Decision' })
     const { sources, jobs, tool, web } = await setup([card, other], false)
     await sources.preparation.replenish()
-    for (const { source_revision } of jobs) {
-      expect(await tool('publish_prepared_packet', { job_id: source_revision, packet: { ...contents,
+    for (const { publish } of jobs) {
+      expect(await tool(publish.tool, { job_id: publish.job_id, packet: { ...contents,
         options: contents.options.map(option => ({ ...option, next: { status: 'Done', owner: 'Will' } })),
       } })).toMatchObject({ outcome: 'published' })
     }
@@ -295,7 +298,7 @@ describe('prepared-card loop', () => {
     card.body.push('A second question requires a new decision.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(3)
-    expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.source_revision, packet: contents })).toMatchObject({ outcome: 'published' })
+    expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
     expect((await web('submit', answer)).data).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.comments).toHaveLength(1)
     const reopened = await web('claim', { operation_id: 'reopened', review_session_token, card_id: card.id })
