@@ -1026,17 +1026,51 @@ describe('remaining shared workflow operations', () => {
     expect(await f.workflow.update(input('request_decision', {
       request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(input('request_decision', {
+      operation_id: 'publish-sibling', request_id: 'sibling', requested_from: 'Will', question: 'Approve the sibling?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     f.raw.properties['Will action'].multi_select = []
     expect(await f.workflow.update(input('supersede_decision', {
       request_id: 'original', reason: 'Corrected scope',
       replacement: { request_id: 'replacement', requested_from: 'Will', question: 'Approve the replacement?' },
     }), 'Consumer')).toMatchObject({ outcome: 'saved' })
     expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+    expect(await f.workflow.update(input('withdraw_decision', {
+      operation_id: 'withdraw-replacement', request_id: 'replacement', reason: 'No longer needed',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
     expect(await f.workflow.update(input(kind, {
-      request_id: 'replacement',
+      request_id: 'sibling',
       ...(kind === 'withdraw_decision' ? { reason: 'No longer needed' } : { answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } }),
     }), 'Owner')).toMatchObject({ outcome: 'saved' })
     expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual([])
+  })
+
+  it('redacts decoded supersession audit values in card details', async () => {
+    const f = fixture()
+    const questionToken = 'secret_question_fixture_123456789'
+    const recipientToken = 'secret_recipient_fixture_123456789'
+    const optionToken = 'secret_option_fixture_123456789'
+    expect(await f.workflow.update(input('request_decision', {
+      request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(input('supersede_decision', {
+      request_id: 'original', reason: 'Corrected scope',
+      replacement: { request_id: 'replacement', requested_from: `Will\n${recipientToken}`,
+        question: `Approve the replacement?\n${questionToken}`, options: [{ id: 'approve', label: `Approve\n${optionToken}` }] },
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(decisionRequests(await new WorkflowContent(f.reader).notes(id))).toMatchObject([{
+      id: 'replacement', question: `Approve the replacement?\n${questionToken}`,
+    }])
+    const context = await f.sources().card(id)
+    const audit = context.blocks.find(block => block.text.includes('Operation: supersede_decision'))!
+    expect(audit.text).not.toContain(questionToken)
+    expect(audit.text).not.toContain(recipientToken)
+    expect(audit.text).not.toContain(optionToken)
+    expect(decisionRequests([audit])).toMatchObject([{
+      id: 'replacement', requestedFrom: 'Will\n[credential omitted]', question: 'Approve the replacement?\n[credential omitted]',
+      options: [{ id: 'approve', label: 'Approve\n[credential omitted]' }],
+    }])
   })
 
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {
