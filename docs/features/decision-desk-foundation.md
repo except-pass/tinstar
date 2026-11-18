@@ -31,6 +31,9 @@ Jobs expire after 15 minutes without publication. Published packets have no
 age limit. Editing decision properties, card text, or substantive discussion
 invalidates the packet.
 
+For a prepared card with an open Notion request, see
+[withdrawing or superseding a decision request](workflow.md#decision-retractions).
+
 ### Answer attribution
 
 The card comment and any corresponding Firstmate update use the Desk caller

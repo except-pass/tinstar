@@ -3,6 +3,7 @@ import type { WorkCard } from './workReader'
 import type { CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
+import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
 import { actionableWillCard } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
@@ -26,9 +27,10 @@ export const decisionPropertyRevision = (card: WorkCard) => createHash('sha256')
 function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks']) {
   const prose = (text: string) => text.replace(/\r\n?/g, '\n').trim()
   const body = blocks.filter(block => block.type !== 'comment').map(block => [block.type, prose(block.text)])
-  const comments = blocks.filter(block => block.type === 'comment' && !checkInReport(block.text) &&
+  const comments = blocks.filter(block => block.type === 'comment' && (isDecisionRetraction(block.text) && workflowReceipt(block) ||
+    !checkInReport(block.text) &&
     !block.text.split('\n').at(-1)?.startsWith(deskAnswerMarker) &&
-    !block.text.includes('Tin Star prepared packet:') && !block.text.includes('Tin Star operation: ["waiting-on-main",'))
+    !block.text.includes('Tin Star prepared packet:') && !block.text.includes('Tin Star operation: ["waiting-on-main",')))
     .map(block => prose(block.text)).filter(Boolean).sort()
   return createHash('sha256').update(canonical([decisionProperties(card), body, comments])).digest('hex')
 }

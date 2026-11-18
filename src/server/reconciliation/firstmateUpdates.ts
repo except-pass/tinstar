@@ -1,4 +1,4 @@
-import { workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { isDecisionRetraction, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -97,7 +97,7 @@ export class FirstmateUpdates {
   async confirmed(change: WorkflowChange) {
     this.mutations.set(change.card.id, ++this.version)
     const context = this.baselines.has(change.card.id) && (active(change.card) || !!change.before && active(change.before))
-      ? await this.sources.updateContext(change.card.id).catch(() => undefined) : undefined
+      ? await this.sources.updateContext(change.card.id, change.kind === 'withdraw_decision' || change.kind === 'supersede_decision').catch(() => undefined) : undefined
     return this.observe(change.card, change.actor, context, change)
   }
   async refreshComments(card: WorkCard, force = true) {
@@ -115,8 +115,14 @@ export class FirstmateUpdates {
       const baseline = this.baselines.get(card.id)
       const operationSeen = own && old?.operations?.includes(own.operationId)
       const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
-      const noteMatches = (text: string, note: string) => !!own && (workflowNoteHasMarker({ text: note }, receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
-      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
+      const noteMatches = (block: CardContextRead['blocks'][number], note: string) => {
+        if (!own || block.type !== 'comment') return false
+        const marker = receiptMarker(own.actor, own.operationId)
+        if (isDecisionRetraction(note) && !workflowNoteHasMarker(block, marker)) return false
+        return workflowNoteHasMarker({ ...block, text: note }, marker) && block.text === contextText(note) ||
+          block.text === contextText(`${note}\n${marker}`)
+      }
+      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => noteMatches(block, note))) &&
         (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}
@@ -136,9 +142,9 @@ export class FirstmateUpdates {
           }
         }
         const externalChanges = diff(baseline.properties, external)
-        const ownNote = (text: string) => own.notes?.some(note => noteMatches(text, note))
+        const ownNote = (block: CardContextRead['blocks'][number]) => own.notes?.some(note => noteMatches(block, note))
         const ownSection = (text: string) => own.sectionTexts?.some(section => text === contextText(section))
-        const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block.text) &&
+        const comments = (context?.blocks ?? []).filter(block => block.type === 'comment' && !ownNote(block) &&
           (baseline.comments ? !baseline.comments.some(previous => previous.id === block.id && previous.text === block.text) : !!block.createdAt && Date.parse(block.createdAt) > Date.parse(old.observed)))
           .map(block => ({ id: block.id, text: block.text, author: block.author ?? null }))
         const priorEdit = !!own.before && own.before.last_edited_time !== old.edited && !operationSeen
@@ -166,7 +172,7 @@ export class FirstmateUpdates {
         this.add(state, actor, bounded)
       }
       const details = body ? context?.outcome === 'available' ? body : [...new Map([...(baseline?.details ?? []), ...body].map(block => [block.id, block])).values()] : baseline?.details
-      const confirmedComments = (context?.blocks ?? []).filter(block => block.type === 'comment' && own?.notes?.some(note => noteMatches(block.text, note)))
+      const confirmedComments = (context?.blocks ?? []).filter(block => block.type === 'comment' && own?.notes?.some(note => noteMatches(block, note)))
       const comments = context && (context.commentsOutcome ?? context.outcome) === 'available' ? context.blocks.filter(block => block.type === 'comment')
         : confirmedComments.length ? [...new Map([...(baseline?.comments ?? []), ...confirmedComments].map(block => [block.id, block])).values()] : baseline?.comments
       const bodyComplete = body ? context?.outcome === 'available' : baseline?.bodyComplete ?? false

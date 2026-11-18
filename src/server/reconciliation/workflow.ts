@@ -1,4 +1,5 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
+import { isJiraCard } from '../../shared/workIdentity'
 import type { DeskAnswerer, RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
 import { decisionCardSource, decisionPropertyRevision, deskAnswerMarker } from './decisionEvidence'
@@ -11,7 +12,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequests, isVerifiedDecisionRetraction, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -54,6 +55,7 @@ export class WorkflowOperations {
   validateReview?: (input: Extract<ReviewOperation, { kind: 'submit_for_review' }>) => Promise<void>
   decisionDelivery?: DecisionDelivery
   onChange?: (change: WorkflowChange) => Promise<void>
+  onDecisionRetracted?: (card: string, auditTime?: string) => Promise<void>
   onRecordedChange?: (cardId: string) => void
   deliveryStatus?: (cardId: string, operationId?: string) => Promise<unknown>
   private content: WorkflowContent
@@ -64,7 +66,7 @@ export class WorkflowOperations {
   private locks = new Map<string, Promise<unknown>>()
   private receipts = new Map<string, { input: string; until: number; result: Promise<StartWorkResult> }>()
   constructor(private reader: WorkReader, private fleet: () => Promise<SourceSnapshot['fleet']>, receiptRoot?: string, private proposals?: import('./proposalSource').ProposalSource) { if (receiptRoot) reader.leases ??= new CardLeases(receiptRoot); this.content = new WorkflowContent(reader); this.creations = new CreationReceipts(receiptRoot) }
-  private exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
+  exclusive<T>(key: string, perform: () => Promise<T>): Promise<T> {
     const result = (this.locks.get(key) ?? Promise.resolve()).catch(() => {}).then(perform)
     this.locks.set(key, result)
     void result.finally(() => { if (this.locks.get(key) === result) this.locks.delete(key) }).catch(() => {})
@@ -213,13 +215,10 @@ export class WorkflowOperations {
     const previous = this.receipts.get(key)
     if (previous && previous.input !== signature) return Promise.resolve({ ...failed('operation-conflict', 'operation_id was used with different input'), requires_new_operation_id: true })
     if (previous && !this.noteRepairs.has(key)) return previous.result
-    const prior = this.locks.get(cardId) ?? Promise.resolve()
-    const result = prior.catch(() => {}).then(perform)
-    this.locks.set(cardId, result)
-    void result.finally(() => { if (this.locks.get(cardId) === result) this.locks.delete(cardId) }).catch(() => {})
+    const result = this.exclusive(cardId, perform)
     if (this.receipts.size >= 1000) { const oldest = this.receipts.keys().next().value!; this.receipts.delete(oldest); this.noteRepairs.delete(oldest) }
     this.receipts.set(key, { input: signature, until: Date.now() + 600_000, result })
-    void result.then(value => { if (value.code === 'firstmate-pending' || value.outcome === 'not-saved' || value.outcome === 'partially-saved' && (!('kind' in input) || input.kind === 'not_for_me')) this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
+    void result.then(value => { if (value.code === 'firstmate-pending' || value.code === 'packet-retirement-unconfirmed' || value.outcome === 'not-saved' || value.outcome === 'partially-saved' && (!('kind' in input) || input.kind === 'not_for_me')) this.receipts.delete(key) }).catch(() => this.receipts.delete(key))
     return result
   }
   private async changed(change: WorkflowChange) {
@@ -387,7 +386,7 @@ export class WorkflowOperations {
   private async performDecisionReconcile(cardId: string, fleet?: SourceSnapshot['fleet'], repair = false, census = this.decisionCensus()) {
     let card = await this.reader.card(cardId, true)
     if (card.source?.synthetic) return null
-    let notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
+    let notes = [...await this.content.notes(cardId, undefined, true), ...await this.content.sections(cardId)]
     const jsonLines = (prefix: string) => decisionRecordRows(notes, prefix)
     const recordedRequests = decisionHistory(notes, await this.proposals?.read(cardId, notes))
     if (repair) {
@@ -415,7 +414,7 @@ export class WorkflowOperations {
         if (result.outcome !== 'saved') return { state: 'verification-needed' as const, message: `Decision reconciliation needs verification: ${result.message}` }
       }
       card = await this.reader.card(cardId, true)
-      notes = [...await this.content.notes(cardId), ...await this.content.sections(cardId)]
+      notes = [...await this.content.notes(cardId, undefined, true), ...await this.content.sections(cardId)]
     }
     return reconcileDecision(card, notes, fleet ?? await this.fleet(), this.decisionDelivery,
       async (text, marker) => { await this.content.note(cardId, text, marker); this.onRecordedChange?.(cardId) }, await this.proposals?.read(cardId, notes), census)
@@ -697,9 +696,39 @@ export class WorkflowOperations {
       set('Will action', [])
       set('Next check-in', new Date(checkInCeiling(Date.now())).toISOString())
       note += `\nNot for me: ${input.reason}\nReturned to: ${mate.id}\nPrevious Will ask: ${JSON.stringify(originalWaitText)}`
+    } else if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+      const open = decisionRequests(notes).filter(request => !request.answered)
+      const matching = open.filter(request => request.id === input.request_id)
+      if (matching.length !== 1) throw new WorkflowError('decision-not-open', 'Expected one open request with this ID on this card. It may be absent, answered, withdrawn, or ambiguous.')
+      const request = matching[0]!
+      // A local withdrawal cannot close the authoritative First Mate request.
+      if (request.hasSourceBinding) throw new WorkflowError('decision-source-bound', 'Withdraw this First Mate request at its authoritative source.')
+      const tags = card.properties['Will action']?.value
+      note += `\nReason: ${input.reason}`
+      if (input.kind === 'supersede_decision') {
+        const { request_id, question, requested_from, options } = input.replacement
+        if (decisionRecordRows(notes, 'Tin Star request: ').some(row => row.id === request_id)) {
+          throw new WorkflowError('decision-conflict', 'The replacement request ID already exists on this card. Supply a new ID.')
+        }
+        if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select to publish the replacement.')
+        const hasTag = tags.includes(request.action)
+        if (!hasTag) set('Will action', [...tags, request.action])
+        note += `\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
+          id: input.request_id,
+          replacement: { id: request_id, action: request.action, preserve_action: hasTag && request.preserveAction, requested_from, question, options },
+        })}`
+      } else {
+        const shared = open.some(row => row.id !== input.request_id && row.action === request.action)
+        if (!request.preserveAction && !shared && Array.isArray(tags) && tags.includes(request.action)) {
+          set('Will action', tags.filter(action => action !== request.action))
+        }
+        note += `\n${workflowMarkers.withdrawal} ${JSON.stringify({ id: input.request_id })}`
+      }
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const publications = await this.proposals?.read(card.id, notes)
-      const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
+      const withdrawn = withdrawnDecisionIds(notes)
+      const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications))
+        .filter(row => typeof row.id === 'string' && typeof row.action === 'string' && !withdrawn.has(row.id))
       const answered = new Set(decisionRecordRows(notes, 'Tin Star answer: '))
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
@@ -721,6 +750,10 @@ export class WorkflowOperations {
           // absent that judgment, leave every legacy action tag untouched.
           const source = notes.find(note => note.id === input.request_id) ?? (await this.content.sections(card.id)).find(block => block.id === input.request_id)
           if (source && source.text.trim()) {
+            if (isVerifiedDecisionRetraction(source)) throw new WorkflowError('decision-not-open', 'A retraction audit cannot be answered. Use the replacement request ID if one exists.')
+            if (decisionRecordRows([source], 'Tin Star request: ').some(row => withdrawn.has(row?.id))) {
+              throw new WorkflowError('decision-not-open', 'This request was withdrawn. No answer was saved.')
+            }
             if (input.legacy_action && !tags.includes(input.legacy_action)) throw new WorkflowError('decision-conflict', 'The explicitly resolved legacy action tag is no longer present')
             request = { id: input.request_id, action: input.legacy_action ?? '', preserve_action: !input.legacy_action }
           }
@@ -755,7 +788,7 @@ export class WorkflowOperations {
         }
         const action = request.action
         const others = requests.some(row => row.id !== input.request_id && row.action === action && !answered.has(row.id))
-        set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== request.action))
+        set('Will action', request.preserve_action || others ? tags : tags.filter(tag => tag !== action))
         note += `\n${decisionMarker(input.request_id)}\n${workflowMarkers.answer} ${JSON.stringify(input.request_id)}\nAnswer: ${input.answer}\nNext owner: ${input.next.owner}\nNext status: ${input.next.status}\n${workflowMarkers.answerData} ${JSON.stringify({ request_id: input.request_id, answer: input.answer, option_id: input.option_id, legacy_action: input.legacy_action, next: input.next, resolve_wait: input.resolve_wait, binding: answerBinding })}`
       }
     } else if (input.kind === 'complete' || input.kind === 'park') {
@@ -777,7 +810,7 @@ export class WorkflowOperations {
       await this.validateWaitState(card, desired, 'resolve_wait' in input ? input.resolve_wait : undefined)
     }
     for (const name of ['Status', 'Waiting For', 'Waiting For Type', 'Waiting For ID', 'Next check-in']) if (name in desired || 'Status' in desired) reads.add(name)
-    set('Last touched by', actor)
+    if (input.kind !== 'withdraw_decision' && input.kind !== 'supersede_decision') set('Last touched by', actor)
     const sectionOriginal: Record<string, string> = {}
     if (Object.keys(sections).length) {
       const blocks = await this.content.sections(card.id)
@@ -803,13 +836,22 @@ export class WorkflowOperations {
     let requested: Record<string, unknown> = {}
     const repair = this.noteRepairs.get(key)
     const saved: string[] = [...(repair?.result.saved_fields ?? [])]
+    const retracting = input.kind === 'withdraw_decision' || input.kind === 'supersede_decision'
     const result = (outcome: StartWorkResult['outcome'], code: string, message: string): StartWorkResult => ({ outcome, code, message, operation_id: input.operation_id, saved_fields: [...saved], ...(card ? { card } : {}) })
     try {
       card = await this.reader.card(input.card_id, true)
       if (card.source?.synthetic && 'source_request' in input && input.source_request) throw new WorkflowError('synthetic-source', 'Synthetic Jira decisions cannot deliver to live First Mate requests')
       const before = card
+      if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+        if (isJiraCard(card.id)) throw new WorkflowError('unsupported-source', 'Decision retractions require a Notion workflow writer.')
+        await this.content.workflowWriter()
+      }
       stage = 'read card comments'
-      const notes = await this.content.notes(card.id)
+      const notes = await this.content.notes(card.id, undefined,
+        input.kind === 'request_decision' || input.kind === 'answer_decision' || input.kind === 'withdraw_decision' || input.kind === 'supersede_decision')
+      if (input.kind === 'answer_decision' && withdrawnDecisionIds(notes).has(input.request_id)) {
+        throw new WorkflowError('decision-not-open', 'This request was withdrawn. No answer was saved.')
+      }
       stage = 'read decision publications'
       const publications = input.kind === 'answer_decision' ? await this.proposals?.read(card.id, notes) : undefined
       const intents = input.kind === 'answer_decision' ? decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
@@ -865,6 +907,12 @@ export class WorkflowOperations {
       }
       if (receipt) {
         this.noteRepairs.delete(key)
+        if (retracting && isVerifiedDecisionRetraction(receipt)) {
+          saved.push('note')
+          stage = 'retire prepared packet'
+          await this.onDecisionRetracted?.(card.id, receipt.createdAt)
+          stage = 'confirm workflow card'
+        }
         this.reader.confirm(card)
         await this.changed({ kind: input.kind, card, actor, operationId: input.operation_id, properties: {}, notes: [receipt.text] })
         return { ...result('saved', 'already-saved', 'This operation is already recorded; no changes replayed'), saved_fields: [...(repair?.result.saved_fields ?? []), 'note'] }
@@ -874,6 +922,10 @@ export class WorkflowOperations {
         if (cardVersion(card) !== repair.version) {
           this.noteRepairs.delete(key)
           return { ...result('partially-saved', 'card-changed', 'Previously listed steps saved; the card changed since that partial write. Nothing else submitted. Review current state and re-issue with a new operation_id.'), requires_new_operation_id: true }
+        }
+        if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+          // A concurrent answer or supersession can change the history without changing properties.
+          await this.updatePlan(card, input, actor, notes)
         }
         contentBefore = card
         notePending = repair.note
@@ -927,12 +979,19 @@ export class WorkflowOperations {
       await this.content.note(card.id, notePending, marker)
       saved.push('note')
       this.noteRepairs.delete(key)
+      if (retracting) {
+        stage = 'retire prepared packet'
+        await this.onDecisionRetracted?.(card.id)
+        stage = 'confirm workflow card'
+      }
       card = await this.reader.card(card.id, true); this.reader.confirm(card)
       await this.changed({ kind: input.kind, before: contentBefore, card, actor, operationId: input.operation_id, properties: {}, notes: [notePending] })
       return result('saved', heldWait ? 'wait-remains' : 'saved', heldWait
         ? 'The named wait was resolved, but another independent wait remains, so status stayed Waiting For. Other asks, tags and worker history were preserved.'
         : 'Workflow changes and history saved and confirmed')
     } catch (error) {
+      if (stage === 'retire prepared packet') return result('partially-saved', 'packet-retirement-unconfirmed',
+        'The retraction audit is saved, but packet retirement could not be confirmed. Retry the same operation ID and input.')
       if (error instanceof CardLeaseError) return result(saved.length ? 'partially-saved' : 'not-saved', error.lease ? 'card-held' : 'claim-lost', error.message)
       if (card?.source?.provider === 'jira' && attempted) {
         const current = await this.reader.card(card.id, true).catch(() => undefined)

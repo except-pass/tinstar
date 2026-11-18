@@ -3,7 +3,7 @@ import { apiFetch } from '../apiClient'
 import type { SceneCard } from '../server/reconciliation/scene'
 import type { StartWorkInput, StartWorkResult, UpdateWorkInput } from '../shared/workflow'
 
-import { decisionRequests } from '../shared/workflowRequests'
+import { decisionRequests, type RetractionAnswerSources } from '../shared/workflowRequests'
 import { workflowSaved } from './workflowSaved'
 import { displayRequestText } from '../shared/requestText'
 
@@ -33,7 +33,7 @@ export function useWorkSave(onSaved: (result?: StartWorkResult) => Promise<void>
 const field = (label: string, value: string, set: (value: string) => void, required = true, multiline = false) => <label>{label}{multiline ? <textarea required={required} maxLength={12000} value={value} onChange={e => set(e.target.value)} /> : <input required={required} value={value} onChange={e => set(e.target.value)} />}</label>
 
 /** These forms collect consumer intent; the same backend policy serves MCP. */
-export function WorkActions({ card, onSaved, sources = [], answerOnly = false }: { answerOnly?: boolean; card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
+export function WorkActions({ card, onSaved, sources = [], answerSources, answerOnly = false }: { answerOnly?: boolean; answerSources?: RetractionAnswerSources; card: SceneCard; sources?: Array<{ id: string; text: string }>; onSaved: (result?: StartWorkResult) => Promise<void> }) {
   const [kind, setKind] = useState<typeof actions[number][0]>(answerOnly ? 'answer_decision' : 'edit')
   const [owner, setOwner] = useState(String(card.source.properties.Owner?.value ?? ''))
   const [status, setStatus] = useState('Queued'), [note, setNote] = useState('')
@@ -51,7 +51,8 @@ export function WorkActions({ card, onSaved, sources = [], answerOnly = false }:
   const { save, busy, result, canReissue, newAttempt } = useWorkSave(onSaved)
   const requests = decisionRequests(sources)
   const answeredSources = new Set(requests.filter(request => request.answered).map(request => request.sourceId))
-  const choices = sources.filter(source => !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
+  const excluded = new Set(answerSources?.excluded)
+  const choices = sources.filter(source => !excluded.has(source.id) && !/^Tin Star decision intent:/.test(source.text) && !answeredSources.has(source.id) && !source.text.split('\n').some(line => line.startsWith('Tin Star answer: ')))
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     const base = { card_id: card.id }
@@ -90,7 +91,7 @@ export function WorkActions({ card, onSaved, sources = [], answerOnly = false }:
     {(kind === 'wait' || kind === 'answer_decision' && status === 'Waiting For') && <><label>Waiting For Type<select value={waitType} onChange={event => setWaitType(event.target.value as typeof waitType)}><option>Actor</option><option>Event</option><option>Work</option></select></label>{field('Waiting For ID', waitId, setWaitId)}{field('Named dependency', dependency, setDependency, true, true)}{field('What unblocks it', unblocks, setUnblocks, true, true)}{field('Who follows up', followUp, setFollowUp)}{field('Next check-in (date or timestamp with timezone)', waitCheckIn, setWaitCheckIn)}<p>Waiting For is an independent blocker. A worker that has not started stays Queued until Start work.</p></>}
     {(kind === 'request_decision' || kind === 'answer_decision') && field('Decision request ID', requestId, setRequestId)}
     {kind === 'request_decision' && <>{field('Requested from', requestedFrom, setRequestedFrom)}{field('Will action', action, setAction)}</>}
-    {kind === 'answer_decision' && choices.length > 0 && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{choices.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{displayRequestText(source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text).slice(0, 100)}</option> })}</select></label>}
+    {kind === 'answer_decision' && (choices.length > 0 || !!answerSources?.replacements.length) && <label>Existing request or source note<select value={requestId} onChange={event => setRequestId(event.target.value)}><option value="">Choose an existing source, or enter its ID above</option>{answerSources?.replacements.map(request => <option key={request.sourceId} value={request.id}>{displayRequestText(request.question ?? request.id).slice(0, 100)}</option>)}{choices.map(source => { const request = source.text.split('\n').find(line => line.startsWith('Tin Star request: ')); let id = source.id; try { if (request) id = JSON.parse(request.slice('Tin Star request: '.length)).id } catch { /* show actual source ID */ } return <option key={source.id} value={id}>{displayRequestText(source.text.split('\n').find(line => line.startsWith('Question: ')) ?? source.text).slice(0, 100)}</option> })}</select></label>}
     {kind === 'answer_decision' && field('Legacy action tag explicitly resolved (optional)', legacyAction, setLegacyAction, false)}
     {kind === 'answer_decision' && field('Exact wait text resolved (required to leave Waiting For; other waits stay)', resolvedWait, setResolvedWait, String(card.source.properties.Status?.value ?? '') === 'Waiting For' && status !== 'Waiting For', true)}
     {kind === 'answer_decision' && status === 'In Progress' && <>

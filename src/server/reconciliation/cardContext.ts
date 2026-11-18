@@ -1,5 +1,6 @@
 import { readNotionCard } from './notion'
-import type { NotionFetch } from './notionApi'
+import { cachedNotionWorkflowWriter, notionWorkflowWriter, type NotionFetch } from './notionApi'
+import { decisionRecordRows, decisionRequests, isDecisionRetraction, isVerifiedDecisionRetraction, withdrawnDecisionIds, type RetractionAnswerSources } from '../../shared/workflowRequests'
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
@@ -15,9 +16,17 @@ export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
-  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
+  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; workflowWriter?: boolean; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
   omissions?: string
+}
+
+const originalCommentText = new WeakMap<CardContextRead['blocks'][number], string>()
+const unverifiedRetraction = (block: CardContextRead['blocks'][number]) => block.type === 'comment' &&
+  block.workflowWriter === undefined && isDecisionRetraction(originalCommentText.get(block) ?? block.text)
+export const hasUnverifiedRetractions = (context: CardContextRead) => context.blocks.some(unverifiedRetraction)
+export function requestHistory(blocks: CardContextRead['blocks']) {
+  return blocks.map(block => ({ ...block, text: originalCommentText.get(block) ?? block.text }))
 }
 
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
@@ -35,6 +44,28 @@ export class CardContextReader {
   cachedComments(id: string): CardContextRead | undefined {
     const cached = this.commentCache.get(id)
     return cached && cached.resolvedUntil > Date.now() ? cached.resolved : undefined
+  }
+  async verifyRetractions(context: CardContextRead): Promise<CardContextRead> {
+    const retractions = context.blocks.filter(unverifiedRetraction)
+    if (this.config && retractions.length) {
+      const writer = await notionWorkflowWriter(this.config, this.fetcher)
+      for (const block of retractions) block.workflowWriter = block.author === writer
+    }
+    return context
+  }
+  async retractionAnswerSources(context: CardContextRead): Promise<RetractionAnswerSources | undefined> {
+    if (!context.blocks.some(block => block.type === 'comment' && isDecisionRetraction(originalCommentText.get(block) ?? block.text))) return
+    await this.verifyRetractions(context).catch(() => {})
+    const history = requestHistory(context.blocks)
+    const incomplete = hasUnverifiedRetractions(context) || (context.commentsOutcome ?? context.outcome) !== 'available'
+    const withdrawn = withdrawnDecisionIds(history)
+    const audits = new Set(history.filter(isVerifiedDecisionRetraction).map(note => note.id))
+    const excluded = history.filter(note => audits.has(note.id) ||
+      decisionRecordRows([note], 'Tin Star request: ').some(row => withdrawn.has(row?.id))).map(note => note.id)
+    const replacements = incomplete ? [] : decisionRequests(history).filter(request =>
+      !request.answered && audits.has(request.sourceId) && workReadback(request.id) === request.id)
+      .map(({ sourceId, id, question }) => ({ sourceId, id, question }))
+    return { excluded, replacements }
   }
   /** Read the card text and comments used for the decision revision. */
   decisionDetails(id: string, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher): Promise<CardContextRead> {
@@ -151,16 +182,22 @@ export class CardContextReader {
         signal.throwIfAborted()
         const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
         if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Invalid comments')
+        const writer = cachedNotionWorkflowWriter(this.config)
         for (const item of body.results) {
           const comment = record(item)
           if (!Array.isArray(comment.rich_text)) continue
-          context.blocks.push({ id: String(comment.id), type: 'comment',
+          const author = record(comment.created_by).id
+          const text = comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('')
+          const block = { id: String(comment.id), type: 'comment',
+            workflowWriter: writer && isDecisionRetraction(text) ? author === writer : undefined,
             authorName: typeof record(comment.created_by).name === 'string' ? String(record(comment.created_by).name) : null,
-            author: typeof record(comment.created_by).id === 'string' ? String(record(comment.created_by).id) : null,
+            author: typeof author === 'string' ? author : null,
             createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,
             created_time: typeof comment.created_time === 'string' ? comment.created_time : undefined,
             last_edited_time: typeof comment.last_edited_time === 'string' ? comment.last_edited_time : undefined,
-            text: comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('').replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+            text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') }
+          if (text !== block.text) originalCommentText.set(block, text)
+          context.blocks.push(block)
         }
         if (body.has_more !== true) return context
         const next = typeof body.next_cursor === 'string' ? body.next_cursor : undefined

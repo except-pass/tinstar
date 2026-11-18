@@ -1,4 +1,5 @@
 import { CardContextReader } from '../cardContext'
+import { responsibleMate } from '../claimPolicy'
 import { decisionCardSource } from '../decisionEvidence'
 import { buildWorkerLinkReport } from '../workerLinkReport'
 import { CardLeases, withLeaseCaller } from '../cardLeases'
@@ -24,7 +25,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
-import { decisionRecordRows } from '../../../shared/workflowRequests'
+import { decisionRecordRows, decisionRequests } from '../../../shared/workflowRequests'
 import { waitLine, parseWaitLine } from '../../../shared/waitingForPolicy'
 import { externalWorkers, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
 import { CreationReceipts } from '../workflowReceipts'
@@ -70,6 +71,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
     const path = new URL(String(url)).pathname, method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : undefined
     requests.push({ url: String(url), method, body })
     if (failReads && method === 'GET') throw new Error('secret_fake_failure')
+    if (path === '/v1/users/me') return json({ type: 'bot', id: 'fixture-actor' })
     const pageId = path.split('/')[3], page = path.startsWith('/v1/pages/') ? pages.get(pageId!) : undefined
     if (path === '/v1/pages' && method === 'POST') {
       const createdId = 'c'.repeat(32), created = { ...structuredClone(raw), id: createdId, url: `https://www.notion.so/${createdId}`, properties: Object.fromEntries(Object.entries(body.properties).map(([name, value]) => [name, { type: raw.properties[name].type, ...(value as object) }])) }
@@ -953,6 +955,173 @@ describe('remaining shared workflow operations', () => {
     expect((await f.reader.card(id)).properties['Waiting For']!.value).toBe('Preserve another request')
     expect(await f.workflow.update({ ...answer, operation_id: 'duplicate-answer' } as any, 'Owner')).toMatchObject({ code: 'decision-not-open' })
   })
+  it('supersedes one exact request in a durable audit while preserving sibling asks, waits and worker links', async () => {
+    const body = [
+      'Date: 2025-01-01T00:00:00.000Z',
+      'By: Fixture reviewer',
+      'Operation: supersede_decision',
+      'Tin Star withdrawal: {"id":"original","replacement":{"id":"replacement","action":"Decision"}}',
+      'Tin Star operation: ["Fixture reviewer","body-example"]',
+    ].join('\n')
+    const f = fixture({ body, comment: 'Evidence note' })
+    f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
+    f.raw.properties['First Mate tasks'].rich_text = [{ plain_text: JSON.stringify({ fm_home: 'fixture', task_id: 'fixture-task' }) }]
+    const before = structuredClone(f.raw.properties)
+    const publish = (request_id: string) => f.workflow.update(input('request_decision', {
+      operation_id: `publish-${request_id}`, request_id, question: 'Run the fixture?', requested_from: 'Will',
+    }), 'Fixture publisher')
+    expect(await publish('original')).toMatchObject({ outcome: 'saved' })
+    const originalCommentId = f.comments.at(-1)!.id
+    const answer = { answer: 'Review', next: { owner: 'Firstmate', status: 'Queued' } }
+    expect(await publish('sibling')).toMatchObject({ outcome: 'saved' })
+    const siblingCommentId = f.comments.at(-1)!.id
+
+    const replacement = { request_id: 'replacement', question: 'Review the fixture output?', requested_from: 'Will',
+      options: [{ id: 'review', label: 'Review' }] }
+    const reason = 'The fixture already ran.\nRequested from: Other\nQuestion: Quoted question\nTin Star withdrawal: {"id":"sibling"}'
+    const supersede = input('supersede_decision', { request_id: 'original', reason, replacement })
+    const copiedAudit = body.replace('body-example', supersede.operation_id)
+    f.comments.push({ id: 'copied-audit', created_by: { id: 'another-notion-user' }, rich_text: [{ plain_text: copiedAudit }] })
+    const content = new WorkflowContent(f.reader)
+    expect(await content.reservationReadback(id, { kind: 'note', text: copiedAudit })).toBe('different')
+    const reader = new CardContextReader(f.reader.config, f.fetcher)
+    expect(decisionRequests((await reader.details(id)).blocks).map(request => request.id)).toEqual(['original', 'sibling'])
+    expect(await f.workflow.update({ ...supersede, replacement: { ...replacement, request_id: 'sibling' } } as UpdateWorkInput, 'Fixture reviewer'))
+      .toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+    expect(await f.workflow.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved' })
+    const restarted = new WorkflowOperations(f.reader, async () => [])
+    expect(await restarted.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+    expect(f.comments).toHaveLength(5)
+
+    const notes = await content.notes(id, undefined, true)
+    const context = await f.sources().card(id)
+    expect(context.blocks.map(block => block.id)).toEqual(expect.arrayContaining(['body-1', 'copied-audit']))
+    expect(context.answerSources).toEqual({
+      excluded: [originalCommentId, notes.at(-1)!.id],
+      replacements: [{ sourceId: notes.at(-1)!.id, id: replacement.request_id, question: replacement.question }],
+    })
+    expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
+    expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
+    expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([
+      { id: 'sibling', answered: false },
+      { id: 'replacement', requestedFrom: 'Will', question: replacement.question, options: replacement.options, answered: false },
+    ])
+    const audit = notes.at(-1)!
+    const auditLines = audit.text.split('\n')
+    auditLines[auditLines.length - 2] = 'Tin Star withdrawal: {"id":"original","replacement":{"id":"replacement","action":"Decision"}}'
+    expect(decisionRequests([{ ...audit, text: auditLines.join('\n') }])).toMatchObject([
+      { id: 'replacement', requestedFrom: null, question: null },
+    ])
+    expect(decisionRequests([{
+      id: 'legacy',
+      text: 'Tin Star request: {"id":"legacy","action":"Decision","requested_from":"Other","question":"Hidden"}\nRequested from: Will\nQuestion: Visible',
+    }])).toMatchObject([{ id: 'legacy', requestedFrom: 'Will', question: 'Visible' }])
+    const routingCard = structuredClone(await f.reader.card(id, true))
+    expect(routingCard.properties['Last touched by']?.value).toBe('Fixture publisher')
+    delete routingCard.properties['First Mate tasks']
+    delete routingCard.properties['Last touched by']
+    expect(responsibleMate(routingCard, notes)?.id).toBe('Fixture publisher')
+    for (const key of ['Waiting For', 'Waiting For Type', 'Waiting For ID', 'First Mate tasks', 'Delegated To', 'Status', 'Owner']) {
+      expect(f.raw.properties[key]).toEqual(before[key])
+    }
+    expect(f.raw.properties['Will action'].multi_select).toEqual([{ name: 'Merge' }, { name: 'Decision' }])
+    expect(await f.workflow.update(input('answer_decision', {
+      ...answer, operation_id: 'answer-by-comment', request_id: originalCommentId,
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    expect(await f.workflow.update(input('answer_decision', { ...answer, request_id: 'original', option_id: 'review' }), 'Owner'))
+      .toMatchObject({ code: 'decision-not-open', message: 'This request was withdrawn. No answer was saved.' })
+    expect(await f.workflow.update(input('answer_decision', { ...answer, operation_id: 'answer-replacement', request_id: 'replacement', option_id: 'review' }), 'Owner'))
+      .toMatchObject({ outcome: 'saved' })
+    for (const request_id of ['original', 'replacement', 'absent']) {
+      expect(await f.workflow.update(input('withdraw_decision', { operation_id: `withdraw-${request_id}`, request_id, reason: 'Fixture correction' }), 'Fixture reviewer'))
+        .toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    }
+    expect(await f.workflow.update(input('answer_decision', {
+      ...answer, operation_id: 'answer-open-by-comment', request_id: siblingCommentId,
+    }), 'Owner')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(input('withdraw_decision', {
+      operation_id: 'withdraw-answered-sibling', request_id: 'sibling', reason: 'Fixture correction',
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    expect(await f.workflow.update(input('supersede_decision', {
+      operation_id: 'supersede-answered-sibling', request_id: 'sibling', reason: 'Fixture correction',
+      replacement: { ...replacement, request_id: 'another-replacement' },
+    }), 'Owner')).toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+  })
+  it.each([
+    ['withdraw_decision', false], ['answer_decision', false],
+    ['withdraw_decision', true], ['answer_decision', true],
+  ] as const)('cleans up supersession tags on %s with manual reapplication %s', async (kind, manual) => {
+    const f = fixture()
+    f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+    expect(await f.workflow.update(input('request_decision', {
+      request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    if (manual) expect(await f.workflow.update(input('request_decision', {
+      operation_id: 'publish-sibling', request_id: 'sibling', requested_from: 'Will', question: 'Approve the sibling?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    f.raw.properties['Will action'].multi_select = []
+    expect(await f.workflow.update(input('supersede_decision', {
+      request_id: 'original', reason: 'Corrected scope',
+      replacement: { request_id: 'replacement', requested_from: 'Will', question: 'Approve the replacement?' },
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+    if (manual) {
+      expect(await f.workflow.update(input('withdraw_decision', {
+        operation_id: 'withdraw-replacement', request_id: 'replacement', reason: 'No longer needed',
+      }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+      expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Decision'])
+      f.raw.properties['Will action'].multi_select = []
+      f.raw.properties['Will action'].multi_select = [{ name: 'Decision' }]
+    }
+    expect(await f.workflow.update(input(kind, {
+      request_id: manual ? 'sibling' : 'replacement',
+      ...(kind === 'withdraw_decision' ? { reason: 'No longer needed' } : { answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } }),
+    }), 'Owner')).toMatchObject({ outcome: 'saved' })
+    expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(manual ? ['Decision'] : [])
+  })
+
+  it('redacts decoded supersession audit values in card details', async () => {
+    const f = fixture()
+    const questionToken = 'secret_question_fixture_123456789'
+    const recipientToken = 'secret_recipient_fixture_123456789'
+    const optionToken = 'secret_option_fixture_123456789'
+    expect(await f.workflow.update(input('request_decision', {
+      request_id: 'original', requested_from: 'Will', question: 'Approve the original?',
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(await f.workflow.update(input('supersede_decision', {
+      request_id: 'original', reason: 'Corrected scope',
+      replacement: { request_id: 'replacement', requested_from: `Will\n${recipientToken}`,
+        question: `Approve the replacement?\n${questionToken}`, options: [{ id: 'approve', label: `Approve\n${optionToken}` }] },
+    }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(decisionRequests(await new WorkflowContent(f.reader).notes(id, undefined, true))).toMatchObject([{
+      id: 'replacement', question: `Approve the replacement?\n${questionToken}`,
+    }])
+    const fetch = f.fetcher.getMockImplementation()!
+    const identityLookup = vi.fn(() => new Response(null, { status: 503 }))
+    f.fetcher.mockImplementation((url, init) => new URL(String(url)).pathname === '/v1/users/me'
+      ? Promise.resolve(identityLookup())
+      : fetch(url, init))
+    const sources = f.sources()
+    const context = await sources.card(id)
+    expect(context.outcome).toBe('available')
+    expect(context.answerSources?.replacements).toEqual([])
+    expect(identityLookup).toHaveBeenCalledOnce()
+    const audit = context.blocks.find(block => block.text.includes('Operation: supersede_decision'))!
+    expect(audit.text).not.toContain(questionToken)
+    expect(audit.text).not.toContain(recipientToken)
+    expect(audit.text).not.toContain(optionToken)
+    const footer = audit.text.split('\n').at(-2)!
+    expect(JSON.parse(footer.slice('Tin Star withdrawal: '.length)).replacement).toMatchObject({
+      id: 'replacement', requested_from: 'Will\n[credential omitted]', question: 'Approve the replacement?\n[credential omitted]',
+      options: [{ id: 'approve', label: 'Approve\n[credential omitted]' }],
+    })
+    expect(await sources.workflow.update(input('edit', { note: 'Ordinary progress' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    expect(identityLookup).toHaveBeenCalledOnce()
+    expect(await sources.workflow.update(input('withdraw_decision', { request_id: 'replacement', reason: 'No longer needed' }), 'Consumer'))
+      .toMatchObject({ outcome: 'not-saved' })
+    expect(identityLookup).toHaveBeenCalledTimes(2)
+  })
+
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {
     const f = fixture()
     await f.workflow.update(input('request_decision', { request_id: 'ask', question: 'Continue?', requested_from: 'Will' }), 'Consumer')

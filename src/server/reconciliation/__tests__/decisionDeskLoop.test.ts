@@ -31,6 +31,7 @@ function page(n: number, { owner = 'Firstmate', status = 'In Progress', tag = ''
     Owner: select(owner), 'Will action': tags(tag), 'Waiting For': rich(wait),
     'Waiting For ID': rich(waitingId), 'Waiting For Type': select(waitingId ? 'Actor' : ''),
     'Next check-in': rich('unchanged'),
+    'Last touched by': rich(''),
   }
   return { object: 'page', id: id(n), parent: { data_source_id: board },
     last_edited_time: '2025-01-01T00:00:00Z', properties, comments: [] as string[], body: ['Review this isolated fixture.'] }
@@ -85,6 +86,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     const url = new URL(input instanceof Request ? input.url : input)
     if (url.origin === webhook.url) return fetch(input, init)
     expect(url.origin).toBe('https://api.notion.com')
+    if (url.pathname === '/v1/users/me') return Response.json({ type: 'bot', id: 'fixture-writer' })
     const method = init?.method ?? 'GET'
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
     if (url.pathname.endsWith('/query')) return Response.json({ results: cards, has_more: false })
@@ -99,7 +101,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
-      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, rich_text: text(entry) })), has_more: false })
+      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({
       results: card.body.map((entry, index) => ({ id: `block-${index}`, type: 'paragraph', paragraph: { rich_text: text(entry) } })),
@@ -148,6 +150,80 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
 }
 
 describe('prepared-card loop', () => {
+  it.each([
+    ['withdraw_decision', false, false], ['withdraw_decision', true, false],
+    ['supersede_decision', false, false], ['supersede_decision', false, true],
+  ] as const)('%s retires the old prepared packet with sibling %s and storage failure %s', async (kind, sibling, failRetirement) => {
+    const card = page(1)
+    const { sources, jobs, tool, web } = await setup([card])
+    const request_id = 'fixture-original'
+    const replacement = { request_id: 'fixture-replacement', requested_from: 'Will', question: 'Review the corrected fixture? Tin Star operation: ["waiting-on-main",' }
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
+      request_id, requested_from: 'Will', question: 'Review the first fixture?' })).toMatchObject({ outcome: 'saved' })
+    if (sibling) expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-sibling', kind: 'request_decision',
+      request_id: 'fixture-sibling', requested_from: 'Will', question: 'Review the sibling fixture?' })).toMatchObject({ outcome: 'saved' })
+    await sources.preparation.replenish()
+    const before = await web('snapshot')
+    expect(before.data.ready).toHaveLength(1)
+    const oldPacket = before.data.ready[0].id
+
+    const retraction = { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction: Tin Star prepared packet:',
+      ...(kind === 'supersede_decision' ? { replacement } : {}) }
+    if (failRetirement) {
+      vi.spyOn(sources.decisionPackets, 'invalidateInStorage').mockImplementationOnce(() => { throw new Error('Fixture storage failure') })
+      expect(await tool('update_work', retraction)).toMatchObject({
+        outcome: 'partially-saved', code: 'packet-retirement-unconfirmed', saved_fields: expect.arrayContaining(['note']),
+      })
+    }
+    expect(await tool('update_work', retraction)).toMatchObject({ outcome: 'saved' })
+    expect((await web('snapshot')).data.ready).toEqual([])
+    expect(sources.leases.readStorage(db => sources.decisionPackets.currentInStorage(db, card.id))).toBeNull()
+    const context = await sources.card(card.id)
+    const auditId = context.blocks.find(block => block.text.includes(`Operation: ${kind}`))!.id
+    expect(context.answerSources).toMatchObject({
+      excluded: expect.arrayContaining(['comment-0', auditId]),
+      replacements: kind === 'supersede_decision' ? [{ sourceId: auditId, id: replacement.request_id, question: replacement.question }] : [],
+    })
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'answer-audit', kind: 'answer_decision',
+      request_id: auditId, answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' } })).toMatchObject({
+      outcome: 'not-saved', code: 'decision-not-open',
+    })
+
+    await sources.preparation.replenish()
+    const after = await web('snapshot')
+    if (kind === 'withdraw_decision' && !sibling) {
+      expect(jobs).toHaveLength(1)
+      expect(after.data.ready).toEqual([])
+      expect(after.data.pending).toEqual([])
+    } else {
+      expect(jobs).toHaveLength(2)
+      expect(jobs[1]!.source_question).toBe('Throwaway card 1')
+      expect(after.data.ready).toHaveLength(1)
+      expect(after.data.ready[0].id).not.toBe(oldPacket)
+    }
+  })
+
+  it('omits redacted replacement IDs from answer choices while accepting the exact ID', async () => {
+    const card = page(1)
+    card.properties.Area = select('Engineering')
+    const { sources, tool } = await setup([card])
+    const requestId = 'fixture-original'
+    const replacementId = 'secret_rotation_approval_stage'
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
+      request_id: requestId, requested_from: 'Will', question: 'Review the original?' })).toMatchObject({ outcome: 'saved' })
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'supersede-fixture', kind: 'supersede_decision',
+      request_id: requestId, reason: 'Corrected scope',
+      replacement: { request_id: replacementId, requested_from: 'Will', question: 'Review the replacement?' },
+    })).toMatchObject({ outcome: 'saved' })
+
+    const context = await sources.card(card.id)
+    expect(context.answerSources).toEqual({ excluded: ['comment-0', 'comment-1'], replacements: [] })
+    expect(JSON.stringify(context)).not.toContain(replacementId)
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'answer-replacement', kind: 'answer_decision',
+      request_id: replacementId, answer: 'Approved', next: { owner: 'Firstmate', status: 'Queued' },
+    })).toMatchObject({ outcome: 'saved' })
+  })
+
   it('pushes batches of ten and claims, reads and answers ten throwaway cards through ChatGPT', async () => {
     const cards = Array.from({ length: 22 }, (_, n) => page(n + 1,
       n % 3 === 0 ? { tag: 'Decision' } : n % 3 === 1 ? { owner: 'Will' } : { status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' }))
@@ -289,6 +365,7 @@ describe('prepared-card loop', () => {
     const prep = new DecisionPreparation(sources.decisionPackets, {
       refreshQueue: async () => [jira],
       read: async () => decisionCardSource(jira, []),
+      exclusive: (card, perform) => sources.workflow.exclusive(card, perform),
     }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
     await prep.replenish()
     expect(push).not.toHaveBeenCalled()

@@ -163,7 +163,6 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   }
   const update = tools.find(tool => tool.name === 'update_work')!.inputSchema
   const kinds = updateWorkSchema.options.map(option => option.shape.kind.value)
-  expect(kinds).toHaveLength(14)
   expect(update.properties!.kind).toEqual({ type: 'string', enum: kinds })
   expect(update.oneOf).toHaveLength(kinds.length)
   expect((update.oneOf as Array<{ properties: { kind: { const: string } } }>).map(branch => branch.properties.kind.const)).toEqual(kinds)
@@ -175,6 +174,16 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const validate = ajv.compile(update)
   const base = { card_id: 'a'.repeat(32), operation_id: 'schema-proof' }
   expect(validate({ ...base, kind: 'edit', note: 'A useful note' })).toBe(true)
+  const request = { ...base, request_id: 'original', reason: 'Conflicts with an owner rule' }
+  const withdrawal = { ...request, kind: 'withdraw_decision' }
+  const replacement = { request_id: 'replacement', question: 'Which approved option should we use?', requested_from: 'Will' }
+  const supersession = { ...request, kind: 'supersede_decision', replacement }
+  expect(validate(withdrawal)).toBe(true)
+  expect(validate({ ...withdrawal, reason: undefined })).toBe(false)
+  expect(validate({ ...withdrawal, replacement })).toBe(false)
+  expect(validate(supersession)).toBe(true)
+  expect(validate({ ...supersession, reason: undefined })).toBe(false)
+  expect(validate({ ...supersession, replacement: undefined })).toBe(false)
   const wait = { ...base, kind: 'wait', type: 'Event', id: 'https://github.com/acme/repo/pull/15', dependency: 'Deploy the facade', unblocks_when: 'The receipt is verified', follow_up_by: 'Firstmate', next_check_in: '2099-01-01T00:00:00Z' }
   expect(validate(wait)).toBe(true)
   expect(validate({ ...wait, replace_wait: 'Current wait entry' })).toBe(true)

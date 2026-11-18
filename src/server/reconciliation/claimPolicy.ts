@@ -1,7 +1,7 @@
 import { waitEntries, waitState } from '../../shared/waitingForPolicy'
 import type { WorkCard } from './workReader'
 import { parseWorkerLinks, FIRST_MATE_TASKS } from './workerLinks'
-import { decisionRequests, workflowReceipt } from '../../shared/workflowRequests'
+import { decisionRequests, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
 
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
 export const deferredDecisionStatus = (status: unknown) => ['todo', 'backlog', 'archived', 'done'].includes(String(status).trim().toLowerCase())
@@ -45,7 +45,7 @@ export function responsibleMate(card: WorkCard, notes: Array<{ text: string }> =
   const links = parseWorkerLinks(value(card, FIRST_MATE_TASKS))
   if (links.status === 'valid' && links.tasks.length) return { owner: 'Firstmate', id: links.tasks.map(task => `${task.fm_home}/${task.task_id}`).join(', '), tasks: links.tasks }
   const actors = [value(card, 'Last touched by'), ...[...notes].reverse().flatMap(note => {
-    const receipt = workflowReceipt(note)
+    const receipt = isDecisionRetraction(note.text) ? null : workflowReceipt(note)
     return receipt ? [JSON.parse(receipt.slice('Tin Star operation: '.length))[0] as unknown] : []
   })]
   for (const actor of actors) if (typeof actor === 'string' && actor.trim() && !['Will', 'Owner', 'owner-chatgpt', 'Tin Star MCP', 'Tin Star UI'].includes(actor)) return { owner: actor, id: actor, tasks: [] }

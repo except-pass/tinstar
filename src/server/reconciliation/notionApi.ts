@@ -3,6 +3,35 @@ import { sourceWriteDispatched } from './cardLeases'
 
 export type NotionFetch = (input: string | URL, init?: RequestInit, timeoutMs?: number, onSend?: (signal?: AbortSignal | null) => void) => Promise<Response>
 
+const workflowWriters = new WeakMap<{ token: string }, { pending: Promise<string>; id?: string }>()
+export const cachedNotionWorkflowWriter = (config: { token: string }) => workflowWriters.get(config)?.id
+export function notionWorkflowWriter(config: { token: string }, fetcher: NotionFetch): Promise<string> {
+  const known = workflowWriters.get(config)
+  if (known) return known.pending
+  const pending = (async () => {
+    const response = await fetcher('https://api.notion.com/v1/users/me', {
+      redirect: 'error', signal: AbortSignal.timeout(20_000),
+      headers: { Authorization: `Bearer ${config.token}`, 'Notion-Version': '2025-09-03' },
+    })
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Error('Cannot verify Notion workflow writer')
+    }
+    const user = await response.json()
+    if (user?.type !== 'bot' || typeof user.id !== 'string' || !user.id) throw new Error('Notion workflow token must identify a bot')
+    return user.id as string
+  })().then(id => {
+    entry.id = id
+    return id
+  }).catch(error => {
+    workflowWriters.delete(config)
+    throw error
+  })
+  const entry: { pending: Promise<string>; id?: string } = { pending }
+  workflowWriters.set(config, entry)
+  return pending
+}
+
 const queueDeadlineMs = 30_000
 export class NotionQueueTimeoutError extends DOMException {
   constructor() { super('Notion queue deadline exceeded', 'TimeoutError') }

@@ -101,6 +101,7 @@ export class ReconciliationSources {
         return this.decisionQueue().cards
       },
       read: (card, background) => this.readDecisionCard(card, background),
+      exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
     this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation, answerer, canPost) =>
@@ -108,6 +109,13 @@ export class ReconciliationSources {
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workflow.onDecisionRetracted = async (id, auditTime) => {
+      await this.decisionPackets.initialize()
+      await this.leases.writeStorage(db => {
+        const packet = this.decisionPackets.currentInStorage(db, id)
+        if (packet && (!auditTime || Date.parse(packet.published_at) <= Date.parse(auditTime))) this.decisionPackets.invalidateInStorage(db, id)
+      })
+    }
     this.leases.onChange = () => this.invalidateQueueDisplays()
     this.fleet = config.fleet.map(source => ({ source, observation: fleetObservation(source) }))
   }
@@ -158,6 +166,7 @@ export class ReconciliationSources {
     ])
     this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
+    await this.context.verifyRetractions(context)
     return { card, blocks: context.blocks }
   }
 
@@ -236,7 +245,11 @@ export class ReconciliationSources {
     return workReadback({ ...queue, refreshing: !!entry.pending })
   }
 
-  async card(id: string) { return { ...workReadback(await this.context.details(id, false, this.notionApi.parallelFetch)), lease: this.leases.status(id) } }
+  async card(id: string) {
+    const context = await this.context.details(id, false, this.notionApi.parallelFetch)
+    const answerSources = await this.context.retractionAnswerSources(context)
+    return { ...workReadback({ ...context, ...(answerSources ? { answerSources } : {}) }), lease: this.leases.status(id) }
+  }
 
   /** The full board can be incomplete without silencing the independent
    * Firstmate-owned active-card census. No additional timer or writer. */
@@ -380,7 +393,10 @@ export class ReconciliationSources {
     return this.workReader.query({ owner: 'Firstmate', statuses: ['Queued', 'In Progress', 'Waiting For'] }, force)
   }
   async updateComments(id: string, force = false) { return this.context.commentDetails(id, force) }
-  async updateContext(id: string) { return this.context.details(id, true) }
+  async updateContext(id: string, verifyRetractions = false) {
+    const context = await this.context.details(id, true)
+    return verifyRetractions ? this.context.verifyRetractions(context) : context
+  }
 
   async workerLinkReport() { return buildWorkerLinkReport(await this.snapshot()) }
 
@@ -466,7 +482,8 @@ export class ReconciliationSources {
     const readContexts = async () => {
       for (let offset = 0; offset < Math.min(ids.length, 20) && Date.now() < historyDeadline; offset += 4) {
         await Promise.all(ids.slice(offset, Math.min(offset + 4, 20)).map(async id => {
-          collectedContexts.set(id, await this.context.commentDetails(id, force))
+          const context = await this.context.commentDetails(id, force)
+          collectedContexts.set(id, await this.context.verifyRetractions(context).catch(() => context))
         }))
       }
     }
