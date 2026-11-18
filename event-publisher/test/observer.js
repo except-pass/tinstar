@@ -138,7 +138,7 @@ test('fleet PR links rebaseline silently after a coverage gap', async t => {
   equal(returned.evidence.pr_link_coverage, 'rebaselined')
 })
 
-test('one fleet call feeds worker health and reports a quiet PR coverage gap', async t => {
+test('a PR coverage outage preserves task inventory acceptance across passes', async t => {
   const path = await temp(t)
   const bin = join(path, 'bin')
   const calls = join(path, 'fleet-calls')
@@ -146,11 +146,12 @@ test('one fleet call feeds worker health and reports a quiet PR coverage gap', a
   const db = join(path, 'journal.sqlite')
   await mkdir(bin)
   await writeFile(config, JSON.stringify({ homes: [{ ...home, path }] }))
-  await writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
+  const writeTasks = state => writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
 cat <<'TASKS'
-${encode({ count: 1, tasks: [row('sample-task')] })}
+${encode({ count: 1, tasks: [row('sample-task', { state })] })}
 TASKS
 `, { mode: 0o700 })
+  await writeTasks('queued')
   await writeFile(join(bin, 'fm-fleet-snapshot.sh'), `#!/bin/sh
 echo call >> '${calls}'
 printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HOME\\",\\"generated\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\",\\"main_inventory\\":{\\"valid\\":true},\\"secondmate_current\\":{\\"registry\\":{\\"present\\":false}},\\"tasks\\":[]}"
@@ -158,11 +159,26 @@ printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HO
   await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
   equal(await readFile(calls, 'utf8'), 'call\n')
   const { stdout } = await exec(cli, ['sources', '--db', db])
-  match(stdout, /:task .*partial.*pr_links_unobserved=1/)
+  match(stdout, /:task .*ok.*pr_links_unobserved=1/)
   match(stdout, /:worker .*ok/)
   const journal = new Journal(db, { readOnly: true })
   t.after(() => journal.close())
   equal(journal.tail(), 0)
+  const taskBefore = journal.sources().find(source => source.type === 'task')
+  ok(taskBefore.last_snapshot_id)
+
+  await writeTasks('done')
+  await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
+  equal(await readFile(calls, 'utf8'), 'call\ncall\n')
+  const taskAfter = journal.sources().find(source => source.type === 'task')
+  equal(taskAfter.health, 'ok')
+  deepEqual(taskAfter.counts, { pr_links_unobserved: 1 })
+  ok(taskAfter.last_snapshot_id !== taskBefore.last_snapshot_id)
+  deepEqual(journal.events().map(event => event.change), [
+    { field: 'state', before: 'queued', after: 'done' },
+    { field: 'ready', before: true, after: false },
+  ])
+  equal(journal.events()[0].evidence.pr_link_coverage, 'unobserved')
 })
 
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {
@@ -239,7 +255,8 @@ test('missing, failed, partial and out-of-order task polls preserve the last wit
   const cursor = journal.sources().find(source => source.source_id === tasks.source_id).last_snapshot_id
 
   journal.record({ source: tasks, started_at: at(1), observed_at: at(2), health: 'unavailable', reason: 'synthetic outage' })
-  journal.record({ source: tasks, started_at: at(2), observed_at: at(3), health: 'partial', reason: 'synthetic truncation' })
+  equal(journal.record({ ...taskObservation([row('sample-a', { state: 'done' })], 2),
+    health: 'partial', reason: 'synthetic truncation' }), 0)
   equal(journal.sources().find(source => source.source_id === tasks.source_id).last_snapshot_id, cursor)
   equal(journal.record(taskObservation([row('sample-a', { state: 'done' })], 1)), 0)
   equal(journal.record(taskObservation([], 3)), 0)

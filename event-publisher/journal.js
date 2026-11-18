@@ -143,7 +143,7 @@ export class Journal {
         } else if (generated_at && previous.last_generated_at && generated_at <= previous.last_generated_at) {
           health = 'stale'
           reason = 'fleet watermark did not advance'
-        } else if (entries) {
+        } else if (entries && (source.type !== 'task' || health === 'ok')) {
           snapshotId = randomUUID()
           written = this.recordEntries(observation, previous.last_snapshot_id, snapshotId)
         }

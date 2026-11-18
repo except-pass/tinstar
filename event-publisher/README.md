@@ -79,8 +79,9 @@ data. Replay notices go to stderr so the JSON payloads stay identical.
 
 Stop the publisher, run `events observe`, and check `events sources` before
 restarting it. This performs one fresh read of each configured source and updates
-the journal. A partial or unavailable source makes the one-pass command exit
-with status 1. The continuous collector retries on the next scheduled pass.
+the journal. A source with incomplete coverage or an unsuccessful read makes
+the one-pass command exit with status 1. The continuous collector retries on
+the next scheduled pass.
 
 - For an unavailable task source, check that the service account can execute
   `bin/fm-tasks-axi.sh` and read its backlog, and that `tasks-axi` is on PATH.
@@ -95,9 +96,10 @@ with status 1. The continuous collector retries on the next scheduled pass.
   the fleet snapshot's remote-summary cache and the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
 - `events sources` reports the last attempt and the last accepted inventory.
-  Task source health reports missing PR link coverage even when no event is
-  emitted. Each home uses one fleet snapshot per pass for worker state and
-  PR link coverage.
+  The task verdict reflects the tasks-axi inventory. The
+  `pr_links_unobserved` count reports missing PR coverage even when no event
+  is emitted. Each home uses one fleet snapshot per pass for worker state
+  and PR link coverage.
   Accepted inventories report remote exclusions and unverifiable local
   current states. An inventory with a missing local execution identity or
   an unconfirmed producer verdict is rejected. A timed-out, stale, or

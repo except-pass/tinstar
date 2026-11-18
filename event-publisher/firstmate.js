@@ -342,8 +342,6 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
     const pr_links_unobserved = tasks.entries.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
     if (pr_links_unobserved) {
       tasks.counts = { pr_links_unobserved }
-      tasks.health = 'partial'
-      tasks.reason = 'PR link coverage is unavailable for some tasks'
     }
     if (pr_links_unobserved < tasks.entries.length) tasks.observed_at = fleetObservedAt
   }
