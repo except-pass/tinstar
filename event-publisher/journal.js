@@ -191,14 +191,15 @@ export class Journal {
     const entries = [...observation.entries].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     for (const entry of entries) {
       const prior = select.get(source.source_id, entry.id)
-      const fields = entry.fields ? JSON.stringify(entry.fields) : null
+      const before = prior?.fields ? JSON.parse(prior.fields) : null
+      const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const evidence = JSON.stringify(entry.evidence)
       // Unavailable worker states count toward inventory coverage. Only a
       // verified per-incarnation observation may advance its state snapshot.
       saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
         entry.sample.current_state, entry.sample.reason, evidence)
       if (previousSnapshot && fields && fields !== prior?.fields) {
-        const before = prior?.fields ? JSON.parse(prior.fields) : null
+        const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
         const related = this.relationships(source, entry)
         for (const difference of eventChanges(source.type, before, entry.fields)) {
           const envelope = {
@@ -216,14 +217,19 @@ export class Journal {
               batch_id: snapshotId,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
               current_snapshot: snapshotId,
-              observed_between: { after: prior?.started_at ?? null, by: observed_at },
+              observed_between: {
+                after: difference.change.field === 'pull_requests' && previousEvidence?.pr_link_coverage === 'ambiguous'
+                  ? null : prior?.started_at ?? null,
+                by: observed_at,
+              },
             },
             related,
             evidence: {
               source_reference: { interface: source.command, task_id: entry.evidence.task_id,
                 ...(entry.evidence.spawn_gen ? { spawn_gen: entry.evidence.spawn_gen } : {}) },
               state_source: entry.evidence.state_source,
-              ...(prior?.evidence ? { previous_state_source: JSON.parse(prior.evidence).state_source } : {}),
+              ...(previousEvidence ? { previous_state_source: previousEvidence.state_source } : {}),
+              ...(entry.evidence.pr_link_coverage ? { pr_link_coverage: entry.evidence.pr_link_coverage } : {}),
               ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
               confidence_basis: before ? 'field differs across verified observations'
                 : prior ? 'first verified state for a previously seen incarnation'

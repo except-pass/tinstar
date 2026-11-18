@@ -75,11 +75,12 @@ async function readConfig(path) {
       throw new UsageError('each home needs a stable id and absolute path; check codeRoot, mode and markdownFastPath if supplied')
     }
     const path = await realpath(home.path).catch(() => null)
-    const configuredPath = path ?? resolve(home.path)
-    if (ids.has(home.id) || paths.has(configuredPath)) throw new UsageError('home ids and paths must be unique')
+    const configuredPath = home.path
+    const uniquePath = path ?? resolve(configuredPath)
+    if (ids.has(home.id) || paths.has(uniquePath)) throw new UsageError('home ids and paths must be unique')
     ids.add(home.id)
-    paths.add(configuredPath)
-    homes.push({ id: home.id, path, codeRoot: resolve(home.codeRoot ?? configuredPath), mode: home.mode ?? 'live',
+    paths.add(uniquePath)
+    homes.push({ id: home.id, path, configuredPath, codeRoot: home.codeRoot && resolve(home.codeRoot), mode: home.mode ?? 'live',
       markdownFastPath: home.markdownFastPath ?? false })
   }
   return homes
@@ -116,6 +117,17 @@ async function collect(journal, homes, interval) {
     if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
     do {
       const start = Date.now()
+      for (const home of homes) {
+        if (home.path || controller.signal.aborted) continue
+        const path = await realpath(home.configuredPath).catch(() => null)
+        if (!path || homes.some(other => other.path === path)) continue
+        try {
+          journal.registerSources(sourcesFor({ ...home, path }))
+          home.path = path
+        } catch (error) {
+          if (!(error instanceof JournalConfigurationError)) throw error
+        }
+      }
       for (const { source, home, taskCache } of sources) {
         if (controller.signal.aborted) break
         journal.record(await observe(home, source, scratch, { taskCache }))

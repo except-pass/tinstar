@@ -109,12 +109,37 @@ test('CLI rejects oversized intervals and JSON source health output', async () =
     error => error.code === 2 && /--json is unsupported for sources/.test(error.stderr))
 })
 
+test('ambiguous PR link lists preserve the last verified links', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.register(tasks)
+  const first = row('sample-a', { links: 'pr:https://github.com/example/repo/pull/12' })
+  journal.record(taskObservation([first], 0))
+  const ambiguous = [
+    'pr:https://github.com/example/repo/pull/12?next=x,pr:https://github.com/other/repo/pull/9',
+    'doc:https://example.test/page#x,pr:https://github.com/other/repo/pull/9',
+  ]
+  for (const [index, links] of ambiguous.entries()) {
+    equal(journal.record(taskObservation([{ ...first, links, priority: index }], index + 1)), 1)
+    const event = journal.events().at(-1)
+    equal(event.change.field, 'priority')
+    equal(event.evidence.pr_link_coverage, 'ambiguous')
+    ok(!JSON.stringify(event).includes('github.com/other/repo'))
+  }
+  equal(journal.record(taskObservation([{ ...first, links: 'none', priority: 1 }], 3)), 1)
+  const removed = journal.events().at(-1)
+  deepEqual(removed.change, {
+    field: 'pull_requests', before: ['https://github.com/example/repo/pull/12'], after: [],
+  })
+  equal(removed.observation.observed_between.after, null)
+})
+
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const before = row('sample-a', { title: 'one, "two"', priority: 2 })
   const after = row('sample-a', {
     state: 'done', priority: 1, closed: '2026-01-02',
-    links: 'pr:https://demo:discard-this@github.com/example/repo/pull/12?token=discard-this#discard-this',
+    links: 'pr:https://github.com/example/repo/pull/12',
   })
   const baseline = new Journal(path)
   baseline.register(tasks)
@@ -135,7 +160,6 @@ test('baseline, direct Queued to Done, exact task fields, dedup and immutable re
   deepEqual(state.observation.observed_between, { after: at(0), by: at(3) })
   equal(new Set(events.map(event => event.observation.batch_id)).size, 1)
   equal(events[2].change.after[0], 'https://github.com/example/repo/pull/12')
-  ok(!JSON.stringify(events).includes('discard-this'))
   journal.close()
 
   const restart = new Journal(path)

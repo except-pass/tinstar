@@ -38,8 +38,8 @@ independently readable home. The paths and ID below are synthetic.
 sidecars in a private directory outside the checkout.
 The journal binds each home ID to its resolved path on first registration.
 Existing journals retain that binding. Start a new journal to use the same ID
-with a different path. If a home path cannot be resolved at startup, restart
-the collector after restoring it.
+with a different path. The collector retries unresolved homes on subsequent
+passes and checks the journal binding before reading them.
 
 ```sh
 events serve --interval 20
@@ -127,8 +127,10 @@ separate coverage. After initial attach, the first verified state of an
 incarnation appears as `worker.observed`. Its evidence records whether the
 incarnation was previously seen with unknown state. The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
-titles, hold reasons and status messages stay out of the journal. PR references
-drop URL credentials, query strings and fragments.
+titles, hold reasons and status messages stay out of the journal. PR coverage
+requires exact GitHub pull URLs without credentials, query strings or fragments.
+Ambiguous link lists leave the prior verified PR links in place and appear as
+ambiguous coverage in any task events from that read.
 
 Each accepted snapshot and its events commit in one SQLite transaction.
 An event's `sequence` is the local journal cursor and `observation.batch_id`

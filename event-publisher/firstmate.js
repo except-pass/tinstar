@@ -60,22 +60,12 @@ function normalizedDependencies(value, home) {
 
 function normalizedPullRequests(value) {
   if (value === 'none') return []
-  if (typeof value !== 'string') partial('invalid task link field')
+  if (typeof value !== 'string' || !value) return null
   const links = []
   for (const link of value.split(/,(?=(?:pr|doc|report):)/)) {
-    if (!link.startsWith('pr:')) continue
-    let url
-    try {
-      url = new URL(link.slice(3))
-    } catch {
-      continue
-    }
-    // Keep the source's PR locator. Credentials, query strings, fragments and
-    // arbitrary paths can carry tokens or prose and do not identify the PR.
-    if (['https:', 'http:'].includes(url.protocol) &&
-        /^\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/[1-9]\d*\/?$/.test(url.pathname)) {
-      links.push(url.origin + url.pathname.replace(/\/$/, ''))
-    }
+    if (link !== link.trim() ||
+        !/^pr:https:\/\/github\.com\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/pull\/[1-9]\d*\/?$/u.test(link)) return null
+    links.push(link.slice(3).replace(/\/$/, ''))
   }
   return [...new Set(links)].sort(compare)
 }
@@ -112,6 +102,7 @@ export function parseTasks(text, homeId) {
     }
     ids.add(row.id)
     const dependencies = normalizedDependencies(row.deps, homeId)
+    const pullRequests = normalizedPullRequests(row.links)
     const held = row.held === 'yes'
     const blocked = row.blocked === 'yes'
     return {
@@ -124,14 +115,15 @@ export function parseTasks(text, homeId) {
         hold_kind: holdKinds.has(row.hold_kind) ? row.hold_kind : null,
         hold_until: sourceDate(row.hold_until),
         dependencies,
-        pull_requests: normalizedPullRequests(row.links),
+        ...(pullRequests === null ? {} : { pull_requests: pullRequests }),
         priority: row.priority === '-' ? null : row.priority,
         blocked,
         held,
         ready: row.state === 'queued' && row.kind !== 'public-followup' && !blocked && !held,
       },
       related: dependencies.map(dep => ({ relation: dep.type, subject: { type: 'task', id: dep.id } })),
-      evidence: { task_id: row.id, state_source: 'tasks-axi list' },
+      evidence: { task_id: row.id, state_source: 'tasks-axi list',
+        ...(pullRequests === null ? { pr_link_coverage: 'ambiguous' } : {}) },
     }
   })
 }
@@ -262,7 +254,7 @@ async function readTasks(home, cache, now) {
 async function runRead(home, script, args, overrides) {
   // Ambient First Mate overrides can point a command at another home's state.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('FM_')))
-  const command = join(home.codeRoot, 'bin', script)
+  const command = join(home.codeRoot ?? home.path, 'bin', script)
   try {
     const { stdout } = await run('timeout', ['--kill-after=2s', '18s', command, ...args], {
       env: { ...env, FM_HOME: home.path, ...overrides },
