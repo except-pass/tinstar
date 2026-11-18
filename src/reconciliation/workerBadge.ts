@@ -3,7 +3,8 @@ import type { Execution } from '../server/reconciliation/scene'
 import type { FinishedPullStatus } from '../server/fleet/attention'
 import { releasePull } from '../shared/pullIdentity'
 import { ageLabel } from '../shared/workerTimestamps'
-import { stale } from './overviewModel'
+import { hasCurrentExecution } from '../shared/workerEvidence'
+import { homeAuthoritative, stale } from './overviewModel'
 
 const stalledAfterMs = 45 * 60_000
 
@@ -48,7 +49,10 @@ export function workerBadge(worker: Execution, now: number, pulls: ReadonlyMap<s
   const pullId = typeof url === 'string' ? releasePull(url)?.id : null
   const pull = pullId ? pulls?.get(pullId) : null
   if (pull === 'merged') return { label: 'PR merged', tone: 'done' }
-  if (state === 'working' || state === 'running') return { label: 'Running', tone: 'running' }
+  const executionState = state && (current.source === 'pane' || current.source === 'run-step' || state === 'done' || state === 'failed') ? current : {}
+  if (homeAuthoritative(worker.observation, now, readFailed) && hasCurrentExecution(worker.source, now, executionState)) {
+    return { label: 'Running', tone: 'running' }
+  }
   if (pull === 'closed') return { label: 'PR closed', tone: 'done' }
   if (state === 'done') return { label: 'Done', tone: 'done' }
   if (state === 'failed') return { label: 'Failed', tone: 'blocked' }

@@ -19,7 +19,7 @@ import { startWorkSchema, updateWorkSchema, decisionOptionsSchema, createWorkSch
 import { canonicalWorkId, independentWaitIssue, retainedWaitText, typedWaitEntry, waitEntries, waitLine, hasActiveTypedWait, waitingForIssues, waitState, workIdShape } from '../../shared/waitingForPolicy'
 import { ContractError, ImplementationContracts } from './implementationContract'
 import { HandoffOperations } from './workflowHandoff'
-import { codexTurn } from '../../shared/codexActivity'
+import { hasCurrentExecution } from '../../shared/workerEvidence'
 import { FIRST_MATE_TASKS, isBlankWorkerLinks, workerLinkRecord } from './workerLinks'
 import { checkInTime, checkInCeiling } from '../../shared/checkIn'
 import { WorkflowContent, ManagedSectionConflict, NotionWriteError, richText, paragraph, heading, codeBlock, createBlockText, type WorkflowCreateBlock, receiptMarker, decisionMarker, sectionMarker, sectionText } from './workflowContent'
@@ -246,12 +246,10 @@ export class WorkflowOperations {
       if (!home || home.observation.status !== 'fresh' || home.observation.coverage !== 'complete' || !home.observation.data || Date.parse(home.observation.expiresAt ?? '') <= Date.now()) throw new WorkflowError('worker-unknown', 'Worker source is missing, partial or stale; current execution is unknown')
       const matches = home.observation.data.tasks.filter(task => task.identity.task_id === worker.task_id)
       if (matches.length !== 1 || matches[0]!.identity.spawn_gen !== worker.first_observed_spawn_gen) throw new WorkflowError('worker-untracked', 'Exact home/task/spawn generation is not currently tracked')
-      const task = matches[0]!, state = task.current_state
+      const task = matches[0]!
       // Historical status-log verbs and endpoint existence cannot authorize a
       // new start. Use fresh native pane/run-step or Codex turn observations.
-      const current = ['pane', 'run-step'].includes(String(state.source)) && state.freshness === 'fresh' && ['working', 'running', 'executing'].includes(String(state.state))
-      const alive = task.endpoint.exists !== false && task.endpoint.agent_alive !== 'dead' && task.endpoint.status !== 'dead'
-      if (task.kind === 'secondmate' || !alive || !(current || codexTurn(task, Date.now()) === true)) throw new WorkflowError('worker-not-executing', 'Tracked worker has no current execution evidence; owner names, historical reports and waits do not establish execution')
+      if (!hasCurrentExecution(task, Date.now())) throw new WorkflowError('worker-not-executing', 'Tracked worker has no current execution evidence; owner names, historical reports and waits do not establish execution')
       const property = card.properties[FIRST_MATE_TASKS], links = property?.workerLinks
       if (property?.type !== 'rich_text' || !links || links.status !== 'valid' && !isBlankWorkerLinks(links)) throw new WorkflowError('worker-links-unreadable', 'Existing First Mate tasks cannot be safely merged; correct that property first')
       const tasks = links.status === 'valid' ? [...links.tasks] : []

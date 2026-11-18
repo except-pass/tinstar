@@ -393,6 +393,10 @@ worker chips, relationships and pattern counts share the same observed, unfinish
 worker membership; finished tasks and declared links with no observed execution
 are excluded. Card worker facts read home unreachable for a stale or missing home.
 Worker badges use First Mate's current state and Tin Star's existing forge status.
+Merged and closed PR labels appear only when the existing cockpit lookup has a
+result for the linked PR. Reconciliation-only snapshots do not trigger a lookup.
+Running requires fresh execution evidence from a native pane or run-step state,
+or a fresh open Codex turn when current crew state is unusable.
 A wait badge shows age when the latest structured event declared that same wait.
 A waiting worker shows **Stalled** when its own backlog row records task
 dependencies and explicitly lists no unresolved blockers. A parked worker shows

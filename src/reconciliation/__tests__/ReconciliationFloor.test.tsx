@@ -81,7 +81,11 @@ it('places finished and absent records in history rather than the current worker
   expect(container.querySelector('.ov-history')?.textContent).toContain('Finished')
 })
 
-it('renders structured waits, finished dependencies and the linked PR outcome', () => {
+it.each([
+  ['pane', 'working', 'Running'],
+  ['run-step', 'executing', 'Running'],
+  ['status-log', 'working', 'Unknown'],
+] as const)('renders waits and linked PR outcomes with %s %s execution evidence', (source, state, expected) => {
   const now = Date.now(), sources = fixtureSources({ now })
   const tasks = sources.fleet[1]!.observation.data!.tasks
   const [waiting, decision, stalled, running] = tasks
@@ -92,7 +96,7 @@ it('renders structured waits, finished dependencies and the linked PR outcome', 
   Object.assign(stalled!.current_state, { state: 'blocked' })
   Object.assign(stalled!.last_event, { state: 'blocked', age_seconds: 60 })
   Object.assign(stalled!.backlog, { id: stalled!.id, blocked_by_ids: ['fixture-blocker', 'second-blocker'], unresolved_blocker_ids: [] })
-  Object.assign(running!.current_state, { state: 'working', source: 'pane' })
+  Object.assign(running!.current_state, { state, source })
   Object.assign(running!.last_event, { state: 'paused', age_seconds: 60 * 60 })
   const url = 'https://github.com/fixture/tinstar/pull/9'
   const helper = sources.fleet[2]!.observation.data!.tasks[0]!
@@ -113,7 +117,7 @@ it('renders structured waits, finished dependencies and the linked PR outcome', 
   expect(stateFor(decision!.id)).toHaveTextContent('Needs a decision · 1m')
   expect(stateFor(stalled!.id)).toHaveTextContent('Stalled · 1m')
   expect(stateFor(stalled!.id)).toHaveClass('status-stalled')
-  expect(stateFor(running!.id)).toHaveTextContent('Running')
+  expect(stateFor(running!.id)).toHaveTextContent(expected)
   expect(stateFor(helper.id)).toHaveTextContent('PR merged')
 })
 
@@ -329,5 +333,5 @@ it.each(['done', 'landed'])('shows a worker resumed after a recorded %s outcome'
   const worker = scene.executions.find(value => value.identity.task_id === task.id)!
   const element = [...container.querySelectorAll('.ov-execution')].find(value => value.getAttribute('data-entity-id') === worker.id)
   expect(element).toBeDefined()
-  expect(element?.querySelector('.ov-worker-status')).toHaveTextContent('Unknown')
+  expect(element?.querySelector('.ov-worker-status')).toHaveTextContent('Running')
 })
