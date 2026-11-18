@@ -152,7 +152,10 @@ scene either way.
 Firstmate owns merge, deployment and live proof. Update the Tin Star collector
 on each publishing machine using the existing [collector install](codex-activity.md),
 then confirm fresh `parent_asks` fields in the transported child snapshots and
-`parent_resolutions` in main's snapshot. Main's publishing machine must also run
+`parent_resolutions` in main's snapshot. Note-correlation closes require refreshed
+child snapshots from the updated collector, so an ask closed only by note
+correlation may reappear until its publishing machine is updated and republishes.
+Main's publishing machine must also run
 the updated collector before its answers leave the backstop. No First
 Mate repository change is required. Confirm main's fleet label and child parent
 links before deploying the backend/client. Preserve alert state outside the
