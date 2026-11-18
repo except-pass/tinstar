@@ -46,7 +46,7 @@ const knownCredential = new RegExp(
 const sameLineSpace = String.raw`[^\S\r\n\u2028\u2029]`
 const credentialValue = String.raw`(?:(?:(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])${sameLineSpace}+)?${quotedCredential}|[^\r\n\u2028\u2029]*)`
 const assignmentWithValue = (key: string, flags: string) =>
-  new RegExp(String.raw`(?:${key})${sameLineSpace}*${credentialValue}`, flags)
+  new RegExp(String.raw`(?:${key})\s*${credentialValue}`, flags)
 
 const credentialAssignment = assignmentWithValue(
   String.raw`(?<![\w-])(?:${credentialKey}["']?${sameLineSpace}*[:=]|--${credentialKey}${sameLineSpace}+)`,
@@ -70,9 +70,14 @@ function redactClassificationText(text: string) {
     .replace(knownCredential, omittedCredential)
 }
 
-export function clean(text: unknown, limit: number) {
-  const oneLine = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : ''
-  return redactClassificationText(oneLine).trim().slice(0, limit)
+const flatten = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+export function clean(text: unknown, limit: number, omitLines?: RegExp) {
+  if (typeof text !== 'string') return ''
+  const sanitized = omitLines
+    ? flatten(redactClassificationText(text).replace(omitLines, ''))
+    : redactClassificationText(flatten(text)).trim()
+  return sanitized.slice(0, limit)
 }
 
 export const exampleTitleLimit = 85

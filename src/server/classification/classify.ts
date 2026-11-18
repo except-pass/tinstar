@@ -79,9 +79,8 @@ function openingProse(context: CardContextRead, historical: boolean) {
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
     blocks.push(block.text)
   }
-  const text = blocks.join('\n')
-  if (historical && /^[^\S\r\n]*(?:initiative|epic)[^\S\r\n]*:/im.test(text)) return ''
-  return clean(text, 1_100)
+  const labels = historical ? /^[^\S\r\n\u2028\u2029]*(?:initiative|epic)[^\S\r\n\u2028\u2029]*:.*$/gim : undefined
+  return clean(blocks.join('\n'), 1_100, labels)
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({

@@ -280,7 +280,7 @@ it('reads the configured board through NotionApi and persists replay results in 
         'opaque continuation fragment',
         'Excluded sixth block',
       ] : url.pathname.includes(id(5)) ? [
-        'Initiative: Cockpit\nEpic: Operations\nEpic: password="historical secret opener\nhistorical secret continuation"\nVerify panel recovery.',
+        'Initiative: Cockpit\nEpic: Operations\nEpic: password="historical secret opener\nhistorical secret continuation"\nVerify panel recovery.\npassword:\nhistorical bare credential\nConfirm export stability.',
       ] : url.pathname.includes(examples[2].id) ? ['Safe replay objective.'] : url.pathname.includes(id(7)) || url.pathname.includes(id(8)) ? ['Unverified body text'] : []
       return Response.json({ has_more: true, next_cursor: 'ignored', results: texts.map((plain_text, index) => ({
         id: String(index), type: 'paragraph', paragraph: { rich_text: [{ plain_text }] },
@@ -314,7 +314,7 @@ it('reads the configured board through NotionApi and persists replay results in 
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Check authentication', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status', body: '' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status', body: 'Verify panel recovery. [credential omitted] Confirm export stability.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({
@@ -325,7 +325,7 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ body: 'Safe replay objective.' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Unverified body text|Moved card|Changed card|historical secret opener|historical secret continuation|Initiative: Cockpit|Epic: Operations|cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(JSON.stringify(transmitted)).not.toMatch(/Unverified body text|Moved card|Changed card|historical secret opener|historical secret continuation|historical bare credential|Initiative: Cockpit|Epic: Operations|cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   const blockRequests = notion.mock.calls.map(([url]) => new URL(String(url))).filter(url => url.pathname.includes('/blocks/'))
