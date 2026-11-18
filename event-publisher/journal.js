@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS homes (
 CREATE TABLE IF NOT EXISTS sources (
   source_id TEXT PRIMARY KEY,
   description TEXT NOT NULL,
-  last_attempt_started TEXT,
   last_attempt_at TEXT,
   last_snapshot_id TEXT,
   last_success_at TEXT,
@@ -248,13 +247,12 @@ export class Journal {
         `).run(source.home_id, acceptedFleet.started_at, acceptedFleet.observed_at, acceptedFleet.generated_at)
       }
       this.db.prepare(`
-        UPDATE sources SET last_attempt_started = ?, last_attempt_at = ?, health = ?, reason = ?,
+        UPDATE sources SET last_attempt_at = ?, health = ?, reason = ?,
           counts = ?, last_snapshot_id = COALESCE(?, last_snapshot_id),
           last_success_at = COALESCE(?, last_success_at),
           last_generated_at = COALESCE(?, last_generated_at)
         WHERE source_id = ?
-      `).run(observed_at < started_at ? previous.last_attempt_started : started_at,
-        batchObservedAt, health, reason, JSON.stringify(counts),
+      `).run(batchObservedAt, health, reason, JSON.stringify(counts),
         snapshotId, snapshotId ? batchObservedAt : null,
         acceptedFleet?.generated_at ?? null, source.source_id)
       this.db.exec('COMMIT')
@@ -372,8 +370,12 @@ export class Journal {
   }
 
   sources() {
-    return this.db.prepare('SELECT * FROM sources ORDER BY source_id').all().map(row => {
-      const { description, counts, source_id, ...health } = row
+    return this.db.prepare(`
+      SELECT description, counts, last_attempt_at, last_snapshot_id, last_success_at,
+        last_generated_at, health, reason
+      FROM sources ORDER BY source_id
+    `).all().map(row => {
+      const { description, counts, ...health } = row
       const { configured = 1, ...source } = JSON.parse(description)
       return configured
         ? { ...source, ...health, counts: counts ? JSON.parse(counts) : null }

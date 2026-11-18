@@ -388,7 +388,7 @@ test('reversed task and worker reads preserve accepted snapshots and events', as
   }
   for (const [index, source] of journal.sources().entries()) {
     equal(source.health, 'stale')
-    for (const field of ['last_attempt_started', 'last_attempt_at', 'last_success_at', 'last_snapshot_id', 'last_generated_at']) {
+    for (const field of ['last_attempt_at', 'last_success_at', 'last_snapshot_id', 'last_generated_at']) {
       equal(source[field], baseline[index][field])
     }
   }
