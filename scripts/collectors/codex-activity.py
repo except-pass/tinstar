@@ -148,7 +148,8 @@ def parent_ask_stamp(metadata):
     return bare[1] if bare else ''
 
 
-_PARENT_EVENT = re.compile(r'^\s*(blocked|needs-decision|resolved|done)(?=[:\s\[]|$)(.*)$')
+_PARENT_EVENT = re.compile(r'^(blocked|needs-decision|resolved|done)(?=[:\s\[]|$)(.*)$')
+_PARENT_HEADER_CORR = re.compile(r'\[corr=([0-9A-Fa-f]{16})\]')
 _PARENT_CORR = re.compile(r'(?<!\w)corr=([0-9A-Fa-f]{16})(?!\w)')
 
 
@@ -160,10 +161,11 @@ def parent_event(line):
     metadata, separator, note = content.partition(':')
     # Extra prose before the first tag does not declare a status verb.
     prefix = metadata.partition('[')[0]
-    if any(not re.fullmatch(r'corr=[0-9A-Fa-f]{16}|at=\d+', word) for word in prefix.split()):
+    if any(not re.fullmatch(r'at=\d+', word) for word in prefix.split()):
         return None
     keys = re.findall(r'\[key=([^\]]+)\]', metadata)
-    return state, metadata, keys, _PARENT_CORR.findall(content), note.lstrip() if separator else content.strip(), bool(separator)
+    corrs = _PARENT_HEADER_CORR.findall(metadata) + _PARENT_CORR.findall(note)
+    return state, metadata, keys, corrs, note.lstrip() if separator else content.strip(), bool(separator)
 
 
 def fold_parent_asks(lines):

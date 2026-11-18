@@ -161,6 +161,17 @@ class CollectorTests(unittest.TestCase):
                    'blocked [at=300]: [key=other] choose\n')
         self.assertEqual([ask['key'] for ask in collector.fold_parent_asks(history)['items']], ['api'])
 
+    def test_parent_asks_ignore_indented_records_and_bare_header_correlations(self):
+        history = ('blocked [key=api] [corr=8940e5f6dad58120] [at=100]: choose\n'
+                   ' blocked [key=indented] [at=110]: choose\n'
+                   'blocked corr=8940e5f6dad58120 [key=bad-prefix] [at=120]: choose\n'
+                   'blocked [key=bare] corr=8940e5f6dad58120 [at=130]: choose\n'
+                   'done corr=8940e5f6dad58120 [at=200]: answered\n'
+                   'done [at=210] corr=8940e5f6dad58120: answered\n'
+                   '\tresolved [key=api] [at=220]: answered\n')
+        self.assertEqual([(ask['key'], ask['corr']) for ask in collector.fold_parent_asks(history)['items']],
+                         [('api', '8940e5f6dad58120'), ('bare', None)])
+
     def test_hilda_card_note_closes_on_a_later_matching_done_or_resolved(self):
         ask = 'blocked [key=eforce-publication325] [at=1794593070]: corr=8940e5f6dad58120 Card needs a publication route\n'
         unrelated = ('done [key=eforce-publication325]: different work\n'
@@ -340,8 +351,12 @@ class CollectorTests(unittest.TestCase):
             'resolved [key=pad] [at=01]: padded\n'
             'working [key=other] [at=160]: not a close\n'
             'done [key=other] [at=170]: corr=8940e5f6dad58120 answered\n'
+            'done [corr=1234567890abcdef] [at=180]: answered\n'
             'resolved [key=api] [at=200]: answered: use REST\n'
             'resolved [at=250]: [key=api] unrelated note\n'
+            'done corr=8940e5f6dad58120 [at=260]: unrelated header\n'
+            'done [at=270] corr=1234567890abcdef: unrelated header\n'
+            ' resolved [key=api] [corr=8940e5f6dad58120] [at=280]: indented\n'
             'resolved [key=partial] [at=999]: still writing')
         (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')
         (state / 'by-role.status').write_text('resolved [key=role-key] [at=50]: answered\n')
@@ -366,7 +381,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(published['observed_at'], collector.iso(NOW.timestamp()))
         self.assertEqual(published['mates']['remote-mate'], {'status': 'known', 'keys': [
             {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}],
-            'corrs': [{'corr': '8940e5f6dad58120', 'at': 170}]})
+            'corrs': [{'corr': '1234567890abcdef', 'at': 180}, {'corr': '8940e5f6dad58120', 'at': 170}]})
         self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}], 'corrs': []})
         self.assertEqual(published['mates']['from-registry']['keys'], [{'key': 'reg', 'at': 80}])
         self.assertEqual(published['mates']['absent-mate'], {'status': 'known', 'keys': []})
