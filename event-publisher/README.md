@@ -147,9 +147,14 @@ exclusion.
 A worker ID includes the exact task ID and generation. A worker links to a
 task when the same home has a matching row in its latest accepted active
 backlog and the task inventory verdict is healthy. Worker inventory and
-current-state evidence have separate coverage. After initial attach, the first
-verified state of an incarnation appears as `worker.observed`. Its evidence records whether the
-incarnation was previously seen with unknown state. The historical status verb is retained as
+current-state evidence have separate coverage. After initial attach, a newly
+seen incarnation in an accepted complete inventory appears as `worker.observed`.
+It includes the observed state, or `unknown` with the reason. The first later
+verified state appears as `worker.current_state.changed` from `unknown`.
+An incarnation absent from the next complete accepted inventory produces
+`worker.inventory.left`, which records absence within that inventory's coverage.
+Failed, stale, or incomplete inventories preserve the last accepted membership.
+The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR links
 come from the fleet snapshot's structured backlog records and require exact

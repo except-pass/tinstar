@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS worker_samples (
   evidence TEXT NOT NULL,
   PRIMARY KEY (source_id, entity_id)
 );
+CREATE INDEX IF NOT EXISTS worker_samples_inventory ON worker_samples (source_id, snapshot_id, entity_id);
 CREATE TABLE IF NOT EXISTS events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -248,7 +249,8 @@ export class Journal {
     } else if (entries && generated_at && !freshFleet(observation, fleetWindow, previous.last_generated_at, true)) {
       health = 'stale'
       reason = 'fleet watermark did not advance'
-    } else if (entries && (source.type !== 'task' || health === 'ok')) {
+    } else if (entries && (health === 'ok' ||
+      (source.type === 'worker' && health === 'partial' && observation.inventory_complete))) {
       snapshotId = randomUUID()
       if (generated_at) acceptedFleet = observation
       if (source.type === 'task') {
@@ -259,7 +261,10 @@ export class Journal {
         if (canJoinLinks && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
-      written = this.recordEntries(observation, previous, snapshotId, batchIds)
+      const previousWorkerStartedAt = source.type === 'worker' && fleetWindow &&
+        fleetWindow.observed_at === previous.last_success_at && fleetWindow.generated_at === previous.last_generated_at
+        ? fleetWindow.started_at : null
+      written = this.recordEntries(observation, previous, snapshotId, batchIds, previousWorkerStartedAt)
       complete = health === 'ok' && !counts?.pr_links_unobserved && !counts?.fleet_backlog_absent
     }
     if (acceptedFleet) {
@@ -281,9 +286,10 @@ export class Journal {
     return { written, complete }
   }
 
-  recordEntries(observation, previous, snapshotId, batchIds) {
+  recordEntries(observation, previous, snapshotId, batchIds, previousWorkerStartedAt) {
     const previousSnapshot = previous.last_snapshot_id
     const { source, started_at, observed_at } = observation
+    const isWorker = source.type === 'worker'
     const select = this.db.prepare('SELECT * FROM entities WHERE source_id = ? AND entity_id = ?')
     const save = this.db.prepare(`
       INSERT INTO entities (source_id, entity_id, last_seen_snapshot, snapshot_id, started_at, observed_at, fields, evidence)
@@ -297,21 +303,62 @@ export class Journal {
     const append = this.db.prepare(`
       INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)
     `)
-    const saveWorker = source.type === 'worker' ? this.db.prepare(`
+    const saveWorker = isWorker ? this.db.prepare(`
       INSERT INTO worker_samples (source_id, entity_id, snapshot_id, observed_at, current_state, reason, evidence)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id, entity_id) DO UPDATE SET snapshot_id = excluded.snapshot_id,
         observed_at = excluded.observed_at, current_state = excluded.current_state,
         reason = excluded.reason, evidence = excluded.evidence
     `) : null
+    const selectWorker = isWorker ? this.db.prepare(`
+      SELECT evidence FROM worker_samples WHERE source_id = ? AND entity_id = ?
+    `) : null
     let count = 0
+    const publish = (entry, difference, context) => {
+      const pullRequestChange = difference.change.field === 'pull_requests'
+      const taskObserved = difference.event_type === 'task.observed'
+      const eventObservedAt = pullRequestChange ? observation.pullRequests.observed_at : observed_at
+      const { evidence } = entry
+      const previousEvidence = context.evidence
+      const envelope = {
+        schema: 'event-publisher.event.v1',
+        event_id: `event:${randomUUID()}`,
+        ...difference,
+        source: { provider: 'firstmate', source_id: source.source_id, home_id: source.home_id, mode: source.mode },
+        subject: { type: source.type, id: entry.id },
+        observed_at: eventObservedAt,
+        occurred_at: null,
+        observation: {
+          method: 'snapshot-diff',
+          read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
+          coverage: source.coverage,
+          batch_id: pullRequestChange || isWorker ? batchIds.fleet : batchIds.task,
+          previous_snapshot: context.snapshot ?? previousSnapshot,
+          current_snapshot: snapshotId,
+          observed_between: { after: context.startedAt ?? null, by: eventObservedAt },
+        },
+        related: this.relationships(source, entry, started_at),
+        evidence: {
+          source_reference: { interface: pullRequestChange ? fleetCommand : source.command, task_id: evidence.task_id,
+            ...(evidence.spawn_gen ? { spawn_gen: evidence.spawn_gen } : {}) },
+          state_source: pullRequestChange ? prLinkSource : evidence.state_source,
+          ...(previousEvidence ? { previous_state_source: pullRequestChange ? prLinkSource : previousEvidence.state_source } : {}),
+          ...(!taskObserved && evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
+          ...(!taskObserved && evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
+          ...(isWorker ? { historical_last_event: evidence.historical_last_event } : {}),
+          confidence_basis: context.basis,
+        },
+      }
+      append.run(envelope.event_id, source.source_id, source.type, entry.id, JSON.stringify(envelope))
+      count++
+    }
     const entries = [...observation.entries].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     for (const entry of entries) {
       const prior = select.get(source.source_id, entry.id)
       const before = prior?.fields ? JSON.parse(prior.fields) : null
       const fields = entry.fields ? JSON.stringify({ ...before, ...entry.fields }) : null
       const previousEvidence = prior?.evidence ? JSON.parse(prior.evidence) : null
-      const rebaselinePullRequests = source.type === 'task' && before && Object.hasOwn(entry.fields, 'pull_requests') &&
+      const rebaselinePullRequests = !isWorker && before && Object.hasOwn(entry.fields, 'pull_requests') &&
         (previous.health !== 'ok' || previous.last_attempt_at !== previous.last_success_at ||
           prior.last_seen_snapshot !== previousSnapshot || !Object.hasOwn(before, 'pull_requests') ||
           previousEvidence?.pr_link_source !== prLinkSource)
@@ -319,58 +366,59 @@ export class Journal {
         ...entry.evidence,
         ...(rebaselinePullRequests ? { pr_link_coverage: 'rebaselined' } : {}),
       }
-      // Unavailable worker states count toward inventory coverage. Only a
-      // verified per-incarnation observation may advance its state snapshot.
-      saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
-        entry.sample.current_state, entry.sample.reason, JSON.stringify(evidence))
-      if (previousSnapshot && fields && fields !== prior?.fields) {
-        const related = this.relationships(source, entry, started_at)
-        for (const difference of eventChanges(source.type, before, entry.fields)) {
-          const pullRequestChange = difference.change.field === 'pull_requests'
-          if (pullRequestChange && rebaselinePullRequests) continue
-          const taskObserved = difference.event_type === 'task.observed'
-          const eventObservedAt = pullRequestChange ? observation.pullRequests.observed_at : observed_at
-          const envelope = {
-            schema: 'event-publisher.event.v1',
-            event_id: `event:${randomUUID()}`,
-            ...difference,
-            source: { provider: 'firstmate', source_id: source.source_id, home_id: source.home_id, mode: source.mode },
-            subject: { type: source.type, id: entry.id },
-            observed_at: eventObservedAt,
-            occurred_at: null,
-            observation: {
-              method: 'snapshot-diff',
-              read_method: pullRequestChange ? 'fleet-snapshot' : observation.method ?? 'fleet-snapshot',
-              coverage: source.coverage,
-              batch_id: pullRequestChange || source.type === 'worker' ? batchIds.fleet : batchIds.task,
-              previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
-              current_snapshot: snapshotId,
-              observed_between: { after: prior?.started_at ?? null, by: eventObservedAt },
-            },
-            related,
-            evidence: {
-              source_reference: { interface: pullRequestChange ? fleetCommand : source.command, task_id: entry.evidence.task_id,
-                ...(entry.evidence.spawn_gen ? { spawn_gen: entry.evidence.spawn_gen } : {}) },
-              state_source: pullRequestChange ? prLinkSource : entry.evidence.state_source,
-              ...(previousEvidence ? { previous_state_source: pullRequestChange ? prLinkSource : previousEvidence.state_source } : {}),
-              ...(!taskObserved && evidence.pr_link_coverage ? { pr_link_coverage: evidence.pr_link_coverage } : {}),
-              ...(!taskObserved && evidence.pr_link_source ? { pr_link_source: evidence.pr_link_source } : {}),
-              ...(source.type === 'worker' ? { historical_last_event: entry.evidence.historical_last_event } : {}),
-              confidence_basis: before ? 'field differs across verified observations'
-                : prior ? 'first verified state for a previously seen incarnation'
-                : 'first seen after the initial inventory',
-            },
+      if (previousSnapshot) {
+        const context = {
+          snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot,
+          startedAt: prior?.started_at,
+          evidence: previousEvidence,
+          basis: before ? 'field differs across verified observations' : 'first seen after the initial inventory',
+        }
+        if (isWorker && !prior) {
+          const { current_state, reason } = entry.sample
+          context.startedAt = previousWorkerStartedAt
+          publish(entry, {
+            event_type: 'worker.observed',
+            change: { after: { current_state, ...(reason ? { reason } : {}) } },
+          }, context)
+        } else if (fields && fields !== prior?.fields) {
+          let previousFields = before
+          if (isWorker && !before) {
+            previousFields = { current_state: 'unknown' }
+            const sample = selectWorker.get(source.source_id, entry.id)
+            context.evidence = sample ? JSON.parse(sample.evidence) : null
+            context.startedAt = context.evidence?.started_at ??
+              (prior.last_seen_snapshot === previousSnapshot ? previousWorkerStartedAt : null)
+            context.basis = 'first verified state after an unknown sample'
           }
-          append.run(envelope.event_id, source.source_id, source.type, entry.id, JSON.stringify(envelope))
-          count++
+          for (const difference of eventChanges(source.type, previousFields, entry.fields)) {
+            if (difference.change.field === 'pull_requests' && rebaselinePullRequests) continue
+            publish({ ...entry, evidence }, difference, context)
+          }
         }
       }
+      // Keep membership samples even when the state cannot be verified.
+      saveWorker?.run(source.source_id, entry.id, snapshotId, observed_at,
+        entry.sample.current_state, entry.sample.reason, JSON.stringify({ ...evidence, started_at }))
       save.run(source.source_id, entry.id, snapshotId, fields ? snapshotId : null,
         fields ? started_at : null, fields ? observed_at : null, fields,
         fields ? JSON.stringify(evidence) : null)
     }
-    // Missing entities are retained. Only an observed field value can change
-    // their last known state and inventory absence never asserts deletion.
+    if (isWorker && previousSnapshot) {
+      // Current members now reference the new snapshot. Rows still in the previous
+      // snapshot were absent from this complete inventory; retain their last state.
+      const departed = this.db.prepare(`
+        SELECT entity_id, evidence FROM worker_samples
+        WHERE source_id = ? AND snapshot_id = ? ORDER BY entity_id
+      `).all(source.source_id, previousSnapshot)
+      for (const sample of departed) {
+        const evidence = JSON.parse(sample.evidence)
+        publish({ id: sample.entity_id, evidence: { ...evidence, state_source: null, historical_last_event: null } }, {
+          event_type: 'worker.inventory.left',
+          change: { field: 'inventory_membership', before: 'present', after: 'absent' },
+        }, { startedAt: evidence.started_at ?? previousWorkerStartedAt,
+          evidence, basis: 'absent from the next accepted worker inventory' })
+      }
+    }
     return count
   }
 

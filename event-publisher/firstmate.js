@@ -249,7 +249,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
       },
     })
   }
-  return { entries, counts, generated_at: new Date(generated).toISOString() }
+  return { entries, counts, inventory_complete: true, generated_at: new Date(generated).toISOString() }
 }
 
 async function backlogFingerprint(dataPath) {
