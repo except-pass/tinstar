@@ -31,6 +31,10 @@ Jobs expire after 15 minutes without publication. Published packets have no
 age limit. Editing decision properties, card text, or substantive discussion
 invalidates the packet.
 
+To retract an open card-native request, use the [workflow withdrawal or
+supersession operation](workflow.md). Both invalidate the old prepared packet.
+The next packet uses the remaining open request questions when available.
+
 ### Answer attribution
 
 The card comment and any corresponding Firstmate update use the Desk caller

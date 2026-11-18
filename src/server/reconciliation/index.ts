@@ -4,7 +4,7 @@ import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { DecisionPreparation, readClavisValue } from './decisionPrep'
-import { cardSourceUrl } from '../../shared/workIdentity'
+import { cardSourceUrl, isJiraCard } from '../../shared/workIdentity'
 import { actionableDecisionCard, decisionCardSource } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
@@ -365,6 +365,11 @@ export class ReconciliationSources {
   async updateWork(input: UpdateWorkInput, actor: string) {
     const result = await this.workflow.update(input, actor)
     if (result.outcome !== 'not-saved') this.context.invalidate(input.card_id)
+    if (result.outcome === 'saved' && (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') && !isJiraCard(input.card_id)) {
+      // Retire the old revision immediately. Claims and preparation also
+      // validate the source revision if this refresh is temporarily unavailable.
+      await this.readDecisionCard(input.card_id, false).catch(() => {})
+    }
     const released = input.kind === 'not_for_me' && result.outcome === 'saved' ? await this.leases.releaseCurrent(input.card_id, `Not for me: ${input.reason}`) : undefined
     return { ...workReadback(result), ...(released ? { lease_release: released } : {}), lease: this.leases.status(input.card_id) }
   }

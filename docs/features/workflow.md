@@ -201,9 +201,22 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `checkpoint` | `checkpoint: {assessment,evidence,next_action,next_check_in,confirmation,request_id?,blocker?}`. Confirmation is `provisional` or `owner-confirmed`; it is caller-declared and recorded in history, never inferred from actor/owner names. |
 | `wait` | See [Waiting For writes](#waiting-for-writes). |
 | `request_decision` | Caller-chosen `request_id`, `question`, `requested_from`, optional action tag (default Decision). Records the request and merges its action tag. For source binding and published choices, see [First Mate decision reconciliation](#first-mate-decision-reconciliation). |
+| `withdraw_decision` | Exact open card-native `request_id` and a required `reason`. |
+| `supersede_decision` | Exact open card-native `request_id`, a required `reason`, and `replacement: {request_id,question,requested_from,options?}`. The replacement uses a fresh ID on the card and inherits the original action tag. |
 | `answer_decision` | That `request_id`, `answer`, declared `next: {owner,status,worker?,wait?,disposition?,evidence?}`, optional exact `resolve_wait`. Returning to In Progress requires the same current tracked worker evidence as start; Waiting For requires the full wait; Done/Archived requires disposition/evidence. Resolving one wait requeues only when no other wait remains. |
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
+
+Withdrawal removes the named request from active views and invalidates the
+prepared Desk packet. Supersession records the withdrawal and replacement in
+one history comment, with the authenticated caller, timestamp, and reason.
+Other requests, waits, worker links, owner, and status stay in place. A plain
+withdrawal removes an action tag introduced for the request once no other open
+request shares it. A separate Will action, owner assignment, or wait can still
+bring the card to the Desk. An absent, answered, or already withdrawn request
+cannot be withdrawn or superseded. Close a First Mate-bound request at its
+authoritative source. Retry an uncertain save with the same operation ID and
+input.
 
 <a id="waiting-for-writes"></a>
 

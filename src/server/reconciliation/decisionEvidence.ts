@@ -3,7 +3,8 @@ import type { WorkCard } from './workReader'
 import type { CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { actionableWillCard } from './claimPolicy'
+import { actionableWillCard, currentWillRequests } from './claimPolicy'
+import { withdrawnDecisionIds } from '../../shared/workflowRequests'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
@@ -37,10 +38,13 @@ export const actionableDecisionCard = (card: WorkCard) => !card.source?.syntheti
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
+  const remainingQuestions = withdrawnDecisionIds(blocks).size
+    ? currentWillRequests(blocks, value(card, 'Will action')).filter(request => !request.answered).map(request => request.question).filter(Boolean).join('\n')
+    : ''
   return {
     card,
     title,
-    question: String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
+    question: remainingQuestions || String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),

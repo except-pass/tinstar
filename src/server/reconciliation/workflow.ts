@@ -11,7 +11,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequests, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -697,9 +697,39 @@ export class WorkflowOperations {
       set('Will action', [])
       set('Next check-in', new Date(checkInCeiling(Date.now())).toISOString())
       note += `\nNot for me: ${input.reason}\nReturned to: ${mate.id}\nPrevious Will ask: ${JSON.stringify(originalWaitText)}`
+    } else if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+      const history = [...notes, ...await this.content.sections(card.id, false, true)]
+      const open = decisionRequests(history).filter(request => !request.answered)
+      const matching = open.filter(request => request.id === input.request_id)
+      if (matching.length !== 1) throw new WorkflowError('decision-not-open', 'Expected one open request with this ID on this card. It may be absent, answered, withdrawn, or ambiguous.')
+      const request = matching[0]!
+      // A local withdrawal cannot close the authoritative First Mate request.
+      if (request.hasSourceBinding) throw new WorkflowError('decision-source-bound', 'Withdraw this First Mate request at its authoritative source.')
+      const tags = card.properties['Will action']?.value
+      note += `\nReason: ${input.reason}`
+      if (input.kind === 'supersede_decision') {
+        const { request_id, question, requested_from, options } = input.replacement
+        if (decisionRecordRows(history, 'Tin Star request: ').some(row => row.id === request_id)) {
+          throw new WorkflowError('decision-conflict', 'The replacement request ID already exists on this card. Supply a new ID.')
+        }
+        if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select to publish the replacement.')
+        if (!tags.includes(request.action)) set('Will action', [...tags, request.action])
+        note += `\n${decisionMarker(request_id)}\nRequested from: ${requested_from}\nQuestion: ${question}\n${workflowMarkers.withdrawal} ${JSON.stringify({
+          id: input.request_id,
+          replacement: { id: request_id, action: request.action, preserve_action: request.preserveAction, requested_from, question, options },
+        })}`
+      } else {
+        const shared = open.some(row => row.id !== input.request_id && row.action === request.action)
+        if (!request.preserveAction && !shared && Array.isArray(tags) && tags.includes(request.action)) {
+          set('Will action', tags.filter(action => action !== request.action))
+        }
+        note += `\n${workflowMarkers.withdrawal} ${JSON.stringify({ id: input.request_id })}`
+      }
     } else if (input.kind === 'request_decision' || input.kind === 'answer_decision') {
       const publications = await this.proposals?.read(card.id, notes)
-      const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications)).filter(row => typeof row.id === 'string' && typeof row.action === 'string')
+      const withdrawn = withdrawnDecisionIds(notes)
+      const requests = (input.kind === 'answer_decision' ? decisionHistory(notes, publications) : decisionProposals(notes, publications))
+        .filter(row => typeof row.id === 'string' && typeof row.action === 'string' && !withdrawn.has(row.id))
       const answered = new Set(decisionRecordRows(notes, 'Tin Star answer: '))
       const tags = card.properties['Will action']?.value
       if (!Array.isArray(tags)) throw new WorkflowError('unsupported-property', 'Will action must be a readable multi-select')
@@ -810,6 +840,9 @@ export class WorkflowOperations {
       const before = card
       stage = 'read card comments'
       const notes = await this.content.notes(card.id)
+      if (input.kind === 'answer_decision' && withdrawnDecisionIds(notes).has(input.request_id)) {
+        throw new WorkflowError('decision-not-open', 'This request was withdrawn. No answer was saved.')
+      }
       stage = 'read decision publications'
       const publications = input.kind === 'answer_decision' ? await this.proposals?.read(card.id, notes) : undefined
       const intents = input.kind === 'answer_decision' ? decisionRecordRows(notes, 'Tin Star decision intent: ').flatMap(row => {
@@ -874,6 +907,10 @@ export class WorkflowOperations {
         if (cardVersion(card) !== repair.version) {
           this.noteRepairs.delete(key)
           return { ...result('partially-saved', 'card-changed', 'Previously listed steps saved; the card changed since that partial write. Nothing else submitted. Review current state and re-issue with a new operation_id.'), requires_new_operation_id: true }
+        }
+        if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+          // A concurrent answer or supersession can change the history without changing properties.
+          await this.updatePlan(card, input, actor, notes)
         }
         contentBefore = card
         notePending = repair.note

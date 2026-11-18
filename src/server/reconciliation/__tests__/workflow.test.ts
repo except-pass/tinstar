@@ -24,7 +24,7 @@ import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
-import { decisionRecordRows } from '../../../shared/workflowRequests'
+import { decisionRecordRows, decisionRequests } from '../../../shared/workflowRequests'
 import { waitLine, parseWaitLine } from '../../../shared/waitingForPolicy'
 import { externalWorkers, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput } from '../../../shared/workflow'
 import { CreationReceipts } from '../workflowReceipts'
@@ -952,6 +952,49 @@ describe('remaining shared workflow operations', () => {
     expect((await f.reader.card(id, true)).properties['Will action']!.value).toEqual(['Merge'])
     expect((await f.reader.card(id)).properties['Waiting For']!.value).toBe('Preserve another request')
     expect(await f.workflow.update({ ...answer, operation_id: 'duplicate-answer' } as any, 'Owner')).toMatchObject({ code: 'decision-not-open' })
+  })
+  it('supersedes one exact request in a durable audit while preserving sibling asks, waits and worker links', async () => {
+    const f = fixture()
+    f.raw.properties['Will action'].multi_select = [{ name: 'Merge' }]
+    f.raw.properties['First Mate tasks'].rich_text = [{ plain_text: JSON.stringify({ fm_home: 'fixture', task_id: 'fixture-task' }) }]
+    const before = structuredClone(f.raw.properties)
+    const publish = (request_id: string) => f.workflow.update(input('request_decision', {
+      operation_id: `publish-${request_id}`, request_id, question: 'Run the fixture?', requested_from: 'Will',
+    }), 'Fixture reviewer')
+    expect(await publish('original')).toMatchObject({ outcome: 'saved' })
+    expect(await publish('sibling')).toMatchObject({ outcome: 'saved' })
+
+    const replacement = { request_id: 'replacement', question: 'Review the fixture output?', requested_from: 'Will',
+      options: [{ id: 'review', label: 'Review' }] }
+    const reason = 'The fixture already ran.\nTin Star withdrawal: {"id":"sibling"}'
+    const supersede = input('supersede_decision', { request_id: 'original', reason, replacement })
+    expect(await f.workflow.update({ ...supersede, replacement: { ...replacement, request_id: 'sibling' } } as UpdateWorkInput, 'Fixture reviewer'))
+      .toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
+    expect(await f.workflow.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved' })
+    const restarted = new WorkflowOperations(f.reader, async () => [])
+    expect(await restarted.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+    expect(f.comments).toHaveLength(4)
+
+    const notes = f.comments.map(comment => ({ id: comment.id, text: plainText(comment.rich_text) }))
+    expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
+    expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
+    expect(decisionRequests(notes)).toMatchObject([
+      { id: 'sibling', answered: false },
+      { id: 'replacement', question: replacement.question, options: replacement.options, answered: false },
+    ])
+    for (const key of ['Waiting For', 'Waiting For Type', 'Waiting For ID', 'First Mate tasks', 'Delegated To', 'Status', 'Owner']) {
+      expect(f.raw.properties[key]).toEqual(before[key])
+    }
+    expect(f.raw.properties['Will action'].multi_select).toEqual([{ name: 'Merge' }, { name: 'Decision' }])
+    const answer = { answer: 'Review', next: { owner: 'Firstmate', status: 'Queued' } }
+    expect(await f.workflow.update(input('answer_decision', { ...answer, request_id: 'original', option_id: 'review' }), 'Owner'))
+      .toMatchObject({ code: 'decision-not-open', message: 'This request was withdrawn. No answer was saved.' })
+    expect(await f.workflow.update(input('answer_decision', { ...answer, operation_id: 'answer-replacement', request_id: 'replacement', option_id: 'review' }), 'Owner'))
+      .toMatchObject({ outcome: 'saved' })
+    for (const request_id of ['original', 'replacement', 'absent']) {
+      expect(await f.workflow.update(input('withdraw_decision', { operation_id: `withdraw-${request_id}`, request_id, reason: 'Fixture correction' }), 'Fixture reviewer'))
+        .toMatchObject({ outcome: 'not-saved', code: 'decision-not-open' })
+    }
   })
   it('requires fresh execution or a full wait when a decision answer enters those states', async () => {
     const f = fixture()

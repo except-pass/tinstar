@@ -1,11 +1,30 @@
 import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
 import { decisionOptionsSchema } from './workflow'
+import { workflowMarkers } from './workflowMarkers'
+
+const withdrawalPrefix = `${workflowMarkers.withdrawal} `
+const withdrawalOperation = (lines: string[]) => lines[2] === 'Operation: withdraw_decision' || lines[2] === 'Operation: supersede_decision'
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
 export interface RequestNote { id: string; text: string; createdAt?: string | null; created_time?: string }
 export const decisionRecordRows = (notes: { text: string }[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
   const lines = note.text.split('\n')
+  if (withdrawalOperation(lines)) {
+    if (prefix !== withdrawalPrefix && prefix !== `${workflowMarkers.request} `) return []
+    const footer = note.text.trimEnd().split('\n'), marker = footer.at(-2)
+    const superseded = lines[2] === 'Operation: supersede_decision'
+    // Only the fixed footer is a record. The reason and question may quote markers.
+    if (!receiptIdentity(footer.at(-1)!) || !marker?.startsWith(withdrawalPrefix)) return []
+    try {
+      const { id, replacement } = JSON.parse(marker.slice(withdrawalPrefix.length))
+      if (typeof id !== 'string' || !id || superseded && (typeof replacement?.id !== 'string' ||
+        !replacement.id || replacement.id === id || typeof replacement.action !== 'string')) return []
+      if (prefix === withdrawalPrefix) return [id]
+      return superseded ? [replacement] : []
+    } catch { return [] }
+  }
+  if (prefix === withdrawalPrefix) return []
   const recordStart = lines.findIndex(line => line.startsWith('Tin Star answer: ') || line.startsWith('Tin Star request: '))
   const operation = lines.slice(0, recordStart < 0 ? lines.length : recordStart).find(line => line.startsWith('Operation: '))
   if (prefix === 'Tin Star request: ' && operation === 'Operation: answer_decision') {
@@ -24,13 +43,17 @@ export const decisionRecordRows = (notes: { text: string }[], prefix: string): R
   const records = lines.filter(line => line.startsWith(prefix))
   return (kind === 'answer_decision' && prefix === 'Tin Star answer: ' ? records.slice(0, 1) : records.slice(-1)).flatMap(line => { try { return [JSON.parse(line.slice(prefix.length))] } catch { return [] } })
 })
-export function workflowReceipt(note: { text: string }): string | null {
-  const lines = note.text.trimEnd().split('\n'), terminal = lines.at(-1)!
-  if (!terminal.startsWith('Tin Star operation: ')) return null
+function receiptIdentity(terminal: string): boolean {
+  if (!terminal.startsWith('Tin Star operation: ')) return false
   try {
     const identity: unknown = JSON.parse(terminal.slice('Tin Star operation: '.length))
-    if (!Array.isArray(identity) || identity.length !== 2 || !identity.every(value => typeof value === 'string' && value.length > 0)) return null
-  } catch { return null }
+    return Array.isArray(identity) && identity.length === 2 && identity.every(value => typeof value === 'string' && value.length > 0)
+  } catch { return false }
+}
+export function workflowReceipt(note: { text: string }): string | null {
+  const lines = note.text.trimEnd().split('\n'), terminal = lines.at(-1)!
+  if (!receiptIdentity(terminal)) return null
+  if (withdrawalOperation(lines)) return decisionRecordRows([note], withdrawalPrefix).length ? terminal : null
   const answer = decisionRecordRows([note], 'Tin Star answer: ')[0]
   if (typeof answer === 'string') {
     const data = decisionRecordRows([note], 'Tin Star answer data: ')[0]
@@ -43,12 +66,15 @@ export function workflowReceipt(note: { text: string }): string | null {
 export function workflowNoteHasMarker(note: { text: string }, marker: string): boolean {
   return marker.startsWith('Tin Star operation: ') ? workflowReceipt(note) === marker : note.text.trimEnd().split('\n').at(-1) === marker
 }
+export const withdrawnDecisionIds = (notes: { text: string }[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
+
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()
   for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)
+  const withdrawn = withdrawnDecisionIds(notes)
   return notes.flatMap(note => decisionRecordRows([note], 'Tin Star request: ').flatMap(row => {
     try {
-      if (typeof row.id !== 'string' || typeof row.action !== 'string') return []
+      if (typeof row.id !== 'string' || typeof row.action !== 'string' || withdrawn.has(row.id)) return []
       const options = decisionOptionsSchema.safeParse(row.options)
       const proposal = decisionProposalSchema.safeParse(row.proposal), sourceRequest = firstMateRequestSchema.safeParse(row.source_request)
       const lines = note.text.split('\n')
@@ -57,8 +83,8 @@ export function decisionRequests(notes: RequestNote[]) {
       return [{ id: row.id as string, action: row.action as string, preserveAction: row.preserve_action === true, options: options.success ? options.data : undefined,
         ...(row.source_request != null || row.source_question != null || row.source_spawn_gen != null ? { hasSourceBinding: true } : {}),
         ...(proposal.success ? { proposal: proposal.data } : {}), ...(sourceRequest.success ? { sourceRequest: sourceRequest.data, sourceQuestion: row.source_question as string, sourceSpawnGen: row.source_spawn_gen as string | null } : {}),
-        requestedFrom: lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
-        question: lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
+        requestedFrom: typeof row.requested_from === 'string' ? row.requested_from : lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
+        question: typeof row.question === 'string' ? row.question : lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) }]
     } catch { return [] }
   }))

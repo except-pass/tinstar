@@ -31,6 +31,7 @@ function page(n: number, { owner = 'Firstmate', status = 'In Progress', tag = ''
     Owner: select(owner), 'Will action': tags(tag), 'Waiting For': rich(wait),
     'Waiting For ID': rich(waitingId), 'Waiting For Type': select(waitingId ? 'Actor' : ''),
     'Next check-in': rich('unchanged'),
+    'Last touched by': rich(''),
   }
   return { object: 'page', id: id(n), parent: { data_source_id: board },
     last_edited_time: '2025-01-01T00:00:00Z', properties, comments: [] as string[], body: ['Review this isolated fixture.'] }
@@ -148,6 +149,37 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
 }
 
 describe('prepared-card loop', () => {
+  it.each(['withdraw_decision', 'supersede_decision'] as const)('%s retires the old prepared packet', async kind => {
+    const card = page(1)
+    const { sources, jobs, tool, web } = await setup([card])
+    const request_id = 'fixture-original'
+    const replacement = { request_id: 'fixture-replacement', requested_from: 'Will', question: 'Review the corrected fixture?' }
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
+      request_id, requested_from: 'Will', question: 'Review the first fixture?' })).toMatchObject({ outcome: 'saved' })
+    await sources.preparation.replenish()
+    const before = await web('snapshot')
+    expect(before.data.ready).toHaveLength(1)
+    const oldPacket = before.data.ready[0].id
+
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction',
+      ...(kind === 'supersede_decision' ? { replacement } : {}) })).toMatchObject({ outcome: 'saved' })
+    expect((await web('snapshot')).data.ready).toEqual([])
+    expect(sources.leases.readStorage(db => sources.decisionPackets.currentInStorage(db, card.id))).toBeNull()
+
+    await sources.preparation.replenish()
+    const after = await web('snapshot')
+    if (kind === 'withdraw_decision') {
+      expect(jobs).toHaveLength(1)
+      expect(after.data.ready).toEqual([])
+      expect(after.data.pending).toEqual([])
+    } else {
+      expect(jobs).toHaveLength(2)
+      expect(jobs[1]!.source_question).toBe(replacement.question)
+      expect(after.data.ready).toHaveLength(1)
+      expect(after.data.ready[0].id).not.toBe(oldPacket)
+    }
+  })
+
   it('pushes batches of ten and claims, reads and answers ten throwaway cards through ChatGPT', async () => {
     const cards = Array.from({ length: 22 }, (_, n) => page(n + 1,
       n % 3 === 0 ? { tag: 'Decision' } : n % 3 === 1 ? { owner: 'Will' } : { status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' }))
