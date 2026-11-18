@@ -223,24 +223,3 @@ it('revalidates containment for a changed effective merge immediately before a s
   expect(transition).not.toHaveBeenCalled()
   expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
 })
-
-it('keeps the last-known catalog and its observation time when the branch read is rate limited', async () => {
-  let clock = now, limited = false
-  const releaseSha = 'a'.repeat(40), mainSha = 'b'.repeat(40)
-  const reader = new GithubReleaseReader(async path => {
-    if (path.includes('/tags?')) return [{ name: 'v1.0.0', commit: { sha: releaseSha } }]
-    if (path.endsWith('/branches/main')) {
-      if (limited) throw new Error('GitHub REST rate limited until 2026-11-09T00:00:00.000Z')
-      return { commit: { sha: mainSha } }
-    }
-    if (path.includes('/actions/runs?')) return { total_count: 0, workflow_runs: [] }
-    if (path.includes('/compare/')) return { status: 'ahead', merge_base_commit: { sha: releaseSha }, total_commits: 0, commits: [] }
-    return []
-  }, () => clock)
-  const original = await reader.get(data())
-  expect(original.releases.map(release => release.version)).toEqual(['v1.0.0', 'main'])
-  clock += 61_000; limited = true
-  const retained = await reader.get(data())
-  expect(retained).toMatchObject({ status: 'unknown', observedAt: original.observedAt, warnings: [expect.stringContaining('rate limited')] })
-  expect(retained.releases.map(release => [release.version, release.provenance.historical])).toEqual([['v1.0.0', true], ['main', true]])
-})

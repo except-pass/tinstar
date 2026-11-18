@@ -1,5 +1,5 @@
 const hour = 3_600_000
-const rateLimitMessage = 'GitHub REST rate limited until '
+const rateLimitMessage = 'GitHub REST rate limited'
 const cacheBudget = 16 * 1024 * 1024
 
 export interface GithubRestResponse {
@@ -9,7 +9,7 @@ export interface GithubRestResponse {
 }
 
 export function isGithubRateLimit(error: unknown): error is Error {
-  return error instanceof Error && error.message.startsWith(rateLimitMessage)
+  return error instanceof Error && error.message === rateLimitMessage
 }
 
 function holdUntil(response: GithubRestResponse, now: number) {
@@ -36,7 +36,7 @@ export class GithubRestBudget {
   constructor(private source: string, private now = Date.now) {}
 
   assertAvailable() {
-    if (this.blockedUntil > this.now()) throw new Error(rateLimitMessage + new Date(this.blockedUntil).toISOString())
+    if (this.blockedUntil > this.now()) throw new Error(rateLimitMessage)
   }
 
   async send(send: () => Promise<GithubRestResponse>) {
@@ -49,8 +49,14 @@ export class GithubRestBudget {
         this.hourly = { requests: 0, notModified: 0, holds: 0 }
       }, hour).unref()
     }
-    const response = await send()
-    this.hourly.requests++
+    const window = this.hourly
+    window.requests++
+    let response: GithubRestResponse
+    try { response = await send() }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') window.requests--
+      throw error
+    }
     if (response.status === 304) this.hourly.notModified++
     const now = this.now()
     const until = holdUntil(response, now)

@@ -29,23 +29,26 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
 
 type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string }
 type CliMethod = 'GET' | 'POST'
+type CliLimits = typeof options
 
-async function includedRequest(method: CliMethod, path: string, projection: string, flags: string[]) {
+async function includedRequest(method: CliMethod, path: string, projection: string, flags: string[], limits: CliLimits) {
   const args = ['api', path, '--method', method, '--include', '--jq', `{payload:(${projection})}`, ...flags]
   let stdout: string
-  try { ({ stdout } = await exec('gh', args, options)) }
+  let failure: CliError | undefined
+  try { ({ stdout } = await exec('gh', args, limits)) }
   catch (error) {
     // gh exits nonzero for 304, 403 and 429, but keeps HTTP metadata on stdout.
-    const failure = error as CliError
+    failure = error as CliError
     if (!failure.stdout) throw error
     stdout = failure.stdout
   }
   const response = includedResponse(stdout)
+  if (failure && (!response || response.status < 300)) throw failure
   if (!response) throw new Error('GitHub response metadata unavailable')
   return response
 }
 
-async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions = options): Promise<GithubRestResponse> {
+async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits): Promise<GithubRestResponse> {
   try {
     const { stdout } = await exec('gh-axi', args, commandOptions)
     return { status: 200, data: decode(stdout) }
@@ -64,9 +67,9 @@ async function legacyRequest(args: string[], decode: (stdout: string) => unknown
   }
 }
 
-async function cliRequest(method: CliMethod, path: string, projection: string, flags: string[]) {
+async function cliRequest(method: CliMethod, path: string, projection: string, flags: string[], limits: CliLimits) {
   try {
-    const response = await budget.send(() => includedRequest(method, path, projection, flags))
+    const response = await budget.send(() => includedRequest(method, path, projection, flags, limits))
     if (response.status >= 200 && response.status < 300) {
       if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new Error('Unsupported GitHub response')
       response.data = response.data.payload
@@ -83,17 +86,17 @@ async function cliRequest(method: CliMethod, path: string, projection: string, f
       const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
       if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new Error('Unsupported GitHub response')
       return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
-    }))
+    }, limits))
   }
 }
 
-export function githubCliJson(path: string, projection = '.'): Promise<unknown> {
-  return budget.get(JSON.stringify([path, projection]), etag =>
-    cliRequest('GET', path, projection, etag ? ['--header', `If-None-Match:${etag}`] : []))
+export function githubCliJson(path: string, projection = '.', limits: CliLimits = options): Promise<unknown> {
+  return budget.get(JSON.stringify([path, projection, limits.timeout, limits.maxBuffer]), etag =>
+    cliRequest('GET', path, projection, etag ? ['--header', `If-None-Match:${etag}`] : [], limits))
 }
 
-export async function githubCliPost(path: string, input: string): Promise<unknown> {
-  const response = await cliRequest('POST', path, '.', ['--input', input])
+export async function githubCliPost(path: string, input: string, limits: CliLimits): Promise<unknown> {
+  const response = await cliRequest('POST', path, '.', ['--input', input], limits)
   if (response.status < 200 || response.status >= 300) throw new Error(`GitHub request failed (HTTP ${response.status})`)
   return response.data
 }

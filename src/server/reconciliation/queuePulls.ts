@@ -43,7 +43,7 @@ export async function readGithubScalars(path: string, projection: string): Promi
     }
     throw new Error('Scalar Reader operation outside PR evidence scope')
   }
-  return await githubCliJson(path, projection) as Record<string, unknown>
+  return await githubCliJson(path, projection, { timeout: 5_000, maxBuffer: 64 * 1024 }) as Record<string, unknown>
 }
 
 async function readPull(url: string, read = readGithubScalars): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {

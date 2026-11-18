@@ -282,8 +282,8 @@ if (args[3] === 'POST') {
     expect(await acceptanceGithub('POST', `${base}/workflows/existing-smoke.yml/dispatches`, { ref: 'main', return_run_details: true })).toMatchObject({ workflow_run_id: 99 })
     expect(await acceptanceGithub('GET', `${base}/runs/99`)).toMatchObject({ id: 99 })
     const { githubCliJson } = await import('../../pulls/github')
-    await expect(githubCliJson(`${base}/runs?per_page=1`)).rejects.toThrow('GitHub REST rate limited until')
-    await expect(acceptanceGithub('GET', `${base}/runs/99`)).rejects.toThrow('GitHub REST rate limited until')
+    await expect(githubCliJson(`${base}/runs?per_page=1`)).rejects.toThrow('GitHub REST rate limited')
+    await expect(acceptanceGithub('GET', `${base}/runs/99`)).rejects.toThrow('GitHub REST rate limited')
   })
   it('an audited skip is recoverable and never becomes a pass', async () => {
     const f = await setup('human')

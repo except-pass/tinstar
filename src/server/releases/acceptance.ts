@@ -43,12 +43,13 @@ export type AcceptanceGithub = (method: 'GET' | 'POST', path: string, body?: Rec
  * directly; never guess from timestamps or the most recent workflow run.
  * https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event */
 export const acceptanceGithub: AcceptanceGithub = async (method, path, body) => {
-  if (method === 'GET') return await githubCliJson(path) as Record<string, unknown>
+  const limits = { timeout: 15_000, maxBuffer: 256 * 1024 }
+  if (method === 'GET') return await githubCliJson(path, '.', limits) as Record<string, unknown>
   const temporary = await mkdtemp(join(tmpdir(), 'tinstar-check-'))
   try {
     const file = join(temporary, 'request.json')
     await writeFile(file, JSON.stringify(body ?? {}), { mode: 0o600 })
-    return await githubCliPost(path, file) as Record<string, unknown>
+    return await githubCliPost(path, file, limits) as Record<string, unknown>
   } finally { await rm(temporary, { recursive: true, force: true }) }
 }
 interface Selection { release: ReleaseObject; change: ReleaseChange; check: AcceptanceResult }
