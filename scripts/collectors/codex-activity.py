@@ -150,7 +150,7 @@ def parent_ask_stamp(metadata):
 
 _PARENT_EVENT = re.compile(r'^(blocked|needs-decision|resolved|done)\b(.*)$')
 _PARENT_HEADER_FIELDS = re.compile(r'\[(key|corr|at)=([^\]]+)\]')
-_PARENT_CORR = re.compile(r'(?<!\w)corr=([0-9A-Fa-f]{16})(?!\w)')
+_PARENT_NOTE_CORR = re.compile(r'^\s*corr=([0-9A-Fa-f]{16})(?!\w)')
 
 
 def parent_event(line):
@@ -166,7 +166,7 @@ def parent_event(line):
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']
     header_corrs = [value for field, value in fields if field == 'corr']
-    corrs = header_corrs[-1:] + _PARENT_CORR.findall(note)
+    corrs = header_corrs[-1:] + _PARENT_NOTE_CORR.findall(note)
     return state, metadata, keys, corrs, note.lstrip() if separator else content.strip(), bool(separator)
 
 

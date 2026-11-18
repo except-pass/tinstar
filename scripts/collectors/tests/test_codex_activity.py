@@ -184,6 +184,7 @@ class CollectorTests(unittest.TestCase):
                      'done with a different task: corr=8940e5f6dad58120\n'
                      'done corr=unused [at=1794593700]: corr=8940e5f6dad58120 unrelated\n'
                      'done [at=200] corr=unused: corr=8940e5f6dad58120 unrelated\n'
+                     'done [at=300]: Built the release; corr=8940e5f6dad58120 is still waiting\n'
                      'done [corr=8940e5f6dad58120ff]: different token\n'
                      'done [corr=8940e5f6dad58121]: other reply\n')
         for close in ('done [at=1794593720]: corr=8940e5f6dad58120 Card closed\n',
@@ -369,6 +370,7 @@ class CollectorTests(unittest.TestCase):
             'resolved [at=250]: [key=api] unrelated note\n'
             'done corr=unused [at=260]: corr=8940e5f6dad58120 unrelated header\n'
             'done [at=270] corr=unused [corr=shared]: corr=8940e5f6dad58120 unrelated\n'
+            'done [at=275]: Built the release; corr=8940e5f6dad58120 is still waiting\n'
             ' resolved [key=api] [corr=8940e5f6dad58120] [at=280]: indented\n'
             'resolved [key=partial] [at=999]: still writing')
         (state / 'ship-worker.status').write_text('resolved [key=ship-key] [at=900]: answered\n')

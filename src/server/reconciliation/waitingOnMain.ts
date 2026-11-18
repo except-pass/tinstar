@@ -8,6 +8,7 @@ import { bridgeUpdateSchema, inboxRequestId, type BridgeUpdate } from '../../sha
 import { getConfigRoot } from '../configRoot'
 import { AskConflict, AskNotFound } from '../ask/store'
 import { ageObservation } from './observation'
+import { acceptedMateCloses } from './fleet'
 import type { SourceSnapshot } from './index'
 import type { ReconciliationConfig } from './config'
 import type { NotionApi } from './notionApi'
@@ -31,10 +32,17 @@ export function parentAskClosed(ask: Pick<ParentAsk, 'key' | 'at'> & { corr?: st
 /** A timestamped close is historical evidence even after the snapshot ages. */
 function mainResolutions(snapshot: SourceSnapshot, parentHome: string, childHome: string, now: number): ParentMateResolutions | undefined {
   const data = snapshot.fleet.find(row => row.source.home === parentHome)?.observation.data
-  const resolutions = data?.parent_resolutions
-  if (!resolutions || !(Date.parse(resolutions.observed_at) <= now + 60_000)) return undefined
+  if (!data) return undefined
   const mate = data.tasks.find(task => task.kind === 'secondmate' && task.paths.home === childHome && typeof task.id === 'string')
-  const entry = typeof mate?.id === 'string' ? resolutions.mates[mate.id] : undefined
+  if (typeof mate?.id !== 'string') return undefined
+  const accepted = data[acceptedMateCloses]
+  if (accepted) {
+    const entry = accepted.get(mate.id)
+    return entry?.home === childHome ? entry.close : undefined
+  }
+  const resolutions = data.parent_resolutions
+  if (!resolutions || !(Date.parse(resolutions.observed_at) <= now + 60_000)) return undefined
+  const entry = resolutions.mates[mate.id]
   return entry?.status === 'known' ? entry : undefined
 }
 

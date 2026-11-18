@@ -309,22 +309,23 @@ describe('Waiting on main', () => {
     expect(mateItems(unknown).map(row => row.key)).toEqual(['approve-api'])
   })
   it.each([
-    ['fleet', 'cms-3573-merge', 'needs-decision', 1794951758, 1794957772],
-    ['hilda', 'cantools-nav-dev-proof', 'blocked', 1794928507, 1794929133],
-    ['hilda', 'eforce-publication325', 'blocked', 1794593070, 1794593720],
-  ] as const)('drops the Serena %s ask %s while the parent task inventory is older than the resolution read', async (label, key, state, at, closedAt) => {
+    ['fleet', 'cms-3573-merge', 'needs-decision', 1794951758, 1794957772, null],
+    ['hilda', 'cantools-nav-dev-proof', 'blocked', 1794928507, 1794929133, null],
+    ['hilda', 'eforce-publication325', 'blocked', 1794593070, 1794593720, '8940e5f6dad58120'],
+  ] as const)('drops the Serena %s ask %s while the parent task inventory is older than the resolution read', async (label, key, state, at, closedAt, corr) => {
     const time = Date.parse('2026-11-18T03:41:20Z'), value = snapshot(time)
     const child = value.fleet[1]!
     child.source.label = label
-    child.observation.data!.parent_asks!.items = [{ key, corr: null, state, at, text: 'Awaiting a response' }]
+    child.observation.data!.parent_asks!.items = [{ key, corr, state, at, text: 'Awaiting a response' }]
     const service = new WaitingOnMain(async () => value, async () => 'disabled', await root(), async () => true, () => time)
     await service.sweep()
     const hasAsk = (body: string) => JSON.parse(body.split('\n')[1]!).waiting_on_first_mate
       .some((row: { key: string }) => row.key === key)
     expect((await service.bridgeWork()).pending.some(note => hasAsk(note.body))).toBe(true)
 
-    publishResolutions(value, [{ key, at: closedAt }])
+    publishResolutions(value, corr ? [] : [{ key, at: closedAt }])
     const main = value.fleet[0]!.observation.data!
+    if (corr) main.parent_resolutions!.mates.hulk!.corrs = [{ corr, at: closedAt }]
     main.generated = '2026-11-18T03:36:08Z'
     main.parent_resolutions!.observed_at = '2026-11-18T03:38:34.644544Z'
     expect((await service.sweep()).items.some(row => row.key === key)).toBe(false)
@@ -396,6 +397,41 @@ describe('Waiting on main', () => {
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_resolutions).toEqual(resolutions)
     await writeFile(file, JSON.stringify({ ...raw, parent_resolutions: { status: 'known' } }))
     expect((await fleetObservation({ home: directory, snapshotFile: file }).get()).data?.parent_resolutions).toBeUndefined()
+  })
+  it.each(['key', 'correlation'] as const)('keeps accepted %s closes across incomplete mate reads', async matching => {
+    const directory = await root(), file = join(directory, 'snapshot.json')
+    const time = Date.now(), generated = new Date(time).toISOString(), value = snapshot(time)
+    const [parent, child] = value.fleet
+    const home = parent!.source.home
+    const cache = fleetObservation({ home, snapshotFile: file })
+    const close = matching === 'key'
+      ? { status: 'known', keys: [{ key: 'approve-api', at: askAt + 1 }] }
+      : { status: 'known', keys: [], corrs: [{ corr: '1234567890abcdef', at: askAt + 1 }] }
+    const unknown = { status: 'unknown', keys: [] }
+    async function read(id: string, evidence: typeof close | typeof unknown, mateHome = child!.source.home) {
+      await writeFile(file, JSON.stringify({
+        schema: 'fm-fleet-snapshot.v1', fm_home: home, generated,
+        tasks: [{ id, kind: 'secondmate', paths: { home: { path: mateHome } } }],
+        backlog: { present: true, records: [] }, main_inventory: { valid: true },
+        parent_resolutions: { status: evidence.status, observed_at: generated, mates: { [id]: evidence } },
+      }))
+      parent!.observation = await cache.get(true)
+    }
+    const service = new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => true, () => time)
+    const hasAsk = async () => (await service.sweep()).items.some(row => row.key === 'approve-api')
+    await read('hulk', unknown)
+    expect(await hasAsk()).toBe(true)
+    await read('hulk', close)
+    expect(await hasAsk()).toBe(false)
+    await read('hulk', unknown)
+    expect(await hasAsk()).toBe(false)
+    expect(parent!.observation.data?.parent_resolutions?.mates.hulk).toEqual(unknown)
+    await read('hulk', { status: 'known', keys: [] })
+    expect(await hasAsk()).toBe(true)
+    await read('hulk', close)
+    expect(await hasAsk()).toBe(false)
+    await read('replacement', unknown)
+    expect(await hasAsk()).toBe(true)
   })
   it('nudges each fresh wait once, batches the sweep, and waits 2h after delivery', async () => {
     const directory = await root()

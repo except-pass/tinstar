@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ParentAsks, ParentResolutions } from '../../shared/waitingOnMain'
+import type { ParentAsks, ParentMateResolutions, ParentResolutions } from '../../shared/waitingOnMain'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readFleetSnapshot } from '../fleet/snapshot'
@@ -74,7 +74,11 @@ const parentResolutionsSchema = z.object({
     corrs: z.array(z.object({ corr: z.string().min(1), at: z.number().int().nonnegative() })).optional(),
   })),
 })
-function parentResolutionsField(value: unknown): { parent_resolutions?: ParentResolutions } {
+export const acceptedMateCloses = Symbol('acceptedMateCloses')
+function parentResolutionsField(value: unknown): {
+  parent_resolutions?: ParentResolutions
+  [acceptedMateCloses]?: ReadonlyMap<string, { home: string; close: ParentMateResolutions }>
+} {
   const parsed = parentResolutionsSchema.safeParse(value)
   return parsed.success ? { parent_resolutions: parsed.data } : {}
 }
@@ -140,5 +144,18 @@ export function fleetObservation(source: FleetSource) {
   }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source', Date.now, (previous, current) => ({ ...current,
     tasks: retainMissing(previous.tasks, current.tasks, task => JSON.stringify(task.identity)),
     backlog: previous.backlog || current.backlog ? retainMissing(previous.backlog ?? [], current.backlog ?? [], entry => String(entry.id)) : null,
-  }))
+  }), (previous, current) => {
+    const resolutions = current.parent_resolutions
+    const mates = resolutions && Date.parse(resolutions.observed_at) <= Date.now() + 60_000 ? resolutions.mates : undefined
+    const accepted = new Map<string, { home: string; close: ParentMateResolutions }>()
+    for (const task of current.tasks) {
+      const { id, kind, paths: { home } } = task
+      if (kind !== 'secondmate' || typeof id !== 'string' || !home) continue
+      const close = mates?.[id]
+      const prior = previous?.[acceptedMateCloses]?.get(id)
+      if (close?.status === 'known') accepted.set(id, { home, close })
+      else if (prior?.home === home) accepted.set(id, prior)
+    }
+    return { ...current, [acceptedMateCloses]: accepted }
+  })
 }
