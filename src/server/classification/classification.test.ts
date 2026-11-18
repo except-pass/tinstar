@@ -77,6 +77,7 @@ describe('classifier catalog and policy', () => {
     const request = ask.mock.calls[0]![0]
     expect(JSON.stringify(request)).not.toMatch(/privateabcdefghijkl|test\.invalid|Rotate service sessions.+Update panel status/)
     expect(Object.keys(request.questions.destination!.criteria)).toContain('none')
+    expect(request.state).not.toHaveProperty('catalog')
     expect(cache.get(board)).toBe(catalog)
     expect(() => cache.get({ ...board, status: 'stale' })).toThrow(/fresh, complete/)
   })
@@ -134,17 +135,30 @@ Initiative: password="another
 multiline fragment"` }, {
           id: 'start', type: 'paragraph', text: 'Then password="first half',
         }, {
-          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue',
+          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg==',
         }] }),
       }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue',
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and authorization: [credential omitted]',
     } })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment/)
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg/)
+  })
+
+  it('keeps at most five body snippets and clips each to 450 characters', async () => {
+    const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(catalog, 'Platform')))
+    const texts = ['a'.repeat(450) + ' omitted tail', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh']
+    await classifyCard(notionCard(card(4, 'Rotation', null, null)), catalog, {
+      ...source, excerpt: async () => ({ outcome: 'available', blocks: texts.map((text, index) => ({
+        id: String(index), type: 'paragraph', text,
+      })) }),
+    }, ask)
+    expect(ask.mock.calls[0]![0].state).toMatchObject({ card: {
+      brief: ['a'.repeat(450), ...texts.slice(1, 5)].join(' '),
+    } })
   })
 
   it('supports an explicitly allowed initiative-only destination', async () => {

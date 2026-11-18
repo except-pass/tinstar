@@ -1,6 +1,6 @@
 import type { CardContextRead } from '../reconciliation/cardContext'
 import type { WorkCard } from '../reconciliation/workReader'
-import { clean, eligible, fingerprint, label, property, type Catalog, type Destination } from './catalog'
+import { clean, compact, eligible, fingerprint, label, property, redactClassificationText, type Catalog, type Destination } from './catalog'
 import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, type Question } from './openRouter'
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
@@ -74,13 +74,24 @@ async function readParents(card: WorkCard, source: ClassifierSource) {
 }
 
 function openingProse(context: CardContextRead) {
+  const blockSeparator = '\u2029'
   const blocks: string[] = []
   for (const block of context.blocks) {
     // Coordination and generated logs are outside the classification brief.
     if (/^\s*(?:check[- ]?ins?|updates?|decision history|worker handoff|activity|audit log|comment log)\s*:?(?:\s*$|\n)/i.test(block.text)) break
-    blocks.push(block.text)
+    blocks.push(block.text.replaceAll(blockSeparator, '\n'))
   }
-  return clean(blocks.join('\n'), 1_100, /^\s*(?:initiative|epic)\s*:.*$/gim)
+
+  const snippets: string[] = []
+  let size = 0
+  for (const block of redactClassificationText(blocks.join(blockSeparator)).split(blockSeparator)) {
+    const snippet = compact(block.replace(/^\s*(?:initiative|epic)\s*:.*$/gim, ''), 450)
+    if (!snippet) continue
+    snippets.push(snippet)
+    size += snippet.length
+    if (size >= 1_050 || snippets.length >= 5) break
+  }
+  return snippets.join(' ').slice(0, 1_100)
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({
@@ -124,12 +135,11 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
     card: { title, description, area, brief },
     existing_classification: { initiative: clean(initiative, 100), epic: clean(epic, 100) },
     ancestors: parentFacts,
-    catalog: { initiatives: initiatives.map(candidate => clean(candidate.initiative, 100)) },
   }
   const questions: Record<string, Question> = {
     initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use the parent chain as supporting context. A child can belong to a different initiative.',
       criteria: { ...initiativeCriteria, [none]: 'No listed initiative is supported by the work.' } },
-    initiative_fit: noul('Does any initiative in the supplied catalog substantively fit this work card?',
+    initiative_fit: noul('Does any initiative in the initiative Choice criteria substantively fit this work card? Ignore the none option.',
       'At least one listed initiative clearly owns the actual work.',
       'The work needs a new initiative, is outside the listed scopes, or has too little evidence to substantiate a fit.'),
     ambiguous: noul('Is the work classification ambiguous even after considering the card and its hierarchy?',

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { redactSourceText } from '../../shared/searchDocuments'
 import type { Observation } from '../reconciliation/observation'
 import type { WorkCard, WorkData } from '../reconciliation/workReader'
 
@@ -34,9 +33,10 @@ export const active = (card: WorkCard) => eligible(card) && !['Done', 'Archived'
 
 const credentialKey = String.raw`(?:[\da-z]+[_-]+)*(?:password|passwd|token|api[_-]?key|secret)(?:[_-]+[\da-z]+)*`
 const quotedCredential = String.raw`(?:"(?:\\(?:[\s\S]|$)|[^"\\])*(?:"|$)|'(?:\\(?:[\s\S]|$)|[^'\\])*(?:'|$)|“[^”]*(?:”|$)|‘[^’]*(?:’|$))`
-const credentialValue = String.raw`(?:${quotedCredential}|[^\s"',;]+)`
+const omittedCredential = '[credential omitted]'
+const credentialValue = String.raw`(?:${quotedCredential}|\[credential omitted\]|[^\s"',;]+)`
 const credentialAssignment = new RegExp(
-  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)(?:${quotedCredential}|\S+)|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
+  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)(?:\[credential omitted\]|${quotedCredential}|\S+)|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
   'gi',
 )
 
@@ -45,17 +45,20 @@ const legacyCredentialAssignment = new RegExp(
   'g',
 )
 
-export function clean(text: unknown, limit: number, omitLines?: RegExp) {
-  const prose = typeof text === 'string' ? text : ''
-  const redacted = redactSourceText(prose
-    .replace(credentialAssignment, '[credential omitted]')
-    .replace(legacyCredentialAssignment, '[credential omitted]')
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, '[credential omitted]')
+export function redactClassificationText(text: unknown) {
+  return (typeof text === 'string' ? text : '')
+    .replace(/\b(?:bearer|basic)\s+[A-Za-z0-9._~+\/-]+=*/gi, omittedCredential)
+    .replace(/\b(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}/g, omittedCredential)
+    .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, omittedCredential)
+    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, omittedCredential)
+    .replace(credentialAssignment, omittedCredential)
+    .replace(legacyCredentialAssignment, omittedCredential)
     .replace(/```[\s\S]*?(?:```|$)/g, '')
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
-    .replace(/\b(?:xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b/g, '[credential omitted]'))
-  return (omitLines ? redacted.replace(omitLines, '') : redacted).replace(/\s+/g, ' ').trim().slice(0, limit)
 }
+
+export const compact = (text: string, limit: number) => text.replace(/\s+/g, ' ').trim().slice(0, limit)
+export const clean = (text: unknown, limit: number) => compact(redactClassificationText(text), limit)
 
 const unique = (values: string[]) => [...new Set(values)].sort()
 
