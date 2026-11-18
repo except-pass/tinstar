@@ -259,12 +259,15 @@ export class ReconciliationMcp {
     catalog.registerTool('claim_next_prepared_decision', { description: 'Atomically claim the first Ready, unleased packet in existing source queue order. ' + preparedInstructions, inputSchema: preparedClaimInput.omit({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
     catalog.registerTool('claim_prepared_decision', { description: 'Atomically claim a Ready packet for an exact canonical card; conflicting holds are reported without reallocating. ' + preparedInstructions, inputSchema: preparedClaimInput.required({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
     catalog.registerTool('release_prepared_decision', { description: 'Release with an audited reason, skip, or request research (invalidates the packet); atomically claim next excluding this card for this operation. Never answers or changes source owner/status. ' + preparedInstructions, inputSchema: preparedReleaseInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.release(caller, actor, input))))
-    catalog.registerTool('publish_prepared_packet', { description: 'Store one prepared packet for an open preparation job. The packet becomes Ready only when source validation passes. Never answers a request, claims a review lease, or changes card owner or status.', inputSchema: { job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: z.unknown() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
+    catalog.registerTool('publish_prepared_packet', { description: 'Store a prepared packet using the webhook job_id and a required operation_id. Reuse the operation_id for identical retries. Supply schema (tinstar.decision-packet.v1), background, rationale, recommended_option_id (from the webhook), risk, reversibility, confidence, uncertainty, material_unknowns, consequences, impacted, prerequisites, authorization, references, invalidation_conditions, and review_within_ms. Title and question default to the source question. The server supplies binding and dependencies and reports invalid field paths. Publishing does not answer the request, claim a lease, or change the card.', inputSchema: { job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: z.unknown() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
       if (!this.readers.preparation) return result({ outcome: 'unavailable', message: 'Preparation dispatcher unavailable' })
       try { return result(await this.readers.preparation.publish(input)) }
       catch (error) {
         if (error instanceof DecisionDeskConflict) return result({ outcome: 'operation-conflict', message: error.message })
-        if (error instanceof z.ZodError) return result({ outcome: 'not-saved', message: 'Invalid prepared packet; nothing was claimed, answered, or published' })
+        if (error instanceof z.ZodError) {
+          const issue_paths = [...new Set(error.issues.map(issue => issue.path.join('.') || 'packet'))]
+          return result({ outcome: 'not-saved', message: `Invalid prepared packet fields: ${issue_paths.join(', ')}`, issue_paths })
+        }
         throw error
       }
     })

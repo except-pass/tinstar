@@ -15,6 +15,7 @@ import { checkInReport } from './checkInWatchdog'
 import { isPreparedPacketComment } from './commentPacket'
 
 export interface CachedDecisionHistory { context: CardContextRead; observed_at: string; expires_at: string }
+export const decisionHistoryUnavailable = 'Complete cached decision history is unavailable'
 
 function sourceComment(note: CardContextRead['blocks'][number]) {
   return note.type === 'comment' && !checkInReport(note.text) && !isPreparedPacketComment(note)
@@ -42,7 +43,7 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   if (deferred) reasons.push('Source card is deferred or closed')
   const completeHistory = history?.context.outcome === 'available' && history.context.commentsOutcome === 'available'
   const freshHistory = completeHistory && Number.isFinite(Date.parse(history!.observed_at)) && Date.parse(history!.observed_at) <= now && (Date.parse(history!.expires_at) > now || renewing)
-  if (!freshHistory) reasons.push('Complete cached decision history is unavailable')
+  if (!freshHistory) reasons.push(decisionHistoryUnavailable)
   const notes = history?.context.blocks ?? []
   // Bind substantive discussion once per card, without persisting its prose
   // or invalidating on connector ordering, timestamps, or prep-bot output.

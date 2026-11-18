@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -64,7 +65,7 @@ it('loads cold body and comment history for Prepare now without other readers, w
   expect(sources.preparationEvidence(cardId).reasons).toContain('Complete cached decision history is unavailable')
   const request = { card_id: cardId, request_id: requestId, reason: 'Prepare this open decision' }
   expect(await sources.preparation.prepareNow('fixture-owner', request)).toMatchObject({ outcome: 'dispatched' })
-  expect(posts).toEqual([{ request_id: requestId, card_url: `https://www.notion.so/${cardId}`, publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) } }])
+  expect(posts).toMatchObject([{ card_url: `https://www.notion.so/${cardId}`, publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) } }])
   expect(sources.preparationEvidence(cardId)).toMatchObject({ reasons: [], requests: [{ reasons: [], answered: false }] })
   const readCount = reads.length
   expect((await sources.preparation.prepareNow('fixture-owner', request)).outcome).toBe('already-preparing')
@@ -464,8 +465,11 @@ it.each(['firstmate', 'card-native'] as const)('prepares and answers a %s struct
     expect((await loadedSnapshot(f.sources)).pending).toContainEqual(expect.objectContaining({ card_id: f.cardId, request_id: f.requestId, state: 'Queued' }))
     const prepared = await f.sources.preparation.prepareNow('fixture-owner', { card_id: f.cardId, request_id: f.requestId, reason: 'Prepare published large-card request' })
     expect(prepared).toMatchObject({ outcome: 'dispatched' })
-    expect(f.posts).toEqual([{ request_id: f.requestId, card_url: `https://www.notion.so/${f.cardId}`, publish: { tool: 'publish_prepared_packet', job_id: prepared.job_id } }])
     const evidence = f.sources.preparationEvidence(f.cardId), request = evidence.requests[0]!
+    expect(f.posts).toEqual([{
+      card_url: `https://www.notion.so/${f.cardId}`, source_question: template.question,
+      source_revision: createHash('sha256').update(request.binding!.source_revision).digest('hex'), options: template.binding.options, publish: { tool: 'publish_prepared_packet', job_id: prepared.job_id },
+    }])
     expect(evidence.reasons).toEqual([])
     expect(request.reasons).toEqual([])
     template.binding = request.binding!

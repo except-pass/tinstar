@@ -3,7 +3,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { z } from 'zod'
-import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type DecisionEvidence } from '../../shared/decisionPacket'
+import { bindingMeaning, dependencyIdentity, decisionPacketSchema, type DecisionEvidence, type DecisionRequestEvidence } from '../../shared/decisionPacket'
+import { decisionHistoryUnavailable } from './decisionEvidence'
 import { DecisionDeskConflict, packetContentHash, type DecisionPackets } from './decisionPackets'
 import { commentPacketActor, commentPacketSource, newestCommentPackets } from './commentPacket'
 import type { CardContextRead } from './cardContext'
@@ -15,6 +16,7 @@ const attemptMs = 10 * 60 * 1000
 export const prepSecretName = 'grok/tinstar-decision-prep'
 export const preparerName = 'Tinstar Decision Prep'
 export const webhookMissing = 'The preparer webhook is not configured.'
+const sourceChanged = 'source changed; job superseded'
 
 export interface PrepCandidate {
   card_id: string; request_id: string; source_revision: string; card_url: string
@@ -41,7 +43,21 @@ export interface PreparationReport {
 export interface PrepareResult { outcome: string; explanation: string; job_id?: string; state?: string }
 
 type Secret = { url: string; key: string }
-type Row = PreparationJob & { scope: string; created_at: string; updated_at: string; dispatched_at: string | null }
+type Row = PreparationJob & { scope: string; dependency_revision: string | null; created_at: string; updated_at: string; dispatched_at: string | null }
+
+function jobSource(job: Row, evidence: DecisionEvidence) {
+  const requests = evidence.requests.filter(request => request.binding?.request_id === job.request_id)
+  const source = requests.length === 1 ? requests[0] : undefined
+  const binding = source?.binding
+  // Never publish research against an ambiguous request, a changed revision, or an answer.
+  if (!binding || binding.card_id !== job.card_id || binding.source_revision !== job.source_revision || source.answered) return null
+  return { source, binding, question: source.question ?? binding.source_question }
+}
+
+function dependencyRevision(source: DecisionRequestEvidence) {
+  const revisions = source.dependencies.map(dependency => JSON.stringify([dependencyIdentity(dependency), dependency.revision]))
+  return createHash('sha256').update(JSON.stringify(revisions.sort())).digest('hex')
+}
 
 /** Read one Clavis bundle as JSON. Failures and empty results are absence; stdout is never logged. */
 export async function readClavisValue(name: string): Promise<string | null> {
@@ -99,6 +115,7 @@ export class DecisionPreparation {
       CREATE INDEX IF NOT EXISTS decision_prep_revision ON decision_prep_jobs(scope, card_id, request_id, source_revision);`)
       const columns = db.prepare('PRAGMA table_info(decision_prep_jobs)').all() as Array<{ name: string }>
       if (!columns.some(column => column.name === 'published_at')) db.exec('ALTER TABLE decision_prep_jobs ADD COLUMN published_at TEXT')
+      if (!columns.some(column => column.name === 'dependency_revision')) db.exec('ALTER TABLE decision_prep_jobs ADD COLUMN dependency_revision TEXT')
       // Recover successful legacy jobs even if later evidence/lease changes made
       // their state blocked or failed. Validation events retain the real time.
       db.exec(`UPDATE decision_prep_jobs SET published_at = (
@@ -202,7 +219,7 @@ export class DecisionPreparation {
     if (inflight >= policy.values.max_preparers) return { outcome: 'at-capacity', explanation: 'All preparer slots are in use. Wait for a job to finish or raise the maximum parallel preparers.' }
     if (mode === 'automatic' && (policy.values.automatic_replenishment !== true || this.readyCount(db) + inflight >= policy.values.target_ready)) return { outcome: 'depth-met', explanation: 'Ready decisions and in-flight jobs already fill the target depth.' }
     const id = randomUUID(), at = new Date(this.now()).toISOString()
-    const job: Row = { id, scope: this.scope, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
+    const job: Row = { id, scope: this.scope, dependency_revision: null, card_id: candidate.card_id, request_id: candidate.request_id, source_revision: candidate.source_revision, card_url: candidate.card_url,
       state: 'admitted', reason: 'Admitted for preparation.', actor, mode, attempt: (prior?.attempt ?? 0) + 1, packet_id: null, created_at: at, updated_at: at, dispatched_at: null }
     db.prepare("UPDATE decision_prep_jobs SET state = 'superseded', reason = 'Replaced by a newer preparation attempt.', updated_at = ? WHERE scope = ? AND card_id = ? AND request_id = ? AND source_revision = ?")
       .run(at, this.scope, candidate.card_id, candidate.request_id, candidate.source_revision)
@@ -220,11 +237,21 @@ export class DecisionPreparation {
   private async dispatch(job: Row) {
     const secret = this.secret
     if (!secret) { await this.mark(job.id, 'failed', webhookMissing); return }
-    if (this.evidence(job.card_id).deferred) {
+    const evidence = this.evidence(job.card_id)
+    if (evidence.deferred) {
       await this.mark(job.id, 'cancelled', 'Preparation is deferred while the source card is inactive.')
       return
     }
-    const payload = { request_id: job.request_id, card_url: job.card_url, publish: { tool: 'publish_prepared_packet', job_id: job.id } }
+    const match = jobSource(job, evidence)
+    if (!match) { await this.mark(job.id, 'superseded', sourceChanged); return }
+    const revision = dependencyRevision(match.source)
+    const pinned = await this.packets.leases.writeStorage(db => db.prepare(
+      "UPDATE decision_prep_jobs SET dependency_revision = ? WHERE id = ? AND state = 'admitted' AND dependency_revision IS NULL",
+    ).run(revision, job.id).changes)
+    if (!pinned) return
+    const payload = { card_url: job.card_url, source_question: match.question,
+      source_revision: createHash('sha256').update(job.source_revision).digest('hex'),
+      options: match.binding.options.map(({ id, label }) => ({ id, label })), publish: { tool: 'publish_prepared_packet', job_id: job.id } }
     try {
       const response = await this.fetchImpl(secret.url, {
         method: 'POST', redirect: 'error',
@@ -457,21 +484,31 @@ export class DecisionPreparation {
 
   /** Store a bot packet for one open job. Ready is the existing validation result, never a status or lease change. */
   async publish(input: unknown) {
-    const parsed = z.object({ job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: decisionPacketSchema }).strict().parse(input)
+    const parsed = z.object({ job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: z.object({}).passthrough() }).strict().parse(input)
     await this.initialize()
     await this.packets.leases.writeStorage(db => this.expire(db))
-    return this.packets.leases.writeStorage(db => {
+    const publication = await this.packets.leases.writeStorage(db => {
       const job = db.prepare('SELECT * FROM decision_prep_jobs WHERE id = ? AND scope = ?').get(parsed.job_id, this.scope) as Row | undefined
       if (!job) throw new DecisionDeskConflict('Preparation job is unavailable')
-      if (parsed.packet.binding.card_id !== job.card_id || parsed.packet.binding.request_id !== job.request_id || parsed.packet.binding.source_revision !== job.source_revision) throw new DecisionDeskConflict('Packet does not match this preparation job')
-      if (job.state === 'superseded') throw new DecisionDeskConflict('This preparation attempt has been replaced')
+      if (job.state === 'superseded') throw new DecisionDeskConflict(job.reason === sourceChanged ? sourceChanged : 'This preparation attempt has been replaced')
       const evidence = this.evidence(job.card_id)
+      const match = jobSource(job, evidence)
+      // A cold or unavailable history can recover while the same job is still open.
+      if (!match && evidence.reasons.includes(decisionHistoryUnavailable)) throw new DecisionDeskConflict('Current preparation source evidence is unavailable; retry this job')
+      if (!match || (job.dependency_revision !== null || job.state !== 'published') && job.dependency_revision !== dependencyRevision(match.source)) {
+        db.prepare("UPDATE decision_prep_jobs SET state = 'superseded', reason = ?, updated_at = ? WHERE id = ? AND published_at IS NULL")
+          .run(sourceChanged, new Date(this.now()).toISOString(), job.id)
+        return null
+      }
+      const { title = match.question, question = match.question } = parsed.packet
+      const dependencies = match.source.dependencies.flatMap(({ kind, key, revision }) => revision ? [{ kind, key, revision }] : [])
+      const packet = decisionPacketSchema.parse({ ...parsed.packet, title, question, binding: match.binding, dependencies })
       if (job.state === 'published' && job.packet_id) {
         const current = this.packets.readInStorage(db, job.packet_id, evidence)
         return { outcome: current?.ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: job.packet_id, ready: !!current?.ready, reasons: current?.reasons ?? [], replayed: true }
       }
       if (!['admitted', 'dispatched', 'blocked', 'failed'].includes(job.state)) throw new DecisionDeskConflict('This preparation attempt is not open for publication')
-      const stored = this.packets.publishInStorage(db, parsed.packet, evidence, preparerName, parsed.operation_id)
+      const stored = this.packets.publishInStorage(db, packet, evidence, preparerName, parsed.operation_id)
       const current = this.packets.readInStorage(db, stored.id, evidence)
       const ready = !!current?.ready
       const reasons = current?.reasons ?? stored.validation?.reasons ?? []
@@ -479,5 +516,7 @@ export class DecisionPreparation {
         .run(Number(!!current?.validation.valid), 'blocked', Number(!!current?.validation.valid), new Date(this.now()).toISOString(), ready ? 'Packet is ready for review.' : reasons.join(' ') || 'Packet is not ready.', new Date(this.now()).toISOString(), stored.id, job.id)
       return { outcome: ready ? 'ready' : 'not-ready', job_id: job.id, packet_id: stored.id, ready, reasons, replayed: stored.replayed }
     })
+    if (!publication) throw new DecisionDeskConflict(sourceChanged)
+    return publication
   }
 }

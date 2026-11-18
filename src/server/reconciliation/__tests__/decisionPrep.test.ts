@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -27,7 +28,7 @@ function candidate(packet: DecisionPacket, overrides: Partial<PrepCandidate> = {
     card_url: `https://www.notion.so/${packet.binding.card_id}`, card_status: 'Waiting For', answered: false, leased: false, reasons: [], rank: 0, ...overrides }
 }
 
-async function harness(options: { configured?: boolean; coverage?: 'complete' | 'unknown'; status?: number } = {}) {
+async function harness(options: { configured?: boolean; coverage?: 'complete' | 'unknown'; status?: number; onPost?: (body: unknown) => void } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'decision-prep-')); roots.push(root)
   const fixture = preparedDecisionFixture(now)
   const secondId = 'b'.repeat(32)
@@ -40,7 +41,9 @@ async function harness(options: { configured?: boolean; coverage?: 'complete' | 
     const chunks: Buffer[] = []
     req.on('data', chunk => chunks.push(Buffer.from(chunk)))
     req.on('end', () => {
-      posts.push({ body: JSON.parse(Buffer.concat(chunks).toString() || '{}'), authorized: req.headers.authorization === `Bearer ${key}` })
+      const body: unknown = JSON.parse(Buffer.concat(chunks).toString() || '{}')
+      posts.push({ body, authorized: req.headers.authorization === `Bearer ${key}` })
+      options.onPost?.(body)
       res.writeHead(options.status ?? 202); res.end('accepted')
     })
   })
@@ -52,6 +55,25 @@ async function harness(options: { configured?: boolean; coverage?: 'complete' | 
   const packets = new DecisionPackets(leases, () => now)
   const prep = new DecisionPreparation(packets, 'board', { candidates: () => rows, coverage: () => coverage }, card => card === secondId ? { ...fixture.evidence, card_id: secondId, requests: fixture.evidence.requests.map(request => ({ ...request, binding: request.binding ? { ...second.binding } : null })) } : fixture.evidence, async name => name === prepSecretName ? bundle : null, () => now)
   return { root, fixture, second, secondId, rows, posts, key, packets, leases, prep, setCoverage: (value: 'complete' | 'unknown') => { coverage = value }, turnOn: (target = 10, workers = 3) => packets.updatePolicy('board', { expected_version: 0, values: { target_ready: target, max_preparers: workers, automatic_replenishment: true } }, 'Will') }
+}
+
+async function connectPreparer(root: string, leases: CardLeases, prep: DecisionPreparation) {
+  const unused = async () => { throw new Error('Publication must use cached decision evidence') }
+  const mcp = new ReconciliationMcp({ leases, preparation: prep, scene: unused, card: unused, queue: unused, workerLinkReport: unused }, root)
+  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
+  const client = new Client({ name: 'prep-test', version: '1' })
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+  return {
+    client,
+    async publish(args: Record<string, unknown>) {
+      const response = await client.callTool({ name: 'publish_prepared_packet', arguments: args })
+      const text = (response.content as Array<{ text: string }>)[0]!.text
+      if (response.isError) throw new Error(text)
+      return JSON.parse(text)
+    },
+  }
 }
 
 it('says the webhook is not configured and still serves policy without posting', async () => {
@@ -87,7 +109,11 @@ it('posts one job per eligible decision, dedupes the revision, and skips leased,
   await prep.replenish()
   expect(posts).toHaveLength(1)
   expect(posts[0]!.authorized).toBe(true)
-  expect(posts[0]!.body).toEqual({ request_id: fixture.packet.binding.request_id, card_url: `https://www.notion.so/${fixture.cardId}`, publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) } })
+  expect(posts[0]!.body).toEqual({
+    card_url: `https://www.notion.so/${fixture.cardId}`,
+    source_question: fixture.packet.question, source_revision: createHash('sha256').update(fixture.packet.binding.source_revision).digest('hex'), options: fixture.packet.binding.options,
+    publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
+  })
   expect(JSON.stringify(posts.map(post => post.body))).not.toContain(key)
   await prep.replenish()
   expect(posts).toHaveLength(1)
@@ -108,16 +134,15 @@ it('posts one job per eligible decision, dedupes the revision, and skips leased,
 })
 
 it('fills only below the ready target and stops at the preparer cap', async () => {
-  const { prep, posts, packets, fixture, rows, turnOn } = await harness()
+  const { prep, posts, packets, fixture, secondId, turnOn } = await harness()
   await packets.publish(fixture.packet, fixture.evidence, 'fixture', 'already-ready')
   await turnOn(1, 3)
   await prep.replenish()
   expect(posts).toEqual([])
   await packets.updatePolicy('board', { expected_version: 1, values: { target_ready: 2, max_preparers: 1, automatic_replenishment: true } }, 'Will')
-  rows[0]!.source_revision = 'not-the-ready-revision'
   await prep.replenish()
   expect(posts).toHaveLength(1)
-  expect(posts[0]!.body).toMatchObject({ request_id: rows[0]!.request_id })
+  expect(posts[0]!.body).toMatchObject({ card_url: `https://www.notion.so/${secondId}` })
 })
 
 it('prepare now dispatches one audited job while automatic replenishment is off', async () => {
@@ -155,34 +180,112 @@ it('retries webhook failures automatically and manually without exposing the sen
   expect((await prep.status()).jobs).toHaveLength(5)
 })
 
-it('publishes a valid packet to Ready and keeps an invalid packet out of Ready without claiming or answering', async () => {
-  const { prep, fixture, leases, packets, root } = await harness()
+it('uses the job evidence for binding and dependencies and defaults the title and question', async () => {
+  const { prep, fixture, leases, packets } = await harness()
   const prepared = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Publish proof' })
-  const mismatch = structuredClone(fixture.packet)
-  mismatch.binding.request_id = 'other-request'
-  await expect(prep.publish({ job_id: prepared.job_id, operation_id: 'packet-mismatch', packet: mismatch })).rejects.toThrow('does not match')
-  expect(await packets.ids()).toEqual([])
-  const invalid = structuredClone(fixture.packet)
-  invalid.question = 'A different question than the source?'
-  const blocked = await prep.publish({ job_id: prepared.job_id, operation_id: 'packet-invalid', packet: invalid })
-  expect(blocked).toMatchObject({ outcome: 'not-ready', ready: false })
-  expect(blocked.reasons.join(' ')).toMatch(/question/i)
-  expect(leases.status(fixture.cardId)).toBeNull()
-  const published = await prep.publish({ job_id: prepared.job_id, operation_id: 'packet-valid', packet: fixture.packet })
+  const packet = { ...fixture.packet, title: undefined, question: undefined,
+    binding: { card_id: 'b'.repeat(32), request_id: 'other-request', source_revision: 'wrong' },
+    dependencies: [{ kind: 'card', key: fixture.cardId, revision: 'forged' }] }
+  const published = await prep.publish({ job_id: prepared.job_id, operation_id: 'packet-valid', packet })
   expect(published).toMatchObject({ outcome: 'ready', ready: true, replayed: false })
-  expect(await packets.read(published.packet_id, fixture.evidence)).toMatchObject({ ready: true, prepared_by: 'Tinstar Decision Prep' })
+  expect(await packets.read(published.packet_id, fixture.evidence)).toMatchObject({
+    ready: true, prepared_by: 'Tinstar Decision Prep',
+    packet: { binding: fixture.packet.binding, dependencies: fixture.packet.dependencies, title: fixture.packet.question, question: fixture.packet.question },
+  })
   expect(leases.status(fixture.cardId)).toBeNull()
-  const mcp = new ReconciliationMcp({ leases, preparation: prep, scene: async () => { throw new Error('publish must not read a scene') }, card: async () => { throw new Error('publish must not read a card') }, queue: async () => { throw new Error('publish must not read the queue') }, workerLinkReport: async () => { throw new Error('unused') } }, root)
-  const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const token = (await readFile(join(root, 'mcp-token'), 'utf8')).trim()
-  const client = new Client({ name: 'prep-test', version: '1' })
-  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/reconciliation/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+})
+
+it('reports only invalid field paths when the callback omits references or sends an invalid risk rating', async () => {
+  const { prep, fixture, leases, packets, root, key } = await harness()
+  const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Report invalid input' })
+  const { client, publish } = await connectPreparer(root, leases, prep)
   try {
-    const names = (await client.listTools()).tools.map(tool => tool.name)
-    expect(names).toContain('publish_prepared_packet')
-    const replay = JSON.parse(((await client.callTool({ name: 'publish_prepared_packet', arguments: { job_id: prepared.job_id, operation_id: 'packet-valid', packet: fixture.packet } })) as { content: Array<{ text: string }> }).content[0]!.text)
-    expect(replay).toMatchObject({ outcome: 'ready', ready: true, replayed: true })
+    const result = await publish({ job_id: job.job_id, operation_id: 'invalid-fields', packet: { recommended_option_id: 'preview', background: 'Research',
+      risk: { ...fixture.packet.risk, rating: key }, [key]: key } })
+    expect(result).toMatchObject({ outcome: 'not-saved', issue_paths: expect.arrayContaining(['schema', 'rationale', 'references', 'reversibility', 'authorization', 'risk.rating']) })
+    expect(result.message).toContain('references')
+    expect(result.message).toContain('risk.rating')
+    expect(JSON.stringify(result)).not.toContain(key)
+    expect(await packets.ids()).toEqual([])
+  } finally { await client.close() }
+})
+
+it.each(['changed revision', 'changed card dependency', 'answered', 'ambiguous', 'removed'])('supersedes a dispatched job when its source is %s', async change => {
+  const { prep, fixture, packets, leases, root } = await harness()
+  const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Check callback revision' })
+  const source = fixture.evidence.requests[0]!
+  if (change === 'changed revision') source.binding!.source_revision = 'new-revision'
+  if (change === 'changed card dependency') source.dependencies.find(dependency => dependency.kind === 'card')!.revision = 'changed-evidence'
+  if (change === 'answered') source.answered = true
+  if (change === 'ambiguous') fixture.evidence.requests.push(structuredClone(source))
+  if (change === 'removed') {
+    fixture.evidence.requests = []
+    fixture.evidence.reasons = ['No decision request is recorded in the complete card history']
+  }
+  const restarted = new DecisionPreparation(packets, 'board', { candidates: () => [], coverage: () => 'complete' }, () => fixture.evidence, async () => null, () => now)
+  const { client, publish } = await connectPreparer(root, leases, restarted)
+  try {
+    const args = { job_id: job.job_id, operation_id: 'superseded-packet', packet: fixture.packet }
+    const refusal = { outcome: 'operation-conflict', message: 'source changed; job superseded' }
+    expect(await publish(args)).toEqual(refusal)
+    expect(await publish(args)).toEqual(refusal)
+    expect(await packets.ids()).toEqual([])
+    expect(await prep.status()).toMatchObject({ preparing: 0, jobs: [{ id: job.job_id, state: 'superseded', reason: refusal.message }] })
+  } finally { await client.close() }
+})
+
+it('requires an operation ID at both publication entry points', async () => {
+  const { prep, fixture, packets, leases, root } = await harness()
+  const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Check callback operation identity' })
+  const args = { job_id: job.job_id, packet: fixture.packet }
+  const { client, publish } = await connectPreparer(root, leases, prep)
+  try {
+    await expect(prep.publish(args)).rejects.toThrow('operation_id')
+    await expect(publish(args)).rejects.toThrow('operation_id')
+    expect(await packets.ids()).toEqual([])
+    await expect(publish({ ...args, operation_id: 'explicit-operation' })).resolves.toMatchObject({ outcome: 'ready' })
+  } finally { await client.close() }
+})
+
+it('allows retrying the same job after unavailable evidence recovers', async () => {
+  const { prep, fixture } = await harness()
+  const job = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare before source renewal' })
+  const requests = fixture.evidence.requests
+  fixture.evidence.requests = []
+  fixture.evidence.reasons = ['Complete cached decision history is unavailable']
+  const args = { job_id: job.job_id, operation_id: 'retry-unavailable', packet: fixture.packet }
+  await expect(prep.publish(args)).rejects.toThrow('retry this job')
+  expect((await prep.status()).jobs[0]).toMatchObject({ state: 'dispatched' })
+  fixture.evidence.requests = requests
+  fixture.evidence.reasons = []
+  await expect(prep.publish(args)).resolves.toMatchObject({ outcome: 'ready' })
+})
+
+it('publishes through MCP from the webhook with only the job and research fields, and shows Ready on the Desk', async () => {
+  let onPost!: (body: unknown) => void
+  const { prep, packets, leases, fixture, root } = await harness({ onPost: body => onPost(body) })
+  const { client, publish } = await connectPreparer(root, leases, prep)
+  try {
+    const { binding: _binding, dependencies: _dependencies, title: _title, question: _question, ...research } = fixture.packet
+    let publication: ReturnType<typeof publish> | undefined
+    let args: Record<string, unknown>
+    let tool: string
+    onPost = body => {
+      const job = body as { options: Array<{ id: string }>; publish: { tool: string; job_id: string } }
+      tool = job.publish.tool
+      args = { job_id: job.publish.job_id, operation_id: 'webhook-packet', packet: { ...research, recommended_option_id: job.options[0]!.id } }
+      publication = publish(args)
+    }
+    const prepared = await prep.prepareNow('Will', { card_id: fixture.cardId, request_id: fixture.packet.binding.request_id, reason: 'Prepare through the webhook' })
+    expect(tool!).toBe('publish_prepared_packet')
+    expect(publication).toBeDefined()
+    const published = await publication
+    expect(published).toMatchObject({ outcome: 'ready', job_id: prepared.job_id, ready: true, replayed: false })
+    expect(await publish(args!)).toMatchObject({ outcome: 'ready', packet_id: published.packet_id, replayed: true })
+    const reviews = new PreparedReviews(packets, 'board', () => fixture.evidence,
+      () => ({ card_ids: [fixture.cardId], coverage: 'complete', requests: 1 }), () => now)
+    expect((await reviews.snapshot()).pending).toContainEqual(expect.objectContaining({ card_id: fixture.cardId, state: 'Ready' }))
+    expect((await packets.events()).map(event => event.type)).not.toContain('comment-import')
     expect(leases.status(fixture.cardId)).toBeNull()
   } finally { await client.close() }
 })
@@ -212,6 +315,7 @@ it('projects the latest current-revision attempt without overriding ready or lea
   await prep.prepareNow('Will', request)
   expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Failed' })
   rows[0]!.source_revision = 'old-revision'
+  fixture.evidence.requests[0]!.binding!.source_revision = 'old-revision'
   for (let i = 0; i < 9; i++) await prep.prepareNow('Will', request)
   expect((await reviews.snapshot()).pending[0]).toMatchObject({ state: 'Failed' })
   fixture.evidence.requests[0]!.binding!.source_revision = 'unattempted-revision'
