@@ -19,9 +19,9 @@ import type { PreparedClaimResult } from '../preparedReviews'
 const board = 'f'.repeat(32)
 const id = (i: number) => i.toString(16).padStart(32, '0')
 const text = (content: string) => content ? [{ text: { content } }] : []
-const select = (name: string) => ({ type: 'select', select: name ? { name } : null })
-const rich = (value: string) => ({ type: 'rich_text', rich_text: text(value) })
-const tags = (value: string) => ({ type: 'multi_select', multi_select: value ? [{ name: value }] : [] })
+const select = (name: string) => ({ type: 'select' as const, select: name ? { name } : null })
+const rich = (value: string) => ({ type: 'rich_text' as const, rich_text: text(value) })
+const tags = (value: string) => ({ type: 'multi_select' as const, multi_select: value ? [{ name: value }] : [] })
 const statuses = ['Waiting For', 'In Progress', 'Queued', 'Waiting for Prod Release', 'Todo', 'Backlog', 'Archived', 'Done']
 type Property = ReturnType<typeof select | typeof tags | typeof rich> | { type: 'status'; status: { name: string } }
 
