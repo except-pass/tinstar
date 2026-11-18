@@ -9,6 +9,8 @@ import { workReadback } from './workReadback'
 export const decisionHistoryDeadlineMs = 120_000
 class CardHistoryReadError extends Error {}
 
+export type ClassificationExcerpt = CardContextRead | { outcome: 'provenance-rejected' }
+
 export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   commentsOutcome?: 'available' | 'partial' | 'unavailable'
@@ -191,15 +193,14 @@ export class CardContextReader {
     return value
   }
   /** Classification uses the opening brief only and never reads comments, files or nested blocks. */
-  async classificationExcerpt(id: string, expectedVersion: string): Promise<CardContextRead> {
-    try {
-      const excerpt = await this.read(id, undefined, this.fetcher, true)
-      const card = await readNotionCard(this.config, id, this.fetcher)
-      if (card.archived || card.in_trash || card.last_edited_time !== expectedVersion) return { outcome: 'unavailable', blocks: [] }
-      return excerpt
-    } catch {
-      return { outcome: 'unavailable', blocks: [] }
+  async classificationExcerpt(id: string, expectedVersion: string): Promise<ClassificationExcerpt> {
+    const excerpt = await this.read(id, undefined, this.fetcher, true)
+      .catch((): CardContextRead => ({ outcome: 'unavailable', blocks: [] }))
+    const card = await readNotionCard(this.config, id, this.fetcher).catch(() => undefined)
+    if (!card || card.archived || card.in_trash || card.last_edited_time !== expectedVersion) {
+      return { outcome: 'provenance-rejected' }
     }
+    return excerpt
   }
   async read(id: string, historySignal?: AbortSignal, fetcher = this.fetcher, excerpt = false): Promise<CardContextRead> {
     if (isJiraCard(id)) {

@@ -280,8 +280,8 @@ it('reads the configured board through NotionApi and persists replay results in 
         'opaque continuation fragment',
         'Excluded sixth block',
       ] : url.pathname.includes(id(5)) ? [
-        'Initiative: Cockpit\nEpic: Operations\nVerify panel recovery.',
-      ] : url.pathname.includes(id(7)) || url.pathname.includes(id(8)) ? ['Unverified body text'] : []
+        'Initiative: Cockpit\nEpic: Operations\nEpic: password="historical secret opener\nhistorical secret continuation"\nVerify panel recovery.',
+      ] : url.pathname.includes(examples[2].id) ? ['Safe replay objective.'] : url.pathname.includes(id(7)) || url.pathname.includes(id(8)) ? ['Unverified body text'] : []
       return Response.json({ has_more: true, next_cursor: 'ignored', results: texts.map((plain_text, index) => ({
         id: String(index), type: 'paragraph', paragraph: { rich_text: [{ plain_text }] },
       })) })
@@ -308,13 +308,13 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(notion).not.toHaveBeenCalled()
   expect(model).not.toHaveBeenCalled()
   const report = await service.dryRun(2000)
-  expect(model).toHaveBeenCalledTimes(6)
+  expect(model).toHaveBeenCalledTimes(4)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({ title: 'Check authentication', brief: 'Fix basic authentication. [credential omitted] Verify the rollout.', description: 'Rotate session cookies. [credential omitted] Check session expiry via [link omitted] and [link omitted] and [link omitted] then verify.' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status', body: 'Verify panel recovery.' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status', body: '' }) }),
   }))
   expect(transmitted).toContainEqual(expect.objectContaining({
     state: expect.objectContaining({ card: expect.objectContaining({
@@ -322,7 +322,10 @@ it('reads the configured board through NotionApi and persists replay results in 
       body: 'Restore billing exports. [credential omitted] Verify recovery. [credential omitted]',
     }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Unverified body text|Initiative: Cockpit|Epic: Operations|cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
+  expect(transmitted).toContainEqual(expect.objectContaining({
+    state: expect.objectContaining({ card: expect.objectContaining({ body: 'Safe replay objective.' }) }),
+  }))
+  expect(JSON.stringify(transmitted)).not.toMatch(/Unverified body text|Moved card|Changed card|historical secret opener|historical secret continuation|Initiative: Cockpit|Epic: Operations|cross-block first fragment|cross-block last fragment|opaque continuation fragment|Excluded sixth block|U1lOVEhFVElDUEtDUzg|U1lOVEhFVElDUlNB|syntheticUrlPassword|syntheticDbPassword|syntheticSshPassword|example\.invalid|BEGIN (?:RSA )?PRIVATE KEY/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   const blockRequests = notion.mock.calls.map(([url]) => new URL(String(url))).filter(url => url.pathname.includes('/blocks/'))
@@ -330,10 +333,10 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(blockRequests.every(url => url.searchParams.get('page_size') === '12' && !url.searchParams.has('start_cursor'))).toBe(true)
   const rows = new CardLeases(root).readStorage(db => db.prepare('SELECT card_id, state, result, write_receipt FROM classification_jobs').all())
   expect(rows).toHaveLength(6)
-  expect(rows.every(row => row.state === 'examined' && row.write_receipt === null)).toBe(true)
+  expect(rows.every(row => row.write_receipt === null)).toBe(true)
   for (const page of [moved, changed]) {
     const result = report.rows.find(row => row.result.cardId === page.id)!.result
-    expect(assess(result, thresholds.conservative)).toEqual({ outcome: 'needs-review', reason: 'incomplete-source' })
+    expect(assess(result, thresholds.conservative)).toEqual({ outcome: 'needs-review', reason: 'source-provenance-rejected' })
   }
   for (const row of report.rows) {
     const stored = rows.find(record => record.card_id === row.result.cardId)

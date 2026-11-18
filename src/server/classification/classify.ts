@@ -1,11 +1,11 @@
-import type { CardContextRead } from '../reconciliation/cardContext'
+import type { CardContextRead, ClassificationExcerpt } from '../reconciliation/cardContext'
 import type { WorkCard } from '../reconciliation/workReader'
 import { clean, eligible, exampleTitleLimit, fingerprint, label, property, type Catalog, type Destination } from './catalog'
 import { JevError, type ChoiceAnswer, type DecisionRequest, type JevResponse, type Question } from './openRouter'
 
 export type AskJev = (request: DecisionRequest) => Promise<JevResponse>
 export type ClassifierSource = {
-  excerpt(id: string, expectedVersion: string): Promise<CardContextRead>
+  excerpt(id: string, expectedVersion: string): Promise<ClassificationExcerpt>
   parent(id: string): Promise<WorkCard | undefined>
 }
 type Rank = { id: string; probability: number }
@@ -80,7 +80,8 @@ function openingProse(context: CardContextRead, historical: boolean) {
     blocks.push(block.text)
   }
   const text = blocks.join('\n')
-  return clean(historical ? text.replace(/^[^\S\r\n]*(?:initiative|epic)[^\S\r\n]*:.*$/gim, '') : text, 1_100)
+  if (historical && /^[^\S\r\n]*(?:initiative|epic)[^\S\r\n]*:/im.test(text)) return ''
+  return clean(text, 1_100)
 }
 
 const noul = (instructions: string, yes: string, no: string): Question => ({
@@ -110,6 +111,9 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
 
   const title = clean(property(card, 'Name'), 250)
   const [hierarchy, excerpt] = await Promise.all([readParents(card, source), source.excerpt(card.id, card.last_edited_time)])
+  if (excerpt.outcome === 'provenance-rejected') {
+    return { ...base, ...timing(), state: 'needs-review', reason: 'source-provenance-rejected' }
+  }
   const body = openingProse(excerpt, mode === 'historical')
   const area = clean(property(card, 'Area'), 100)
   const brief = clean(property(card, 'Brief'), 500)
