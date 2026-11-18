@@ -11,7 +11,7 @@ describe('Git release membership', () => {
     expect(range.membership).toMatchObject({ status: 'complete', baseline: 'v1.0.0', baselineSha: base })
     expect([...range.pulls.values()].map(pull => pull.number)).toEqual([1])
     await reader.get('owner/repo', head, 'v2.0.0')
-    expect(read).toHaveBeenCalledTimes(8)
+    expect(read).toHaveBeenCalledTimes(4)
   })
   it.each([false, true])('ignores non-production baseline tags with supplied catalog: %s', async supplied => {
     const tags = [tag('v1.24.0', base), ...['v1.25.0-rc1', 'v1.25.0+build', 'v1.25.0.1', '1.25.0'].map(name => tag(name, merge))]
@@ -25,7 +25,7 @@ describe('Git release membership', () => {
     expect(range.membership).toMatchObject({ status: 'unknown', baseline: null })
     expect(read).not.toHaveBeenCalled()
   })
-  it('retains partial progress through failure and replaces superseded PRs on completion', async () => {
+  it('retains partial progress through failure and replaces superseded PRs on their next turn', async () => {
     let now = 0
     let pullNumber = 1
     const commits = Array.from({ length: 10 }, (_, index) => index.toString(16).padStart(40, '0'))
@@ -39,7 +39,15 @@ describe('Git release membership', () => {
     pullNumber = 2
     now = 90_000
     const resumed = await reader.get('owner/repo', head, 'v2.0.0')
-    expect(resumed.membership.status).toBe('complete'); expect([...resumed.pulls.values()].map(row => row.number)).toEqual([2])
+    expect(resumed.membership.status).toBe('complete')
+    expect([...resumed.pulls.values()].map(row => row.number)).toEqual([1])
+    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(12)
+
+    now = 110_000
+    const rotated = await reader.get('owner/repo', head, 'v2.0.0')
+    expect(rotated.membership.status).toBe('complete')
+    expect([...rotated.pulls.values()].map(row => row.number)).toEqual([2])
+    expect(read.mock.calls.filter(([path]) => path.includes('/commits/'))).toHaveLength(20)
   })
   it('does not guess a baseline from unrelated or newer tags', async () => {
     const read = vi.fn(async (path: string) => path.includes('/tags?') ? [tag('v3.0.0', base), tag('feature-only', base), tag('v1.0.0', base)] : { status: 'diverged', merge_base_commit: { sha: 'f'.repeat(40) } })
@@ -61,10 +69,12 @@ it('reopens an unchanged tag with the current commit associations', async () => 
   const read = vi.fn(async (path: string) => path.includes('/compare/')
     ? { status: 'ahead', merge_base_commit: { sha: base }, total_commits: 2, commits: [{ sha: merge }, { sha: head }] }
     : [pull(number)])
-  const reader = new ReleaseMembershipReader(read)
+  let now = 0
+  const reader = new ReleaseMembershipReader(read, () => now)
   const tags = [tag('v1.0.0', base)]
   expect([...((await reader.get('owner/repo', head, 'v2.0.0', tags)).pulls.values())].map(row => row.number)).toEqual([1])
   number = 2
+  now = 15_000
   const reopened = await reader.get('owner/repo', head, 'v2.0.0', tags)
   expect(reopened.membership.status).toBe('complete')
   expect([...reopened.pulls.values()].map(row => row.number)).toEqual([2])
