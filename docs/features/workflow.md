@@ -76,21 +76,32 @@ npx tsx scripts/jev-classifier-dry-run.ts \
 ```
 
 The CLI reads the board through the foreground Notion scheduler and uses the
-existing Clavis bundle `openrouter/api-key`. It examines every active card
-missing Initiative and replays closed cards whose Initiative and Epic are set.
+existing Clavis bundle `openrouter/api-key` for OpenRouter Decisions with
+`typesafe/jev-1.14`. It examines every active card missing Initiative and
+replays Done or Archived cards whose Initiative and Epic are both set.
 OpenRouter receives sanitized card titles, Areas, ancestor titles, Brief, and
-Description along with the taxonomy choices and a bounded, sanitized excerpt
+Description along with taxonomy choices and a bounded, sanitized excerpt
 from the opening body blocks.
-Use `--historical-limit N` to cap the historical sample. The limit must be
-between 1 and 2,000. Candidates and abstentions go to the report and the
-local `classification_jobs` table in
-`card-leases.sqlite`. The dry run performs no Notion writes or dispatch.
+
+The run requires fresh, complete Notion observations of the board and history
+and select properties for Initiative and Epic. Use `--historical-limit N` to
+cap the replay sample after reading history. It accepts integers from 1 to
+2,000 and defaults to 2,000.
+
+The Markdown report goes to stdout unless `--output` is supplied. It compares
+candidates against historical Notion labels using separate calibration and
+holdout cohorts. The holdout measures agreement with those reference labels.
+An independent human audit is required before write rollout. The CLI stores
+per-card results in the local `classification_jobs` table in
+`card-leases.sqlite`, using the Tin Star configuration directory unless
+`--ledger-home` is supplied. The dry run performs no Notion writes or dispatch.
 
 Optional `--taxonomy-notes FILE` supplies JSON arrays named `initiatives` and
 `pairs`. Entries identify the exact Initiative or Initiative/Epic names and
-can add a `scope` and `aliases`. An initiative entry can explicitly set
-`initiativeOnly: true` for initiative-wide work. The open board assignments
-and select schema determine the eligible initiatives and pairs.
+can add a `scope` and `aliases`. The active board assignments and select schema
+determine the eligible initiatives and pairs. An initiative entry can explicitly
+set `initiativeOnly: true` to allow a destination with a blank Epic for an
+eligible initiative.
 
 ## Start contract and enforced rules
 
