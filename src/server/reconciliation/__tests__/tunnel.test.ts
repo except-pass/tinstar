@@ -105,12 +105,12 @@ it.each(['2026-07-28', '2025-11-25'])('serves stateless %s tool requests with th
   else expect(list.result).not.toHaveProperty('resultType')
   for (const [name, args] of [
     ['get_prepared_submission_state', {}],
-    ['submit_prepared_decision', { operation_id: 'tunnel-submit', lease_token: 'lease', packet_id: '12345678-1234-4234-8234-123456789abc', packet_version: 1, request_id: 'request', option_id: 'option', next: { owner: 'First Mate', status: 'Queued' } }],
+    ['submit_prepared_decision', { operation_id: 'tunnel-submit', lease_token: 'lease', option_id: '1', answer: 'Approved' }],
   ] as const) {
     const response = await post(url, 'tools/call', version, { name, arguments: args })
     expect(parse((await response.json()).result)).toEqual({ outcome: 'unavailable' })
   }
-  const publish = await post(url, 'tools/call', version, { name: 'publish_prepared_packet', arguments: { job_id: '12345678-1234-4234-8234-123456789abc', operation_id: 'tunnel-publish', packet: {} } })
+  const publish = await post(url, 'tools/call', version, { name: 'publish_prepared_packet', arguments: { job_id: '12345678-1234-4234-8234-123456789abc', packet: {} } })
   expect(parse((await publish.json()).result)).toEqual({ outcome: 'unavailable', message: 'Preparation dispatcher unavailable' })
   const views = await post(url, 'tools/call', version, { name: 'get_work_views', arguments: {} })
   expect(JSON.parse((await views.json()).result.content[0].text).outcome).toBe('queue-source-unavailable')

@@ -346,7 +346,7 @@ test('Decision Desk reports unavailable sources without claiming a visible decis
   await expect(page.getByRole('heading', { name: 'Decision Desk unavailable.' })).toBeVisible()
   await expect(page.locator('.dd-identifiers')).toHaveCount(0)
   await expect(page.getByRole('radio')).toHaveCount(0)
-  await expect(page.getByText('Queue metrics unavailable: the backend or source coverage could not be verified.')).toBeVisible()
+  await expect(page.getByText('Queue status unavailable.')).toBeVisible()
   const current = await call('get_scene', { scene_id })
   let ack = await call('present_view', { scene_id, command_id: 'desk-unavailable-flash', expected_revision: current.state.revision, action: { type: 'flash', targets: [{ kind: 'card', id: dirtId }] } })
   if (ack.outcome === 'queued') await expect.poll(async () => { ack = await call('get_command', { scene_id, command_id: 'desk-unavailable-flash' }); return ack.outcome }).toBe('queue-source-unavailable')
@@ -367,17 +367,16 @@ test('Decision Desk presentation flashes cannot submit or discard a selected sou
   expect(writes).toEqual([])
 })
 
-test('Preparation explains blocked source requests without inventing answer choices', async ({ page }) => {
+test('Preparation shows queued cards without inventing answer choices', async ({ page }) => {
   await page.route('**/api/reconciliation/decision-desk/snapshot', route => route.fulfill({ json: { ok: true, data: {
-    counts: { ready: null, leased: null, preparing: 0, needs_repreparation: null, to_prepare: null, requests: null }, coverage: 'unknown', omissions: ['Source evidence is stale or unavailable.'],
-    runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [{ card_id: fixtureId(4), request_id: null, title: 'Unlinked recovery request', state: 'Blocked', reasons: ['Exact source request and supported options are unavailable.'] }],
+    counts: { ready: null, leased: null, preparing: 0, needs_repreparation: null, to_prepare: null, requests: null }, coverage: 'unknown', omissions: ['Showing known cards. The board read is incomplete.'],
+    runner: { configured: false, explanation: 'No preparation runner is configured.' }, ready: [], recorded_requests: [], pending: [{ card_id: fixtureId(4), request_id: null, title: 'Card awaiting preparation', state: 'Queued' }],
   } } }))
   await page.goto(`${base}/?view=decisions`)
   await openDecisionDesk(page)
   await page.getByRole('button', { name: 'Preparation', exact: true }).click()
-  await expect(page.getByText('Unlinked recovery request')).toBeVisible()
-  await page.getByText('Evidence & next action').click()
-  await expect(page.getByText('Exact source request and supported options are unavailable.')).toBeVisible()
+  await expect(page.getByText('Card awaiting preparation')).toBeVisible()
+  await expect(page.getByText('· Queued')).toBeVisible()
   await expect(page.getByRole('radio')).toHaveCount(0)
 })
 
@@ -542,7 +541,7 @@ test('Decisions shows unknown actions, unlinked requests and stale coverage hone
   const altered = structuredClone(queue)
   altered.items = [
     { ...altered.items[0]!, id: 'unknown-action-proof', cardIds: [fixtureId(4)], action: null, readiness: 'needs-readiness-verification', oneTouch: false },
-    { ...altered.items[0]!, id: 'unlinked-proof', title: 'Unlinked recovery request', cardIds: [], evidence: [] },
+    { ...altered.items[0]!, id: 'unlinked-proof', title: 'Card awaiting preparation', cardIds: [], evidence: [] },
   ]
   altered.coverage.intentions.status = 'stale'
   const ownershipScene = structuredClone(scene)
@@ -556,8 +555,8 @@ test('Decisions shows unknown actions, unlinked requests and stale coverage hone
   await page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`).click()
   await expect(page.getByLabel('Selected decision')).toContainText('This request needs verification before you act.')
   await expect(page.locator(`.decisions-row[data-card-id="${fixtureId(4)}"]`)).not.toContainText('Will')
-  await page.getByLabel('Decision requests').getByText('Unlinked recovery request', { exact: true }).click()
-  await expect(page.getByLabel('Selected decision').getByRole('heading', { level: 2 })).toHaveText('Unlinked recovery request')
+  await page.getByLabel('Decision requests').getByText('Card awaiting preparation', { exact: true }).click()
+  await expect(page.getByLabel('Selected decision').getByRole('heading', { level: 2 })).toHaveText('Card awaiting preparation')
   await expect(page.getByLabel('Selected decision').getByRole('link', { name: 'Read Notion card' })).toHaveCount(0)
   const directory = process.env.TINSTAR_MCP_PROOF
   if (directory) await page.screenshot({ path: join(directory, 'decisions-stale-unlinked.png'), fullPage: true })

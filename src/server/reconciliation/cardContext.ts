@@ -21,7 +21,7 @@ export interface CardContextRead {
 /** Read card prose only. Code, files, embeds and unsupported blocks are not
  * exported to conversational clients. Nested/truncated context is explicit. */
 export class CardContextReader {
-  private decisionCache = new Map<string, { pending: boolean; signal: AbortSignal; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory }>()
+  private decisionCache = new Map<string, { pending: boolean; signal: AbortSignal; fetcher: NotionFetch; value: Promise<CardContextRead>; resolved?: CachedDecisionHistory }>()
   private commentCache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher?: NotionFetch }>()
   private cache = new Map<string, { until: number; pending: boolean; resolvedUntil: number; revision?: string; value: Promise<CardContextRead>; resolved?: CardContextRead; fetcher: NotionFetch }>()
   constructor(private config: ReconciliationConfig['notion'], private fetcher: NotionFetch = fetch, private jira?: JiraAdapter) {}
@@ -37,15 +37,6 @@ export class CardContextReader {
       return { ...history.context, outcome: history.context.commentsOutcome ?? 'unavailable', blocks: history.context.blocks.filter(block => block.type === 'comment') }
     }
     return cached && cached.resolvedUntil > Date.now() ? cached.resolved : undefined
-  }
-  /** Claims can exclude a known answer even while the other history read is
-   * pending. This never establishes complete history for Desk preparation. */
-  cachedClaimBlocks(id: string): CardContextRead['blocks'] {
-    const now = Date.now()
-    const history = this.decisionCache.get(id)?.resolved
-    return [...(history && Date.parse(history.expires_at) > now ? history.context.blocks : []),
-      ...[this.cache.get(id), this.commentCache.get(id)].flatMap(cached =>
-        cached && cached.resolvedUntil > now ? cached.resolved?.blocks ?? [] : [])]
   }
   /** Read the cached observation with its original conservative freshness;
    * looking at evidence never refreshes it or fetches source history. */
@@ -63,24 +54,21 @@ export class CardContextReader {
     }
     return { context, observed_at: new Date(until - 30_000).toISOString(), expires_at: new Date(until).toISOString() }
   }
-  /** WorkflowContent publishes decisions/answers as page comments and reads
-   * legacy records from top-level paragraphs. Contract chunks (code), embeds,
-   * and nested specification content are not workflow publication surfaces.
-   * Keep this cache separate: complete decision history is not complete prose. */
-  decisionDetails(id: string, force = false, signal = AbortSignal.timeout(decisionHistoryDeadlineMs)): Promise<CardContextRead> {
+  /** Read the card text and comments used for the decision revision. */
+  decisionDetails(id: string, force = false, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher): Promise<CardContextRead> {
     const cached = this.decisionCache.get(id)
-    if (cached && (cached.pending && !cached.signal.aborted || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
+    if (cached && (cached.pending && !cached.signal.aborted && (fetcher === this.fetcher || fetcher === cached.fetcher) || !force && cached.resolved && Date.parse(cached.resolved.expires_at) > Date.now())) return cached.value
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now()
-    const comments = this.readComments(id, signal)
-    const body = this.read(id, signal).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
+    const comments = this.readComments(id, signal, fetcher)
+    const body = this.read(id, signal, fetcher).catch((error): CardContextRead => ({ outcome: 'unavailable', blocks: [],
       omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }))
     const value = Promise.all([body, comments]).then(([body, comments]): CardContextRead => ({
       ...body, commentsOutcome: comments.outcome, blocks: [...body.blocks, ...comments.blocks],
       outcome: !signal.aborted && body.outcome === 'available' && comments.outcome === 'available' ? 'available' : 'partial',
       omissions: [body.omissions, comments.omissions].filter(Boolean).join(' '),
     }))
-    const entry = { pending: true, signal, value, resolved: cached?.resolved }
+    const entry = { pending: true, signal, fetcher, value, resolved: cached?.resolved }
     this.decisionCache.set(id, entry)
     // Positive comment evidence remains useful to claims even if the body
     // fails. Preserve the hotfix's independent-cache behavior and freshness.
@@ -254,7 +242,7 @@ export class CardContextReader {
         for (const item of body.results) {
           const b = record(item), type = String(b.type), data = record(b[type])
           if (b.archived === true || b.in_trash === true) continue
-          if (historySignal ? type === 'paragraph' : safeTypes.has(type)) {
+          if (safeTypes.has(type) || historySignal && type === 'code') {
             const rich = type === 'table_row' && Array.isArray(data.cells) ? data.cells.flat() : data.rich_text
             const text = Array.isArray(rich) ? rich.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('') : ''
             // Avoid forwarding common credential literals embedded in prose.
@@ -263,9 +251,9 @@ export class CardContextReader {
               last_edited_time: typeof b.last_edited_time === 'string' ? b.last_edited_time : undefined,
               text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
           } else if (!historySignal) partial = true
-          if (!historySignal && b.has_children === true) {
+          if (b.has_children === true) {
             if (safeTypes.has(type) || type === 'table' || type === 'column_list' || type === 'column') await visit(String(b.id), depth + 1)
-            else partial = true
+            else if (!historySignal) partial = true
           }
         }
         if (typeof body.has_more !== 'boolean') throw new Error('Invalid body pagination')
@@ -278,6 +266,6 @@ export class CardContextReader {
       if (!historySignal) throw error
       return { outcome: 'partial', blocks, omissions: error instanceof CardHistoryReadError ? error.message : 'Card body history read failed.' }
     }
-    return { outcome: partial ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: historySignal ? 'Complete paginated workflow history from top-level paragraphs and page comments. Nested specification content, code, files and embeds are not workflow publication surfaces.' : 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
+    return { outcome: partial ? 'partial' : 'available', observedAt: new Date().toISOString(), blocks, omissions: historySignal ? 'Paginated card text and page comments. Files and embeds are omitted.' : 'Code, files, embeds and unsupported blocks omitted; bounded to ten reads and four nesting levels. This is card prose, not terminal history.' }
   }
 }

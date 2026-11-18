@@ -3,13 +3,12 @@ import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type Prep
 import { DecisionDeskConflict } from './decisionPackets'
 import type { DecisionPreparation } from './decisionPrep'
 import { CardLeases, CardLeaseError, leaseCaller, leaseFailure, withLeaseCaller } from './cardLeases'
-import { hasQueue, type DeskQueue } from '../../shared/reconciliationQueue'
 import { renderedObservationSchema, deliverySchema } from '../../shared/presentationObservation'
 import { organizedGroups } from '../../shared/floorOrganization'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -26,9 +25,6 @@ import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
 import { SessionProbe } from './sessionProbe'
-import { claimFilters, matchesClaimFilters, strictlyNeedsWill, needsWillIssues, oldestOpenRequestSince, type ClaimFilters } from './claimPolicy'
-import { claimCardReadiness, claimRequestCandidate, type QueueItem } from './queue'
-import type { NeedsWillItem } from './needsWill'
 
 export function installToken(root = getConfigRoot()) {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -72,9 +68,7 @@ export interface PresentationReaders {
   authorizePulls?(req?: IncomingMessage): Promise<boolean>
   searchWork?(input: unknown): Promise<unknown>
   getWork?(input: unknown): Promise<unknown>
-  currentCard?(id: string): Promise<import('./workReader').WorkCard>
   workViews?(): Promise<QueueRead>
-  claimQueue?(filters?: ClaimFilters): Promise<QueueRead>
   startWork?(input: StartWorkInput, actor: string): Promise<unknown>
   updateWork?(input: UpdateWorkInput, actor: string): Promise<unknown>
   createWork?(input: CreateWorkInput, actor: string): Promise<unknown>
@@ -86,25 +80,6 @@ export interface PresentationReaders {
 }
 type CardInput<T> = T extends unknown ? Omit<T, 'lease_token'> : never
 const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
-/** claim_next_card only. Decisions navigation still uses decisionItems, which keeps ready-now rows. */
-function claimNextCards(queue: DeskQueue) {
-  const source = queue.needsWill ?? queue.items
-  const ordered = [...source.filter(item => item.readiness === 'ready-now'), ...source.filter(item => item.readiness !== 'ready-now')]
-  const seen = new Set<string>()
-  const cards: Array<{ id: string; readiness: (typeof source)[number]['readiness']; reasons: string[]; item: QueueItem & Partial<NeedsWillItem> }> = []
-  for (const item of ordered) for (const id of item.cardIds) {
-    if (seen.has(id)) continue
-    seen.add(id)
-    cards.push({ id, readiness: item.readiness, reasons: [...item.reasons], item })
-  }
-  return cards
-}
-function claimRequestSince(card: import('./workReader').WorkCard, item: QueueItem & Partial<NeedsWillItem>) {
-  const actions = card.properties['Will action']?.value
-  const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(action => action.trim().toLowerCase())
-  return oldestOpenRequestSince((item.requests ?? []).filter(request => request.cardId === card.id &&
-    request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase())))
-}
 const renderedSchema = renderedObservationSchema
 const ackSchema = z.object({ command_id: z.string().max(128), scene_id: z.string().uuid(), outcome: z.enum(['applied', 'unknown-id', 'stale-revision', 'expired', 'queue-source-unavailable']), revision: z.number().int().nonnegative().optional(), applied_at: z.number().optional(), delivery: deliverySchema.optional(), state: stateSchema.optional() }).strict()
 
@@ -128,97 +103,30 @@ export class ReconciliationMcp {
       try { return await withLeaseCaller(caller, lease_token, () => perform(clean as CardInput<T>)) }
       catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error); throw error }
     }
-    const claim = async (input: ClaimFilters & { operation_id: string; lease_token?: string; card_id?: string }) => {
-      try {
-        const admitted = new Map<string, NonNullable<ReturnType<typeof claimCardReadiness>>>()
-        const claimWarnings: string[] = []
-        const enrich = async (claimed: Awaited<ReturnType<CardLeases['claim']>>, queue?: QueueRead) => {
-          const claimedId = 'lease' in claimed && claimed.lease ? claimed.lease.card_id : undefined
-          if (!input.card_id && claimedId && !queue) queue = await (this.readers.claimQueue?.() ?? this.readers.workViews?.() ?? this.readers.queue()).catch(() => undefined)
-          const readiness = !input.card_id && claimedId
-            ? admitted.get(claimedId) ?? (queue && hasQueue(queue) ? claimNextCards(queue).find(card => card.id === claimedId) : undefined)
-            : undefined
-          return { ...claimed, ...(!input.card_id && claimedId ? { readiness: readiness?.readiness ?? 'unknown', readiness_reasons: readiness?.reasons ?? ['Current queue readiness evidence is unavailable for this card'] } : {}), ...(queue ? { queue: 'needs-will', coverage: hasQueue(queue) ? queue.coverage : undefined, warnings: hasQueue(queue) ? [...queue.warnings, ...claimWarnings] : undefined } : {}), ...(claimedId ? { card: await this.readers.getWork?.({ card_id: claimedId, details: false }) } : {}) }
-        }
-        if (input.lease_token) {
-          const held = await this.leases.claim(input.card_id ? [input.card_id] : [], caller, actor, input.operation_id, input.lease_token, !!input.card_id)
-          return await enrich(held)
-        }
-        const revision = this.leases.sourceRevision()
-        let cards: string[], queue: QueueRead | undefined
-        let candidates: ReturnType<typeof claimNextCards> = []
-        const exactCard = async (id: string) => {
-          // Exact source validation must precede a lease grant. Read-only
-          // claims must not wait for get_work(refresh)'s receipt recovery.
-          if (this.readers.currentCard) {
-            return this.readers.currentCard(id).catch(() => null)
-          }
-          const card = await this.readers.getWork?.({ card_id: id, details: false, refresh: true }) as { outcome?: string; card?: { source?: { archived?: boolean; in_trash?: boolean; properties?: Record<string, { value?: unknown }> } } } | undefined
-          return card?.outcome === 'available' ? card.card?.source as import('./workReader').WorkCard | undefined : null
-        }
-        let exact: Awaited<ReturnType<typeof exactCard>>
-        if (input.card_id) {
-          exact = await exactCard(input.card_id)
-          cards = [input.card_id]
-        } else {
-          queue = await (this.readers.claimQueue?.(input) ?? this.readers.workViews?.() ?? this.readers.queue())
-          if (!hasQueue(queue)) return queue
-          candidates = claimNextCards(queue).filter(candidate => {
-            const card = hasQueue(queue) ? queue.claimCards?.find(card => card.id === candidate.id) : undefined
-            return !!card && matchesClaimFilters(card, input, claimRequestSince(card, candidate.item))
-          })
-          cards = candidates.map(card => card.id)
-        }
-        const select = async () => {
-          if (input.card_id) {
-            const claimed = await this.leases.claim(cards, caller, actor, input.operation_id, undefined, true, { eligible: () => !!exact && strictlyNeedsWill(exact), sourceRevision: revision })
-            if (claimed.outcome === 'no-unclaimed-card' && (!exact || !strictlyNeedsWill(exact))) {
-              const issues = exact ? needsWillIssues(exact) : ['Card is unavailable on the configured board']
-              return { outcome: 'unavailable', issues, message: `${issues.join('; ') || 'Card is archived or trashed'}. The owning mate must fix or retag the card.` }
-            }
-            return claimed
-          }
-          // Validate only unheld candidates, preserving queue order. A competing
-          // claim can win during the source read; try the next card in that case.
-          const covered = () => {
-            const coverage = hasQueue(queue) ? queue.coverage.intentions : undefined
-            return !!coverage && ['fresh', 'partial'].includes(coverage.status) && coverage.coverage !== 'unknown' &&
-              (!coverage.expiresAt || Date.parse(coverage.expiresAt) > Date.now())
-          }
-          for (const candidate of candidates) if (!this.leases.status(candidate.id)) {
-            if (!covered()) continue
-            if (!claimRequestCandidate(candidate.item)) continue
-            const id = candidate.id
-            const current = await exactCard(id)
-            const item = candidate.item
-            if (!current) claimWarnings.push(`Fresh exact-card eligibility is unknown for ${id}; skipped without a lease. Queue coverage does not certify this request.`)
-            const eligible = () => {
-              if (!covered() || !current) return false
-              const since = claimRequestSince(current, item)
-              if (!matchesClaimFilters(current, input, since)) return false
-              const readiness = claimCardReadiness(item, current)
-              if (!readiness) return false
-              admitted.set(id, readiness)
-              return true
-            }
-            if (!eligible()) continue
-            const result = await this.leases.claim([id], caller, actor, input.operation_id, undefined, false, { eligible, sourceRevision: revision })
-            if (result.outcome !== 'no-unclaimed-card') return result
-          }
-          // Also replays an identical lost-response operation when its card is
-          // already held and therefore skipped by the loop above.
-          return this.leases.claim([], caller, actor, input.operation_id)
-        }
-        return await enrich(await select(), queue)
-      } catch (error) { if (error instanceof CardLeaseError) return leaseFailure(error, input.operation_id); throw error }
-    }
-
     const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
-    const claimInstructions = 'Use for next card in this conversation. Generate a fresh globally unique UUID operation_id for a new operation; reuse it only for an identical retry. Start without lease_token, then keep the returned lease_token in tool arguments across calls and later turns, never visible chat, card text or URLs. Present it on every later call for that card, including repeat claims. Independent conversations start without a token. A repeated claim with the token returns the held card; release it before selecting another. A lost token expires after 60 minutes. Claims never change card workflow or worker assignment. Retry an identical operation_id for an ambiguous result.'
-    catalog.registerTool('claim_next_card', { description: 'Claim the first actionable, unclaimed strictly formed Needs Will card. Optional will_action, initiative (exact label or relation ID), area and max_age_days narrow the census before individual reads. Max age is the age of the oldest recorded open Will request; unknown ages are excluded. Owner Will, Waiting For status, a recognized Will action, Waiting For starting Will:, Actor/Will are required. Includes readiness and source coverage. ' + claimInstructions, inputSchema: { operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema, ...claimFilters }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
-    catalog.registerTool('claim_card', { description: 'Claim one exact strictly formed Needs Will card on the configured board. ' + claimInstructions, inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: leaseTokenSchema }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async input => result(await claim(input)))
+    const reviewAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: true }
+    const preparedCall = async (perform: (reviews: PreparedReviews) => Promise<unknown>) => {
+      if (!this.readers.preparedReviews) return { outcome: 'unavailable', message: 'Prepared review storage unavailable' }
+      try { return await perform(this.readers.preparedReviews) }
+      catch (error) {
+        if (error instanceof CardLeaseError) return leaseFailure(error)
+        if (error instanceof DecisionDeskConflict) return { outcome: 'operation-conflict', message: error.message }
+        throw error
+      }
+    }
+    const preparedInstructions = 'Use the returned packet to review the card. Keep the lease_token in tool arguments. Use it to resume or answer in the same chat. Generate a unique operation_id for each operation and reuse it to retry.'
+    const claim = async (input: z.infer<typeof preparedClaimInput>) => result(await preparedCall(reviews => reviews.claim(caller, actor, input)))
+    const nextClaim = { description: 'Claim the next unleased, prepared card that needs Will. ' + preparedInstructions, inputSchema: preparedClaimInput.omit({ card_id: true }), annotations: reviewAnnotations }
+    const exactClaim = { description: 'Claim the prepared packet for one specific card that needs Will. ' + preparedInstructions, inputSchema: preparedClaimInput.required({ card_id: true }), annotations: reviewAnnotations }
+    catalog.registerTool('claim_next_card', nextClaim, claim)
+    catalog.registerTool('claim_card', exactClaim, claim)
     catalog.registerTool('release_claim', { description: 'Release this conversation card lease with an explicit reason; no card workflow changes. Use lease_token from the previous tool result in arguments only, never visible chat, card text or URLs. Discard it after release; a later next card starts without a token.', inputSchema: { lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } }, async input => {
-      try { return result(await this.leases.release(caller, input.lease_token, input.reason)) }
+      try {
+        if (this.readers.preparedReviews) return result(await this.readers.preparedReviews.release(caller, actor, {
+          ...input, operation_id: randomUUID(), action: 'release',
+        }))
+        return result(await this.leases.release(caller, input.lease_token, input.reason))
+      }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
     catalog.registerTool('not_for_me', { description: 'Return this leased card to its responsible mate with a one-line owner reason. Records the reason, clears Will action badges, replaces the Will wait with the mate blocker, notifies Firstmate through the existing workflow bridge and releases the lease after confirmed save. Keep lease_token in arguments only.', inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } }, async input => {
@@ -230,25 +138,14 @@ export class ReconciliationMcp {
         return result(saved)
       } catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    const preparedCall = async (perform: (reviews: PreparedReviews) => Promise<unknown>) => {
-      if (!this.readers.preparedReviews) return { outcome: 'unavailable', message: 'Prepared review storage unavailable' }
-      try { return await perform(this.readers.preparedReviews) }
-      catch (error) {
-        if (error instanceof CardLeaseError) return leaseFailure(error)
-        if (error instanceof DecisionDeskConflict) return { outcome: 'operation-conflict', message: error.message }
-        throw error
-      }
-    }
-    const preparedInstructions = 'Prepared packets only; no research, receipt delivery or source writes. Supply the same review_session_token or lease_token to resume one held card. Keep capabilities in tool arguments only, never visible prose or URLs. A request with neither capability cannot identify an earlier conversation; only an identical operation_id replays that operation. Generate a unique operation_id for each new operation and reuse it for an identical lost-response retry. Stale packets block review. Browser scene IDs and auth actor names never identify conversations. '
-    const reviewAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
-    catalog.registerTool('get_prepared_submission_state', { description: 'Restore this authenticated review context retained operation IDs, selections and per-request progress after refresh/restart. Capabilities belong in arguments only. Expired leases require explicit reclaim and validation before any source write.', inputSchema: preparedRecoveryInput, annotations: readAnnotations }, async input => {
+    catalog.registerTool('get_prepared_submission_state', { description: 'Read unfinished answer operations from this review context. Retry with the same answer, lease token and operation_id.', inputSchema: preparedRecoveryInput, annotations: readAnnotations }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
       try { return result(await this.readers.preparedSubmissions.recover(caller, input)) }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    catalog.registerTool('submit_prepared_decision', { description: 'Save one exact source request on the held prepared packet, confirm durable source readback, then release and claim next. Keep operation_id and selection unchanged for retries, including ambiguous outcomes and restarts. Returns retained selection/progress on failure; recorded awaiting worker acknowledgment never blocks next. High risk/difficult rollback requires the returned selected option and scope confirmation. Keep lease_token in arguments only.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
+    catalog.registerTool('submit_prepared_decision', { description: 'Record Will’s exact answer and selected option on the held card, apply that option’s changes, then release and claim next. Retry with the same answer and operation_id.', inputSchema: preparedSubmitInput, annotations: { ...reviewAnnotations, openWorldHint: true } }, async input => {
       if (!this.readers.preparedSubmissions) return result({ outcome: 'unavailable' })
-      try { return result(await this.readers.preparedSubmissions.submit(caller, actor, actor, input)) }
+      try { return result(await this.readers.preparedSubmissions.submit(caller, actor, input)) }
       catch (error) {
         if (error instanceof DecisionDeskConflict) return result({ outcome: 'operation-conflict', message: error.message })
         throw error
@@ -256,10 +153,10 @@ export class ReconciliationMcp {
     })
     catalog.registerTool('open_prepared_review_session', { description: 'Explicitly register an independent review context; keep the returned capability across successive cards. ' + preparedInstructions, inputSchema: reviewSessionInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.create(caller, input))))
     catalog.registerTool('list_prepared_review_sessions', { description: 'List only real registered contexts authorized for this authenticated caller. No scene identity or invented conversation deep links; metadata never grants control of a held lease.', inputSchema: {}, annotations: readAnnotations }, async () => result(await preparedCall(reviews => reviews.list(caller))))
-    catalog.registerTool('claim_next_prepared_decision', { description: 'Atomically claim the first Ready, unleased packet in existing source queue order. ' + preparedInstructions, inputSchema: preparedClaimInput.omit({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
-    catalog.registerTool('claim_prepared_decision', { description: 'Atomically claim a Ready packet for an exact canonical card; conflicting holds are reported without reallocating. ' + preparedInstructions, inputSchema: preparedClaimInput.required({ card_id: true }), annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.claim(caller, actor, input))))
-    catalog.registerTool('release_prepared_decision', { description: 'Release with an audited reason, skip, or request research (invalidates the packet); atomically claim next excluding this card for this operation. Never answers or changes source owner/status. ' + preparedInstructions, inputSchema: preparedReleaseInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.release(caller, actor, input))))
-    catalog.registerTool('publish_prepared_packet', { description: 'Store a prepared packet using the webhook job_id and a required operation_id. Reuse the operation_id for identical retries. Supply schema (tinstar.decision-packet.v1), background, rationale, recommended_option_id (from the webhook), risk, reversibility, confidence, uncertainty, material_unknowns, consequences, impacted, prerequisites, authorization, references, invalidation_conditions, and review_within_ms. Title and question default to the source question. The server supplies binding and dependencies and reports invalid field paths. Publishing does not answer the request, claim a lease, or change the card.', inputSchema: { job_id: z.string().uuid(), operation_id: z.string().trim().min(1).max(128), packet: z.unknown() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
+    catalog.registerTool('claim_next_prepared_decision', nextClaim, claim)
+    catalog.registerTool('claim_prepared_decision', exactClaim, claim)
+    catalog.registerTool('release_prepared_decision', { description: 'Release the held card, or skip it and claim the next prepared card. ' + preparedInstructions, inputSchema: preparedReleaseInput, annotations: reviewAnnotations }, async input => result(await preparedCall(reviews => reviews.release(caller, actor, input))))
+    catalog.registerTool('publish_prepared_packet', { description: 'Publish research for the webhook job_id. Send packet with summary, options (each with label and optional next fields status, owner, waiting_for, waiting_for_type, waiting_for_id), recommendation and links (label and url). Tin Star adds the card, revision and option IDs. Missing fields are reported by name.', inputSchema: { job_id: z.string().uuid(), packet: z.unknown() }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async input => {
       if (!this.readers.preparation) return result({ outcome: 'unavailable', message: 'Preparation dispatcher unavailable' })
       try { return result(await this.readers.preparation.publish(input)) }
       catch (error) {

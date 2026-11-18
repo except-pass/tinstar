@@ -106,7 +106,7 @@ The live discovery proof is saved outside the repository at `/home/farm/fm-home/
 
 ## Decisions tab
 
-The [Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui)
+The [Decision Desk guide](decision-desk-foundation.md#review-and-preparation-ui)
 owns mode selection and prepared Review / Preparation. The workbench controls
 below apply to the source-request list. Queue navigation alone does not establish
 a prepared packet or a review lease.

@@ -419,60 +419,18 @@ TINSTAR_MCP_PROOF=/absolute/proof-directory npx playwright test --config playwri
 
 The MCP Playwright test uses an official SDK client and actual browser pages; source records are explicitly controlled fixtures. The separate live development proof uses Hulk’s actual First Mate snapshot and authenticated Notion reads with the discovery helper retaining its credential. Neither is a production whole-farm deployment. Task evidence is saved outside the repository at `/home/farm/fm-home/data/tinstar-recon-s5/` (transcripts, screenshots, failed-start logs and final-head receipts).
 
-MCP queue traversal uses the [S4 queue API](reconciliation-queue.md), which owns readiness, deduplication, PR checks, source coverage and ordering. The [Decision Desk guide](decision-desk-foundation.md#p5--review-and-preparation-ui) owns prepared review and its separate claim/display boundary. The [Overview reference](overview.md) owns card presentation and floor navigation. Next/previous navigation traverses verified-ready requests; verification candidates can also be opened explicitly by item ID. Navigation mutates only presentation. An answered item removed by a fresh source read stays explicitly unavailable if selected; it is never silently replaced or restored. The [queue refresh contract](reconciliation-queue.md#progressive-display-and-refresh) owns progressive HTTP display, polling, save-triggered refresh and retained evidence behavior. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3. The live proof’s discovery bridge is development evidence, not a production credential deployment.
+MCP queue traversal uses the [S4 queue API](reconciliation-queue.md), which owns readiness, deduplication, PR checks, source coverage and ordering. The [Decision Desk guide](decision-desk-foundation.md#review-and-preparation-ui) owns prepared review and its separate claim/display boundary. The [Overview reference](overview.md) owns card presentation and floor navigation. Next/previous navigation traverses verified-ready requests; verification candidates can also be opened explicitly by item ID. Navigation mutates only presentation. An answered item removed by a fresh source read stays explicitly unavailable if selected; it is never silently replaced or restored. The [queue refresh contract](reconciliation-queue.md#progressive-display-and-refresh) owns progressive HTTP display, polling, save-triggered refresh and retained evidence behavior. Production Notion credentials and other farm homes’ authorized snapshot routes remain operator prerequisites from S1–S3. The live proof’s discovery bridge is development evidence, not a production credential deployment.
 
 MCP and workflow request bodies remain bounded at 256 KiB. UI registration and sync allow 16 MiB because a single accepted command expands into search focus, replay flash IDs, an acknowledgment state snapshot, and requested/rendered/visible delivery arrays. The browser sends one acknowledgment per poll to avoid multiplying those snapshots by a 32-item batch. Unsent updates coalesce per command in queue order, preserving the original commit timestamp and terminal delivery observations even when failed batches return to the queue. The large-reveal transport regression exercises a command below 256 KiB whose acknowledgment exceeds that limit, including 4097 targets and a maximum-length semantic ID.
 
 ## Session-scoped card leases
 
-For “next card”, call `claim_next_card(operation_id)` without a browser session.
-Generate a fresh UUID operation_id for the first attempt and reuse it only for
-an identical retry. It claims the first currently actionable, unclaimed Needs Will
-request in existing queue order, ready-now cards first, and includes its `readiness` and
-`readiness_reasons` with source coverage. Successful repeat claims and
-operation-id replays also include these fields, using current queue evidence;
-when evidence for the card is unavailable, `readiness` is `unknown` and
-`readiness_reasons` explains the missing evidence. Check the card before acting
-when it is not certified ready. Automatic claims skip
-[deferred cards](workflow.md#deferred-decision-cards), future Start Dates and
-cached known answered requests. Desk readiness and
-independent waits do not block a current strict Will property ask.
-New next-card and exact-card leases
-require exact structured fields: Owner `Will`, Status `Waiting For`, at least one
-`Will action` of `Decision`, `Do`, `Merge`, `Elevated command`, `Waiting For`
-starting `Will:`, `Waiting For Type` `Actor`, and `Waiting For ID` `Will`.
-Legacy or malformed asks can remain visible for verification but are not claimable.
-Backlog approvals must be formed as a current Will wait before next-card admission.
-Eligibility is checked before claiming and again in the lease allocation
-transaction; a Tin Star workflow source write to the candidate card during queue/history
-collection or the fresh exact-card read invalidates that card's snapshot, and a
-pending workflow source write prevents allocation on that card. See the
-[reservation contract](decision-desk-foundation.md#per-card-source-write-reservations-and-recovery)
-for reminder admission and write fencing. Other cards' writes and
-reservations do not block admission. An identical retry or held-token call retains its
-existing lease, even if readiness or strict fields have since changed. A refused
-new exact-card claim identifies failing fields and directs the owning mate to
-fix or retag the card.
-
-Generic claims refresh the property census, enqueue missing history through the
-[shared bounded history loader](decision-desk-foundation.md#read-only-preparer-evidence),
-and select using cached evidence without waiting for history or operational
-reconciliation. A current strict Will property ask is claimable with or without
-Next action text, even while history is cold, partial, unavailable or pending.
-Desk preparation still requires its structured request history. Cached recorded
-answers exclude their matching request/source anchor, and a future Start Date
-excludes automatic claims. Claim responses include card
-metadata only; use `get_work` with `details: true` for the selected card's prose.
-
-Optional `will_action`, `initiative`, `area`, and `max_age_days` filters intersect.
-Action and area use exact labels; initiative accepts its exact label or relation
-ID. Max age is elapsed days since each candidate card’s oldest recorded open Will
-request matching its current action tags, even when several cards share a PR.
-Unknown ages do not satisfy this filter; `get_work_views` loads the
-existing bounded request history when needed. The census and cached timestamps
-narrow candidates before individual reads. The selected candidate gets fresh
-properties and checks cached comment history; a stale or answered candidate is
-skipped. Missing histories warm through the shared bounded loader.
+Call `claim_next_card(operation_id)` for the next prepared card that needs
+Will. `claim_card(card_id, operation_id)` scopes review to one card.
+These are aliases of the Decision Desk claim tools. Claims return the packet
+and a per-card lease. See the
+[Decision Desk guide](decision-desk-foundation.md#chatgpt-claims) for answers,
+scoped claims, and skip.
 
 `not_for_me(card_id, operation_id, lease_token, reason)` returns a leased ask with
 a one-line reason. The workflow writer records that reason, clears all Will
@@ -487,21 +445,6 @@ or notice storage retains the lease and reports the failure; retry the identical
 operation for an interrupted save. An unresolved provider write uses the existing
 audited source-write recovery before retry. After a lost final response, read `get_work`
 for the recorded return and current lease before retrying.
-
-The existing Firstmate workflow-notice surface also receives one daily UTC
-malformed-asks report, grouped by declared mate, from a fresh complete census.
-It selects active asks using structured owner/identity fields or action tags
-(including legacy tags such as `Approval`), without inferring asks from free-text
-Will keywords. It lists each violating field and explicitly labels unknown mate ownership.
-It adds no dispatch, status or delivery channel. `search_work` owner/status
-filters and `coverage.intentions` retain their existing contracts.
-
-When none qualifies, `no-unclaimed-card` means no currently unclaimed actionable
-card in the covered queue. Its `coverage` and `warnings` retain stale, unknown,
-partial and body-only evidence limitations; it does not certify all work clear.
-An unavailable source is not an empty queue.
-`claim_card(card_id, operation_id)` instead claims
-an exact strictly formed Needs Will card on the configured board.
 
 Keep the returned `lease_token` in tool arguments across calls and later turns.
 Never print it in chat, card text, URLs or logs. Every later card read/change
@@ -540,13 +483,13 @@ claim returns `claim-lost`.
 
 Requires Node >=22.13 for built-in `node:sqlite` without a launch flag
 ([Node CLI history](https://nodejs.org/api/cli.html#--no-experimental-sqlite)).
-After deployment, refresh connector discovery for the three new tools.
+After deployment, refresh connector discovery for the updated claim, publish, and answer arguments.
 Firstmate owns the guarded deploy and live proof: two separate ChatGPT chats
 holding distinct cards, one refused cross-chat change and one refused mate
 update. Local automated coverage does not substitute for that live proof.
 
 Prepared-only claims, registered review contexts, skip and claim timing audit
-are documented in the [Decision Desk reference](decision-desk-foundation.md#p2-registered-review-sessions-and-prepared-claims).
+are documented in the [Decision Desk reference](decision-desk-foundation.md#chatgpt-claims).
 Follow-ups: admin force-claim/takeover, an active-claims dashboard,
 the five-conversation DEV load proof, and generic skip/cooldown semantics. The facade
 scope list and deploy approved-tool catalog currently duplicate tool names;

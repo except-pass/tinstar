@@ -29,7 +29,7 @@ The [Card Janitor reference](docs/features/card-janitor.md) covers the read-only
 
 The [Next check-in watchdog](docs/features/check-in-watchdog.md) requests overdue status updates through First Mate and shows a quiet line on the relevant card until Notion readback verifies the answer.
 
-Open **Decisions** to review source requests in the **Workbench**. Select **Decision Desk** for prepared review and queue preparation controls. See the [Decision Desk guide](docs/features/decision-desk-foundation.md#p5--review-and-preparation-ui) for submission, recovery and the preparation runner boundary.
+Open **Decisions** to review source requests in the **Workbench**. Select **Decision Desk** for prepared review and queue status. See the [Decision Desk guide](docs/features/decision-desk-foundation.md#review-and-preparation-ui) for submission, recovery and the preparation runner boundary.
 
 Use the speech-bubble **Ask** icon on a task, worker, PR, deployment target or receipt to open a blank question, or right-click a supported field or relationship for an editable draft. Review the question, then send. Questions and answers appear in **Discuss**, under **Needs you**, **Waiting** or **History**; opening an item returns to its originating context. The [Ask reference](docs/features/ask.md) covers gestures, semantic targeting, answer return, and the required owner-authenticated setup and outbound puller.
 

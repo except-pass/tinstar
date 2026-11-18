@@ -512,8 +512,8 @@ test('formal decisions remain in Decisions and never enter conversation tab coun
   prepared.invalidate()
   await page.reload()
   await openDecisionDesk(page)
-  await expect(page.getByText('Packet invalidated — source revision changed. Refresh research before deciding.')).toBeVisible()
-  await expect(page.getByRole('textbox', { name: 'Answer this decision' })).toHaveCount(0)
+  await expect(page.getByText('The card changed and will be prepared again if it still needs Will.')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Your answer' })).toHaveCount(0)
 })
 
 test('delivered questions offer waiting copy while genuine failures alone expose retry', async ({ page }, testInfo) => {
@@ -758,10 +758,9 @@ test('phone Discuss return to a card held elsewhere offers untargeted next witho
   const claims: Record<string, unknown>[] = []
   await page.route('**/api/reconciliation/decision-desk/claim', async route => {
     const input = route.request().postDataJSON(); claims.push(input)
-    const fixture = preparedDecisionFixture().packet
-    fixture.binding.card_id = b; fixture.binding.request_key = 'next-request'
+    const fixture = preparedDecisionFixture(b).packet
     const data = input.card_id === a ? { outcome: 'not-saved', code: 'card-held', lease: { holder: 'Other fixture context' } } : {
-      outcome: 'held', lease_token: 'next-fixture-lease', lease: { expires_at: new Date(Date.now() + 3600000).toISOString() },
+      outcome: 'held', lease_token: 'next-fixture-lease', lease: { card_id: b, expires_at: new Date(Date.now() + 3600000).toISOString() },
       packet: { id: '00000000-0000-4000-8000-000000000002', version: 1, packet: fixture, validation: { valid: true, reasons: [], valid_until: new Date(Date.now() + 3600000).toISOString() }, expires_at: new Date(Date.now() + 3600000).toISOString() },
     }
     await route.fulfill({ json: { ok: true, data } })

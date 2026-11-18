@@ -21,3 +21,16 @@
 @media(max-width:660px){.decision-desk{--dd-nav-clearance:56px}}
 
 .dd-target-recovery { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+
+.dd-review-content > label { display: block; }
+.dd-review-content textarea {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--dd-line);
+  border-radius: 8px;
+  background: var(--dd-bg);
+  color: var(--dd-text);
+}

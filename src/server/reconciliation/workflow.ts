@@ -1,7 +1,11 @@
+import type { DecisionPacket } from '../../shared/decisionPacket'
+import type { RecordDeskAnswer } from './preparedSubmissions'
+import type { CardContextRead } from './cardContext'
+import { decisionCardSource, deskAnswerMarker } from './decisionEvidence'
 import { releasePull } from '../../shared/pullIdentity'
 import { workReadback } from './workReadback'
 import { CardLeases, CardLeaseError, leaseFailure, withSourceOperation } from './cardLeases'
-import { responsibleMate, strictlyNeedsWill } from './claimPolicy'
+import { actionableWillCard, responsibleMate } from './claimPolicy'
 import { reviewSubmissions } from '../../shared/reviews'
 import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
@@ -80,39 +84,74 @@ export class WorkflowOperations {
     if (input.kind === 'not_for_me' && !this.reader.leases?.status(input.card_id)) return Promise.resolve({ outcome: 'not-saved', code: 'claim-required', message: 'Not for me requires a current card lease', saved_fields: [], operation_id: input.operation_id })
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
-  /** Desk-only persistence boundary. Legacy update() still waits for its
-   * existing reconciliation result; desk advancement never waits for a worker. */
-  answerPrepared(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string): Promise<StartWorkResult> {
-    return this.guarded(input.card_id, input.operation_id, actor, () => this.exclusive(input.card_id, () => this.performUpdate(input, actor, true)), false)
+  recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>): ReturnType<RecordDeskAnswer> {
+    const id = packet.card_id
+    const actor = 'Tin Star Decision Desk'
+    const marker = deskAnswerMarker + operation
+    const option = packet.options.find(item => item.id === selection.option_id)!
+    return withSourceOperation(actor, operation, () => this.exclusive(id, async () => {
+      await this.content.recoverAppliedWrite(id)
+      const { card, blocks } = await load()
+      const hasAnswer = (block: CardContextRead['blocks'][number]) => block.type === 'comment' && block.text.endsWith(`\n${marker}`)
+      const recorded = blocks.some(hasAnswer)
+      const next = option.next
+      const desired: Record<string, unknown> = {}
+      if (card.properties['Will action']) desired['Will action'] = []
+      if (next?.owner !== undefined) desired.Owner = next.owner
+      if (next?.status !== undefined) desired.Status = next.status
+      if (card.properties.Status?.value === 'Waiting For' && next?.status && next.status !== 'Waiting For') {
+        for (const name of ['Waiting For', 'Waiting For Type', 'Waiting For ID']) if (card.properties[name]) desired[name] = null
+      } else {
+        if (next?.waiting_for !== undefined) desired['Waiting For'] = next.waiting_for
+        if (next?.waiting_for_type !== undefined) desired['Waiting For Type'] = next.waiting_for_type
+        if (next?.waiting_for_id !== undefined) desired['Waiting For ID'] = next.waiting_for_id
+      }
+      const matches = (current: WorkCard, name: string) => this.matches(current, name, this.normalized(current, name, desired[name]))
+      if (recorded && Object.keys(desired).every(name => matches(card, name))) return { outcome: 'recorded' }
+      const source = decisionCardSource(card, blocks.filter(block => !hasAnswer(block)))
+      if (!source.actionable || source.revision !== packet.source_revision) {
+        if (recorded) return { outcome: 'recorded', message: 'The answer is on the card. The card changed independently before the option’s workflow changes could be applied.' }
+        return { outcome: 'packet-invalidated' }
+      }
+      let properties: Record<string, unknown>
+      try {
+        const statuses = this.reader.declarations().data?.schema?.Status?.options ?? []
+        if (!card.source?.synthetic && next?.status && statuses.length && !statuses.includes(next.status)) {
+          return { outcome: 'not-saved', message: `Status: ${next.status} is unavailable on this board.` }
+        }
+        properties = Object.fromEntries(Object.keys(desired).filter(name => !matches(card, name))
+          .map(name => [name, this.property(card, name, desired[name])]))
+        if (card.source?.provider === 'jira') this.reader.jira?.validateProperties(properties)
+      } catch (error) {
+        if (error instanceof WorkflowError || error instanceof JiraMappingError) {
+          return { outcome: recorded ? 'recorded' : 'not-saved', message: error.message }
+        }
+        throw error
+      }
+      const note = `Will chose: ${option.label}\n\n${selection.answer}`
+      if (!recorded) await this.content.note(id, note, marker)
+      let saved = card
+      if (Object.keys(properties).length) {
+        await this.content.patchProperties(id, properties, async () => {
+          const latest = await this.reader.card(id, true)
+          for (const name of Object.keys(properties)) {
+            if (!matches(latest, name) && !this.matches(latest, name, card.properties[name]?.value ?? null)) {
+              throw new Error(`${name} changed before the answer could be applied`)
+            }
+          }
+          return Object.keys(properties).every(name => matches(latest, name))
+        })
+        saved = await this.reader.card(id, true)
+        if (!Object.keys(desired).every(name => matches(saved, name))) throw new Error('Decision properties could not be confirmed')
+      }
+      this.reader.confirm(saved)
+      void this.changed({ before: card, card: saved, actor, operationId: operation,
+        properties: Object.fromEntries(Object.keys(properties).map(name => [name, saved.properties[name]?.value])), notes: [`${note}\n${marker}`] }).catch(() => {})
+      return { outcome: 'recorded' }
+    }))
   }
-  async observePreparedAnswer(input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, actor: string) {
-    // Full notes, not a property timestamp or cached UI history. An absent
-    // marker in truncated/unavailable history cannot authorize a second write.
-    await withSourceOperation(actor, input.operation_id, () => this.content.recoverAppliedWrite(input.card_id))
-    const notes = await this.content.notes(input.card_id)
-    const intents = notes.flatMap(note => decisionRecordRows([note], 'Tin Star decision intent: ').filter(row => row.input?.request_id === input.request_id).map(row => ({ ...row, noteId: note.id })))
-    const answers = notes.filter(note => workflowReceipt(note)).flatMap(note => decisionRecordRows([note], 'Tin Star answer data: ')).filter(row => row.request_id === input.request_id)
-    const matches = (value: unknown) => {
-      const parsed = updateWorkSchema.safeParse(value)
-      return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
-    }
-    const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
-    const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
-    let desired: Record<string, unknown> | undefined
-    if (!conflict && !answers.length && own) {
-      const card = await this.reader.card(input.card_id, true)
-      const planning = { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([key, property]) => [key,
-        key in own.original ? { ...property, value: own.original[key] } : property])) }
-      desired = (await this.updatePlan(planning, input, actor, notes)).desired
-    }
-    return { state: conflict ? 'conflict' as const : answers.length ? 'confirmed' as const : own ? 'pending' as const : 'absent' as const,
-      original: own?.original as Record<string, unknown> | undefined, desired, ownIntentId: own?.noteId }
-  }
-  async preparedHistory(cardId: string) {
-    const [notes, sections] = await Promise.all([this.content.notes(cardId), this.content.sections(cardId, false, true)])
-    return [...notes.map(note => ({ ...note, type: 'comment' })), ...sections]
-  }
+
   async submitHandoff(input: SubmitHandoffInput, actor: string) {
     return withSourceOperation(actor, input.submission_id, async () => {
       try {
@@ -633,7 +672,7 @@ export class WorkflowOperations {
       if (!checkInReport(cp.request_id ? note : `Check-in request: ${requestId}\n${note}`, requestId)) throw new WorkflowError('invalid-checkpoint', 'Serialized checkpoint must satisfy the existing watchdog requirements for substantive progress/evidence and non-placeholder fields')
     } else if (input.kind === 'not_for_me') {
       if (!this.onChange) throw new WorkflowError('bridge-unavailable', 'The Firstmate workflow bridge is unavailable; the claim is retained.')
-      if (!strictlyNeedsWill(card)) throw new WorkflowError('ask-changed', 'This card no longer has the same structured Will ask. Refresh before returning it.')
+      if (!actionableWillCard(card)) throw new WorkflowError('ask-changed', 'This card no longer needs Will. Refresh before returning it.')
       const mate = responsibleMate(card, notes)
       if (!mate) throw new WorkflowError('mate-unknown', 'No responsible mate is declared in First Mate tasks or Last touched by. Firstmate must repair the route; the claim is retained.')
       transition(mate.owner, 'Waiting For')
@@ -743,7 +782,7 @@ export class WorkflowOperations {
     if (Array.isArray(value) && Array.isArray(actual)) return same([...value].sort(), [...actual].sort())
     return same(actual, value)
   }
-  private async performUpdate(input: UpdateWorkInput, actor: string, prepared = false): Promise<StartWorkResult> {
+  private async performUpdate(input: UpdateWorkInput, actor: string): Promise<StartWorkResult> {
     const key = JSON.stringify([actor, input.card_id, input.operation_id]), marker = receiptMarker(actor, input.operation_id)
     let attempted = false, card: WorkCard | undefined, contentBefore: WorkCard | undefined, notePending: string | undefined, heldWait = false
     let stage = 'read canonical card'
@@ -791,7 +830,7 @@ export class WorkflowOperations {
           const effects = decisionEffects(first.input, source)
           if (!same(effects, decisionEffects(input, source)) || intents.some(intent => !same(effects, decisionEffects(intent.input, source)))) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer intent or effects')
           if (first.actor !== actor || first.input.operation_id !== input.operation_id) {
-            const recovered = await this.performUpdate(first.input, first.actor, prepared)
+            const recovered = await this.performUpdate(first.input, first.actor)
             return { ...recovered, operation_id: input.operation_id }
           }
         }
@@ -851,15 +890,8 @@ export class WorkflowOperations {
         const missing = Object.fromEntries(Object.entries(plan.properties).filter(([name]) => !this.matches(current, name, plan.desired[name])))
         if (Object.keys(missing).length) {
           attempted = true
-          const recheck = prepared ? async () => {
-            const latest = await this.reader.card(input.card_id, true)
-            for (const name of Object.keys(missing)) {
-              if (name !== 'Last touched by' && !this.matches(latest, name, plan.original[name]) && !this.matches(latest, name, plan.desired[name])) throw new WorkflowError('conflict', `${name} changed before the reserved answer write; unrelated work was preserved`)
-            }
-            return Object.keys(missing).every(name => this.matches(latest, name, plan.desired[name]))
-          } : undefined
           stage = 'write card properties'
-          const patched = await this.content.patchProperties(card.id, missing, recheck)
+          const patched = await this.content.patchProperties(card.id, missing)
           card = card.source?.provider === 'jira' ? patched as WorkCard : await this.reader.card(card.id, true)
         }
         this.reader.confirm(card)
