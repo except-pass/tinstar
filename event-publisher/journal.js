@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, lstatSync, mkdirSync, openSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { closeSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
 
@@ -52,9 +52,28 @@ CREATE TABLE IF NOT EXISTS events (
 );
 `
 
+function writerPath(path) {
+  const requestedDirectory = dirname(path)
+  mkdirSync(requestedDirectory, { recursive: true, mode: 0o700 })
+  const directory = realpathSync(requestedDirectory)
+  const owner = process.geteuid()
+  for (let current = directory; ; current = dirname(current)) {
+    const info = lstatSync(current)
+    const direct = current === directory
+    const trustedOwner = info.uid === owner || (!direct && info.uid === 0)
+    const writable = (info.mode & 0o022) !== 0
+    const stickyAncestor = !direct && (info.mode & 0o1000) !== 0
+    if (!info.isDirectory() || !trustedOwner || (writable && !stickyAncestor)) {
+      throw new JournalConfigurationError('use a service-owned journal directory protected from file replacement and sidecar creation by other users')
+    }
+    if (current === dirname(current)) break
+  }
+  return join(directory, basename(path))
+}
+
 function openJournal(path, readOnly) {
   if (!readOnly) {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    path = writerPath(path)
     for (const suffix of ['', '-wal', '-shm', '-journal']) {
       const file = lstatSync(path + suffix, { throwIfNoEntry: false })
       if (file && (!file.isFile() || file.uid !== process.geteuid() || (file.mode & 0o077) !== 0)) {

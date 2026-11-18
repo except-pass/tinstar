@@ -35,7 +35,11 @@ independently readable home. The paths and ID below are synthetic.
 `codeRoot` defaults to the home path. Use the directory containing the installed
 `bin/` read interfaces. A home defaults to live mode. For synthetic inputs, set
 `"mode": "fixture"` and use a separate journal. Keep the database and its SQLite
-sidecars in a private directory outside the checkout.
+sidecars in a private directory outside the checkout. The writer requires a
+directory owned by the service account, with group and other write access
+disabled. The path to that directory must also prevent other users from
+replacing its directories. This prevents another account from replacing the
+checked journal or planting SQLite sidecars before SQLite opens them.
 The journal binds each home ID to its resolved path on first registration.
 Existing journals retain that binding. Start a new journal to use the same ID
 with a different path. The collector retries unresolved homes on subsequent

@@ -79,6 +79,24 @@ test('journal writer rejects public database and sidecar files', async t => {
   }
 })
 
+test('journal writer rejects directories that allow file replacement', async t => {
+  const parent = await temp(t)
+  const directory = join(parent, 'private')
+  const path = join(directory, 'journal.sqlite')
+  const writer = new Journal(path)
+  writer.close()
+
+  await chmod(directory, 0o770)
+  throws(() => new Journal(path), /service-owned journal directory/)
+  const reader = new Journal(path, { readOnly: true })
+  equal(reader.tail(), 0)
+  reader.close()
+
+  await chmod(directory, 0o700)
+  await chmod(parent, 0o770)
+  throws(() => new Journal(path), /service-owned journal directory/)
+})
+
 test('home binding survives restart and is shared by task and worker sources', async t => {
   const path = await temp(t)
   const db = join(path, 'journal.sqlite')
