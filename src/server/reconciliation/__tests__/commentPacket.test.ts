@@ -145,13 +145,20 @@ it.each([false, true])('requires a normal job for jobless or unknown-job comment
   expect(await sources.decisionPackets.ids()).toEqual([])
   const evidence = sources.preparationEvidence(cardId)
   const mapped = mapCommentPacket({ id: 'retained-comment', type: 'comment', text: packet }, evidence)!
-  const previous = await sources.decisionPackets.publish(mapped.packet, evidence, commentPacketActor, 'retained-comment')
-  await sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', { job_id: mapped.job_id }, previous.id)
-  expect(await sources.decisionPackets.read(previous.id, evidence)).toMatchObject({ ready: false, validation: { valid: false } })
-  expect(await loaded(sources)).toMatchObject({ ready: [], pending: [{ request_id: requestId, state: 'Queued' }] })
   const job = await prepare(cardId)
   expect(job.outcome).toBe('dispatched')
   expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'prepared-replacement', packet: mapped.packet })).toMatchObject({ ready: true })
+})
+
+it('keeps a retained comment packet reviewable against its pinned evidence without a job', async () => {
+  const { sources, cardId, requestId, prepare } = await setup({ prepare: false, packet: '' })
+  await loaded(sources)
+  const evidence = sources.preparationEvidence(cardId)
+  const { packet } = mapCommentPacket({ id: 'retained-comment', type: 'comment', text: sampleCommentPacket }, evidence)!
+  const previous = await sources.decisionPackets.publish(packet, evidence, commentPacketActor, 'retained-comment')
+  await sources.decisionPackets.recordEvent(commentPacketActor, 'comment-import', {}, previous.id)
+  expect(await loaded(sources)).toMatchObject({ ready: [{ id: previous.id }], pending: [{ request_id: requestId, state: 'Ready' }] })
+  expect(await prepare(cardId)).toMatchObject({ outcome: 'already-ready' })
 })
 
 it('shows a missing packet field as Blocked on the Desk', async () => {

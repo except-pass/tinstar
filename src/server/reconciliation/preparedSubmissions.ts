@@ -12,7 +12,7 @@ const answerSchema = answerDecisionSchema
 export const preparedSubmitInput = z.object({
   operation_id: z.string().min(1).max(128), review_session_token: z.string().min(1).max(256).optional(), lease_token: z.string().min(1).max(256),
   packet_id: z.string().uuid(), packet_version: z.number().int().positive(), request_id: z.string().min(1).max(128), option_id: z.string().min(1).max(128),
-  next: answerSchema.shape.next, resolve_wait: answerSchema.shape.resolve_wait.unwrap().max(12000).optional(),
+  next: answerSchema.shape.next, resolve_wait: answerSchema.shape.resolve_wait.unwrap().pipe(z.string().max(12000)).optional(),
   original_lease_token: z.string().min(1).max(256).optional(),
   confirmation: z.object({ option_id: z.string(), scope: z.string() }).strict().optional(),
 }).strict()
@@ -235,7 +235,7 @@ export class PreparedSubmissions {
         const answer: Answer = JSON.parse(row.answer)
         return { operation_id: row.operation, selection: JSON.parse(row.selection), state: row.state,
           binding_matches_original_lease: !!input.original_lease_token && JSON.parse(row.binding).token_hash === leaseHash(input.original_lease_token),
-          next: workReadback(answer.next), resolve_wait: workReadback(answer.resolve_wait?.trim()), confirmed_at: row.confirmed === null ? null : new Date(row.confirmed).toISOString(),
+          next: workReadback(answer.next), resolve_wait: workReadback(answer.resolve_wait), confirmed_at: row.confirmed === null ? null : new Date(row.confirmed).toISOString(),
           detail: workReadback(JSON.parse(row.detail)), recovery: 'Retry the original operation ID and selection after reclaiming/revalidating an expired lease. Ambiguous provider writes use the existing audited source-write reconciliation API.' }
       }) }
     })

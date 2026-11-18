@@ -30,9 +30,17 @@ const relevant = (card: WorkCard, kind: StartWorkInput['worker']['kind']) => ({ 
   ...(kind === 'firstmate' ? { worker_links: card.properties[FIRST_MATE_TASKS]?.value ?? null } : { external_workers: card.properties['Delegated To']?.value ?? null }), area: card.properties.Area?.value ?? null })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
+function resolvedWaitIndex(entries: string[], resolve: string) {
+  const exact = entries.indexOf(resolve)
+  if (exact !== -1) return exact === entries.lastIndexOf(resolve) ? exact : -1
+  const normalized = entries.map(line => line.trim())
+  const match = normalized.indexOf(resolve.trim())
+  return match === normalized.lastIndexOf(resolve.trim()) ? match : -1
+}
+
 const decisionEffects = (input: Extract<UpdateWorkInput, { kind: 'answer_decision' }>, source?: Extract<UpdateWorkInput, { kind: 'answer_decision' }>['source_request']) => ({
   request_id: input.request_id, answer: input.answer, option_id: input.option_id, next: input.next,
-  resolve_wait: input.resolve_wait?.trim(), legacy_action: input.legacy_action,
+  resolve_wait: input.resolve_wait, legacy_action: input.legacy_action,
   source: input.source_request || source ? requestKey(input.source_request ?? source!) : null,
 })
 
@@ -97,7 +105,7 @@ export class WorkflowOperations {
       return parsed.success && parsed.data.kind === 'answer_decision' && same(decisionEffects(parsed.data), decisionEffects(input))
     }
     const unrelatedReceipt = notes.some(note => workflowNoteHasMarker(note, receiptMarker(actor, input.operation_id))) && !answers.length && !intents.some(row => row.actor === actor && row.input?.operation_id === input.operation_id)
-    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait?.trim() !== input.resolve_wait?.trim() || row.legacy_action !== input.legacy_action)
+    const conflict = unrelatedReceipt || intents.some(row => !matches(row.input)) || answers.some(row => row.answer !== input.answer || row.option_id !== input.option_id || !same(row.next, input.next) || row.resolve_wait !== input.resolve_wait || row.legacy_action !== input.legacy_action)
     const own = intents.find(row => row.actor === actor && row.input?.operation_id === input.operation_id && matches(row.input))
     let desired: Record<string, unknown> | undefined
     if (!conflict && !answers.length && own) {
@@ -467,7 +475,7 @@ export class WorkflowOperations {
     if (hasActiveWait(waitState(card)) && status !== 'Waiting For') {
       const current = waitState(card)
       const entries = waitEntries(current.waitingFor, current).map(entry => entry.text)
-      if (!resolve || entries.filter(line => line === resolve).length !== 1 || entries.some(line => line !== resolve) || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
+      if (!resolve || entries.length !== 1 || resolvedWaitIndex(entries, resolve) !== 0 || String(value('Waiting For') ?? '').trim()) throw new WorkflowError('wait-unresolved', 'Leaving Waiting For requires exact resolution of every active blocker through assign or answer_decision. Nothing was written.')
     }
     const state = { ...waitState(card), status, type: String(value('Waiting For Type') ?? ''), id: String(value('Waiting For ID') ?? ''),
       waitingFor: String(value('Waiting For') ?? ''), nextCheckIn: value('Next check-in') as ReturnType<typeof waitState>['nextCheckIn'] }
@@ -565,7 +573,7 @@ export class WorkflowOperations {
       const entries = currentWaits()
       if (!wasWaiting()) {
         if (!resolve) return
-        if (entries.filter(entry => entry.text === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
+        if (resolvedWaitIndex(entries.map(entry => entry.text), resolve) === -1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
         editedWaits = entries.filter(entry => entry.text !== resolve)
         if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
         return
@@ -573,7 +581,7 @@ export class WorkflowOperations {
       if (requestedStatus === 'Waiting For' && !resolve) return
       const blockers = entries.map(entry => entry.text)
       if (!resolve) throw new WorkflowError('wait-unresolved', `Leaving Waiting For requires the exact current wait text.${blockers.length ? ` Current wait: ${blockers[0]}` : ' Waiting For text is empty, so there is no exact wait to resolve. Repair it with a typed wait, or refresh the card.'} Nothing was written.`)
-      if (entries.filter(entry => entry.text === resolve).length !== 1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
+      if (resolvedWaitIndex(entries.map(entry => entry.text), resolve) === -1) throw new WorkflowError('wait-conflict', 'The explicitly resolved wait must match one current wait; refresh and retry. Nothing was written.')
       const still = entries.filter(entry => entry.text !== resolve)
       editedWaits = still
       if (input.kind === 'assign') note += `\nResolved wait: ${JSON.stringify(resolve)}`
@@ -806,7 +814,7 @@ export class WorkflowOperations {
           const proposal = eligibleRequests.find(row => row.id === input.request_id)
           const intent = decisionRecordRows(notes, 'Tin Star decision intent: ').find(row => row.input?.request_id === input.request_id && row.input?.answer === data?.answer)
           if (input.source_request && requestKey(proposal.source_request) !== requestKey(input.source_request)) throw new WorkflowError('decision-conflict', 'This proposal is already bound to a different First Mate request')
-          if (!data || data.answer !== input.answer || !same(data.next, input.next) || data.resolve_wait?.trim() !== input.resolve_wait?.trim() || data.option_id !== input.option_id || (data.legacy_action ?? intent?.input?.legacy_action) !== input.legacy_action) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
+          if (!data || data.answer !== input.answer || !same(data.next, input.next) || data.resolve_wait !== input.resolve_wait || data.option_id !== input.option_id || (data.legacy_action ?? intent?.input?.legacy_action) !== input.legacy_action) throw new WorkflowError('decision-conflict', 'This proposal already has a different durable answer or next state')
           return { ...result('saved', 'already-saved', 'This exact proposal answer is already recorded; no comment or property changes replayed'), saved_fields: ['note'] }
         }
       }
@@ -826,7 +834,7 @@ export class WorkflowOperations {
         notePending = repair.note
       } else {
         if (!pending && input.expected && Object.entries(input.expected).some(([name, value]) => !this.matches(card!, name, value))) throw new WorkflowError('conflict', 'A requested precondition changed; refresh and re-issue with a new operation_id', true)
-        if (pending && JSON.stringify({ ...pending.input, resolve_wait: pending.input.resolve_wait?.trim() }) !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
+        if (pending && JSON.stringify(pending.input) !== JSON.stringify(input)) throw new WorkflowError('operation-conflict', 'operation_id was used with different input', true)
         const planningCard = pending ? { ...card, properties: Object.fromEntries(Object.entries(card.properties).map(([name, property]) => [name,
           name in pending.original ? { ...property, value: pending.original[name] } : property])) } : card
         // Rebuild policy from validated input; a human-editable note never

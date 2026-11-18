@@ -120,10 +120,10 @@ export function projectDecisionEvidence(snapshot: SourceSnapshot, cardId: string
   })
   const waitingFor = String(card?.properties['Waiting For']?.value ?? '')
   const waitId = String(card?.properties['Waiting For ID']?.value ?? '').trim()
-  const waits = waitingFor.split('\n').map(line => line.trim()).filter(line => {
+  const waits = waitingFor.split('\n').filter(line => {
     const wait = parseWaitLine(line)
     return wait?.type === 'Actor' && wait.id === 'Will'
-      || !wait && line.startsWith('Will:') && waitId === 'Will'
+      || !wait && line.trimStart().startsWith('Will:') && waitId === 'Will'
   })
   const openCount = openDecisionCount(currentRequests.map(id => ({ id })), new Set(rows.filter(row => row.answered).map(row => row.id)))
   return { card_id: cardId, requests, reasons, ...(deferred ? { deferred } : {}),

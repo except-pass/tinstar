@@ -186,7 +186,7 @@ it('saves a prepared answer with a sole padded wait', async () => {
   expect(await sources.preparation.publish({ job_id: job.job_id, operation_id: 'shared-wait-packet', packet })).toMatchObject({ ready: true })
   const claim = await sources.preparedReviews.claim('fixture-owner', 'Fixture owner', { operation_id: 'shared-wait-claim', card_id: cardId })
   expect(claim.outcome).toBe('claimed')
-  expect(claim.resolve_wait).toBe('Will: Choose the bounded preview route?')
+  expect(claim.resolve_wait).toBe('Will: Choose the bounded preview route?  ')
   const saved = await sources.preparedSubmissions.submit('fixture-owner', 'Fixture owner', 'Fixture owner', {
     operation_id: 'shared-wait-answer', lease_token: claim.lease_token, packet_id: claim.packet!.id,
     packet_version: claim.packet!.version, request_id: requestId, option_id: packet.recommended_option_id,

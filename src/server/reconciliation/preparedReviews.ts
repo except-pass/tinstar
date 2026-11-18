@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
 import type { DecisionEvidence, DecisionPacketBinding } from '../../shared/decisionPacket'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
-import { commentJobRequired, DecisionDeskConflict, DecisionPackets } from './decisionPackets'
+import { DecisionDeskConflict, DecisionPackets } from './decisionPackets'
 import type { PreparationReport } from './decisionPrep'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
@@ -114,7 +114,7 @@ export class PreparedReviews {
           const packet = current.find(stored => stored.packet.binding.card_id === card && stored.packet.binding.request_id === request.binding?.request_id)
           return { card_id: card, request_id: request.binding?.request_id ?? null, source_revision: request.binding?.source_revision ?? null,
             title: packet?.packet.title ?? request.question ?? 'Source request needs verification',
-            state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : packet?.prepared_by === commentPacketActor && !packet.reasons.includes(commentJobRequired) ? 'Blocked' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
+            state: packet?.ready ? 'Ready' : held.has(card) ? packet && needsResearch(packet) ? 'Blocked' : 'Leased' : packet?.prepared_by === commentPacketActor ? 'Blocked' : request.binding && !request.reasons.length && !evidence.reasons.length ? 'Queued' : 'Blocked',
             reasons: [...evidence.reasons, ...request.reasons, ...(packet && !packet.ready && !held.has(card) ? packet.reasons : [])] }
         })
       })

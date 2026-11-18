@@ -5,9 +5,6 @@ import { bindingMeaning, decisionMeaning, decisionPacketSchema, decisionPacketRe
   decisionPolicyValuesSchema, type DecisionPacket, type DecisionEvidence, type DecisionPacketValidation, type DecisionDependency } from '../../shared/decisionPacket'
 import { requestAnchor } from '../../shared/deskSource'
 import { CardLeases } from './cardLeases'
-import { commentPacketActor } from './commentPacket'
-
-export const commentJobRequired = 'Card comment has no matching preparation job'
 
 export class DecisionDeskConflict extends Error {}
 export interface StoredDecisionPacket { id: string; version: number; content_hash: string; prepared_by: string; published_at: string; expires_at: string | null; packet: DecisionPacket }
@@ -124,12 +121,6 @@ export class DecisionPackets {
     await this.initialize()
     return this.leases.readStorage(db => this.readInStorage(db, id, evidence))
   }
-  hasCommentJobInStorage(db: DatabaseSync, id: string, binding: DecisionPacket['binding']) {
-    const imported = db.prepare("SELECT json_extract(detail,'$.job_id') AS job FROM decision_packet_events WHERE packet_id = ? AND type = 'comment-import' ORDER BY sequence DESC LIMIT 1").get(id) as { job: string | null } | undefined
-    if (!imported?.job || !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_prep_jobs'").get()) return false
-    return !!db.prepare('SELECT 1 FROM decision_prep_jobs WHERE id = ? AND card_id = ? AND request_id = ? AND source_revision = ?')
-      .get(imported.job, binding.card_id, binding.request_id, binding.source_revision)
-  }
   readInStorage(db: DatabaseSync, id: string, evidence?: DecisionEvidence) {
       const row = db.prepare('SELECT * FROM decision_packets WHERE id = ?').get(id) as PacketRow | undefined
       if (!row) return null
@@ -140,9 +131,8 @@ export class DecisionPackets {
       const lease = db.prepare('SELECT caller,expires FROM leases WHERE card = ?').get(stored.packet.binding.card_id) as { caller: string | null; expires: number } | undefined
       const current = evidence ? validateDecisionPacket(stored.packet, evidence, this.now()) : { valid: false, reasons: ['Current source evidence not supplied'], valid_until: null }
       const withdrawn = !!db.prepare("SELECT 1 FROM decision_packet_events WHERE packet_id = ? AND type IN ('research-requested','answer-confirmed') LIMIT 1").get(id)
-      const missingJob = stored.prepared_by === commentPacketActor && !this.hasCommentJobInStorage(db, id, stored.packet.binding)
-      const validation: DecisionPacketValidation = { valid: !missingJob && !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
-        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(missingJob ? [commentJobRequired] : []), ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
+      const validation: DecisionPacketValidation = { valid: !!attestation?.valid && current.valid && latest.id === id && !withdrawn,
+        reasons: [...(attestation?.reasons ?? ['Packet has not been validated']), ...current.reasons, ...(latest.id !== id ? ['Packet is superseded'] : []), ...(withdrawn ? ['Packet withdrawn for research or durably answered'] : [])],
         // Attestation fixes packet meaning; current observations own freshness.
         // Its old deadline must not expire an unchanged, renewed dependency.
         valid_until: attestation?.valid ? current.valid_until : null }

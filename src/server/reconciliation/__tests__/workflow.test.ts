@@ -2852,6 +2852,19 @@ describe('Waiting For status semantics', () => {
     expect(await f.workflow.update(op('assign', { owner: 'Firstmate', status: 'Queued', resolve_wait: line }), 'Consumer')).toMatchObject({ outcome: 'saved' })
   })
 
+  it.each(['', '  '])('resolves a raw wait with padding %j before trying a trimmed match', async padding => {
+    const f = readyFixture(), blocker = actor({})
+    expect(await f.workflow.update(op('wait', blocker), 'Consumer')).toMatchObject({ outcome: 'saved' })
+    const line = waitLine(blocker)
+    const padded = line + '  '
+    f.raw.properties['Waiting For'].rich_text = [{ plain_text: `${line}\n${padded}` }]
+    const assign = { owner: 'Firstmate', status: 'Queued' }
+    expect(await f.workflow.update(op('assign', { ...assign, resolve_wait: line + ' ', operation_id: 'ambiguous-wait' }), 'Consumer')).toMatchObject({ code: 'wait-conflict' })
+    expect(await f.workflow.update(op('assign', { ...assign, resolve_wait: line + padding, operation_id: 'exact-wait' }), 'Consumer')).toMatchObject({ outcome: 'saved', code: 'wait-remains' })
+    expect((await f.reader.card(id, true)).properties['Waiting For']!.value).toBe(padding ? line : padded)
+    expect(await f.workflow.update(op('assign', { ...assign, resolve_wait: line + ' ', operation_id: 'unique-trimmed-wait' }), 'Consumer')).toMatchObject({ outcome: 'saved' })
+  })
+
   it('resolves long accepted waits and records their exact lines in history', async () => {
     const f = readyFixture(), first = actor({ dependency: 'S'.repeat(12000) }), second = actor({ id: 'Legal', dependency: 'Legal acceptance', unblocks_when: 'Legal approves' })
     expect(await f.workflow.update(op('wait', first), 'Consumer')).toMatchObject({ outcome: 'saved' })
