@@ -154,12 +154,13 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
     const pairs = destinations.filter(pair => pair.initiative === candidate.initiative)
     const epics = pairs.filter(pair => pair.epic !== null)
     if (epics.length) questions[`epic_fit_${candidate.id}`] = noul(
-      'Does any of these specific initiative and epic pairs substantively cover the card? Evaluate only these pairs.',
-      epics.map(pair => pairCriteria[pair.id]).join(' | '),
+      `Does any of these pair IDs from the destination Choice substantively cover the card? Evaluate only ${epics.map(pair => pair.id).join(', ')}.`,
+      'At least one of these pairs substantively covers the work.',
       'None of these pairs covers the work, or there is too little evidence to establish a fit.',
     )
-    if (pairs.some(pair => pair.epic === null)) questions[`initiative_only_${candidate.id}`] = noul(
-      `Is this work at initiative level for ${initiativeCriteria[candidate.id]}?`,
+    const initiativeOnly = pairs.find(pair => pair.epic === null)
+    if (initiativeOnly) questions[`initiative_only_${candidate.id}`] = noul(
+      `Is this work at initiative level for pair ${initiativeOnly.id} from the destination Choice?`,
       'The work belongs at initiative level and does not require a more specific epic.',
       'The work belongs elsewhere, is epic-sized, or may need a new epic.',
     )

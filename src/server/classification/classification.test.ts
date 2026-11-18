@@ -111,15 +111,25 @@ describe('classifier catalog and policy', () => {
   })
 
   it('does not use fit under a different initiative to accept the chosen pair', async () => {
+    const [cockpit, cockpitPair] = candidates(catalog, 'Cockpit')
+    const [platform, platformPair] = candidates(catalog, 'Platform')
     const ask = vi.fn(async (request: DecisionRequest) => {
       const scores = Object.fromEntries(Object.entries(request.questions)
-        .filter(([, question]) => question.type === 'noul' && question.criteria.true.includes(' / Operations'))
-        .map(([key, question]) => [key, question.criteria.true.includes('Cockpit / Operations') ? 0.99 : 0.02]))
-      return modelDecision(request, ...candidates(catalog, 'Platform'), scores)
+        .filter(([key]) => key.startsWith('epic_fit_'))
+        .map(([key, question]) => {
+          const pairIds = question.instructions.match(/\bpair_\d+\b/g)
+          return [key, pairIds?.includes(cockpitPair) ? 0.99 : 0.02]
+        }))
+      return modelDecision(request, platform, platformPair, scores)
     })
     const result = await classifyCard(notionCard(card(4, 'Panel updates', null, null)), catalog, source, ask)
     expect(result).toMatchObject({ evidence: { epicFit: 0.02 } })
     expect(assess(result, thresholds.conservative)).toMatchObject({ reason: 'epic-no-fit' })
+    const request = ask.mock.calls[0]![0]
+    for (const [initiativeId, pairId] of [[cockpit, cockpitPair], [platform, platformPair]] as const) {
+      expect(request.questions[`epic_fit_${initiativeId}`]?.instructions.match(/\bpair_\d+\b/g)).toEqual([pairId])
+      expect(JSON.stringify(request.questions[`epic_fit_${initiativeId}`])).not.toContain(request.questions.destination!.criteria[pairId])
+    }
     expect(ask).toHaveBeenCalledTimes(1)
   })
 
@@ -135,17 +145,18 @@ Initiative: password="another
 multiline fragment"` }, {
           id: 'start', type: 'paragraph', text: 'Then password="first half',
         }, {
-          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment continue token: Bearer opaqueCredential12345 and authorization: Basic YWJjOmRlZg== then [Basic dXNlcjpwYXNzd29yZA==] and (Bearer opaqueCredential12345)',
+          id: 'end', type: 'paragraph', text: 'second half" and SERVICE-SECRET_TOKEN_DEV=unquoted-fragment more secret text\ncontinue token: Bearer opaqueCredential12345\nauthorization: Basic YWJjOmRlZg==\npassword=!?.,:;\nthen [Basic dXNlcjpwYXNzd29yZA==] and (Bearer opaqueCredential12345)',
         }] }),
       }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toMatchObject({ card: {
-      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] and [credential omitted] then [[credential omitted]] and ([credential omitted])',
+      title: 'Rotation [credential omitted] confirmed', brief: 'Rotate [credential omitted] today Then [credential omitted] and [credential omitted] continue [credential omitted] [credential omitted] [credential omitted] then [[credential omitted]] and ([credential omitted])',
     } })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg|dXNlcjpwYXNzd29yZA/)
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|quoted|multiline fragment|rotate this phrase|first half|second half|unquoted-fragment|opaqueCredential12345|YWJjOmRlZg|dXNlcjpwYXNzd29yZA|more secret text/)
+    expect(JSON.stringify(request)).not.toContain('!?.,:;')
   })
 
   it('keeps at most five body snippets and clips each to 450 characters', async () => {
@@ -232,7 +243,7 @@ it('reads the configured board through NotionApi and persists replay results in 
       return Response.json({ results: filter.or ? [historical, examples[2]] : [...examples.slice(0, 2), unassigned], has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({ has_more: true, next_cursor: 'ignored', results: [{
-      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail. Then sk-abcdefghijklmnop.' }] },
+      id: 'opening', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Work on panel status support token: sk-abcdefghijklmnop.opaqueTail.\nThen sk-abcdefghijklmnop.' }] },
     }] })
     return Response.json({ object: 'data_source', properties: Object.fromEntries(Object.entries(schema).map(([name, value]) =>
       [name, { type: value.type, id: value.id, select: { options: value.options.map(name => ({ name })) } }])) })
@@ -242,7 +253,7 @@ it('reads the configured board through NotionApi and persists replay results in 
     expect(JSON.stringify(request.state)).not.toContain('Prior panel update / Operations')
     expect(request.state).toMatchObject({
       existing_classification: { initiative: '', epic: '' },
-      card: { brief: 'Work on panel status support [credential omitted]. Then [credential omitted].' },
+      card: { brief: 'Work on panel status support [credential omitted] Then [credential omitted].' },
     })
     return Response.json(modelDecision(request, 'initiative_1', 'pair_1'))
   })

@@ -43,14 +43,15 @@ const knownCredential = new RegExp(
   String.raw`\b(?:(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}|xox[baprs]-[\w-]{10,}|AKIA[A-Z0-9]{16}|AIza[\w-]{30,}|eyJ[\w-]+\.[\w-]+\.[\w-]+)(?:${unquotedCredential})?`,
   'g',
 )
-const credentialValue = String.raw`(?:(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])\s+)?(?:${quotedCredential}|${unquotedCredential})`
+const sameLineSpace = String.raw`[^\S\r\n\u2028\u2029]`
+const credentialValue = String.raw`(?:(?:(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc])${sameLineSpace}+)?${quotedCredential}|[^\r\n\u2028\u2029]*)`
 const credentialAssignment = new RegExp(
-  String.raw`(?<![\w-])(?:--${credentialKey}(?:=\s*|\s+)${credentialValue}|${credentialKey}["']?\s*[:=]\s*${credentialValue})`,
+  String.raw`(?<![\w-])(?:${credentialKey}["']?${sameLineSpace}*[:=]|--${credentialKey}${sameLineSpace}+)${sameLineSpace}*${credentialValue}`,
   'gi',
 )
 
 const legacyCredentialAssignment = new RegExp(
-  String.raw`\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)\s*=\s*${credentialValue}`,
+  String.raw`\b[A-Z][A-Z0-9_]*(?:TOKEN|KEY|PASSWORD|SECRET)${sameLineSpace}*=${sameLineSpace}*${credentialValue}`,
   'g',
 )
 
