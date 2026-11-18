@@ -277,6 +277,9 @@ test('rejected structured PR candidates leave coverage unobserved', async t => {
   const pr = 'https://github.com/example/repo/pull/12'
   journal.record(taskObservation([task], 0, tasks, [{ id: task.id, links: [pr] }]))
   const rejected = [
+    'https://github.com./example/repo/pull/12',
+    'https://github.com:65536/example/repo/pull/12',
+    'https://github.com:invalid/example/repo/pull/12',
     'https://user:secret@github.com/owner/repo/pull/99',
     'https://github.com/owner/repo/PULL/99',
     'https:github.com/owner/repo/pull/99',

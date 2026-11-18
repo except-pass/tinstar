@@ -97,12 +97,12 @@ export function fleetPullRequests(text, homePath, startedAt, observedAt) {
     const urls = (row.links ?? []).map(link => typeof link === 'string' ? link : link?.url)
     if (urls.some(url => typeof url !== 'string' || !url.trim())) continue
     if (urls.some(value => {
-      const url = URL.parse(value)
-      const literalPath = /github\.com(?::\d+)?(\/[^?#]*)/i.exec(value)?.[1]
+      if (canonicalPullRequests([value]).length) return false
+      const literalPath = /^[a-z][a-z\d+.-]*:(?:\/\/)?(?:[^/?#@]+@)?github\.com\.?(?::[^/?#@]*)?(\/[^?#]*)/i.exec(value)?.[1]
       const pullPath = /^\/[^/]+\/[^/]+\/pull(?:\/|$)/i
-      return url?.hostname === 'github.com' &&
-        (pullPath.test(literalPath ?? '') || pullPath.test(url.pathname)) &&
-        !canonicalPullRequests([value]).length
+      if (pullPath.test(literalPath ?? '')) return true
+      const url = URL.parse(value)
+      return (url?.hostname === 'github.com' || url?.hostname === 'github.com.') && pullPath.test(url.pathname)
     })) continue
     if (row.pr_url != null) {
       if (!canonicalPullRequests([row.pr_url]).length) continue
