@@ -32,7 +32,7 @@ export interface PreparedSubmitResult {
   message: string
   next?: PreparedClaimResult
 }
-export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, requireComment: boolean) =>
+export type RecordDeskAnswer = (stored: StoredDecisionPacket, selected: Selection, operation: string, answerer?: string) =>
   Promise<{ outcome: 'recorded' | 'packet-invalidated' | 'not-saved' | 'save-unconfirmed' | 'answer-missing'; message?: string; settledRevision?: string }>
 
 export class PreparedSubmissions {
@@ -40,10 +40,10 @@ export class PreparedSubmissions {
   private get leases() { return this.reviews.packets.leases }
   private get scope() { return this.reviews.scope }
 
-  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, requireComment: boolean) {
+  private apply(attempt: Attempt, stored: StoredDecisionPacket, token: string | undefined, answerer?: string) {
     return withLeaseCaller(attempt.caller, token, () =>
       this.writeAnswer(stored, JSON.parse(attempt.input) as Selection,
-        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, requireComment))
+        `desk:${leaseHash(JSON.stringify([attempt.caller, attempt.operation]))}`, answerer))
   }
 
   private invalidate(db: DatabaseSync, card: string, packetId: string) {
@@ -81,7 +81,7 @@ export class PreparedSubmissions {
           return { stored: this.reviews.packets.readInStorage(db, binding.packet_id), token }
         })
         if (!stored) continue
-        const result = await this.apply(attempt, stored, token, true)
+        const result = await this.apply(attempt, stored, token)
         await this.leases.writeStorage(db => {
           if (result.outcome === 'recorded') this.finish(db, attempt, binding, result.settledRevision)
           else this.discard(db, attempt, binding, result.outcome)
@@ -92,7 +92,7 @@ export class PreparedSubmissions {
     }
   }
 
-  async submit(caller: string, holder: string, input: unknown): Promise<PreparedSubmitResult> {
+  async submit(caller: string, holder: string, input: unknown, answerer = holder): Promise<PreparedSubmitResult> {
     const parsed = preparedSubmitInput.parse(input)
     const { operation_id, option_id, answer } = parsed
     const outcome = (state: string, message: string, next?: PreparedClaimResult) =>
@@ -126,7 +126,7 @@ export class PreparedSubmissions {
       let message = 'Decision recorded on the card.'
       let settledRevision: string | undefined
       if (attempt.state !== 'recorded') {
-        const result = await this.apply(attempt, stored, token, !token)
+        const result = await this.apply(attempt, stored, token, token ? answerer : undefined)
         message = result.message ?? message
         settledRevision = result.settledRevision
         if (result.outcome !== 'recorded') {

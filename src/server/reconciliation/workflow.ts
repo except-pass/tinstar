@@ -85,7 +85,7 @@ export class WorkflowOperations {
     return this.guarded(input.card_id, input.operation_id, actor, () => { const { lease_token: _token, ...clean } = input; return this.updateUnchecked(clean, actor) }, false)
   }
   recordDeskAnswer(packet: DecisionPacket, selection: { option_id: string; answer: string }, operation: string,
-    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, requireComment: boolean): ReturnType<RecordDeskAnswer> {
+    load: () => Promise<{ card: WorkCard; blocks: CardContextRead['blocks'] }>, answerer?: string): ReturnType<RecordDeskAnswer> {
     const id = packet.card_id
     const actor = 'Tin Star Decision Desk'
     const marker = deskAnswerMarker + operation
@@ -93,8 +93,8 @@ export class WorkflowOperations {
     return withSourceOperation(actor, operation, () => this.exclusive(id, async () => {
       await this.content.recoverAppliedWrite(id)
       const { card, blocks } = await load()
-      const recorded = blocks.some(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
-      if (!recorded && requireComment) return { outcome: 'answer-missing' }
+      const recorded = blocks.find(block => block.type === 'comment' && block.text.endsWith(`\n${marker}`))
+      if (!recorded && answerer === undefined) return { outcome: 'answer-missing' }
       const source = decisionCardSource(card, blocks)
       if (!source.actionable || source.revision !== packet.source_revision) {
         return recorded
@@ -135,8 +135,16 @@ export class WorkflowOperations {
         }
         throw error
       }
-      const note = `Will chose: ${option.label}\n\n${selection.answer}`
-      if (!recorded) await this.content.note(id, note, marker)
+      let writtenComment: string
+      if (recorded) {
+        writtenComment = recorded.text
+      } else {
+        const attribution = answerer === 'Will' || answerer === 'owner-chatgpt'
+          ? 'Will chose' : `${answerer} chose on Will's behalf`
+        const note = `${attribution}: ${option.label}\n\n${selection.answer}`
+        await this.content.note(id, note, marker)
+        writtenComment = `${note}\n${marker}`
+      }
       let saved = card
       if (Object.keys(properties).length) {
         await this.content.patchProperties(id, properties, async () => {
@@ -156,7 +164,7 @@ export class WorkflowOperations {
       }
       this.reader.confirm(saved)
       void this.changed({ before: card, card: saved, actor, operationId: operation,
-        properties: Object.fromEntries(Object.keys(properties).map(name => [name, saved.properties[name]?.value])), notes: [`${note}\n${marker}`] }).catch(() => {})
+        properties: Object.fromEntries(Object.keys(properties).map(name => [name, saved.properties[name]?.value])), notes: [writtenComment] }).catch(() => {})
       return { outcome: 'recorded', settledRevision: decisionCardSource(saved, blocks).revision }
     }))
   }

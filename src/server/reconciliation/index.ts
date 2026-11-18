@@ -103,8 +103,8 @@ export class ReconciliationSources {
       read: (card, background) => this.readDecisionCard(card, background),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
-    this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation, requireComment) =>
-      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), requireComment))
+    this.preparedSubmissions = new PreparedSubmissions(this.preparedReviews, (stored, selection, operation, answerer) =>
+      this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), answerer))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
     this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
