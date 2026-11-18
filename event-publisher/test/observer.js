@@ -421,6 +421,41 @@ test('invalid fleet windows leave valid task fields observable', async t => {
   }
 })
 
+test('rejected and unavailable reads cannot lower the accepted window floor', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const observations = [
+    minute => taskObservation([row('sample-task', { priority: minute ? 1 : 0 })], minute),
+    minute => workerObservation([{ id: 'sample-task', gen: 'gen-1', state: minute ? 'parked' : 'working' }], minute),
+  ]
+  for (const read of observations) {
+    const baseline = read(0)
+    journal.record({ ...baseline, observed_at: at(5) })
+    deepEqual(journal.recordAttempt(read(1)), { written: 0, complete: false })
+    journal.record({ ...read(2), entries: undefined, health: 'unavailable' })
+    deepEqual(journal.recordAttempt(read(4)), { written: 0, complete: false })
+    equal(journal.record(read(5)), 1)
+  }
+})
+
+test('a fleet window overlapping accepted worker evidence cannot advance PR links', async t => {
+  const journal = new Journal(join(await temp(t), 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources([tasks, workers])
+  const task = row('sample-task')
+  journal.record(taskObservation([task], 0))
+  journal.record({ ...workerObservation([], 1), observed_at: at(5) })
+  const pr = 'https://github.com/example/repo/pull/13'
+  const attempt = taskObservation([{ ...task, priority: 2 }], 2, tasks, [{ id: task.id, pr_url: pr }])
+  deepEqual(journal.recordAttempt(attempt), { written: 1, complete: false })
+  deepEqual(journal.recordAttempt(workerObservation([], 2)), { written: 0, complete: false })
+  const [event] = journal.events()
+  equal(event.change.field, 'priority')
+  equal(event.evidence.pr_link_coverage, 'unobserved')
+  equal(journal.sources().find(source => source.type === 'task').last_generated_at, at(0))
+})
+
 test('PR projection rejects a fleet generation accepted by workers in a prior pass', async t => {
   const path = join(await temp(t), 'journal.sqlite')
   const initial = row('initial-task')

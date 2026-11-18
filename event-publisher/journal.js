@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS events (
 );
 `
 
+function startsAfterWindow(startedAt, previous) {
+  return startedAt > (previous?.last_attempt_started ?? '') &&
+    startedAt >= (previous?.last_attempt_at ?? '') &&
+    startedAt >= (previous?.last_success_at ?? '')
+}
+
 function writerPath(path) {
   path = resolve(path)
   const directory = dirname(path)
@@ -194,7 +200,7 @@ export class Journal {
           reason = 'read ended before it started'
           batchStartedAt = previous.last_attempt_started
           batchObservedAt = previous.last_attempt_at
-        } else if (entries && previous.last_attempt_at && started_at < previous.last_attempt_at) {
+        } else if (entries && !startsAfterWindow(started_at, previous)) {
           health = 'stale'
           reason = 'read overlaps the previous collection window'
         } else if (generated_at && previous.last_generated_at && generated_at <= previous.last_generated_at) {
@@ -205,9 +211,13 @@ export class Journal {
           acceptedGeneration = generated_at ?? null
           if (source.type === 'task') {
             const pr = observation.pullRequests
-            const worker = this.db.prepare('SELECT last_generated_at FROM sources WHERE source_id = ?')
+            const worker = this.db.prepare(`
+              SELECT last_attempt_started, last_attempt_at, last_success_at, last_generated_at
+              FROM sources WHERE source_id = ?
+            `)
               .get(entityId('home', source.home_id, 'worker'))
             const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
+              startsAfterWindow(pr.started_at, worker) &&
               pr.generated_at > (previous.last_generated_at ?? '') &&
               pr.generated_at > (worker?.last_generated_at ?? '')
             const projected = withPullRequests(entries, fresh ? pr.links : null)
