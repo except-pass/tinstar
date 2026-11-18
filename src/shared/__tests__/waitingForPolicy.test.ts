@@ -122,11 +122,8 @@ it.each([
   expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toBeNull()
 })
 
-it.each([
-  ['Dependency: Firmware rollout', 'Unblocks when: Receipt verified', 'Follow-up by: Firstmate'],
-  ['Follow-up by: Firstmate', 'The verification team has the rollout logs.', '', 'Unblocks when: Receipt verified', 'Dependency: Firmware rollout'],
-])('keeps prose before an explicit dependency as a separate blocker (%s)', (...lines) => {
-  const authored = lines.join('\n')
+it('keeps leading prose separate from an explicit dependency', () => {
+  const authored = 'Dependency: Firmware rollout\nUnblocks when: Receipt verified\nFollow-up by: Firstmate'
   const waitingFor = `Security approval\n${authored}`
   const identity = { type: 'Event', id: 'firmware-rollout' }
   const entries = waitEntries(waitingFor, identity)
@@ -134,6 +131,18 @@ it.each([
   expect(entries[0]?.fields.dependency).toBe('Security approval')
   expect(entries.map(typedWaitEntry)).toEqual([null, { ...identity, dependency: 'Firmware rollout', unblocks_when: 'Receipt verified', follow_up_by: 'Firstmate' }])
   expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ code: 'missing-unblocks_when' })
+})
+
+it.each([
+  ['Dependency: Approve the exception', 'Unblocks when: Will approves\nFollow-up by: Consumer'],
+  ['Follow-up by: Consumer', 'Unblocks when: Will approves\n\nDependency: Approve the exception'],
+])('keeps an independent blocker between explicit wait labels (%s)', (before, after) => {
+  const identity = { type: 'Actor', id: 'Will' }
+  const waitingFor = `${before}\nLegal approval\n${after}`
+  const entries = waitEntries(waitingFor, identity)
+  expect(entries.map(entry => entry.text)).toEqual([before, 'Legal approval', after])
+  expect(entries[1]?.fields).toEqual({ dependency: 'Legal approval' })
+  expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).not.toBeNull()
 })
 
 it.each(['Dependency: ', ''])('keeps a trailing blocker separate with dependency prefix %j', prefix => {

@@ -114,6 +114,7 @@ const descriptionFields = {
 const labels: Record<string, keyof WaitDescription> = {
   dependency: 'dependency', 'unblocks when': 'unblocks_when', 'follow-up by': 'follow_up_by',
 }
+const authoredLabel = /^(?:Will: )?(Dependency|Unblocks when|Follow-up by):[ \t]*(.*)$/i
 interface WaitEntry { text: string; fields: Partial<WaitFields>; authored?: boolean; implicitIdentity?: boolean; freeForm?: boolean }
 
 /** Read the authored text and the generated entries without changing what an exact resolution matches. */
@@ -127,28 +128,49 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
   const addFreeForm = (lines: string[]) => {
     for (const text of lines) if (text.trim()) entries.push({ text, fields: { dependency: text }, freeForm: true })
   }
+  const addAuthored = (entry: WaitEntry) => {
+    if (!implicitIdentityUsed) {
+      Object.assign(entry.fields, { type: primary.type, id: primary.id })
+      entry.implicitIdentity = true
+      implicitIdentityUsed = true
+    }
+    entries.push(entry)
+  }
   const finish = () => {
     if (!block) return
     const prefix = prose.slice(0, leadingProse)
-    if (block.fields.dependency?.trim()) addFreeForm(prefix)
-    else {
+    if (block.fields.dependency?.trim()) {
+      addFreeForm(prefix)
+      let fragment: WaitEntry | undefined
+      for (const line of block.text.split('\n')) {
+        const labeled = authoredLabel.exec(line.trim())
+        if (labeled) {
+          if (fragment) fragment.text += '\n' + line
+          else fragment = { text: line, fields: {}, authored: true }
+          fragment.fields[labels[labeled[1]!.toLowerCase()]!] = labeled[2]!
+        } else if (line.trim()) {
+          if (fragment) {
+            fragment.text = fragment.text.replace(/(?:\n[^\S\n]*)+$/, '')
+            addAuthored(fragment)
+            fragment = undefined
+          }
+          addFreeForm([line])
+        } else if (fragment) fragment.text += '\n' + line
+      }
+      if (fragment) addAuthored(fragment)
+    } else {
       const dependency = prose.join('\n').trim()
       if (dependency) block.fields.dependency = dependency
       if (prefix.length) block.text = [...prefix, block.text].join('\n')
+      addAuthored(block)
     }
-    if (!implicitIdentityUsed) {
-      Object.assign(block.fields, { type: primary.type, id: primary.id })
-      block.implicitIdentity = true
-      implicitIdentityUsed = true
-    }
-    entries.push(block)
     block = undefined
     prose = trailing
     trailing = []
   }
   for (const line of text.split('\n')) {
     const inline = inlineWait(line.replace(/\r$/, ''))
-    const labeled = /^(?:Will: )?(Dependency|Unblocks when|Follow-up by):[ \t]*(.*)$/i.exec(line.trim())
+    const labeled = authoredLabel.exec(line.trim())
     if (inline) {
       finish()
       addFreeForm(prose)
