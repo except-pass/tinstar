@@ -225,8 +225,18 @@ export class Journal {
     const overlapsAcceptedWindow = started_at < (previous.last_success_at ?? '')
     let { health, reason = null, counts = null } = observation
     let snapshotId = null
-    let acceptedFleet = null
     const fleetWindow = this.db.prepare('SELECT * FROM fleet_windows WHERE home_id = ?').get(source.home_id)
+    const pr = source.type === 'task' ? observation.pullRequests : null
+    const worker = pr && this.db.prepare(`
+      SELECT last_success_at, last_generated_at
+      FROM sources WHERE source_id = ?
+    `).get(entityId('home', source.home_id, 'worker'))
+    const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
+      pr.started_at >= (worker?.last_success_at ?? '') &&
+      freshFleet(pr, fleetWindow, previous.last_generated_at) &&
+      pr.generated_at > (worker?.last_generated_at ?? '')
+    const backlogAbsent = fresh && pr.backlogAbsent
+    let acceptedFleet = backlogAbsent ? pr : null
     if (observed_at < started_at) {
       health = 'stale'
       reason = 'read ended before it started'
@@ -241,24 +251,13 @@ export class Journal {
       snapshotId = randomUUID()
       if (generated_at) acceptedFleet = observation
       if (source.type === 'task') {
-        const pr = observation.pullRequests
-        const worker = this.db.prepare(`
-          SELECT last_success_at, last_generated_at
-          FROM sources WHERE source_id = ?
-        `)
-          .get(entityId('home', source.home_id, 'worker'))
-        const fresh = pr && pr.observed_at >= pr.started_at && pr.observed_at >= observed_at &&
-          pr.started_at >= (worker?.last_success_at ?? '') &&
-          freshFleet(pr, fleetWindow, previous.last_generated_at) &&
-          pr.generated_at > (worker?.last_generated_at ?? '')
         const projected = withPullRequests(entries, fresh ? pr.links : null)
         const pr_links_unobserved = projected.filter(entry => entry.evidence.pr_link_coverage === 'unobserved').length
-        const backlogAbsent = fresh && pr.backlogAbsent
         counts = pr_links_unobserved || backlogAbsent ? {
           ...(pr_links_unobserved ? { pr_links_unobserved } : {}),
           ...(backlogAbsent ? { fleet_backlog_absent: 1 } : {}),
         } : null
-        if (fresh && (backlogAbsent || pr_links_unobserved < entries.length)) acceptedFleet = pr
+        if (fresh && pr_links_unobserved < entries.length) acceptedFleet = pr
         observation = { ...observation, entries: projected }
       }
       written = this.recordEntries(observation, previous, snapshotId, batchIds)

@@ -470,6 +470,35 @@ test('confirmed backlog absence advances freshness without worker inventory', as
   deepEqual(JSON.parse(stored.fields).pull_requests, [pr])
 })
 
+test('confirmed backlog absence survives both inventory failures', async t => {
+  const path = await temp(t)
+  const fixture = { ...home, path }
+  const bin = join(path, 'bin')
+  await mkdir(bin)
+  const generation = at(2)
+  const fleet = { schema: 'fm-fleet-snapshot.v1', fm_home: path, generated: generation, backlog: { present: false } }
+  await writeFile(join(bin, 'fm-fleet-snapshot.sh'),
+    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(fleet)}'\n`, { mode: 0o700 })
+  const journal = new Journal(join(path, 'journal.sqlite'))
+  t.after(() => journal.close())
+  journal.registerSources(sourcesFor(fixture))
+  journal.recordAttempts(await observeHome(fixture, path, { now: () => new Date(generation) }))
+  const [taskStatus, workerStatus] = journal.sources()
+  equal(taskStatus.health, 'unavailable')
+  equal(workerStatus.health, 'partial')
+  equal(taskStatus.last_snapshot_id, null)
+  equal(workerStatus.last_snapshot_id, null)
+
+  const repeated = new Date(Date.parse(generation) + 500).toISOString()
+  await writeFile(join(bin, 'fm-tasks-axi.sh'),
+    `#!/bin/sh\nprintf '%s\\n' '${encode({ count: 1, tasks: [row('sample-task')] })}'\n`, { mode: 0o700 })
+  journal.recordAttempts(await observeHome(fixture, path, { now: () => new Date(repeated) }))
+  const recovered = journal.sources().find(source => source.type === 'task')
+  equal(recovered.last_success_at, repeated)
+  deepEqual(recovered.counts, { pr_links_unobserved: 1 })
+  equal(journal.tail(), 0)
+})
+
 test('rejected and unavailable reads cannot lower the accepted window floor', async t => {
   const journal = new Journal(join(await temp(t), 'journal.sqlite'))
   t.after(() => journal.close())

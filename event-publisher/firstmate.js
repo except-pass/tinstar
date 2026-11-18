@@ -369,7 +369,7 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
       reason: incomplete ? 'some local incarnations have no verified current state' : null,
     }
   })
-  if (tasks.entries && text !== undefined) {
+  if (text !== undefined) {
     tasks.pullRequests = fleetPullRequests(text, home.path, fleetStartedAt, fleetObservedAt)
   }
   return [tasks, workers]
