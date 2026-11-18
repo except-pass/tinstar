@@ -57,8 +57,8 @@ const legacyCredentialAssignment = assignmentWithValue(
   'g',
 )
 
-function redactClassificationText(text: unknown) {
-  return (typeof text === 'string' ? text : '')
+function redactClassificationText(text: string) {
+  return text
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g, omittedCredential)
     .replace(credentialAssignment, omittedCredential)
     .replace(legacyCredentialAssignment, omittedCredential)
@@ -70,8 +70,10 @@ function redactClassificationText(text: unknown) {
     .replace(/https?:\/\/[^\s<>()]+/gi, '[link omitted]')
 }
 
-const compact = (text: string, limit: number) => text.replace(/\s+/g, ' ').trim().slice(0, limit)
-export const clean = (text: unknown, limit: number) => compact(redactClassificationText(text), limit)
+export function clean(text: unknown, limit: number) {
+  const oneLine = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : ''
+  return redactClassificationText(oneLine).trim().slice(0, limit)
+}
 
 const unique = (values: string[]) => [...new Set(values)].sort()
 

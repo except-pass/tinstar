@@ -98,11 +98,12 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
   const title = clean(property(card, 'Name'), 250)
   const hierarchy = await readParents(card, source)
   const area = clean(property(card, 'Area'), 100)
-  const nextAction = clean(property(card, 'Next action'), 500) || clean(property(card, 'Next Action'), 500)
+  const brief = clean(property(card, 'Brief'), 500)
+  const description = clean(property(card, 'Description'), 500)
   const ancestors = hierarchy.parents.map(parent => clean(property(parent, 'Name'), 120)).filter(Boolean)
   const initiativeCriteria = Object.fromEntries(initiatives.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
   const pairCriteria = Object.fromEntries(destinations.map(candidate => [candidate.id, describeCandidate(candidate, title)]))
-  const state = { card: { title, area, next_action: nextAction }, ancestors }
+  const state = { card: { title, area, brief, description }, ancestors }
   const questions: Record<string, Question> = {
     initiative: { type: 'choice', instructions: 'Choose the initiative with the strongest evidence of owning the card. Use ancestor titles as supporting context. A child can belong to a different initiative.',
       criteria: { ...initiativeCriteria, [none]: 'No listed initiative is supported by the work.' } },
@@ -157,7 +158,7 @@ export async function classifyCard(card: WorkCard, catalog: Catalog, source: Cla
       initiativeConfidence: initiativeAnswer.confidence, destinationConfidence: destinationAnswer?.confidence ?? 0,
       initiativeFit: probability('initiative_fit'), epicFit, ambiguous: probability('ambiguous'),
       initiativeOnly: questions[initiativeOnlyKey] ? probability(initiativeOnlyKey) : null,
-      parentConflict, sourceComplete: !!title && !!(area || nextAction || ancestors.length) && hierarchy.complete,
+      parentConflict, sourceComplete: !!title && !!(area || brief || description) && hierarchy.complete,
       parentCount: hierarchy.parents.length,
     } }
   } catch (error) {

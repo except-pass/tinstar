@@ -132,27 +132,31 @@ describe('classifier catalog and policy', () => {
   it('sends only sanitized allowed card fields and taxonomy examples', async () => {
     const example = notionCard(card(1, "Example password='example secret fragments' confirmed", 'Platform', 'Operations'))
     const privateCatalog = cache.get({ ...board, data: { ...board.data, cards: [example, ...board.data.cards.slice(1)] } })
-    const page = card(4, 'Rotation database_password="rotate this phrase" confirmed', 'Platform', null, 'In Progress', 1)
+    const page = card(4, 'Rotation database_password:\nrotate this phrase', 'Platform', null, 'In Progress', 1)
     const work = notionCard({ ...page, properties: {
       ...page.properties,
       Area: prop('Platform api_key=privateabcdefghijkl A reference https://test.invalid'),
-      'Next Action': { type: 'rich_text', rich_text: [{ plain_text: 'Verify rotation. password=!?.,:;\nRetry with (Bearer opaqueCredential12345), [Basic dXNlcjpwYXNzd29yZA==], and sk-abcdefghijklmnop.' }] },
-    } })
+      Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Verify rotation. password:\nopaque multiline brief value' }] },
+      Description: { type: 'rich_text', rich_text: [{ plain_text: 'Retry with (Bearer opaqueCredential12345), [Basic dXNlcjpwYXNzd29yZA==], and sk-abcdefghijklmnop.' }] },
+      'Next action': { type: 'rich_text', rich_text: [{ plain_text: 'Owner instructions in primary spelling' }] },
+      'Next Action': { type: 'rich_text', rich_text: [{ plain_text: 'Owner instructions in alternate spelling' }] },
+    } }, true)
     const ask = vi.fn(async (request: DecisionRequest) => modelDecision(request, ...candidates(privateCatalog, 'Platform')))
     const result = await classifyCard(work, privateCatalog, { parent: async () => example }, ask)
     expect(assess(result, thresholds.conservative)).toMatchObject({ outcome: 'candidate' })
     const request = ask.mock.calls[0]![0]
     expect(request.state).toEqual({
       card: {
-        title: 'Rotation [credential omitted] confirmed',
+        title: 'Rotation [credential omitted]',
         area: 'Platform [credential omitted]',
-        next_action: 'Verify rotation. [credential omitted] Retry with ([credential omitted]), [[credential omitted]], and [credential omitted].',
+        brief: 'Verify rotation. [credential omitted]',
+        description: 'Retry with ([credential omitted]), [[credential omitted]], and [credential omitted].',
       },
       ancestors: ['Example [credential omitted] confirmed'],
     })
     const [, pair] = candidates(privateCatalog, 'Platform')
     expect(request.questions.destination?.criteria[pair]).toContain('Example [credential omitted] confirmed')
-    expect(JSON.stringify(request)).not.toMatch(/secret fragments|rotate this phrase|privateabcdefghijkl|opaqueCredential12345|dXNlcjpwYXNzd29yZA/)
+    expect(JSON.stringify(request)).not.toMatch(/secret fragments|rotate this phrase|privateabcdefghijkl|opaqueCredential12345|dXNlcjpwYXNzd29yZA|opaque multiline brief value|Owner instructions/)
   })
 
   it('supports an explicitly allowed initiative-only destination', async () => {
@@ -217,13 +221,17 @@ describe('OpenRouter Decisions transport', () => {
 it('reads the configured board through NotionApi and persists replay results in the shared database', async () => {
   const root = await mkdtemp(join(tmpdir(), 'jev-classifier-test-'))
   roots.push(root)
-  const page = card(4, 'Fix basic authentication', null, null)
+  const page = card(4, 'Follow-up', null, null)
   const unassigned = { ...page, properties: {
     ...page.properties,
-    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Private brief text' }] },
-    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Private description text' }] },
+    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Fix basic authentication' }] },
+    Description: { type: 'rich_text', rich_text: [{ plain_text: 'Rotate session cookies' }] },
   } }
-  const historical = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
+  const closedPage = card(5, 'Prior panel update', 'Cockpit', 'Operations', 'Done')
+  const historical = { ...closedPage, properties: {
+    ...closedPage.properties,
+    Brief: { type: 'rich_text', rich_text: [{ plain_text: 'Reconcile panel status' }] },
+  } }
   const notion = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input))
     if (url.pathname.endsWith('/query')) {
@@ -240,7 +248,11 @@ it('reads the configured board through NotionApi and persists replay results in 
     const request = JSON.parse(String(init?.body)) as DecisionRequest
     expect(JSON.stringify(request.state)).not.toContain('Prior panel update / Operations')
     expect(request.state).toEqual({
-      card: { title: expect.any(String), area: 'Platform', next_action: '' }, ancestors: [],
+      card: {
+        title: expect.any(String), area: 'Platform',
+        brief: expect.any(String), description: expect.any(String),
+      },
+      ancestors: [],
     })
     return Response.json(modelDecision(request, 'initiative_1', 'pair_1'))
   })
@@ -257,9 +269,12 @@ it('reads the configured board through NotionApi and persists replay results in 
   expect(model).toHaveBeenCalledTimes(3)
   const transmitted = model.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
   expect(transmitted).toContainEqual(expect.objectContaining({
-    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Fix basic authentication' }) }),
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Follow-up', brief: 'Fix basic authentication', description: 'Rotate session cookies' }) }),
   }))
-  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail|Private brief text|Private description text/)
+  expect(transmitted).toContainEqual(expect.objectContaining({
+    state: expect.objectContaining({ card: expect.objectContaining({ title: 'Prior panel update', brief: 'Reconcile panel status' }) }),
+  }))
+  expect(JSON.stringify(transmitted)).not.toMatch(/Work on panel status support|opaqueTail/)
   expect(notion.mock.calls.every(([url, init]) =>
     !init?.method || init.method === 'GET' || (init.method === 'POST' && String(url).endsWith('/query')))).toBe(true)
   expect(notion.mock.calls.some(([url]) => new URL(String(url)).pathname.includes('/blocks/'))).toBe(false)

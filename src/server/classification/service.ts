@@ -82,8 +82,8 @@ export class ClassificationService {
 
   constructor(config: NonNullable<ReconciliationConfig['notion']>, api: NotionApi,
     leases: CardLeases, private jev = new OpenRouterJev(), notes: TaxonomyNotes = {}) {
-    this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch)
-    this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch)
+    this.board = notionObservation(config, api.parallelFetch, {}, api.backgroundFetch, true)
+    this.history = notionObservation(config, api.parallelFetch, { statuses: ['Done', 'Archived'] }, api.backgroundFetch, true)
     this.reader = new WorkReader(config, api)
     this.taxonomy = new ClassificationCatalog(notes)
     this.ledger = new ClassificationLedger(leases)

@@ -78,8 +78,8 @@ npx tsx scripts/jev-classifier-dry-run.ts --config-home /path/to/tinstar-config 
 The CLI reads the board through the foreground Notion scheduler and uses the
 existing Clavis bundle `openrouter/api-key`. It examines every active card
 missing Initiative and replays closed cards whose Initiative and Epic are set.
-OpenRouter receives sanitized card titles, Areas, ancestor titles, and Next
-action fields along with the taxonomy choices. The dry run skips body reads.
+OpenRouter receives sanitized card titles, Areas, ancestor titles, Brief, and
+Description along with the taxonomy choices. The dry run skips body reads.
 Use `--historical-limit N` to cap the historical sample. The limit must be
 between 1 and 2,000. Candidates and abstentions go to the report and the
 local `classification_jobs` table in

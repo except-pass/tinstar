@@ -32,7 +32,7 @@ function property(value: unknown, name: string): { id: string | null; type: stri
     ...(name === FIRST_MATE_TASKS ? { workerLinks: readWorkerLinks(value) } : {}) }
 }
 
-export function notionCard(value: unknown) {
+export function notionCard(value: unknown, includeClassificationContext = false) {
   const p = record(value)
   const id = notionPageId(p.id)
   if (!id || typeof p.last_edited_time !== 'string' || !p.properties || p.object !== 'page') throw new Error('invalid Notion page')
@@ -40,7 +40,8 @@ export function notionCard(value: unknown) {
   return {
     id, url: text(p.url), last_edited_time: p.last_edited_time,
     archived: p.archived === true, in_trash: p.in_trash === true,
-    properties: Object.fromEntries(PROPERTY_NAMES.filter(name => name in properties).map(name => [name, property(properties[name], name)])),
+    properties: Object.fromEntries((includeClassificationContext ? [...PROPERTY_NAMES, 'Brief', 'Description'] : PROPERTY_NAMES)
+      .filter(name => name in properties).map(name => [name, property(properties[name], name)])),
   }
 }
 
@@ -100,7 +101,7 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
 // 2,000 cards leaves room beyond the current board size without unbounded
 // pagination. Schema, query pages and relation reads still share one 20s deadline.
 export const NOTION_QUERY_PAGE_LIMIT = 20
-export function notionObservation(config: ReconciliationConfig['notion'], fetcher: NotionFetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board', backgroundFetch = fetcher) {
+export function notionObservation(config: ReconciliationConfig['notion'], fetcher: NotionFetch = fetch, scope: 'board' | 'check-ins' | WorkScope = 'board', backgroundFetch = fetcher, includeClassificationContext = false) {
   return new CachedObservation(async background => {
     if (!config) throw new Error('Notion is not configured')
     const send = background ? backgroundFetch : fetcher
@@ -174,7 +175,7 @@ export function notionObservation(config: ReconciliationConfig['notion'], fetche
       const response = await request(`${path}/query`, { page_size: 100, ...(filter ? { filter } : {}), ...(cursor ? { start_cursor: cursor } : {}) })
       if (!Array.isArray(response.results) || typeof response.has_more !== 'boolean') throw new Error('invalid Notion query')
       for (const value of response.results) {
-        const item = notionCard(value)
+        const item = notionCard(value, includeClassificationContext)
         cards.set(item.id, item)
       }
       hasMore = response.has_more
