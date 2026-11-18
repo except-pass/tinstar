@@ -132,11 +132,6 @@ export function waitEntries(text: string, primary: WaitIdentity): WaitEntry[] {
     const prefix = prose.slice(0, leadingProse)
     if (block.fields.dependency?.trim()) addFreeForm(prefix)
     else {
-      if (!prose.some(line => line.trim()) && trailing.some(line => line.trim())) {
-        prose.push(...trailing)
-        block.text = [block.text, ...trailing].join('\n')
-        trailing = []
-      }
       const dependency = prose.join('\n').trim()
       if (dependency) block.fields.dependency = dependency
       if (prefix.length) block.text = [...prefix, block.text].join('\n')

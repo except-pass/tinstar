@@ -147,6 +147,16 @@ it.each(['Dependency: ', ''])('keeps a trailing blocker separate with dependency
   ])
 })
 
+it('keeps trailing prose separate even when the labeled wait is missing a dependency', () => {
+  const authored = 'Unblocks when: Will approves\nFollow-up by: Consumer'
+  const waitingFor = `${authored}\nLegal approval`
+  const identity = { type: 'Actor', id: 'Will' }
+  const entries = waitEntries(waitingFor, identity)
+  expect(entries.map(entry => entry.text)).toEqual([authored, 'Legal approval'])
+  expect(entries.map(typedWaitEntry)).toEqual([null, null])
+  expect(waitingForException({ cardId: id, status: 'Waiting For', ...identity, waitingFor, nextCheckIn: { start: '2027-01-01' }, observedAt: null, coverage: 'complete' })).toMatchObject({ code: 'missing-dependency' })
+})
+
 it('retains a typed authored wait without an owner when a different blocker becomes primary', () => {
   const identity = { type: 'Event', id: 'firmware-rollout' }
   const [authored] = waitEntries('Firmware rollout\n\nUnblocks when: Receipt verified', identity)
