@@ -222,7 +222,8 @@ def mate_status_file(home, mate_id):
 
 def resolved_parent_asks(lines):
     """Last timestamped close by key or correlation for a mate on the parent."""
-    if lines and not lines.endswith('\n'):
+    partial = bool(lines and not lines.endswith('\n'))
+    if partial:
         lines = lines.rsplit('\n', 1)[0] if '\n' in lines else ''
     by_key, by_corr = {}, {}
     for line in lines.splitlines():
@@ -241,7 +242,8 @@ def resolved_parent_asks(lines):
             if state == 'resolved' and len(keys) == 1:
                 by_key[keys[0]] = at
             by_corr.update((corr, at) for corr in corrs)
-    return {'keys': [{'key': key, 'at': at} for key, at in sorted(by_key.items())],
+    return {'status': 'unknown' if partial else 'known',
+            'keys': [{'key': key, 'at': at} for key, at in sorted(by_key.items())],
             'corrs': [{'corr': corr, 'at': at} for corr, at in sorted(by_corr.items())]}
 
 
@@ -266,7 +268,8 @@ def parent_resolutions(home, snapshot, now):
             mates[mate_id] = {'status': 'unknown', 'keys': []}
             known = False
             continue
-        mates[mate_id] = {'status': 'known', **resolved_parent_asks(text)}
+        mates[mate_id] = resolved_parent_asks(text)
+        known = known and mates[mate_id]['status'] == 'known'
     return {'status': 'known' if known else 'unknown', 'observed_at': iso(now.timestamp()), 'mates': mates}
 
 

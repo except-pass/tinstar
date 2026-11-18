@@ -32,11 +32,7 @@ export function parentAskClosed(ask: Pick<ParentAsk, 'key' | 'at'> & { corr?: st
 /** A timestamped close is historical evidence even after the snapshot ages. */
 function mainResolutions(snapshot: SourceSnapshot, parentHome: string, childHome: string): ParentMateResolutions | undefined {
   const data = snapshot.fleet.find(row => row.source.home === parentHome)?.observation.data
-  if (!data) return undefined
-  const mate = data.tasks.find(task => task.kind === 'secondmate' && task.paths.home === childHome && typeof task.id === 'string')
-  if (typeof mate?.id !== 'string') return undefined
-  const entry = data[acceptedMateCloses]?.get(mate.id)
-  return entry?.home === childHome ? entry.close : undefined
+  return data?.[acceptedMateCloses]?.get(childHome)?.close
 }
 
 /** Positive records survive incomplete reads. Only a complete fresh source can

@@ -440,7 +440,8 @@ describe('Waiting on main', () => {
       : { status: 'known', keys: [], corrs: [{ corr: '1234567890abcdef', at: askAt + 1 }] }
     const unknown = { status: 'unknown', keys: [] }
     async function read(id: string, evidence: typeof close | typeof unknown,
-      tasks = [{ id, kind: 'secondmate', spawn_gen: 'first', paths: { home: { path: child!.source.home } } }], complete = true) {
+      tasks: { id: string; kind: string; spawn_gen: string; paths?: { home: { path: string } } }[] =
+        [{ id, kind: 'secondmate', spawn_gen: 'first', paths: { home: { path: child!.source.home } } }], complete = true) {
       await writeFile(file, JSON.stringify({
         schema: 'fm-fleet-snapshot.v1', fm_home: home, generated,
         tasks,
@@ -454,6 +455,9 @@ describe('Waiting on main', () => {
     await read('hulk', unknown)
     expect(await hasAsk()).toBe(true)
     const mate = { id: 'hulk', kind: 'secondmate', spawn_gen: 'first', paths: { home: { path: child!.source.home } } }
+    const mateWithoutHome = { id: 'hulk', kind: 'secondmate', spawn_gen: 'first' }
+    await read('hulk', close, [mateWithoutHome])
+    expect(await hasAsk()).toBe(true)
     await read('hulk', close, [mate, mate], false)
     expect(await hasAsk()).toBe(true)
     await read('hulk', close)
@@ -461,6 +465,8 @@ describe('Waiting on main', () => {
     await read('hulk', { status: 'known', keys: [] }, [mate, mate], false)
     expect(await hasAsk()).toBe(false)
     await read('hulk', unknown, [], false)
+    expect(await hasAsk()).toBe(false)
+    await read('hulk', { status: 'known', keys: [] }, [mateWithoutHome])
     expect(await hasAsk()).toBe(false)
     await read('hulk', unknown)
     expect(await hasAsk()).toBe(false)

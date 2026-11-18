@@ -75,7 +75,7 @@ const parentResolutionsSchema = z.object({
   })),
 })
 export const acceptedMateCloses = Symbol('acceptedMateCloses')
-type AcceptedMateClose = { home: string; generation: string | null; close: ParentMateResolutions }
+type AcceptedMateClose = { id: string; generation: string | null; close: ParentMateResolutions }
 function parentResolutionsField(value: unknown): {
   parent_resolutions?: ParentResolutions
   [acceptedMateCloses]?: ReadonlyMap<string, AcceptedMateClose>
@@ -162,20 +162,20 @@ export function fleetObservation(source: FleetSource) {
       if (ids.get(id) !== 1 || homes.get(home) !== 1) continue
       const generation = task.identity.spawn_gen
       const close = mates?.[id]
-      const prior = previous?.[acceptedMateCloses]?.get(id)
-      if (close?.status === 'known') accepted.set(id, { home, generation, close })
-      else if (prior?.home === home && prior.generation === generation) accepted.set(id, prior)
+      const prior = previous?.[acceptedMateCloses]?.get(home)
+      if (close?.status === 'known') accepted.set(home, { id, generation, close })
+      else if (prior?.id === id && prior.generation === generation) accepted.set(home, prior)
     }
-    if (coverage === 'partial') {
-      for (const [id, prior] of previous?.[acceptedMateCloses] ?? []) {
-        if (accepted.has(id)) continue
-        const compatible = current.tasks.every(task => {
-          const sameHome = task.kind === 'secondmate' && task.paths.home === prior.home
-          return (task.id !== id && !sameHome) ||
-            (task.id === id && sameHome && task.identity.spawn_gen === prior.generation)
-        })
-        if (compatible) accepted.set(id, prior)
-      }
+    for (const [home, prior] of previous?.[acceptedMateCloses] ?? []) {
+      if (accepted.has(home) || (coverage === 'complete' && !ids.has(prior.id))) continue
+      const compatible = current.tasks.every(task => {
+        const mate = task.kind === 'secondmate'
+        const taskHome = task.paths.home
+        return task.id !== prior.id
+          ? !mate || taskHome !== home
+          : mate && (!taskHome || taskHome === home) && task.identity.spawn_gen === prior.generation
+      })
+      if (compatible) accepted.set(home, prior)
     }
     return { ...current, [acceptedMateCloses]: accepted }
   })

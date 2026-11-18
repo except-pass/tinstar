@@ -398,7 +398,7 @@ class CollectorTests(unittest.TestCase):
         published = collector.parent_resolutions(str(home), snapshot, NOW)
         self.assertEqual(published['status'], 'unknown')
         self.assertEqual(published['observed_at'], collector.iso(NOW.timestamp()))
-        self.assertEqual(published['mates']['remote-mate'], {'status': 'known', 'keys': [
+        self.assertEqual(published['mates']['remote-mate'], {'status': 'unknown', 'keys': [
             {'key': 'api', 'at': 200}, {'key': 'other', 'at': 150}],
             'corrs': [{'corr': '8940e5f6dad58120', 'at': 170}, {'corr': 'shared', 'at': 180}]})
         self.assertEqual(published['mates']['by-role'], {'status': 'known', 'keys': [{'key': 'role-key', 'at': 50}], 'corrs': []})
