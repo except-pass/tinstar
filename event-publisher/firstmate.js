@@ -190,8 +190,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   }
   if (data?.schema !== 'fm-fleet-snapshot.v1' || data.fm_home !== home.path ||
       !Array.isArray(data.tasks) || data.complete === false || data.truncated === true ||
-      data.main_inventory?.valid !== true ||
-      data.secondmate_current?.registry?.present !== false) {
+      data.main_inventory?.valid !== true) {
     partial('fleet snapshot lacks verified local inventory')
   }
   const generated = Date.parse(data.generated)
@@ -203,7 +202,7 @@ export function parseWorkers(text, home, startedAt, observedAt) {
   const entries = []
   const counts = { remote_excluded: 0, secondmate_without_generation: 0, current_state_unavailable: 0 }
   const ids = new Set()
-  const mates = new Set(Array.isArray(data.secondmate_current.records)
+  const mates = new Set(Array.isArray(data.secondmate_current?.records)
     ? data.secondmate_current.records.map(record => record?.id) : [])
   for (const row of data.tasks) {
     if (typeof row?.id !== 'string' || !identifier.test(row.id) || ids.has(row.id) ||
@@ -356,13 +355,6 @@ export async function observeHome(home, scratch, { now = () => new Date(), taskC
   let text
   let fleetObservedAt
   const workers = await attempt(worker, fleetStartedAt, async () => {
-    // This producer follows registry entries to other homes. This collector
-    // is scoped to the configured local home and its own backlog.
-    const registry = await lstat(join(home.path, 'data', 'secondmates.md')).catch(error => {
-      if (error.code === 'ENOENT') return null
-      throw new ObservationError('unavailable', 'could not verify the local fleet registry')
-    })
-    if (registry?.isFile() || registry?.isSymbolicLink()) partial('fleet snapshot would read registered secondmate homes')
     text = await runRead(home, 'fm-fleet-snapshot.sh', ['--json'], {
       FM_SNAPSHOT_CACHE_DIR: join(scratch, 'disabled', 'cache'),
       FM_CREW_STATE_NO_FORGE: '1',

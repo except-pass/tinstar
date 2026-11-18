@@ -557,7 +557,7 @@ test('task readiness requires a valid kind', () => {
   equal(parseTasks(encode({ count: 1, tasks: [{ ...task, kind }] }), home.id)[0].fields.ready, true)
 })
 
-test('the live list projection and real home backlog drive independent coverage', async t => {
+test('the live list and real home fleet projections work with a secondmate registry', async t => {
   const path = await temp(t)
   const bin = join(path, 'bin')
   const data = join(path, 'data')
@@ -568,6 +568,7 @@ test('the live list projection and real home backlog drive independent coverage'
   await mkdir(bin)
   await mkdir(data)
   const pr = 'https://github.com/example/repo/pull/12'
+  await writeFile(join(data, 'secondmates.md'), '')
   await writeFile(backlog, JSON.stringify({ present: true, records: [{ id: 'sample-task', links: [pr] }] }))
   await writeFile(config, JSON.stringify({ homes: [{ ...home, path }] }))
   const writeTasks = state => writeFile(join(bin, 'fm-tasks-axi.sh'), `#!/bin/sh
@@ -592,7 +593,7 @@ if [ -f "$FM_HOME/data/backlog.md" ]; then
 else
   backlog='{"present":false,"records":[]}'
 fi
-printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_inventory":{"valid":true},"secondmate_current":{"registry":{"present":false}},"tasks":[],"backlog":%s}\\n' "$FM_HOME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backlog"
+printf '{"schema":"fm-fleet-snapshot.v1","fm_home":"%s","generated":"%s","main_inventory":{"valid":true},"secondmate_current":{"registry":{"present":true}},"tasks":[],"backlog":%s}\\n' "$FM_HOME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backlog"
 `, { mode: 0o700 })
   await exec(cli, ['observe', '--config', config, '--db', db])
   equal(await readFile(calls, 'utf8'), 'call\n')

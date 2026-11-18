@@ -100,9 +100,8 @@ the next scheduled pass.
 - For an unavailable worker source, check the local installation's
   `bin/fm-fleet-snapshot.sh --help` and the service account's access to its local
   worker-state reads. The collector uses the configured `FM_HOME` and its
-  real data root. It skips fleet collection for a home with a secondmate
-  registry because the fleet reader would traverse other homes. It disables
-  the fleet snapshot's remote-summary cache and the crew-state forge fallback.
+  real data root. It disables the fleet snapshot's remote-summary cache and
+  the crew-state forge fallback.
   Worker state comes from the reconciler embedded in the fleet snapshot.
 - `events sources` reports the last attempt and the last accepted inventory.
   The task verdict reflects the tasks-axi inventory. The
