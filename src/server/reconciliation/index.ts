@@ -1,3 +1,4 @@
+import { JiraWork } from './jiraWork'
 import { CardLeases, CardLeaseError } from './cardLeases'
 import { deferredDecisionCard } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
@@ -72,6 +73,7 @@ export class ReconciliationSources {
   readonly askStore
   readonly proposalSource
   readonly workflow
+  readonly jiraWork?: JiraWork
   readonly notionApi
   private context
   private sourceWriteRecoveryPass?: Promise<void>
@@ -84,6 +86,7 @@ export class ReconciliationSources {
   constructor(private readonly config: ReconciliationConfig = loadReconciliationConfig(), fetcher: typeof fetch = fetch, api?: NotionApi, receiptRoot = getConfigRoot(), preparationSecret = readClavisValue) {
     this.leases = new CardLeases(receiptRoot)
     this.notionApi = api ?? new NotionApi(fetcher)
+    if (config.jiraWork) this.jiraWork = new JiraWork(config.jiraWork, receiptRoot, fetcher)
     this.workReader = new WorkReader(config.notion, this.notionApi, config.jira)
     this.workReader.leases = this.leases
     this.associations = new AssociationStore(receiptRoot)
