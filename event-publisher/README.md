@@ -38,8 +38,10 @@ independently readable home. The paths and ID below are synthetic.
 sidecars in a private directory outside the checkout. The writer requires a
 directory owned by the service account, with group and other write access
 disabled. Use a path with no directory symlinks and with parent directories
-protected from replacement by other users. This prevents another account from replacing the
-checked journal or planting SQLite sidecars before SQLite opens them.
+protected from replacement by other users. This prevents another account from
+replacing the checked journal or planting SQLite sidecars before SQLite opens
+them. Existing journal and sidecar files must be regular files owned by the
+service account with owner-only access.
 The journal binds each home ID to its resolved path on first registration.
 Existing journals retain that one-to-one binding. Start a new journal to
 change the ID or path in a binding. The collector retries unresolved homes on subsequent
@@ -49,7 +51,8 @@ passes and checks the journal binding before reading them.
 events serve --interval 20
 ```
 
-The polling interval accepts whole seconds from 15 through 3600.
+The polling interval defaults to 20 seconds and accepts whole seconds from
+15 through 3600.
 
 Leave one publisher running per journal. Use the same `EVENTS_DB` in a second
 terminal and start the tail. Ctrl-C stops either process. The collector finishes
@@ -127,16 +130,16 @@ is observed again. A task appearing after the baseline is `task.observed`,
 with its source creation date when available. This identifies first observation
 in the home. State, dates, priority, structured hold fields, dependencies,
 canonical PR links, and derived blocked, held and ready fields are diffed.
-Verified PR links on a newly observed task appear as a separate
+On a newly observed task, a verified nonempty PR link set appears as a separate
 `task.pull_requests.observed` event in the fleet batch.
 Ready uses the tasks-axi dispatch projection, including its public-followup
 exclusion.
 
 A worker ID includes the exact task ID and generation. A worker links to a
-task when the same home has a matching active-backlog row in its latest
-successful observation. Worker inventory and current-state evidence have
-separate coverage. After initial attach, the first verified state of an
-incarnation appears as `worker.observed`. Its evidence records whether the
+task when the same home has a matching row in its latest accepted active
+backlog and the task inventory verdict is healthy. Worker inventory and
+current-state evidence have separate coverage. After initial attach, the first
+verified state of an incarnation appears as `worker.observed`. Its evidence records whether the
 incarnation was previously seen with unknown state. The historical status verb is retained as
 provenance alongside the reconciler's current-state source. Raw details,
 titles, hold reasons and status messages stay out of the journal. PR links
@@ -144,13 +147,16 @@ come from the fleet snapshot's structured backlog records and require exact
 GitHub pull URLs without credentials, query strings, or fragments. When the
 backlog link data is unavailable, the journal keeps the last verified links.
 The next verified read establishes a new PR baseline without a link-change
-event. Task events from those reads include the PR coverage in their evidence.
+event. Task field-change events can carry the PR coverage in their evidence.
 
-Each accepted snapshot and its events commit in one SQLite transaction.
+Each home's collection pass commits its accepted snapshots and their events
+in one SQLite transaction.
 An event's `sequence` is the local journal cursor and `observation.batch_id`
-groups fields from the same observation. `occurred_at` is null for a
-snapshot diff. `observed_between` gives conservative bounds from the previous
-read's start to the current read's end when both states were witnessed.
+groups changes witnessed by the same read. Worker and PR link events from the
+same fleet response share a batch ID. Task inventory events have a separate
+batch ID. `occurred_at` is null for a snapshot diff. `observed_between`
+gives conservative bounds from the start of the prior saved observation,
+when available, to the end of the read that witnessed the change.
 A replay returns the same event IDs and payloads after a restart.
 
 Slice A covers explicitly configured First Mate homes on the running host.
