@@ -1,4 +1,4 @@
-import { workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { isDecisionRetraction, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -115,8 +115,14 @@ export class FirstmateUpdates {
       const baseline = this.baselines.get(card.id)
       const operationSeen = own && old?.operations?.includes(own.operationId)
       const contextText = (text: string) => text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
-      const noteMatches = (text: string, note: string) => !!own && (workflowNoteHasMarker({ text: note }, receiptMarker(own.actor, own.operationId)) && text === contextText(note) || text === contextText(`${note}\n${receiptMarker(own.actor, own.operationId)}`))
-      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => block.type === 'comment' && noteMatches(block.text, note))) &&
+      const noteMatches = (block: CardContextRead['blocks'][number], note: string) => {
+        if (!own || block.type !== 'comment') return false
+        const marker = receiptMarker(own.actor, own.operationId)
+        if (isDecisionRetraction(note) && !workflowNoteHasMarker(block, marker)) return false
+        return workflowNoteHasMarker({ ...block, text: note }, marker) && block.text === contextText(note) ||
+          block.text === contextText(`${note}\n${marker}`)
+      }
+      const contentSeen = operationSeen && (own.notes ?? []).every(note => baseline?.comments?.some(block => noteMatches(block, note))) &&
         (own.sectionTexts ?? []).every(text => baseline?.details?.some(block => block.type !== 'comment' && block.text === contextText(text)))
       const before = own?.before ? values(own.before) : baseline?.properties ?? {}, after = values(card)
       const changes = own?.before || baseline ? diff(before, after) : {}

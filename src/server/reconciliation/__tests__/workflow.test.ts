@@ -70,6 +70,7 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
     const path = new URL(String(url)).pathname, method = init?.method ?? 'GET', body = init?.body ? JSON.parse(String(init.body)) : undefined
     requests.push({ url: String(url), method, body })
     if (failReads && method === 'GET') throw new Error('secret_fake_failure')
+    if (path === '/v1/users/me') return json({ type: 'bot', id: 'fixture-actor' })
     const pageId = path.split('/')[3], page = path.startsWith('/v1/pages/') ? pages.get(pageId!) : undefined
     if (path === '/v1/pages' && method === 'POST') {
       const createdId = 'c'.repeat(32), created = { ...structuredClone(raw), id: createdId, url: `https://www.notion.so/${createdId}`, properties: Object.fromEntries(Object.entries(body.properties).map(([name, value]) => [name, { type: raw.properties[name].type, ...(value as object) }])) }
@@ -975,14 +976,20 @@ describe('remaining shared workflow operations', () => {
       options: [{ id: 'review', label: 'Review' }] }
     const reason = 'The fixture already ran.\nTin Star withdrawal: {"id":"sibling"}'
     const supersede = input('supersede_decision', { request_id: 'original', reason, replacement })
+    const copiedAudit = body.replace('body-example', supersede.operation_id)
+    f.comments.push({ id: 'copied-audit', created_by: { id: 'another-notion-user' }, rich_text: [{ plain_text: copiedAudit }] })
+    const content = new WorkflowContent(f.reader)
+    expect(await content.reservationReadback(id, { kind: 'note', text: copiedAudit })).toBe('different')
+    const reader = new CardContextReader(f.reader.config, f.fetcher)
+    expect(decisionRequests((await reader.details(id)).blocks).map(request => request.id)).toEqual(['original', 'sibling'])
     expect(await f.workflow.update({ ...supersede, replacement: { ...replacement, request_id: 'sibling' } } as UpdateWorkInput, 'Fixture reviewer'))
       .toMatchObject({ outcome: 'not-saved', code: 'decision-conflict' })
     expect(await f.workflow.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved' })
     const restarted = new WorkflowOperations(f.reader, async () => [])
     expect(await restarted.update(supersede, 'Fixture reviewer')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
-    expect(f.comments).toHaveLength(4)
+    expect(f.comments).toHaveLength(5)
 
-    const notes = f.comments.map(comment => ({ id: comment.id, text: plainText(comment.rich_text) }))
+    const notes = await content.notes(id)
     expect(notes.at(-1)?.text).toMatch(/^Date: \d{4}-\d\d-\d\dT[^\n]+\nBy: Fixture reviewer\nOperation: supersede_decision\n/)
     expect(notes.at(-1)?.text).toContain(`Reason: ${reason}`)
     expect(decisionRequests([{ id: 'body-1', text: body, type: 'paragraph' }, ...notes])).toMatchObject([

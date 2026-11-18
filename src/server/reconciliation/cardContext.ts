@@ -1,5 +1,6 @@
 import { readNotionCard } from './notion'
-import type { NotionFetch } from './notionApi'
+import { notionWorkflowWriter, type NotionFetch } from './notionApi'
+import { isDecisionRetraction } from '../../shared/workflowRequests'
 import type { ReconciliationConfig } from './config'
 import { record } from './values'
 import { isJiraCard } from '../../shared/workIdentity'
@@ -15,7 +16,7 @@ export interface CardContextRead {
   outcome: 'available' | 'partial' | 'unavailable'
   commentsOutcome?: 'available' | 'partial' | 'unavailable'
   observedAt?: string
-  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
+  blocks: Array<{ id: string; type: string; text: string; author?: string | null; authorName?: string | null; workflowWriter?: boolean; createdAt?: string | null; created_time?: string; last_edited_time?: string }>
   message?: string
   omissions?: string
 }
@@ -154,13 +155,16 @@ export class CardContextReader {
         for (const item of body.results) {
           const comment = record(item)
           if (!Array.isArray(comment.rich_text)) continue
-          context.blocks.push({ id: String(comment.id), type: 'comment',
+          const author = record(comment.created_by).id
+          const text = comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('')
+          const workflowWriter = isDecisionRetraction(text) ? author === await notionWorkflowWriter(this.config, fetcher) : undefined
+          context.blocks.push({ id: String(comment.id), type: 'comment', workflowWriter,
             authorName: typeof record(comment.created_by).name === 'string' ? String(record(comment.created_by).name) : null,
-            author: typeof record(comment.created_by).id === 'string' ? String(record(comment.created_by).id) : null,
+            author: typeof author === 'string' ? author : null,
             createdAt: typeof comment.created_time === 'string' ? comment.created_time : null,
             created_time: typeof comment.created_time === 'string' ? comment.created_time : undefined,
             last_edited_time: typeof comment.last_edited_time === 'string' ? comment.last_edited_time : undefined,
-            text: comment.rich_text.map(v => record(v).plain_text ?? record(record(v).text).content ?? '').join('').replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
+            text: text.replace(/\b(?:secret_|ntn_|sk-)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]') })
         }
         if (body.has_more !== true) return context
         const next = typeof body.next_cursor === 'string' ? body.next_cursor : undefined

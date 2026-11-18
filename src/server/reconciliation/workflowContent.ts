@@ -1,6 +1,7 @@
 import { type SourceWriteIntent } from './cardLeases'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { isDecisionRetraction, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { notionWorkflowWriter } from './notionApi'
 import type { WorkReader } from './workReader'
 import { isJiraCard } from '../../shared/workIdentity'
 
@@ -21,7 +22,9 @@ export const codeBlock = (text: string) => ({ object: 'block' as const, type: 'c
 export type WorkflowCreateBlock = ReturnType<typeof paragraph> | ReturnType<typeof heading> | ReturnType<typeof codeBlock>
 export const createBlockText = (block: WorkflowCreateBlock): string => plainText(block.type === 'paragraph' ? block.paragraph.rich_text : block.type === 'heading_2' ? block.heading_2.rich_text : block.code.rich_text)
 export const plainText = (rich: unknown): string => Array.isArray(rich) ? rich.map(v => v?.plain_text ?? v?.text?.content ?? '').join('') : ''
-export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string }
+export interface WorkflowNote { id: string; text: string; author?: string; createdAt?: string; type?: 'comment'; workflowWriter?: boolean }
+const matchesNote = (note: WorkflowNote, text: unknown) => note.text === text &&
+  (!isDecisionRetraction(note.text) || note.workflowWriter === true)
 export const receiptMarker = (actor: string, operationId: string) => `${workflowMarkers.operation} ${JSON.stringify([actor, operationId])}`
 export const decisionMarker = (id: string) => `${workflowMarkers.decision} ${JSON.stringify(id)}`
 export const sectionMarker = (name: string) => `${workflowMarkers.section} ${name}`
@@ -33,6 +36,10 @@ export class NotionWriteError extends Error { constructor(readonly status: numbe
 export class ManagedSectionConflict extends Error {}
 export class WorkflowContent {
   constructor(private reader: WorkReader) {}
+  workflowWriter() {
+    if (!this.reader.config) throw new Error('Notion is not configured')
+    return notionWorkflowWriter(this.reader.config, this.reader.api.fetch)
+  }
   private jira(id: string) {
     if (!isJiraCard(id)) return
     if (!this.reader.jira) throw new Error('Jira is not configured')
@@ -65,7 +72,7 @@ export class WorkflowContent {
       if (intent.kind === 'note' || intent.kind === 'reminder') return (await this.notes(id, signal)).some(note =>
         // Notion supplies display prose for mentions; only the reminder's
         // unique terminal receipt is invariant under that rendering.
-        intent.kind === 'reminder' && intent.marker ? workflowNoteHasMarker(note, intent.marker) : note.text === intent.text) ? 'applied' : 'different'
+        intent.kind === 'reminder' && intent.marker ? workflowNoteHasMarker(note, intent.marker) : matchesNote(note, intent.text)) ? 'applied' : 'different'
       if (intent.kind === 'section') return (await this.sections(id, true, true)).some(block => block.text === intent.text) ? 'applied' : 'different'
       if (intent.kind === 'append') {
         const texts = (await this.sections(id, true, true)).map(block => block.text)
@@ -145,8 +152,15 @@ export class WorkflowContent {
       const query = new URLSearchParams({ block_id: id, page_size: '100', ...(cursor ? { start_cursor: cursor } : {}) })
       const body = await this.request(`comments?${query}`, 'GET', undefined, signal)
       if (!Array.isArray(body.results) || typeof body.has_more !== 'boolean') throw new Error('Incomplete comment read')
-      for (const item of body.results) result.push({ id: item.id, text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
-      if (!body.has_more) return result
+      for (const item of body.results) result.push({ id: item.id, type: 'comment', text: plainText(item.rich_text), author: item.created_by?.id, createdAt: item.created_time })
+      if (!body.has_more) {
+        const retractions = result.filter(note => isDecisionRetraction(note.text))
+        if (retractions.length) {
+          const writer = await this.workflowWriter()
+          for (const note of retractions) note.workflowWriter = note.author === writer
+        }
+        return result
+      }
       if (!body.next_cursor || body.next_cursor === cursor) break
       cursor = body.next_cursor
     }
@@ -195,6 +209,6 @@ export class WorkflowContent {
     const jira = this.jira(id)
     if (jira) await jira.note(id, `${text}\n${marker}`)
     else await this.request('comments', 'POST', { parent: { page_id: id }, ...richText(`${text}\n${marker}`) })
-    if (!(await this.notes(id)).some(note => note.text === `${text}\n${marker}`)) throw new Error('Note readback differs')
+    if (!(await this.notes(id)).some(note => matchesNote(note, `${text}\n${marker}`))) throw new Error('Note readback differs')
   }
 }

@@ -1,4 +1,5 @@
 import type { DecisionPacket } from '../../shared/decisionPacket'
+import { isJiraCard } from '../../shared/workIdentity'
 import type { DeskAnswerer, RecordDeskAnswer } from './preparedSubmissions'
 import type { CardContextRead } from './cardContext'
 import { decisionCardSource, decisionPropertyRevision, deskAnswerMarker } from './decisionEvidence'
@@ -11,7 +12,7 @@ import { queueRequestKey } from './queue'
 import { workProposalMatchesRequest } from '../../shared/decisionProposal'
 import { isReviewOperation, writeReview, ReviewWriteError, type ReviewOperation } from './workflowReview'
 import { workflowMarkers } from '../../shared/workflowMarkers'
-import { decisionRequests, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
+import { decisionRequests, isDecisionRetraction, withdrawnDecisionIds, workflowReceipt, workflowNoteHasMarker } from '../../shared/workflowRequests'
 import { DecisionSourceError, requestKey, bindDecision, reconcileDecision, decisionHistory, decisionProposals, decisionAnswer, decisionAnswerText, decisionRecordRows, type DecisionDelivery } from './decisionResolution'
 import { clawsonMergeTitle, type ClawsonMergeInput, type ClawsonMergePlan } from '../../shared/clawsonMerge'
 import { checkInReport } from './checkInWatchdog'
@@ -186,7 +187,12 @@ export class WorkflowOperations {
       exclusive: (id, perform) => this.exclusive(id, perform),
       create: (create, caller) => this.serialize('create', create, caller, () => this.performCreate(create, caller, { signature: JSON.stringify(create), properties: { Status: 'Backlog' } })),
       update: (update, caller) => this.performUpdate(update, caller),
-      hasNote: async (id, caller, operationId) => (await this.content.notes(id)).some(note => note.text.split('\n').includes(receiptMarker(caller, operationId))),
+      hasNote: async (id, caller, operationId) => {
+        const marker = receiptMarker(caller, operationId)
+        return (await this.content.notes(id)).some(note => isDecisionRetraction(note.text)
+          ? workflowNoteHasMarker(note, marker)
+          : note.text.split('\n').includes(marker))
+      },
       matches: (card, desired) => Object.entries(desired).every(([name, value]) => this.matches(card, name, this.normalized(card, name, value))),
       notify: async change => { if (change.card.source?.synthetic) return; if (!this.onChange) throw new Error('Firstmate bridge unavailable'); await this.onChange(change) },
       delivery: (id, operationId) => this.reader.jira && id.startsWith('jira:') ? Promise.resolve({ state: 'disabled', reason: 'Synthetic Jira pilot; no live pickup or inbox delivery' }) : this.deliveryStatus?.(id, operationId) ?? Promise.resolve({ state: 'unknown', reason: 'Firstmate bridge observation unavailable' }),
@@ -837,6 +843,10 @@ export class WorkflowOperations {
       card = await this.reader.card(input.card_id, true)
       if (card.source?.synthetic && 'source_request' in input && input.source_request) throw new WorkflowError('synthetic-source', 'Synthetic Jira decisions cannot deliver to live First Mate requests')
       const before = card
+      if (input.kind === 'withdraw_decision' || input.kind === 'supersede_decision') {
+        if (isJiraCard(card.id)) throw new WorkflowError('unsupported-source', 'Decision retractions require a Notion workflow writer.')
+        await this.content.workflowWriter()
+      }
       stage = 'read card comments'
       const notes = await this.content.notes(card.id)
       if (input.kind === 'answer_decision' && withdrawnDecisionIds(notes).has(input.request_id)) {

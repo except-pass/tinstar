@@ -31,7 +31,7 @@ Jobs expire after 15 minutes without publication. Published packets have no
 age limit. Editing decision properties, card text, or substantive discussion
 invalidates the packet.
 
-To retract an open card-native request, use the [workflow withdrawal or
+To retract an open card-native Notion request, use the [workflow withdrawal or
 supersession operation](workflow.md). Both invalidate the old prepared packet.
 
 ### Answer attribution

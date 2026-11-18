@@ -86,6 +86,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     const url = new URL(input instanceof Request ? input.url : input)
     if (url.origin === webhook.url) return fetch(input, init)
     expect(url.origin).toBe('https://api.notion.com')
+    if (url.pathname === '/v1/users/me') return Response.json({ type: 'bot', id: 'fixture-writer' })
     const method = init?.method ?? 'GET'
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
     if (url.pathname.endsWith('/query')) return Response.json({ results: cards, has_more: false })
@@ -100,7 +101,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
-      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, rich_text: text(entry) })), has_more: false })
+      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({
       results: card.body.map((entry, index) => ({ id: `block-${index}`, type: 'paragraph', paragraph: { rich_text: text(entry) } })),

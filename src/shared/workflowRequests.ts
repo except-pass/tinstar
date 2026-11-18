@@ -5,14 +5,15 @@ import { workflowMarkers } from './workflowMarkers'
 
 const withdrawalPrefix = `${workflowMarkers.withdrawal} `
 const withdrawalOperation = (lines: string[]) => lines[2] === 'Operation: withdraw_decision' || lines[2] === 'Operation: supersede_decision'
+export const isDecisionRetraction = (text: string) => withdrawalOperation(text.split('\n', 3))
 /** Workflow history is evidence of a particular request, not an inference from
  * page edit time. Missing or partial history cannot establish that none exist. */
-type WorkflowRecordSource = { text: string; type?: string }
+type WorkflowRecordSource = { text: string; type?: string; workflowWriter?: boolean }
 export interface RequestNote extends WorkflowRecordSource { id: string; createdAt?: string | null; created_time?: string }
 export const decisionRecordRows = (notes: WorkflowRecordSource[], prefix: string): ReturnType<typeof JSON.parse>[] => notes.flatMap(note => {
   const lines = note.text.split('\n')
   if (withdrawalOperation(lines)) {
-    if (note.type !== undefined && note.type !== 'comment') return []
+    if (!note.workflowWriter || note.type !== 'comment') return []
     if (prefix !== withdrawalPrefix && prefix !== `${workflowMarkers.request} `) return []
     const footer = note.text.trimEnd().split('\n'), marker = footer.at(-2)
     const superseded = lines[2] === 'Operation: supersede_decision'
