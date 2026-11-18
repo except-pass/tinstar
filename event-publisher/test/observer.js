@@ -357,10 +357,16 @@ test('explicit null PR data witnesses removal while an absent projection preserv
   equal(journal.sources()[0].last_generated_at, at(1))
 
   const added = row('new-task')
-  equal(journal.record(taskObservation([{ ...task, priority: 1 }, added], 3, tasks, [
+  const mixed = taskObservation([{ ...task, priority: 2 }, added], 3, tasks, [
     { id: added.id, pr_url: pr },
-  ])), 1)
-  deepEqual(journal.events().at(-1).change.after.pull_requests, [pr])
+  ])
+  equal(journal.record({ ...mixed, observed_at: at(3) }), 2)
+  const [addedEvent, priorityEvent] = journal.events().slice(-2)
+  deepEqual(addedEvent.change.after.pull_requests, [pr])
+  equal(addedEvent.observed_at, at(4))
+  equal(priorityEvent.change.field, 'priority')
+  equal(priorityEvent.observed_at, at(3))
+  equal(priorityEvent.observation.observed_between.by, at(3))
   equal(journal.sources()[0].last_generated_at, at(3))
 })
 
@@ -442,6 +448,27 @@ printf '%s\\n' "{\\"schema\\":\\"fm-fleet-snapshot.v1\\",\\"fm_home\\":\\"$FM_HO
     { field: 'ready', before: true, after: false },
   ])
   equal(journal.events()[0].evidence.pr_link_coverage, 'unobserved')
+})
+
+test('observe fails when its reads are discarded behind the journal watermark', async t => {
+  const path = await temp(t)
+  const config = join(path, 'config.json')
+  const db = join(path, 'journal.sqlite')
+  const configuredHome = { ...home, path }
+  await writeFile(config, JSON.stringify({ homes: [configuredHome] }))
+  const journal = new Journal(db)
+  t.after(() => journal.close())
+  const sources = sourcesFor(configuredHome)
+  journal.registerSources(sources)
+  const future = new Date(Date.now() + 60_000).toISOString()
+  for (const source of sources) {
+    journal.record({ source, started_at: future, observed_at: future, entries: [], health: 'ok' })
+  }
+  const baseline = journal.sources()
+
+  await rejects(exec(cli, ['observe', '--config', config, '--db', db]), { code: 1 })
+  deepEqual(journal.sources(), baseline)
+  equal(journal.tail(), 0)
 })
 
 test('baseline, direct Queued to Done, exact task fields, dedup and immutable restart replay', async t => {

@@ -170,8 +170,12 @@ export class Journal {
   }
 
   record(observation) {
-    const { source, started_at, entries, generated_at } = observation
-    let { observed_at } = observation
+    return this.recordAttempt(observation).written
+  }
+
+  recordAttempt(observation) {
+    const { source, started_at, observed_at, entries, generated_at } = observation
+    let batchObservedAt = observed_at
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const previous = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(source.source_id)
@@ -179,6 +183,7 @@ export class Journal {
       // they have never completed a read.
       if (!previous) throw new Error('observation source was not registered')
       let written = 0
+      let complete = false
       if (!previous.last_attempt_started || started_at > previous.last_attempt_started) {
         let { health, reason = null, counts = null } = observation
         let snapshotId = null
@@ -203,10 +208,11 @@ export class Journal {
             counts = pr_links_unobserved ? { pr_links_unobserved } : null
             const contributesPullRequests = fresh && pr_links_unobserved < entries.length
             acceptedGeneration = contributesPullRequests ? pr.generated_at : null
-            if (contributesPullRequests) observed_at = pr.observed_at
-            observation = { ...observation, observed_at, entries: projected }
+            if (contributesPullRequests) batchObservedAt = pr.observed_at
+            observation = { ...observation, entries: projected }
           }
           written = this.recordEntries(observation, previous, snapshotId)
+          complete = health === 'ok' && !counts?.pr_links_unobserved
         }
         this.db.prepare(`
           UPDATE sources SET last_attempt_started = ?, last_attempt_at = ?, health = ?, reason = ?,
@@ -214,12 +220,12 @@ export class Journal {
             last_success_at = COALESCE(?, last_success_at),
             last_generated_at = COALESCE(?, last_generated_at)
           WHERE source_id = ?
-        `).run(started_at, observed_at, health, reason, JSON.stringify(counts),
-          snapshotId, snapshotId ? observed_at : null,
+        `).run(started_at, batchObservedAt, health, reason, JSON.stringify(counts),
+          snapshotId, snapshotId ? batchObservedAt : null,
           acceptedGeneration, source.source_id)
       }
       this.db.exec('COMMIT')
-      return written
+      return { written, complete }
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
@@ -274,13 +280,14 @@ export class Journal {
           const pullRequestChange = difference.change.field === 'pull_requests'
           if (pullRequestChange && rebaselinePullRequests) continue
           const includesPullRequests = pullRequestChange || Object.hasOwn(difference.change.after ?? {}, 'pull_requests')
+          const eventObservedAt = includesPullRequests ? observation.pullRequests.observed_at : observed_at
           const envelope = {
             schema: 'event-publisher.event.v1',
             event_id: `event:${randomUUID()}`,
             ...difference,
             source: { provider: 'firstmate', source_id: source.source_id, home_id: source.home_id, mode: source.mode },
             subject: { type: source.type, id: entry.id },
-            observed_at,
+            observed_at: eventObservedAt,
             occurred_at: null,
             observation: {
               method: 'snapshot-diff',
@@ -289,7 +296,7 @@ export class Journal {
               batch_id: snapshotId,
               previous_snapshot: prior?.snapshot_id ?? prior?.last_seen_snapshot ?? previousSnapshot,
               current_snapshot: snapshotId,
-              observed_between: { after: prior?.started_at ?? null, by: observed_at },
+              observed_between: { after: prior?.started_at ?? null, by: eventObservedAt },
             },
             related,
             evidence: {

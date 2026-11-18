@@ -117,7 +117,9 @@ async function collect(journal, homes, interval) {
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
     journal.registerSources(sources, { reconcile: true })
     if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
+    let complete
     do {
+      complete = true
       const start = Date.now()
       for (const home of homes) {
         if (home.path || controller.signal.aborted) continue
@@ -135,18 +137,14 @@ async function collect(journal, homes, interval) {
       for (const home of homes) {
         if (controller.signal.aborted) break
         const observations = await observeHome(home, scratch, { taskCache: taskCaches.get(home.id) })
-        for (const observation of observations) journal.record(observation)
+        for (const observation of observations) {
+          if (!journal.recordAttempt(observation).complete) complete = false
+        }
       }
       // Always pause after a slow pass as well. Never overlap collector passes.
       if (interval) await pause(Math.max(1000 * interval - (Date.now() - start), 5000), controller.signal)
     } while (interval && !controller.signal.aborted)
-    if (!interval) {
-      const statuses = new Map(journal.sources().map(source => [source.source_id, source]))
-      return !controller.signal.aborted && sources.every(source => {
-        const status = statuses.get(source.source_id)
-        return status?.health === 'ok' && !status.counts?.pr_links_unobserved
-      })
-    }
+    if (!interval) return !controller.signal.aborted && complete
   } finally {
     controller.close()
     await rmdir(scratch)
