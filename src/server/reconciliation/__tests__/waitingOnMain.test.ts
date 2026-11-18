@@ -364,6 +364,23 @@ describe('Waiting on main', () => {
     await publishResolutions(value, [{ key: 'approve-api', at: askAt }])
     expect((await service.refresh(value)).items.some(row => row.key === 'approve-api')).toBe(false)
   })
+  it('recovers a note-leading correlation only for saved rows without a correlation field', async () => {
+    const directory = await root(), value = snapshot()
+    const child = value.fleet[1]!.observation.data!
+    const text = 'corr=8940e5f6dad58120 Card needs a publication route'
+    child.parent_asks!.items = ['legacy', 'explicit-null'].map(key => ({
+      key, corr: null, at: askAt, state: 'blocked', text,
+    }))
+    const create = () => new WaitingOnMain(async () => value, async () => 'disabled', directory, async () => false, () => now)
+    await create().sweep()
+    const path = join(directory, 'waiting-on-main.json')
+    const state = JSON.parse(await readFile(path, 'utf8'))
+    delete state.rows.find((row: { item: MainWaitItem }) => row.item.key === 'legacy').corr
+    await writeFile(path, JSON.stringify(state))
+    delete child.parent_asks
+    await publishResolutions(value, [], { corrs: [{ corr: '8940e5f6dad58120', at: askAt + 1 }] })
+    expect((await create().sweep()).items.filter(row => row.kind === 'mate').map(row => row.key)).toEqual(['explicit-null'])
+  })
   it.each(['unknown', 'stale', 'failed', 'missing'] as const)('closes saved resolved asks with %s child coverage', async coverage => {
     const directory = await root(), value = snapshot()
     const asks = value.fleet[1]!.observation.data!.parent_asks!
@@ -417,11 +434,12 @@ describe('Waiting on main', () => {
       ? { status: 'known', keys: [{ key: 'approve-api', at: askAt + 1 }] }
       : { status: 'known', keys: [], corrs: [{ corr: '1234567890abcdef', at: askAt + 1 }] }
     const unknown = { status: 'unknown', keys: [] }
-    async function read(id: string, evidence: typeof close | typeof unknown, mateHome = child!.source.home) {
+    async function read(id: string, evidence: typeof close | typeof unknown,
+      tasks = [{ id, kind: 'secondmate', spawn_gen: 'first', paths: { home: { path: child!.source.home } } }], complete = true) {
       await writeFile(file, JSON.stringify({
         schema: 'fm-fleet-snapshot.v1', fm_home: home, generated,
-        tasks: [{ id, kind: 'secondmate', paths: { home: { path: mateHome } } }],
-        backlog: { present: true, records: [] }, main_inventory: { valid: true },
+        tasks,
+        backlog: { present: true, records: [] }, main_inventory: { valid: complete },
         parent_resolutions: { status: evidence.status, observed_at: generated, mates: { [id]: evidence } },
       }))
       parent!.observation = await cache.get(true)
@@ -432,6 +450,8 @@ describe('Waiting on main', () => {
     expect(await hasAsk()).toBe(true)
     await read('hulk', close)
     expect(await hasAsk()).toBe(false)
+    await read('hulk', unknown, [], false)
+    expect(await hasAsk()).toBe(false)
     await read('hulk', unknown)
     expect(await hasAsk()).toBe(false)
     expect(parent!.observation.data?.parent_resolutions?.mates.hulk).toEqual(unknown)
@@ -439,8 +459,14 @@ describe('Waiting on main', () => {
     expect(await hasAsk()).toBe(true)
     await read('hulk', close)
     expect(await hasAsk()).toBe(false)
-    await read('replacement', unknown)
+    const reassignedHome = child!.source.home + '-reassigned'
+    await read('hulk', close, [{ id: 'hulk', kind: 'secondmate', spawn_gen: 'second', paths: { home: { path: reassignedHome } } }], false)
     expect(await hasAsk()).toBe(true)
+    child!.source.home = reassignedHome
+    child!.observation.data!.fm_home = reassignedHome
+    expect(mainWaitCandidates(value, time).items.some(row => row.key === 'approve-api')).toBe(false)
+    await read('replacement', unknown)
+    expect(mainWaitCandidates(value, time).items.some(row => row.key === 'approve-api')).toBe(true)
   })
   it('nudges each fresh wait once, batches the sweep, and waits 2h after delivery', async () => {
     const directory = await root()

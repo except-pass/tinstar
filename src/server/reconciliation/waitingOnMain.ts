@@ -324,7 +324,10 @@ export class WaitingOnMain implements MainWaitBridge {
       const saved = new Map(state.rows.map(row => [row.item.id, row]))
       const seen = new Set(projection.items.map(item => item.id))
       for (const [id, row] of saved) {
-        const resolved = row.item.kind === 'mate' && parentAskClosed({ key: row.item.key, corr: row.corr,
+        const corr = row.corr === undefined && row.item.kind === 'mate'
+          ? /^[\p{White_Space}\u001c-\u001f]*corr=([0-9A-Fa-f]{16})(?![\p{L}\p{N}_])/u.exec(row.item.text)?.[1]
+          : row.corr
+        const resolved = row.item.kind === 'mate' && parentAskClosed({ key: row.item.key, corr,
           at: row.item.since === null ? null : Date.parse(row.item.since) / 1000 }, projection.resolutionsBySource.get(row.item.source))
         if (resolved || (!seen.has(id) && projection.complete.has(row.item.source))) saved.delete(id)
         else row.item.fresh = false

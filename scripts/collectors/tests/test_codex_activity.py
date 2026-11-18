@@ -185,6 +185,7 @@ class CollectorTests(unittest.TestCase):
                      'done corr=unused [at=1794593700]: corr=8940e5f6dad58120 unrelated\n'
                      'done [at=200] corr=unused: corr=8940e5f6dad58120 unrelated\n'
                      'done [at=300]: Built the release; corr=8940e5f6dad58120 is still waiting\n'
+                     'done [corr=shared] [at=400]: corr=8940e5f6dad58120 was handled separately\n'
                      'done [corr=8940e5f6dad58120ff]: different token\n'
                      'done [corr=8940e5f6dad58121]: other reply\n')
         for close in ('done [at=1794593720]: corr=8940e5f6dad58120 Card closed\n',
@@ -365,7 +366,7 @@ class CollectorTests(unittest.TestCase):
             'resolved [key=pad] [at=01]: padded\n'
             'working [key=other] [at=160]: not a close\n'
             'done [key=other] [at=170]: corr=8940e5f6dad58120 answered\n'
-            'done [corr=older] [corr=shared] [at=180]: answered\n'
+            'done [corr=older] [corr=shared] [at=180]: corr=8940e5f6dad58120 was handled separately\n'
             'resolved corr=unused [key=api] [at=200]: answered: use REST\n'
             'resolved [at=250]: [key=api] unrelated note\n'
             'done corr=unused [at=260]: corr=8940e5f6dad58120 unrelated header\n'

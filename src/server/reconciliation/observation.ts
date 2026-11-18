@@ -35,7 +35,7 @@ export class CachedObservation<T> {
   constructor(private readonly read: (background: boolean) => Promise<ReadResult<T>>, private readonly ttlMs: number,
     private readonly maxAgeMs: number, private readonly failureMessage: string, private readonly now = Date.now,
     private readonly mergePartial?: (previous: T, current: T) => T,
-    private readonly acceptData?: (previous: T | null, current: T) => T) {}
+    private readonly acceptData?: (previous: T | null, current: T, coverage: ReadResult<T>['coverage']) => T) {}
 
   get(force = false, background = false): Promise<Observation<T>> {
     if (this.pending && (background || !this.pending.background)) return this.pending.value
@@ -62,9 +62,9 @@ export class CachedObservation<T> {
       if (!Number.isFinite(observed) || observed > this.now() + 60_000) throw new Error('invalid source timestamp')
       const previous = this.cached
       const merged = result.coverage === 'partial' && previous?.data != null && !!this.mergePartial
-      const data = merged ? this.mergePartial!(previous.data!, result.data) : result.data
+      const data = this.acceptData ? this.acceptData(previous?.data ?? null, result.data, result.coverage) : result.data
       this.cached = {
-        ...result, data: this.acceptData ? this.acceptData(previous?.data ?? null, data) : data,
+        ...result, data: merged ? this.mergePartial!(previous.data!, data) : data,
         status: merged ? 'stale' : result.coverage === 'complete' ? 'fresh' : 'partial',
         observedAt: merged ? previous.observedAt : result.observedAt,
         attemptedAt, expiresAt: merged ? previous.expiresAt : new Date(observed + this.maxAgeMs).toISOString(), error: null,

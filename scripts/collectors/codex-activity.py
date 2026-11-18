@@ -166,7 +166,7 @@ def parent_event(line):
     fields = _PARENT_HEADER_FIELDS.findall(metadata)
     keys = [value for field, value in fields if field == 'key']
     header_corrs = [value for field, value in fields if field == 'corr']
-    corrs = header_corrs[-1:] + _PARENT_NOTE_CORR.findall(note)
+    corrs = header_corrs[-1:] or _PARENT_NOTE_CORR.findall(note)
     return state, metadata, keys, corrs, note.lstrip() if separator else content.strip(), bool(separator)
 
 

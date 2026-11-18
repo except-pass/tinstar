@@ -75,9 +75,10 @@ const parentResolutionsSchema = z.object({
   })),
 })
 export const acceptedMateCloses = Symbol('acceptedMateCloses')
+type AcceptedMateClose = { home: string; generation: string | null; close: ParentMateResolutions }
 function parentResolutionsField(value: unknown): {
   parent_resolutions?: ParentResolutions
-  [acceptedMateCloses]?: ReadonlyMap<string, { home: string; close: ParentMateResolutions }>
+  [acceptedMateCloses]?: ReadonlyMap<string, AcceptedMateClose>
 } {
   const parsed = parentResolutionsSchema.safeParse(value)
   return parsed.success ? { parent_resolutions: parsed.data } : {}
@@ -144,17 +145,31 @@ export function fleetObservation(source: FleetSource) {
   }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source', Date.now, (previous, current) => ({ ...current,
     tasks: retainMissing(previous.tasks, current.tasks, task => JSON.stringify(task.identity)),
     backlog: previous.backlog || current.backlog ? retainMissing(previous.backlog ?? [], current.backlog ?? [], entry => String(entry.id)) : null,
-  }), (previous, current) => {
+  }), (previous, current, coverage) => {
     const resolutions = current.parent_resolutions
     const mates = resolutions && Date.parse(resolutions.observed_at) <= Date.now() + 60_000 ? resolutions.mates : undefined
-    const accepted = new Map<string, { home: string; close: ParentMateResolutions }>()
+    const accepted = new Map<string, AcceptedMateClose>()
+    const ids = new Map<string, number>()
+    const homes = new Map<string, number>()
+    for (const task of current.tasks) {
+      if (typeof task.id === 'string') ids.set(task.id, (ids.get(task.id) ?? 0) + 1)
+      const { home } = task.paths
+      if (task.kind === 'secondmate' && home) homes.set(home, (homes.get(home) ?? 0) + 1)
+    }
     for (const task of current.tasks) {
       const { id, kind, paths: { home } } = task
       if (kind !== 'secondmate' || typeof id !== 'string' || !home) continue
+      if (ids.get(id) !== 1 || homes.get(home) !== 1) continue
+      const generation = task.identity.spawn_gen
       const close = mates?.[id]
       const prior = previous?.[acceptedMateCloses]?.get(id)
-      if (close?.status === 'known') accepted.set(id, { home, close })
-      else if (prior?.home === home) accepted.set(id, prior)
+      if (close?.status === 'known') accepted.set(id, { home, generation, close })
+      else if (prior?.home === home && prior.generation === generation) accepted.set(id, prior)
+    }
+    if (coverage === 'partial') {
+      for (const [id, prior] of previous?.[acceptedMateCloses] ?? []) {
+        if (!ids.has(id) && !homes.has(prior.home)) accepted.set(id, prior)
+      }
     }
     return { ...current, [acceptedMateCloses]: accepted }
   })
