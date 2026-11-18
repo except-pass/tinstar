@@ -207,9 +207,11 @@ relation IDs. No owner, execution or substantive card facts are inferred.
 | `complete` | Explicit `disposition` and `evidence`, records Done. No inference from merge/service/worker exit. |
 | `park` | Explicit `disposition`, status Backlog (default) or Archived. |
 
-Withdrawal removes the named request from active views and invalidates the
+Existing workflow write access grants withdrawal and supersession. The audit
+records the authenticated actor for both operations. Withdrawal removes the
+named request from active views and invalidates the
 prepared Desk packet. Supersession records the withdrawal and replacement in
-one history comment, with the authenticated caller, timestamp, and reason.
+one history comment with the timestamp and reason.
 Other requests, waits, worker links, owner, and status stay in place. A plain
 withdrawal removes an action tag introduced for the request once no other open
 request shares it. A separate Will action, owner assignment, or wait can still

@@ -753,7 +753,9 @@ export class WorkflowOperations {
           // absent that judgment, leave every legacy action tag untouched.
           const source = notes.find(note => note.id === input.request_id) ?? (await this.content.sections(card.id)).find(block => block.id === input.request_id)
           if (source && source.text.trim()) {
-            if (decisionRecordRows([source], 'Tin Star request: ').length) throw new WorkflowError('decision-not-open', 'Use the recorded request ID to answer this decision.')
+            if (decisionRecordRows([source], 'Tin Star request: ').some(row => withdrawn.has(row?.id))) {
+              throw new WorkflowError('decision-not-open', 'This request was withdrawn. No answer was saved.')
+            }
             if (input.legacy_action && !tags.includes(input.legacy_action)) throw new WorkflowError('decision-conflict', 'The explicitly resolved legacy action tag is no longer present')
             request = { id: input.request_id, action: input.legacy_action ?? '', preserve_action: !input.legacy_action }
           }
