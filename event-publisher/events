@@ -115,7 +115,7 @@ async function collect(journal, homes, interval) {
   try {
     const sources = homes.flatMap(sourcesFor)
     const taskCaches = new Map(homes.map(home => [home.id, {}]))
-    journal.registerSources(sources)
+    journal.registerSources(sources, { reconcile: true })
     if (interval) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
     do {
       const start = Date.now()

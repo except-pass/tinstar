@@ -132,10 +132,16 @@ export class Journal {
     this.db.close()
   }
 
-  registerSources(sources) {
+  registerSources(sources, { reconcile = false } = {}) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       for (const source of sources) this.register(source)
+      if (reconcile) {
+        this.db.prepare(`
+          UPDATE sources SET health = 'deconfigured', reason = NULL, counts = NULL
+          WHERE source_id NOT IN (SELECT value FROM json_each(?))
+        `).run(JSON.stringify(sources.map(source => source.source_id)))
+      }
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
@@ -156,7 +162,8 @@ export class Journal {
     }
     const result = this.db.prepare(`
       INSERT INTO sources (source_id, description) VALUES (?, ?)
-      ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
+      ON CONFLICT(source_id) DO UPDATE SET description = excluded.description,
+        health = CASE WHEN sources.health = 'deconfigured' THEN 'pending' ELSE sources.health END
       WHERE json_extract(sources.description, '$.mode') = json_extract(excluded.description, '$.mode')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.

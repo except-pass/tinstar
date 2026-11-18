@@ -154,6 +154,35 @@ test('home binding survives restart and is shared by task and worker sources', a
   fresh.close()
 })
 
+test('full configuration registration deconfigures removed sources without losing history', async t => {
+  const path = join(await temp(t), 'journal.sqlite')
+  const journal = new Journal(path)
+  t.after(() => journal.close())
+  const east = { ...home, id: 'example:east', path: '/example/east' }
+  const eastSources = sourcesFor(east)
+  const [eastTasks] = eastSources
+  journal.registerSources([tasks, workers, ...eastSources], { reconcile: true })
+  journal.record(taskObservation([], 0, eastTasks))
+  journal.record(taskObservation([row('sample-task')], 1, eastTasks))
+  const before = journal.sources().find(source => source.source_id === eastTasks.source_id)
+  const events = journal.events()
+
+  journal.registerSources([tasks, workers], { reconcile: true })
+  const { stdout } = await exec(cli, ['sources', '--db', path])
+  match(stdout, /east:task .*deconfigured/)
+  match(stdout, /east:worker .*deconfigured/)
+  const removed = journal.sources().find(source => source.source_id === eastTasks.source_id)
+  equal(removed.last_snapshot_id, before.last_snapshot_id)
+  deepEqual(journal.events(), events)
+  throws(() => journal.registerSources(sourcesFor({ ...east, id: 'renamed' })), /already bound/)
+
+  journal.registerSources(eastSources)
+  equal(journal.sources().find(source => source.source_id === eastTasks.source_id).health, 'pending')
+  equal(journal.sources().find(source => source.source_id === tasks.source_id).health, 'pending')
+  equal(journal.record(taskObservation([row('sample-task', { priority: 1 })], 2, eastTasks)), 1)
+  equal(journal.events().at(-1).sequence, events.at(-1).sequence + 1)
+})
+
 test('CLI rejects oversized intervals and JSON source health output', async () => {
   for (const command of ['watch', 'replay']) {
     await rejects(exec(cli, [command, '--type', '']),
