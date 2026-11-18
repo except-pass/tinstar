@@ -35,7 +35,7 @@ it('sends an ETag on a repeat GET, reuses the cached body on 304 and logs after 
   expect(log).not.toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(1)
   expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=2 notModified=1 holds=0')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=2 notModified=1')
 })
 
 it('suppresses other GitHub GETs until a primary reset and resumes without a fallback request', async () => {
@@ -79,7 +79,7 @@ it('keeps timeout and decoding failures from sending a second request', async ()
   exec.mockImplementationOnce((_binary, _args, _options, done) => setTimeout(() => done(new Error('private timeout diagnostic')), 3_600_001))
   const timedOut = expect(github.githubJson(pulls)).rejects.toThrow('GitHub request failed')
   await vi.advanceTimersByTimeAsync(3_600_000)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0 holds=0')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0')
   await vi.advanceTimersByTimeAsync(1)
   await timedOut
   answer(200, { unexpected: [] })
@@ -97,7 +97,7 @@ it('shares a hold from the legacy transport with subsequent CLI requests', async
   expect(exec).toHaveBeenCalledTimes(2)
   await vi.advanceTimersByTimeAsync(3_600_000)
   expect(log).toHaveBeenCalledTimes(1)
-  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0 holds=1')
+  expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=0 notModified=0')
 })
 
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {

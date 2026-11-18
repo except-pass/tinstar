@@ -32,7 +32,7 @@ export class GithubRestBudget {
   private cache = new Map<string, { etag: string; data: unknown; bytes: number }>()
   private cacheBytes = 0
   private pending = new Map<string, Promise<unknown>>()
-  private hourly = { requests: 0, notModified: 0, holds: 0 }
+  private hourly = { requests: 0, notModified: 0 }
   private reporting = false
 
   constructor(private source: string, private now = Date.now) {}
@@ -46,9 +46,9 @@ export class GithubRestBudget {
     if (!this.reporting) {
       this.reporting = true
       setInterval(() => {
-        const { requests, notModified, holds } = this.hourly
-        console.info(`GitHub REST hourly (${this.source}) requests=${requests} notModified=${notModified} holds=${holds}`)
-        this.hourly = { requests: 0, notModified: 0, holds: 0 }
+        const { requests, notModified } = this.hourly
+        console.info(`GitHub REST hourly (${this.source}) requests=${requests} notModified=${notModified}`)
+        this.hourly = { requests: 0, notModified: 0 }
       }, hour).unref()
     }
     let observed = false
@@ -57,7 +57,6 @@ export class GithubRestBudget {
       const now = this.now()
       const until = holdUntil(response, now, data)
       if (!until) return
-      if (this.blockedUntil <= now) this.hourly.holds++
       this.blockedUntil = Math.max(this.blockedUntil, until)
       held = true
     }

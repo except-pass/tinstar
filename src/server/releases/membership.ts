@@ -24,9 +24,9 @@ export class ReleaseMembershipReader {
   private pending = new Map<string, Promise<Range>>()
   constructor(private read: Read = readReleaseRows, private now = Date.now) {}
   async get(repository: string, source: string | null, tag: string, tags?: Tag[], baseline?: Tag, onMain = false) {
-    const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}:${onMain}`
+    const key = `${repository}:${source}:${tag}:${baseline?.name ?? ''}:${baseline?.commit.sha ?? ''}`
     const current = this.ranges.get(key)
-    if (current && (current.membership.status === 'complete' || current.retryAt > this.now())) return current
+    if (current && current.retryAt > this.now()) return current
     const existing = this.pending.get(key)
     if (existing) return existing
     const work = this.advance(key, repository, source, tag, onMain, current, tags, baseline).finally(() => this.pending.delete(key))
@@ -88,22 +88,35 @@ export class ReleaseMembershipReader {
       }
       for (const [key, entry] of this.commitPulls) if (entry.until <= this.now()) this.commitPulls.delete(key)
       const commitSet = new Set(range.commits)
-      // Advance only whole successful batches: failed reads retry without dropping known members.
-      for (let batch = 0; batch < 2 && range.cursor < range.commits.length; batch++) {
-        const commits = range.commits.slice(range.cursor, range.cursor + 4)
+      const readBatch = async (commits: string[], pulls: Map<string, ReleasePull>) => {
         const responses = await Promise.all(commits.map(commit => this.readCommitPulls(repository, commit, onMain)))
         for (const response of responses) {
           for (const raw of response) {
             const identity = releasePull(raw.html_url)
             if (!identity || identity.repository !== repository || !commitSet.has(raw.merge_commit_sha)) continue
-            range.pulls.set(identity.id, { ...identity, title: typeof raw.title === 'string' ? raw.title : null, state: 'merged', mergedAt: raw.merged_at,
+            pulls.set(identity.id, { ...identity, title: typeof raw.title === 'string' ? raw.title : null, state: 'merged', mergedAt: raw.merged_at,
               mergeSha: raw.merge_commit_sha, head: sha(raw.head?.sha) ? raw.head.sha : null, base: raw.base?.ref ?? null,
               observedAt: new Date(this.now()).toISOString(), freshness: 'fresh', links: [], exceptions: [] })
           }
         }
+      }
+      const start = range.cursor
+      const latest = new Map<string, ReleasePull>()
+      for (let batch = 0; batch < 2 && range.cursor < range.commits.length; batch++) {
+        const commits = range.commits.slice(range.cursor, range.cursor + 4)
+        await readBatch(commits, latest)
+        for (const [id, pull] of latest) range.pulls.set(id, pull)
         range.cursor += commits.length
       }
       const complete = range.cursor === range.total && range.commits.length === range.total
+      if (complete && start > 0) {
+        const refreshed = new Map<string, ReleasePull>()
+        for (let offset = 0; offset < start; offset += 4) {
+          await readBatch(range.commits.slice(offset, Math.min(offset + 4, start)), refreshed)
+        }
+        for (const [id, pull] of latest) refreshed.set(id, pull)
+        range.pulls = refreshed
+      }
       range.membership.status = complete ? 'complete' : 'partial'
       range.membership.reason = complete ? null : `Reading Git membership: ${range.cursor} of ${range.total} commits inspected; counts are partial`
       range.membership.observedAt = new Date(this.now()).toISOString(); range.retryAt = this.now() + 15_000
@@ -112,9 +125,11 @@ export class ReleaseMembershipReader {
       range.membership.reason = error instanceof Error ? error.message : 'Git release membership unavailable'
       range.retryAt = this.now() + 60_000
     }
-    this.ranges.set(key, range)
-    // Retain only recently used immutable ranges, without a new on-disk release ledger.
-    if (this.ranges.size > 32) this.ranges.delete(this.ranges.keys().next().value!)
+    if (range.membership.status === 'complete') this.ranges.delete(key)
+    else {
+      this.ranges.set(key, range)
+      if (this.ranges.size > 32) this.ranges.delete(this.ranges.keys().next().value!)
+    }
     return range
   }
 }
