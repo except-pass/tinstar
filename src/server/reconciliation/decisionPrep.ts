@@ -8,7 +8,7 @@ import { packetContents } from '../../shared/decisionPacket'
 import { redactSourceText } from '../../shared/searchDocuments'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
-import type { DecisionCardSource } from './decisionEvidence'
+import { prepBlocked, type DecisionCardSource } from './decisionEvidence'
 import { NotionCardBoardMismatch } from './notion'
 import type { WorkCard } from './workReader'
 
@@ -166,7 +166,7 @@ export class DecisionPreparation {
       const liveJobs = db.prepare(`SELECT id,card,revision FROM decision_card_prep WHERE scope = ? AND ${liveJobSql} ORDER BY card, id`)
         .all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
       const liveCards = new Set(liveJobs.map(job => job.card))
-      const fresh = capacity ? queue.filter(card => !liveCards.has(card.id) && !this.held(db, card.id)) : []
+      const fresh = capacity ? queue.filter(card => !prepBlocked(card) && !liveCards.has(card.id) && !this.held(db, card.id)) : []
       const first = fresh.length ? this.candidateCursor % fresh.length : 0
       const selected = [...fresh.slice(first), ...fresh.slice(0, first)].slice(0, capacity)
       const refreshable = queue.filter(card => !liveCards.has(card.id) && this.packets.currentInStorage(db, card.id))

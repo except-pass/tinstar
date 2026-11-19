@@ -3,8 +3,8 @@ import type { WorkCard } from './workReader'
 import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
-import { actionableWillCard, currentWillRequests, deferredDecisionCard } from './claimPolicy'
+import { decisionRequests, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
+import { actionableWillCard, deferredDecisionCard, isCurrentWillRequest } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
@@ -42,7 +42,7 @@ const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'de
 /** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
 const isTestDecisionCard = (card: WorkCard) => /^\[TEST(?:\]| )/.test(String(value(card, 'Name') ?? ''))
 
-function prepBlocked(card: WorkCard) {
+export function prepBlocked(card: WorkCard) {
   return !!card.source?.synthetic || isTestDecisionCard(card) || isJiraCard(card.id) ||
     deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
 }
@@ -56,7 +56,7 @@ function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
   const answers = history.filter(note =>
     note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
     .map(note => chronology.get(note.id)!)
-  return currentWillRequests(history, value(card, 'Will action'), { multilineQuestion: true }).filter(request => {
+  return decisionRequests(history, { multilineQuestion: true }).filter(request => {
     if (request.answered) return false
     const source = chronology.get(request.sourceId)!
     return answers.every(answer => Number.isFinite(source.created) && Number.isFinite(answer.created) && source.created !== answer.created
@@ -68,7 +68,8 @@ function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
   const requests = openPrepRequests(card, blocks)
-  const question = requests.length === 1 ? requests[0]?.question?.trim() ?? '' : ''
+  const request = requests.length === 1 ? requests[0] : undefined
+  const question = request && isCurrentWillRequest(request, value(card, 'Will action')) ? request.question?.trim() ?? '' : ''
   return {
     card,
     title,

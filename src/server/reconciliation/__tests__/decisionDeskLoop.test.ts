@@ -95,6 +95,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     } catch { res.writeHead(500).end() }
   })
   fixtures.push(webhook.close)
+  let rejectComment = false
   let beforeBodyRead: (() => Promise<void>) | undefined
   const provider: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
@@ -115,6 +116,10 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     if (method === 'GET') cardReads.push(url.pathname)
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
+      if (method === 'POST' && rejectComment) {
+        rejectComment = false
+        return new Response(null, { status: 400 })
+      }
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
       return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_time: createdTimes.get(entry), created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
     }
@@ -168,7 +173,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, pauseNextBodyRead: (pause: () => Promise<void>) => { beforeBodyRead = pause }, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, rejectNextComment: () => { rejectComment = true }, pauseNextBodyRead: (pause: () => Promise<void>) => { beforeBodyRead = pause }, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -367,10 +372,11 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
 
-  it('skips multiple open requests and sends only the remaining labeled legacy question', async () => {
+  it.each(['Will', 'Alice'])('skips another open request for %s and sends only the remaining labeled legacy question', async recipient => {
     const card = page(1, { tag: 'Decision' })
     card.properties['Next action'] = rich('Deploy the current build')
-    const newer = 'Requested from: Will\nQuestion: Should we pause?\nTin Star request: {"id":"newer","action":"Decision"}'
+    card.properties['Will action'] = { type: 'multi_select', multi_select: [{ name: 'Decision' }, { name: 'Review' }] }
+    const newer = `Requested from: ${recipient}\nQuestion: Should we pause?\nTin Star request: {"id":"newer","action":"Review"}`
     const older = 'Requested from: Will\nQuestion: Should we cancel?\nInternal only: unrelated private notes\nTin Star request: {"id":"older","action":"Decision"}'
     card.comments.push(newer, older)
     const { sources, jobs } = await setup([card], false)
@@ -483,6 +489,7 @@ describe('prepared-card loop', () => {
 
     card.properties.Status = { type: 'status', status: { name: 'In Progress' } }
     card.body.push('An unrelated edit does not reopen the decision.')
+    await sources.snapshot(true)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
 
@@ -846,9 +853,10 @@ describe('prepared-card loop', () => {
     }
   })
 
-  it.each(['publication', 'workflow edit'])('keeps a superseded monitor from restoring the Desk revision after %s', async action => {
-    const card = withOpenRequest(page(1, { tag: 'Decision' }))
-    const { sources, jobs, tool, web, pauseNextBodyRead } = await setup([card], false)
+  it.each(['publication', 'workflow edit', 'partial review'])('keeps a superseded monitor from restoring the Desk revision after %s', async action => {
+    const card = withOpenRequest(page(1, { tag: 'Decision', status: action === 'partial review' ? 'In review' : 'In Progress' }))
+    card.properties.Area = select('Engineering')
+    const { sources, jobs, tool, web, pauseNextBodyRead, rejectNextComment } = await setup([card], false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
     const bodyStarted = Promise.withResolvers<void>()
@@ -864,6 +872,12 @@ describe('prepared-card loop', () => {
         card.comments.push('New evidence changes the decision.')
         await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
           .rejects.toThrow('The card changed while preparing it')
+      } else if (action === 'partial review') {
+        rejectNextComment()
+        expect(await tool('update_work', { card_id: card.id, operation_id: 'review-during-monitor', kind: 'accept_review',
+          submission_key: `legacy:${card.id}:${card.last_edited_time}`, feedback: 'Accepted', remaining_scope: [], scope_complete: true }))
+          .toMatchObject({ outcome: 'partially-saved', saved_fields: expect.arrayContaining(['Status']) })
+        expect(card.properties.Status).toMatchObject({ status: { name: 'Done' } })
       } else {
         expect(await tool('update_work', { card_id: card.id, operation_id: 'complete-during-monitor', kind: 'complete',
           disposition: 'Decision no longer needed', evidence: 'Fixture closed' }))
@@ -1013,6 +1027,17 @@ describe('prepared-card loop', () => {
         expect.objectContaining({ card_id: card.id, state: 'Preparation stopped after two sends without a packet' }),
       ])
     }
+  })
+
+  it('skips property-excluded cards before spending dispatch read slots', async () => {
+    const fixtures = Array.from({ length: 10 }, (_, i) => withOpenRequest(page(i + 1, { owner: 'Will' })))
+    for (const card of fixtures) card.properties.Name = rich('[TEST] excluded fixture')
+    const eligible = withOpenRequest(page(11, { owner: 'Will' }))
+    const { sources, jobs, cardReads } = await setup([...fixtures, eligible], false)
+
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(eligible.id)])
+    expect(cardReads.filter(path => path.startsWith('/v1/pages/'))).toEqual([`/v1/pages/${eligible.id}`])
   })
 
   it('does not send a test card or a synthetic card', async () => {

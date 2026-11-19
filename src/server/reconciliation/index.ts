@@ -108,9 +108,13 @@ export class ReconciliationSources {
       this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), answerer, canPost))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.workflow.onRecordedChange = id => {
+    const invalidateDecisionObservation = (id: string) => {
       this.decisionRevisionReads.delete(id)
       this.decisionRevisions.delete(id)
+    }
+    this.workReader.onConfirmed = card => invalidateDecisionObservation(card.id)
+    this.workflow.onRecordedChange = id => {
+      invalidateDecisionObservation(id)
       this.context.invalidate(id)
       this.invalidateQueueDisplays()
     }
