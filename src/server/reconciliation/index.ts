@@ -3,9 +3,9 @@ import { deferredDecisionCard } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
-import { DecisionPreparation, readClavisValue } from './decisionPrep'
+import { DecisionPreparation, PreparationCardExcluded, readClavisValue } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { actionableDecisionCard, decisionCardSource, decisionPropertyRevision } from './decisionEvidence'
+import { actionableDecisionCard, decisionCardSource, decisionPropertyRevision, prepBlocked } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -100,7 +100,7 @@ export class ReconciliationSources {
         await this.workReader.query({}, false, true)
         return this.decisionQueue().cards
       },
-      read: (card, background, freshHistory) => this.readDecisionCard(card, background, freshHistory),
+      read: (card, background, freshHistory, preparing) => this.readDecisionCard(card, background, freshHistory, preparing),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
@@ -178,18 +178,22 @@ export class ReconciliationSources {
       ? observed.revision : undefined
   }
 
-  private async loadDecisionCard(id: string, background: boolean, freshHistory = false) {
+  private async loadDecisionCard(id: string, background: boolean, freshHistory = false, preparing = false) {
     const observation = Symbol()
     this.decisionRevisionReads.set(id, observation)
     try {
       const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
       const card = await this.workReader.card(id, true, background, signal)
+      if (this.decisionRevisionReads.get(id) === observation) {
+        this.workReader.confirm(card)
+        this.decisionRevisionReads.set(id, observation)
+      }
+      if (preparing && prepBlocked(card)) throw new PreparationCardExcluded()
       const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
       if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
       await this.context.verifyRetractions(context)
       const source = decisionCardSource(card, context.blocks)
       if (this.decisionRevisionReads.get(id) === observation) {
-        this.workReader.confirm(card)
         this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
       }
       return { card, blocks: context.blocks, source }
@@ -198,10 +202,10 @@ export class ReconciliationSources {
     }
   }
 
-  private async readDecisionCard(id: string, background: boolean, freshHistory = false) {
+  private async readDecisionCard(id: string, background: boolean, freshHistory = false, preparing = false) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
-    const { source } = await this.loadDecisionCard(id, background, freshHistory)
+    const { source } = await this.loadDecisionCard(id, background, freshHistory, preparing)
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {

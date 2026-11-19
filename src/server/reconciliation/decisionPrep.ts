@@ -33,6 +33,8 @@ export const prepSecretName = 'grok/tinstar-decision-prep'
 export const preparerName = 'Tinstar Decision Prep'
 const webhookMissing = 'The preparer webhook is not configured.'
 
+export class PreparationCardExcluded extends Error {}
+
 export const publishPacketInput = z.object({ job_id: z.string().uuid(), packet: packetContents })
 interface Job { id: string; card: string; revision: string; state: 'sending' | 'sent' | 'failed' | 'expired' | 'stopped' | 'published'; at: number; packet_id: string | null; message: string | null }
 type Secret = { url: string; key: string }
@@ -78,7 +80,7 @@ export class DecisionPreparation {
 
   constructor(readonly packets: DecisionPackets, private source: {
     refreshQueue(): Promise<WorkCard[]>
-    read(card: string, background: boolean, freshHistory?: boolean): Promise<DecisionCardSource>
+    read(card: string, background: boolean, freshHistory?: boolean, preparing?: boolean): Promise<DecisionCardSource>
     exclusive<T>(card: string, perform: () => Promise<T>): Promise<T>
   }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
@@ -183,7 +185,7 @@ export class DecisionPreparation {
     this.retirementCursor += retirementChecks.length
     const monitoring = Promise.allSettled(retirementChecks.map(async job => {
       const source = await this.readSource(job.card, true)
-      if (source?.prepEligible && source.revision === job.revision) return
+      if (source && source.prepEligible && source.revision === job.revision) return
       await this.packets.leases.writeStorage(db => this.retireJobInStorage(db, job.id, this.now() - retryAfter, null))
     }))
     const secret = this.secret
@@ -191,7 +193,7 @@ export class DecisionPreparation {
       if (!secret) return
       const dispatch = await this.source.exclusive(id, async () => {
         const source = await this.readSource(id, true, true)
-        if (!source?.prepEligible) return
+        if (!source || !source.prepEligible) return
         const job = await this.packets.leases.writeStorage(db => {
           const cutoff = this.now() - retryAfter
           if (this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
@@ -217,9 +219,10 @@ export class DecisionPreparation {
 
   private async readSource(card: string, background: boolean, freshHistory = false) {
     try {
-      return await this.source.read(card, background, freshHistory)
+      return await this.source.read(card, background, freshHistory, true)
     } catch (error) {
       if (error instanceof NotionCardBoardMismatch) return null
+      if (error instanceof PreparationCardExcluded) return false as const
       throw error
     }
   }
@@ -269,7 +272,7 @@ export class DecisionPreparation {
         if (latest.packet_id) return latest.packet_id
         const cutoff = this.now() - retryAfter
         requireLivePreparation(latest, cutoff)
-        if (changed || !source?.prepEligible) {
+        if (changed || !source || !source.prepEligible) {
           this.retireJobInStorage(db, job_id, cutoff, changed ? 'Card changed while preparing' : null)
           return null
         }
@@ -277,7 +280,7 @@ export class DecisionPreparation {
         db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
         return stored.id
       })
-      if (!packetId) throw new DecisionDeskConflict(!source ? 'Notion card identity or source changed' : changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
+      if (!packetId) throw new DecisionDeskConflict(source === null ? 'Notion card identity or source changed' : changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
       return { outcome: 'published', job_id, packet_id: packetId }
     })
   }

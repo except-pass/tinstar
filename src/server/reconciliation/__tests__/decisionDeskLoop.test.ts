@@ -96,6 +96,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
   })
   fixtures.push(webhook.close)
   let rejectComment = false
+  let commentsUnavailable = false
   let beforeBodyRead: (() => Promise<void>) | undefined
   const provider: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
@@ -116,6 +117,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     if (method === 'GET') cardReads.push(url.pathname)
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
+      if (method === 'GET' && commentsUnavailable) return new Response(null, { status: 403 })
       if (method === 'POST' && rejectComment) {
         rejectComment = false
         return new Response(null, { status: 400 })
@@ -173,7 +175,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, rejectNextComment: () => { rejectComment = true }, pauseNextBodyRead: (pause: () => Promise<void>) => { beforeBodyRead = pause }, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, disableCommentReads: () => { commentsUnavailable = true }, rejectNextComment: () => { rejectComment = true }, pauseNextBodyRead: (pause: () => Promise<void>) => { beforeBodyRead = pause }, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -627,17 +629,18 @@ describe('prepared-card loop', () => {
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
 
-  it('removes a closed card from the Desk after rejecting its held packet', async () => {
+  it.each([true, false])('removes a closed held card with comments available=%s', async commentsAvailable => {
     const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
-    const { sources, tool, web, writes } = await setup([card])
+    const { sources, tool, web, writes, disableCommentReads } = await setup([card])
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'claim-before-close', card_id: card.id })
     expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Leased' })])
 
     card.properties.Status = { type: 'status', status: { name: 'Done' } }
+    if (!commentsAvailable) disableCommentReads()
     expect(await tool('submit_prepared_decision', {
       operation_id: 'answer-after-close', lease_token: held.lease_token, option_id: '1', answer: 'Proceed.',
-    })).toMatchObject({ outcome: 'packet-invalidated' })
+    })).toMatchObject({ outcome: commentsAvailable ? 'packet-invalidated' : 'save-unconfirmed' })
     expect((await web('snapshot')).data).toMatchObject({ ready: [], pending: [] })
     expect(writes).toEqual([])
   })
@@ -822,6 +825,22 @@ describe('prepared-card loop', () => {
     card.properties.Status = originalStatus
     expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
+  })
+
+  it.each(['refill', 'callback'])('retires a property-excluded card without history during %s', async path => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, cardReads, disableCommentReads } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    card.properties.Status = { type: 'status', status: { name: 'Waiting for Prod Release' } }
+    disableCommentReads()
+    cardReads.length = 0
+
+    if (path === 'refill') await sources.preparation.replenish()
+    else await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .rejects.toThrow('This card is no longer an open owner decision')
+    expect(cardReads).toEqual([`/v1/pages/${card.id}`])
+    expect((await sources.preparation.status()).jobs[0]?.state).toBe('stopped')
   })
 
   it.each(['refill', 'callback'])('retires a moved-card job without reading its history during %s', async path => {
