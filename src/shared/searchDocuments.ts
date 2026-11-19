@@ -31,9 +31,9 @@ const credentialAssignment = new RegExp(String.raw`((?:(["'])${credentialKey}\2|
 export function redactSourceText(input: unknown): string {
   return (typeof input === 'string' ? input : '')
     .replace(/\b(?:ATATT|ATCTT|secret_|ntn_|sk-|github_pat_|gh[pousr]_)[A-Za-z0-9_.~-]{16,}\b/g, '[credential omitted]')
-    .replace(/((?:\bauthorization|"authorization"|'authorization')[ \t]*[:=][ \t]*(?:\r?\n[ \t]+)?)basic[ \t]+[a-z0-9._~+\/=-]+/gi, '$1[credential omitted]')
-    .replace(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(/\bbasic[ \t]+([a-z0-9._~+\/=-]+)/gi, (match, token) => {
+    .replace(/((?:\bauthorization|"authorization"|'authorization')[ \t]*[:=][ \t]*(?:\r?\n[ \t]+)?)basic(?:[ \t]*\r?\n[ \t]+|[ \t]+)[a-z0-9._~+\/=-]+/gi, '$1[credential omitted]')
+    .replace(/\bbearer\s+[A-Za-z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
+    .replace(/\bbasic\s+([a-z0-9+\/=]+)/gi, (match, token) => {
       try {
         const decoded = atob(token)
         const encoded = btoa(decoded)
