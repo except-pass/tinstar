@@ -14,10 +14,7 @@ const builtInFields = new Map([
   ['summary', 'summary'], ['description', 'description'], ['status', 'status'],
   ['issuelinks', 'links'], ['Link', 'links'],
 ])
-const projectFields = {
-  owner: 'Owner', decisions: 'Decision Questions', blockerType: 'Waiting For Type',
-  blockerTarget: 'Waiting For ID', blockerCondition: 'Waiting For Condition',
-}
+const projectFields = new Set(['owner', 'decisions', 'blockerType', 'blockerTarget', 'blockerCondition'])
 const commentEvents = new Map([
   ['comment_created', 'created'], ['comment_updated', 'updated'], ['comment_deleted', 'deleted'],
 ])
@@ -39,8 +36,8 @@ export function jiraConfig(raw) {
     throw new JiraWebhookConfigurationError('Jira configuration needs a Cloud site URL, cloud ID, immutable project ID and optional live or fixture mode')
   }
   if (!fields || typeof fields !== 'object' || Array.isArray(fields) ||
-      Object.keys(fields).length !== Object.keys(projectFields).length ||
-      Object.entries(fields).some(([key, id]) => !has(projectFields, key) || typeof id !== 'string' || !customField.test(id)) ||
+      Object.keys(fields).length !== projectFields.size ||
+      Object.entries(fields).some(([key, id]) => !projectFields.has(key) || typeof id !== 'string' || !customField.test(id)) ||
       new Set(Object.values(fields)).size !== Object.keys(fields).length) {
     throw new JiraWebhookConfigurationError('Jira requires all five distinct native custom field IDs')
   }
@@ -58,8 +55,8 @@ function preview(text, secret) {
   return text.replaceAll(secret, '[credential omitted]')
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization))\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[^\s"',;]{6,})/gi, '$1=[credential omitted]')
-    .replace(/((["'])(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)\2\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')/gi, '$1"[credential omitted]"')
+    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization))\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*|[^\s"',;]{6,})/gi, '$1=[credential omitted]')
+    .replace(/((["'])(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)\2\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*)/gi, '$1"[credential omitted]"')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
     .replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')
