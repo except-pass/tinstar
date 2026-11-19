@@ -23,7 +23,10 @@ export class ReleasePullReader {
   async get(urls: string[]) {
     const result = new Map<string, Observation>(), candidates = [...new Set(urls)]
     const requested = new Set(candidates)
-    for (const [url, cached] of this.cache) if (!requested.has(url) && (cached.value.state !== 'merged' || cached.until <= this.now())) this.cache.delete(url)
+    for (const [url, cached] of this.cache) {
+      if (requested.has(url) || this.pending.has(url) || this.pollPending.has(releasePull(url)?.repository ?? '')) continue
+      if (cached.value.state !== 'merged' || cached.until <= this.now()) this.cache.delete(url)
+    }
     const groups = new Map<string, Array<{ url: string; number: number }>>()
     for (const url of candidates) {
       const pull = releasePull(url)
@@ -98,10 +101,14 @@ export class ReleasePullReader {
     const started = this.now(), observedAt = new Date(started).toISOString()
     // An unchanged row may predate the newest page. Look back to the oldest
     // mutable observation, including the boundary second for equal timestamps.
+    const coverage = new Map<string, Observation>()
     let since = started - 1000
     for (const { url } of group) {
       const value = this.cache.get(url)?.value
-      if (value?.observedAt && value.state !== 'merged') since = Math.min(since, Date.parse(value.observedAt) - 1000)
+      if (value?.observedAt && value.state !== 'merged') {
+        coverage.set(url, value)
+        since = Math.min(since, Date.parse(value.observedAt) - 1000)
+      }
     }
     const byNumber = new Map(group.map(({ number, url }) => [number, url]))
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
@@ -136,9 +143,8 @@ export class ReleasePullReader {
     } catch (error) {
       return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
     }
-    if (covered) for (const { url } of group) {
-      const previous = this.cache.get(url)?.value
-      if (!observed.has(url) && previous?.observedAt && previous.state !== 'merged') {
+    if (covered) for (const [url, previous] of coverage) {
+      if (!observed.has(url) && this.cache.get(url)?.value === previous) {
         this.save(url, { ...previous, observedAt, freshness: 'fresh', readError: undefined }, observedAt)
       }
     }

@@ -51,7 +51,7 @@ describe('bounded read-only release PR observations', () => {
   it.each([
     { exact: merged, listed: 'open', state: 'merged', mergeSha: sha },
     { exact: { ...merged, state: 'open', merged: false }, listed: 'closed', state: 'closed', mergeSha: null },
-  ] as const)('keeps $state evidence when an older exact read finishes after a list row', async ({ exact, listed, state, mergeSha }) => {
+  ] as const)('keeps $state evidence across an input gap while an older exact read is pending', async ({ exact, listed, state, mergeSha }) => {
     let now = Date.now()
     let finishExact!: () => void, finishList!: () => void, reachedSecondPage!: () => void
     const exactGate = new Promise<void>(resolve => { finishExact = resolve })
@@ -67,14 +67,49 @@ describe('bounded read-only release PR observations', () => {
     const batch = reader.get([url(1), url(2)])
     try {
       await secondPage
+      expect((await reader.get([])).size).toBe(0)
       finishExact()
       expect((await point).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+      expect((await reader.get([])).size).toBe(0)
     } finally {
       finishExact()
       finishList()
     }
     expect((await batch).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
     expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+  })
+
+  it.each([false, true])('does not renew an exact observation written during the list poll (warm: %s)', async warm => {
+    let now = Date.now()
+    let finishExact!: () => void, finishList!: () => void
+    const exactGate = new Promise<void>(resolve => { finishExact = resolve })
+    const listGate = new Promise<void>(resolve => { finishList = resolve })
+    const open = { ...merged, state: 'open', merged: false }
+    const read = vi.fn(async () => { await exactGate; return open })
+    const list = vi.fn(async () => {
+      await listGate
+      return page([row(2, now, 'open')], 100, cutoff)
+    })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const seededAt = now
+    if (warm) {
+      read.mockResolvedValueOnce(open)
+      await reader.get([url(1)])
+      now += pollInterval
+    }
+    const exactStarted = now
+    const cutoff = new Date(warm ? seededAt - 2_000 : exactStarted + 2_000).toISOString()
+    const point = reader.get([url(1)])
+    now += 5_000
+    const batch = reader.get([url(1), url(2)])
+    try {
+      finishExact()
+      await point
+    } finally {
+      finishList()
+    }
+    expect((await batch).get(url(1))).toMatchObject({ state: 'open', observedAt: new Date(exactStarted).toISOString() })
+    expect(list).toHaveBeenCalledTimes(1)
   })
 
   it('revalidates absent links when a later page reaches the cutoff', async () => {
