@@ -5,7 +5,7 @@ import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { DecisionPreparation, readClavisValue } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { actionableDecisionCard, decisionCardSource } from './decisionEvidence'
+import { actionableDecisionCard, decisionCardSource, decisionPropertyRevision } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -108,7 +108,7 @@ export class ReconciliationSources {
       this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), answerer, canPost))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workflow.onRecordedChange = id => { this.decisionRevisions.delete(id); this.context.invalidate(id); this.invalidateQueueDisplays() }
     this.workflow.onDecisionRetracted = async (id, auditTime) => {
       await this.decisionPackets.initialize()
       await this.leases.writeStorage(db => {
@@ -152,10 +152,18 @@ export class ReconciliationSources {
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
   }
 
+  private decisionRevisions = new Map<string, { edited: string; properties: string; revision: string }>()
+
   private decisionQueue() {
     const observation = this.workReader.declarations()
     return { cards: (observation.data?.cards ?? []).filter(actionableDecisionCard).sort((a, b) => a.id.localeCompare(b.id)),
-      coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const }
+      coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const,
+      revisionFor: (card: WorkCard) => {
+        const observed = this.decisionRevisions.get(card.id)
+        return observed?.edited === card.last_edited_time && observed.properties === decisionPropertyRevision(card)
+          ? observed.revision : undefined
+      },
+    }
   }
 
   private async loadDecisionCard(id: string, background: boolean) {
@@ -175,6 +183,7 @@ export class ReconciliationSources {
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
     const { card, blocks } = await this.loadDecisionCard(id, background)
     const source = decisionCardSource(card, blocks)
+    this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {

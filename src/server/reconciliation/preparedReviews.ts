@@ -15,7 +15,7 @@ export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card
 type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }
 export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
-export interface PreparedQueue { cards: WorkCard[]; coverage: 'complete' | 'unknown' }
+export interface PreparedQueue { cards: WorkCard[]; coverage: 'complete' | 'unknown'; revisionFor(card: WorkCard): string | undefined }
 export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: StoredDecisionPacket | null; session_id?: string; message?: string; coverage?: string }
 
 /** Session capabilities identify the conversation. The card lease and the
@@ -24,7 +24,7 @@ export class PreparedReviews {
   private initialized?: Promise<void>
   constructor(readonly packets: DecisionPackets, private queue: () => PreparedQueue,
     private readSource: (card: string) => Promise<import('./decisionEvidence').DecisionCardSource>,
-    private preparation: Pick<DecisionPreparation, 'status' | 'hasJobHistoryInStorage' | 'latestJobInStorage'>, private now = Date.now) {}
+    private preparation: Pick<DecisionPreparation, 'status' | 'latestJobInStorage'>, private now = Date.now) {}
   get scope() { return this.packets.scope }
   private get leases() { return this.packets.leases }
   async initialize() {
@@ -80,20 +80,13 @@ export class PreparedReviews {
     await this.initialize()
     const prep = await this.preparation.status()
     const queue = this.queue()
-    const pending = this.leases.readStorage(db => queue.cards.filter(card =>
-      this.preparation.hasJobHistoryInStorage(db, card.id) &&
-      !this.packets.currentInStorage(db, card.id) &&
-      !this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))))
-    const revisions = new Map(await Promise.all(pending.map(async card => [
-      card.id, (await this.readSource(card.id).catch(() => undefined))?.revision,
-    ] as const)))
     return this.leases.readStorage(db => {
       const now = this.now()
       const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
-        const revision = revisions.get(card.id)
+        const revision = queue.revisionFor(card)
         const job = revision ? this.preparation.latestJobInStorage(db, card.id, revision) : undefined
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
           job && isLivePreparation(job, now) ? 'Preparing' :

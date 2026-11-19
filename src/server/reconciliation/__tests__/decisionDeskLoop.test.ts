@@ -76,6 +76,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
   const published: unknown[] = []
   const jobs: Array<{ card_url: string; source_question: string; source_revision: string; publish: { tool: string; job_id: string } }> = []
   const createdTimes = new Map<string, string>()
+  const cardReads: string[] = []
   const writes: Array<{ card: string; type: string; token: string | null }> = []
   type Call = (name: string, args: Record<string, unknown>) => Promise<any>
   let tool: Call
@@ -109,6 +110,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     const cardId = url.searchParams.get('block_id') ?? body.parent?.page_id ?? url.pathname.split('/')[3]
     const card = cards.find(row => row.id === cardId)
     if (!card) return new Response(null, { status: 404 })
+    if (method === 'GET') cardReads.push(url.pathname)
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
@@ -158,7 +160,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, createdTimes, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -349,6 +351,20 @@ describe('prepared-card loop', () => {
     expect(jobs[19]!.card_url).toBe(jobs[9]!.card_url)
     expect(await tool('publish_prepared_packet', { job_id: jobs[9]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
+  })
+
+  it('sends only the oldest open request question and omits unlabeled legacy prose', async () => {
+    const card = page(1, { tag: 'Decision' })
+    card.properties['Next action'] = rich('Deploy the current build')
+    const newer = 'Requested from: Will\nQuestion: Should we pause?\nTin Star request: {"id":"newer","action":"Decision"}'
+    const older = 'Requested from: Will\nQuestion: Should we cancel?\nInternal only: unrelated private notes\nTin Star request: {"id":"older","action":"Decision"}'
+    card.comments.push(newer, older)
+    const { sources, jobs, createdTimes } = await setup([card], false)
+    createdTimes.set(newer, '2025-01-02T00:00:00Z')
+    createdTimes.set(older, '2025-01-01T00:00:00Z')
+
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.source_question)).toEqual(['Should we cancel?'])
   })
 
   it('publishes a scrubbed webhook job through its callback and makes it Ready', async () => {
@@ -768,7 +784,7 @@ describe('prepared-card loop', () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
-    const { sources, jobs, web, disableSending } = await setup([card], false)
+    const { sources, jobs, tool, web, cardReads, disableSending } = await setup([card], false)
     await sources.preparation.replenish()
     if (state !== 'live') {
       now += 15 * 60_000
@@ -785,7 +801,9 @@ describe('prepared-card loop', () => {
       for (let n = 0; n < 100; n++) insert.run(`history-${n}`, sources.decisionPackets.scope, id(n + 2), 'old', now)
     })
 
+    const readsBeforeSnapshot = cardReads.length
     const snapshot = (await web('snapshot')).data
+    expect(cardReads).toHaveLength(readsBeforeSnapshot)
     expect(jobs).toHaveLength(state === 'stopped' ? 2 : 1)
     expect(snapshot.runner.jobs).toHaveLength(100)
     expect(snapshot.runner.jobs.some((job: { id: string }) => job.id === jobs[0]!.publish.job_id)).toBe(false)
@@ -793,8 +811,12 @@ describe('prepared-card loop', () => {
     const label = state === 'live' ? 'Preparing' : state === 'expired' ? 'Retrying' : 'Preparation stopped after two sends without a packet'
     expect(snapshot.pending).toEqual([expect.objectContaining({ card_id: card.id, state: label })])
 
-    card.comments.push('Requested from: Will\nQuestion: Decide on the revised request?\nTin Star request: {"id":"revised","action":"Decision"}')
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'revise-request', kind: 'request_decision',
+      request_id: 'revised', requested_from: 'Will', question: 'Decide on the revised request?' }))
+      .toMatchObject({ outcome: 'saved' })
+    const readsAfterEdit = cardReads.length
     expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Queued' })])
+    expect(cardReads).toHaveLength(readsAfterEdit)
   })
 
   it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {

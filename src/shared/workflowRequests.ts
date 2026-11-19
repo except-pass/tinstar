@@ -81,11 +81,13 @@ export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<s
 function requestQuestion(lines: string[]) {
   const start = lines.findIndex(line => line.startsWith('Question: '))
   if (start < 0) return null
-  const record = lines.findLastIndex(line => line.startsWith('Tin Star request: '))
-  if (record <= start) return lines[start]!.slice('Question: '.length)
-  const recipient = start === 0 ? lines.findIndex(line => line.startsWith('Requested from: ')) : -1
-  const end = recipient > start && recipient < record ? recipient : record
-  return [lines[start]!.slice('Question: '.length), ...lines.slice(start + 1, end)].join('\n')
+  const firstLine = lines[start]!.slice('Question: '.length)
+  const record = lines.length - 2
+  if (start !== 5 || !lines[0]?.startsWith('Date: ') || !lines[1]?.startsWith('By: ') ||
+    lines[2] !== 'Operation: request_decision' || !lines[3]?.startsWith(`${workflowMarkers.decision} `) ||
+    !lines[4]?.startsWith('Requested from: ') || record <= start ||
+    !lines[record]?.startsWith('Tin Star request: ') || !receiptIdentity(lines.at(-1)!)) return firstLine
+  return [firstLine, ...lines.slice(start + 1, record)].join('\n')
 }
 
 export function decisionRequests(notes: RequestNote[]) {

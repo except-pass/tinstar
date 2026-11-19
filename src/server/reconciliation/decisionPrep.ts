@@ -102,10 +102,6 @@ export class DecisionPreparation {
     })
   }
 
-  hasJobHistoryInStorage(db: DatabaseSync, card: string) {
-    return !!db.prepare('SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? LIMIT 1').get(this.scope, card)
-  }
-
   latestJobInStorage(db: DatabaseSync, card: string, revision: string) {
     return db.prepare('SELECT state,message,at FROM decision_card_prep WHERE scope = ? AND card = ? AND revision = ? ORDER BY at DESC, rowid DESC LIMIT 1')
       .get(this.scope, card, revision) as Pick<Job, 'state' | 'message' | 'at'> | undefined

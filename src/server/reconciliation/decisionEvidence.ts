@@ -73,15 +73,20 @@ function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
   const requests = openPrepRequests(card, blocks)
-  const requestQuestion = requests.length === 1 ? requests[0]?.question?.trim() : undefined
+  const created = (since: string | null) => {
+    const timestamp = Date.parse(since ?? '')
+    return Number.isFinite(timestamp) ? timestamp : Infinity
+  }
+  requests.sort((left, right) => created(left.since) - created(right.since))
+  const question = requests[0]?.question?.trim() ?? ''
   return {
     card,
     title,
-    question: requestQuestion || String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
+    question,
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
-    prepEligible: requests.length > 0,
+    prepEligible: !!question,
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>
