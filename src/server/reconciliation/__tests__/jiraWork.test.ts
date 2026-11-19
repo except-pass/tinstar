@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Ajv from 'ajv'
@@ -167,7 +167,7 @@ async function fixture() {
     }
     return { client, call }
   }
-  return { connect, requests, controls, issues, links, history, historicalKeys }
+  return { root, connect, requests, controls, issues, links, history, historicalKeys }
 }
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
@@ -400,6 +400,7 @@ it('leaves overlapping edit and reversed link history unconfirmed', async () => 
   const edit = { kind: 'jira_edit', card_id, operation_id: 'lost-subset', name: 'Changed' }
   f.controls.beforeWrite = 'PUT issue/60001'
   expect(await call('update_work', edit)).toMatchObject({ code: 'unconfirmed' })
+  f.issues.get('60001')!.fields.summary = 'Temporary'
   expect(await call('update_work', { ...edit, operation_id: 'saved-superset', owner: 'Avery' })).toMatchObject({ outcome: 'saved' })
   const history = (items: Record<string, unknown>[]) => ({ created: jiraNow(), author: { accountId: 'fixture-service' }, items })
   f.history['60001'] = [history([
@@ -633,9 +634,9 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 Basic Zml4dHVyZTpwYXNzd29yZA==\npassword="clipped\ncontinuation of passphrase'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 Basic Zml4dHVyZTpwYXNzd29yZA==\npassword="clipped\nD2 [Open]: What follows?'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  expect(card.description).toBe('{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted]\npassword=[credential omitted]')
+  expect(card.description).toBe('{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted]\npassword=[credential omitted]\nD2 [Open]: What follows?')
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
   const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Ticket' } : {}) }
   f.controls.loseEdit = true
@@ -647,4 +648,29 @@ it.each([false, true])('recovers note-only writes without reposting (unchanged f
   expect(await call('update_work', missing)).toMatchObject({ code: 'unconfirmed' })
   expect(await call('update_work', missing)).toMatchObject({ code: 'unconfirmed' })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)
+
+
+it('persists Jira edit and status values only as comparison digests', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Original private title', description: 'Original private description', owner: 'Avery',
+  })
+  expect(await call('transition_work', { card_id, operation_id: 'prioritize', verb: 'Prioritize' })).toMatchObject({ outcome: 'saved' })
+  expect(await call('update_work', { card_id, operation_id: 'all-fields', kind: 'jira_edit', name: 'Updated private title',
+    description: 'Updated private description', owner: 'Taylor', add_questions: [{ id: 'D1', question: 'Private decision' }],
+    blocker: { type: 'Event', target: 'private:event', unblocks_when: 'Private unblock condition' },
+  })).toMatchObject({ outcome: 'saved' })
+  const raw = await readFile(join(f.root, 'workflow-create-receipts.json'), 'utf8')
+  for (const value of ['Original private title', 'Original private description', 'Updated private title', 'Updated private description',
+    'Avery', 'Taylor', 'Private decision', 'Event', 'private:event', 'Private unblock condition', 'Backlog', 'To Do']) {
+    expect(raw).not.toContain(value)
+  }
+  const receipts = Object.values(JSON.parse(raw)) as { jiraWork: { fields?: unknown[] } }[]
+  const fields = receipts.flatMap(receipt => receipt.jiraWork.fields ?? [])
+  expect(fields).toHaveLength(8)
+  for (const change of fields) expect(change).toEqual({
+    field: expect.any(String), beforeDigest: expect.stringMatching(/^[a-f0-9]{64}$/), afterDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+  })
 }, 30_000)

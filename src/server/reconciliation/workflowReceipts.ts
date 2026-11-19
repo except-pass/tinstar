@@ -23,7 +23,7 @@ export interface ReviewReceiptState {
   note_pending?: boolean
   done?: boolean
 }
-export interface JiraFieldChange { field: string; before: string; after: string }
+export interface JiraFieldChange { field: string; beforeDigest: string; afterDigest: string }
 export interface JiraWorkReceiptState {
   confirmed?: true
   createDispatched?: true

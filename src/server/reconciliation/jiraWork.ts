@@ -13,6 +13,9 @@ import { CreationReceipts, type JiraFieldChange, type JiraWorkReceiptState } fro
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
+const fieldChange = (field: string, before: string, after: string): JiraFieldChange => ({
+  field, beforeDigest: digest(before), afterDigest: digest(after),
+})
 const signature = (verb: string, input: object) => digest(JSON.stringify([verb, input], (_key, value) =>
   value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value))
 const nativeId = (id: unknown): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id)
@@ -436,10 +439,9 @@ export class JiraWork extends JiraClient {
         [mapping.decisions]: current.decisions, [mapping.blockerType]: current.externalBlocker.type,
         [mapping.blockerTarget]: current.externalBlocker.target, [mapping.blockerCondition]: current.externalBlocker.unblocks_when,
       }
-      const changes = Object.entries(fields).map(([field, value]) => ({
-        field, before: previous[field] ?? '',
-        after: text(value && typeof value === 'object' && 'value' in value ? value.value : value),
-      })).filter(change => change.before !== change.after)
+      const changes = Object.entries(fields).map(([field, value]) =>
+        fieldChange(field, previous[field] ?? '', text(value && typeof value === 'object' && 'value' in value ? value.value : value)),
+      ).filter(change => change.beforeDigest !== change.afterDigest)
       await attempt.dispatch({ fields: changes, priorCommentIds: comments, commentHash: note ? digest(note) : undefined })
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
@@ -464,7 +466,7 @@ export class JiraWork extends JiraClient {
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
       const comments = note ? (await this.notes(id)).comments.map(comment => comment.id) : undefined
-      await attempt.dispatch({ fields: [{ field: 'status', before: current.status, after: to }], priorCommentIds: comments, commentHash: note ? digest(note) : undefined })
+      await attempt.dispatch({ fields: [fieldChange('status', current.status, to)], priorCommentIds: comments, commentHash: note ? digest(note) : undefined })
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id }, ...this.commentUpdate(note) })
       const saved = await this.read(id)
       await this.checkComment(id, note, attempt)
@@ -475,9 +477,12 @@ export class JiraWork extends JiraClient {
 
   private fieldMatches(item: Record<string, unknown>, change: JiraFieldChange) {
     const field = item.fieldId ?? (item.fieldtype === 'jira' ? item.field : undefined)
-    const valueMatches = (side: 'from' | 'to', expected: string) =>
-      item[side + 'String'] === expected || (expected === '' && item[side + 'String'] === null && item[side] == null)
-    return field === change.field && valueMatches('from', change.before) && valueMatches('to', change.after)
+    const valueMatches = (side: 'from' | 'to', expected: string) => {
+      const value = item[side + 'String']
+      if (typeof value === 'string') return digest(value) === expected
+      return value === null && item[side] == null && digest('') === expected
+    }
+    return field === change.field && valueMatches('from', change.beforeDigest) && valueMatches('to', change.afterDigest)
   }
 
   private async resolveLinkTarget(key: string) {
@@ -530,7 +535,7 @@ export class JiraWork extends JiraClient {
           (receipt.cardId === this.qualified(link.targetId) && other.targetId === id && other.direction !== link.direction)
       }
       return receipt.cardId === card.id && receipt.jiraWork?.fields?.some(other =>
-        fields?.some(field => isDeepStrictEqual(field, other)))
+        fields?.some(field => field.field === other.field && field.afterDigest === other.afterDigest))
     })
     const confirm = async () => {
       const nextCommentWrite = Math.min(...candidates.flatMap(([, receipt]) => {

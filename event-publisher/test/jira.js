@@ -182,7 +182,7 @@ exit 1
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe}\u001b[31m` }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'continuation of passphrase' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
     ] } },
   })
   equal((await post('comment', evidence)).status, 204)
@@ -191,7 +191,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -241,6 +241,12 @@ exit 1
   const observed = lines((await run('replay', '--source', 'jira', '--last', String(Object.keys(missingValues).length), '--json')).stdout)
   deepEqual(observed.map(event => ({ type: event.event_type, change: event.change })),
     Object.keys(missingValues).map(field => ({ type: `ticket.${field}.changed`, change: { field } })))
+  equal((await post('one-sided', webhookEvent('jira:issue_updated', {
+    changelog: { id: '65005', items: [{ fieldId: jira.fields.owner, toString: null }] },
+  }))).status, 204)
+  match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira omitted values for a tracked change/)
+  const oneSided = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+  deepEqual(oneSided.change, { field: 'owner', after: null })
   await watcher.stop()
   await publisher.stop()
 })
