@@ -14,6 +14,16 @@ export function isGithubRateLimit(error: unknown): error is Error {
   return error instanceof Error && error.message === rateLimitMessage
 }
 
+const invalidResponseMessage = 'GitHub request failed: response is too large or unreadable'
+
+export class GithubResponseError extends Error {
+  constructor() { super(invalidResponseMessage) }
+}
+
+export function isGithubResponseError(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidResponseMessage
+}
+
 function holdUntil({ status, headers }: GithubRestHeaders, now: number, data?: unknown) {
   if (status !== 403 && status !== 429) return 0
   const message = (data as { message?: unknown } | null)?.message
@@ -26,11 +36,15 @@ function holdUntil({ status, headers }: GithubRestHeaders, now: number, data?: u
   return Number.isFinite(deadline) && deadline > now ? deadline : now + 60_000
 }
 
+type ReadDispatch = (etag: string | undefined, dispatched: () => () => void) => Promise<GithubRestResponse>
+type PendingRead = { work: Promise<unknown>; origin: { timing?: [startedAt: number, sequence: number] } }
+
 export class GithubRestBudget {
   private blockedUntil = 0
   private cache = new Map<string, { etag: string; data: unknown; bytes: number }>()
   private cacheBytes = 0
-  private pending = new Map<string, Promise<unknown>>()
+  private pending = new Map<string, PendingRead>()
+  private sequence = 0
   private hourly = { requests: 0, notModified: 0 }
   private reporting = false
 
@@ -78,13 +92,24 @@ export class GithubRestBudget {
     return response
   }
 
-  async get(key: string, send: (etag?: string) => Promise<GithubRestResponse>) {
+  async get(key: string, send: ReadDispatch, onStart?: (startedAt: number, sequence?: number) => void) {
     this.assertAvailable()
-    const pending = this.pending.get(key)
-    if (pending) return pending
+    const { work, origin } = this.pending.get(key) ?? this.startRead(key, send)
+    try {
+      return await work
+    } finally {
+      if (origin.timing) onStart?.(...origin.timing)
+    }
+  }
+
+  private startRead(key: string, send: ReadDispatch): PendingRead {
+    const origin: PendingRead['origin'] = {}
     const cached = this.cache.get(key)
     const work = (async () => {
-      const response = await send(cached?.etag)
+      const response = await send(cached?.etag, () => {
+        origin.timing = [this.now(), ++this.sequence]
+        return () => { delete origin.timing }
+      })
       if (response.status === 304 && cached) return cached.data
       if (response.status < 200 || response.status >= 300) throw new Error(`GitHub read failed (HTTP ${response.status})`)
       if (cached) { this.cache.delete(key); this.cacheBytes -= cached.bytes }
@@ -102,7 +127,8 @@ export class GithubRestBudget {
       }
       return response.data
     })().finally(() => this.pending.delete(key))
-    this.pending.set(key, work)
-    return work
+    const pending = { work, origin }
+    this.pending.set(key, pending)
+    return pending
   }
 }

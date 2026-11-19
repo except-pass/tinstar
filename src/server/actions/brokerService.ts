@@ -36,10 +36,12 @@ export function brokerServer(config: BrokerConfig, provider = new LiveProvider(c
   })
   const server = createServer((req, res) => {
     void (async () => {
+      let timing: { startedAt: number; sequence?: number } | undefined
       try {
         if (req.url === '/reader' && req.method === 'POST') {
-          const { path } = z.object({ path: z.string().max(2048) }).strict().parse(await actionBody(req))
-          return ok(res, await provider.read(path))
+          const { path, pullNumbers, withStartedAt } = z.object({ withStartedAt: z.boolean().optional(), path: z.string().max(2048), pullNumbers: z.array(z.number().int().positive().safe()).min(1).optional() }).strict().parse(await actionBody(req))
+          const data = await provider.read(path, '.', pullNumbers, withStartedAt ? (startedAt, sequence) => { timing = { startedAt, sequence } } : undefined)
+          return ok(res, withStartedAt ? { data, ...timing } : data)
         }
         if (req.url === '/identity' && req.method === 'GET') return ok(res, await provider.identity())
         if (req.url === '/receipt' && req.method === 'POST') {
@@ -50,7 +52,7 @@ export function brokerServer(config: BrokerConfig, provider = new LiveProvider(c
         fail(res, 'NOT_FOUND', 'Unknown typed broker operation')
       } catch (error) {
         const message = error instanceof Error && !('issues' in error) ? error.message : 'Typed broker request refused'
-        fail(res, 'CONFLICT', String(provider.redact(message)))
+        fail(res, 'CONFLICT', String(provider.redact(message)), { details: timing })
       }
     })()
   })

@@ -16,11 +16,26 @@ export async function brokerRequest(path: string, body?: unknown, actor?: string
     req.end(body === undefined ? undefined : JSON.stringify(body))
   })
 }
-export async function brokerData(path: string, body?: unknown) {
+const requestTiming = z.object({
+  startedAt: z.number().int().nonnegative().safe().optional(),
+  sequence: z.number().int().positive().safe().optional(),
+})
+
+export async function brokerData(path: string, body?: unknown, onErrorStart?: (startedAt: number, sequence?: number) => void) {
   const response = await brokerRequest(path, body)
-  const parsed = z.object({ ok: z.boolean(), data: z.unknown().optional(), error: z.object({ message: z.string() }).optional() }).parse(response.body)
-  if (!parsed.ok || response.status !== 200) throw new Error(parsed.error?.message ?? 'Live Reader/Repair unavailable')
+  const parsed = z.object({ ok: z.boolean(), data: z.unknown().optional(), error: z.object({ message: z.string(), details: z.unknown().optional() }).optional() }).parse(response.body)
+  if (!parsed.ok || response.status !== 200) {
+    const timing = requestTiming.safeParse(parsed.error?.details)
+    if (timing.success && timing.data.startedAt !== undefined) onErrorStart?.(timing.data.startedAt, timing.data.sequence)
+    throw new Error(parsed.error?.message ?? 'Live Reader/Repair unavailable')
+  }
   return parsed.data
 }
-export const liveReaderJson = (path: string, _projection = '.') => brokerData('/reader', { path })
+export async function liveReaderJson(path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number, sequence?: number) => void) {
+  if (!onStart) return brokerData('/reader', { path, pullNumbers })
+  const result = requestTiming.extend({ data: z.unknown() })
+    .parse(await brokerData('/reader', { path, pullNumbers, withStartedAt: true }, onStart))
+  if (result.startedAt !== undefined) onStart(result.startedAt, result.sequence)
+  return result.data
+}
 export const liveReaderIdentity = async () => z.object({ account: z.string(), owners: z.array(z.string()), repositories: z.array(z.string()), authenticatedActor: z.string(), credentialProfile: z.literal('Reader') }).parse(await brokerData('/identity'))

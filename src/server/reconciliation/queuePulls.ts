@@ -17,9 +17,9 @@ export interface PullReadiness {
  * normalizes broker JSON to the Queue and Releases scalar contracts.
  * Reject unsupported output as unknown rather than mistaking it for green checks.
  */
-export async function readGithubScalars(path: string, projection: string): Promise<Record<string, unknown>> {
+export async function readGithubScalars(path: string, projection: string, onStart?: (startedAt: number, sequence?: number) => void): Promise<Record<string, unknown>> {
   if (liveActionsEnabled()) {
-    const raw = await liveReaderJson(path) as Record<string, unknown>
+    const raw = await (onStart ? liveReaderJson(path, '.', undefined, onStart) : liveReaderJson(path)) as Record<string, unknown>
     if (/\/pulls\/\d+$/.test(path)) return {
       state: raw.state, merged: raw.merged, draft: raw.draft,
       head: (raw.head as { sha: string })?.sha, mergeable: raw.mergeable, mergeable_state: raw.mergeable_state,
@@ -43,7 +43,7 @@ export async function readGithubScalars(path: string, projection: string): Promi
     }
     throw new Error('Scalar Reader operation outside PR evidence scope')
   }
-  return await githubCliJson(path, projection, { timeout: 5_000, maxBuffer: 64 * 1024 }) as Record<string, unknown>
+  return await githubCliJson(path, projection, { timeout: 5_000, maxBuffer: 64 * 1024 }, true, onStart) as Record<string, unknown>
 }
 
 async function readPull(url: string, read = readGithubScalars): Promise<Omit<PullReadiness, 'status' | 'observedAt' | 'expiresAt'>> {

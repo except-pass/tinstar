@@ -21,6 +21,10 @@ App identity separately from the configured review-author account and derives sc
 from verified repository metadata. While live mode is OFF the existing application
 GET path stays in place.
 
+The broker requires linked PR numbers for the [Releases repository poll](features/releases.md#linked-pr-observations)
+and projects the GitHub response to linked PR evidence and page coverage before
+returning it to the web process.
+
 Live Repair is cmsandbox only and requires one explicitly selected owner operation:
 safe update-branch with `expected_head_sha`, or a single failed job rerun bound to the
 selected PR/head/run/job. Fresh provider evidence and installed grants are checked

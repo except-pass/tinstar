@@ -4,14 +4,21 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { LiveProvider, brokerConfigSchema, readerScope, type ProviderRequest, type ProviderTransport } from '../liveProvider'
-import { assertBrokerIdentity, listenBroker } from '../brokerService'
+import { assertBrokerIdentity, brokerServer, listenBroker } from '../brokerService'
 import { ActionExecutor } from '../executor'
 import { ActionStore } from '../store'
 import { head, snapshot, installed, policy, run, merge } from './fixtures'
 import { readerRepositories, type ActionOperation } from '../../../shared/actions'
-import { brokerData, brokerRequest } from '../liveClient'
+import { brokerData, brokerRequest, liveReaderJson } from '../liveClient'
 import { githubJson } from '../../pulls/github'
 import { PullReader } from '../../pulls/reader'
+import { readReleasePullPage } from '../../pulls/releasePullPage'
+import { ReleasePullReader } from '../../releases/pulls'
+import { GithubResponseError } from '../../pulls/restBudget'
+import { releaseDocuments } from '../../../releases/model'
+import { releasePull } from '../../../shared/releases'
+import { SmartSearchIndex } from '../../../shared/smartSearch'
+import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { sourceDigest } from '../examples'
 import { stageTestRuntime } from './runtimeFixture'
 
@@ -20,7 +27,7 @@ const secret = 'fake-installation-secret-with-no-format-assumption'
 let privateKey: string, publicKey: string
 beforeAll(() => { ({ privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })) }, 30_000)
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function setup(options: { credentials?: boolean; enabled?: boolean; response?: (input: ProviderRequest) => Promise<unknown> } = {}) {
+async function setup(options: { credentials?: boolean; enabled?: boolean; beforeToken?: () => Promise<void>; response?: (input: ProviderRequest) => Promise<unknown> } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-live-provider-')); roots.push(root)
   const custody = join(root, 'credentials'); await mkdir(custody, { mode: 0o700 })
   if (options.credentials !== false) for (const profile of ['reader', 'repair']) await writeFile(join(custody, `${profile}.pem`), privateKey, { mode: 0o600 })
@@ -31,6 +38,7 @@ async function setup(options: { credentials?: boolean; enabled?: boolean; respon
   const transport: ProviderTransport = async input => {
     requests.push(input)
     if (input.path.endsWith('/access_tokens')) {
+      await options.beforeToken?.()
       const payload = input.body as { repository_ids: number[]; permissions: Record<string, string> }
       const [header, body, signature] = input.authorization.split('.')
       expect(verify('RSA-SHA256', Buffer.from(`${header}.${body}`), publicKey, Buffer.from(signature!, 'base64url'))).toBe(true)
@@ -73,6 +81,132 @@ it('mints only explicit repository IDs and minimal endpoint permissions; keeps J
   for (const value of [secret, privateKey, fixture.requests[0]!.authorization]) expect(externallyVisible).not.toContain(value)
   expect(fixture.requests.every(request => request.authorization !== process.env.GH_TOKEN)).toBe(true)
 })
+it('keeps only linked PR fields in live release polling and stored observations', async () => {
+  const updatedAt = '2026-11-08T12:00:00Z'
+  const path = '/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1'
+  const row = { number: 1, title: 'Hydraulic interlock calibration', state: 'open', merged: false, merged_at: null, closed_at: null,
+    updated_at: updatedAt, merge_commit_sha: null, head: { sha: head }, base: { ref: 'main' } }
+  const second = { ...row, number: 2, state: 'closed', title: 'Second linked title' }
+  const fixture = await setup({ response: async ({ path: requested }) => requested === path ? [
+    { ...row, body: 'private body', requested_reviewers: ['private reviewer'],
+      head: { sha: head, label: 'private head' }, base: { ref: 'main', label: 'private base' } },
+    second,
+    { ...row, number: 3, title: 'unlinked PR' },
+  ] : undefined })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair')
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  try {
+    await expect(githubJson(path)).rejects.toThrow('Linked PR numbers required')
+    for (const suffix of ['tags', 'actions/runs', 'pulls?state=open', 'pulls/1/reviews']) {
+      await expect(brokerData('/reader', { path: `/repos/fortresspower/cmsandbox/${suffix}`, withStartedAt: true }))
+        .rejects.toThrow('Request timing is only available for Releases PR reads')
+    }
+    expect(await brokerData('/reader', { path: '/repos/fortresspower/cmsandbox/pulls/1', withStartedAt: true }))
+      .toMatchObject({ data: { number: 1 }, startedAt: expect.any(Number) })
+    expect(await brokerData('/reader', { path, pullNumbers: [1, 2], withStartedAt: true }))
+      .toMatchObject({ data: { count: 3 }, startedAt: expect.any(Number) })
+
+    expect(await readReleasePullPage(path, [1, 2])).toEqual({
+      rows: [row, second], count: 3, oldestUpdatedAt: updatedAt,
+    })
+    const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
+    const pointRead = vi.fn()
+    const reader = new ReleasePullReader(pointRead, () => Date.parse(updatedAt))
+    const expected = [row, second].map(({ state, title }, index) => [urls[index], {
+      title, state, head, base: 'main', mergedAt: null, mergeSha: null, freshness: 'fresh',
+      observedAt: new Date(updatedAt).toISOString(),
+    }])
+    const observations = await reader.get(urls)
+    expect([...observations]).toEqual(expected)
+    const pulls = urls.map(url => ({
+      ...releasePull(url)!, ...observations.get(url)!, links: [], exceptions: [],
+    }))
+    const search = new SmartSearchIndex()
+    search.update(releaseDocuments(fixtureScene(), pulls))
+    expect(search.search('hydraulic interlock calibration')[0]?.document.target).toEqual({ kind: 'pull', id: pulls[0]!.id })
+    expect(search.search('unlinked PR').some(hit => hit.document.title === 'unlinked PR')).toBe(false)
+    expect([...(await reader.get(urls))]).toEqual(expected)
+    expect(pointRead).not.toHaveBeenCalled()
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+it('orders live observations by dispatch when token mints finish out of order', async () => {
+  let releaseMint!: () => void, mintStarted!: () => void
+  const mintGate = new Promise<void>(resolve => { releaseMint = resolve })
+  const firstMintStarted = new Promise<void>(resolve => { mintStarted = resolve })
+  let mints = 0
+  const exactPath = '/repos/fortresspower/cmsandbox/pulls/1'
+  const listPath = '/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1'
+  const fixture = await setup({
+    beforeToken: async () => {
+      if (++mints !== 1) return
+      mintStarted()
+      await mintGate
+    },
+    response: async ({ path }) => {
+      if (path === exactPath) return { state: 'closed' }
+      if (path === listPath) return [{ number: 1, title: 'Linked PR', state: 'open',
+        merged_at: null, updated_at: new Date().toISOString(), merge_commit_sha: null, head: { sha: head }, base: { ref: 'main' } }]
+    },
+  })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  const exactStart = vi.fn(), joinedStart = vi.fn(), listStart = vi.fn()
+  const exact = liveReaderJson(exactPath, '.', undefined, exactStart)
+  try {
+    await firstMintStarted
+    const joined = fixture.provider.read(exactPath, '.', undefined, joinedStart)
+    expect(await liveReaderJson(listPath, '.', [1], listStart)).toMatchObject({ rows: [{ state: 'open' }] })
+    releaseMint()
+    expect(await Promise.all([exact, joined])).toEqual([{ state: 'closed' }, { state: 'closed' }])
+    expect(exactStart.mock.calls).toEqual(joinedStart.mock.calls)
+    expect(exactStart.mock.calls[0]![1]).toBeGreaterThan(listStart.mock.calls[0]![1])
+    expect(fixture.requests.filter(request => request.method === 'GET').map(request => request.path)).toEqual([listPath, exactPath])
+  } finally {
+    releaseMint()
+    await exact.catch(() => {})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+it('does not report a dispatch origin when credentials are unavailable', async () => {
+  const fixture = await setup({ credentials: false })
+  const start = vi.fn()
+  await expect(fixture.provider.read('/repos/fortresspower/cmsandbox/pulls/1', '.', undefined, start)).rejects.toThrow()
+  expect(start).not.toHaveBeenCalled()
+  expect(fixture.requests).toEqual([])
+})
+
+it('recovers linked observations when the live broker cannot read the list response', async () => {
+  const fixture = await setup({ response: async ({ path }) => {
+    if (path.includes('/pulls?')) throw new GithubResponseError()
+    if (/\/pulls\/\d+$/.test(path)) return { title: 'Linked exact PR', state: 'open', merged: false }
+  } })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair')
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  try {
+    const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
+    const exactStart = vi.fn()
+    const failedStart = vi.fn()
+    const path = '/repos/fortresspower/cmsandbox/pulls'
+    await liveReaderJson(`${path}/1`, '.', undefined, exactStart)
+    await expect(liveReaderJson(`${path}?state=all&sort=updated&direction=desc&per_page=100&page=1`, '.', [1, 2], failedStart))
+      .rejects.toThrow(new GithubResponseError().message)
+    expect(failedStart.mock.calls).toEqual([[expect.any(Number), expect.any(Number)]])
+    expect(failedStart.mock.calls[0]![1]).toBeGreaterThan(exactStart.mock.calls[0]![1])
+    const result = await new ReleasePullReader().get(urls)
+    expect(result.size).toBe(2)
+    for (const url of urls) expect(result.get(url)).toMatchObject({ title: 'Linked exact PR', freshness: 'fresh' })
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
 it('uses verified installation identity, separately from review author, on exactly ten repositories', async () => {
   const fixture = await setup()
   expect(await fixture.provider.identity()).toEqual({ account: 'except-pass', owners: ['except-pass', 'fortresspower'], repositories: [...readerRepositories], authenticatedActor: 'Tin Star Reader App', credentialProfile: 'Reader' })
@@ -81,14 +215,33 @@ it('uses verified installation identity, separately from review author, on exact
 it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls', '/user', '/repos/fortresspower/cmsandbox/pulls/1/merge',
   '/repos/fortresspower/cmsandbox/compare/main...release', '/repos/fortresspower/cmsandbox/commits/main',
   '/repos/fortresspower/cmsandbox/git/refs/heads/main', '/repos/fortresspower/cmsandbox/actions/runs/1/rerun', '/repos/fortresspower/cmsandbox/pulls?permissions=write',
+  '/repos/fortresspower/cmsandbox/pulls/1?sort=updated', '/repos/fortresspower/cmsandbox/pulls?sort=created',
   '/repos/fortresspower/cmsandbox/../cmsandbox/pulls', '//attacker.test/repos/fortresspower/cmsandbox/pulls'])('denies scope before minting: %s', async path => {
   const fixture = await setup()
   await expect(fixture.provider.read(path)).rejects.toThrow()
   expect(fixture.requests).toHaveLength(0)
 })
+it('rejects alternate release poll queries before any GitHub read and preserves open inventory', async () => {
+  const fixture = await setup()
+  const path = '/repos/fortresspower/cmsandbox/pulls'
+  const poll = 'state=all&sort=updated&direction=desc&per_page=100&page=1'
+  for (const query of ['state=all', 'sort=updated', 'direction=desc', poll.replace('state=all', 'state=closed'),
+    poll.replace('100', '99'), poll.replace('&page=1', '&page=5'), `${poll}&page=1`, `${poll}&filter=latest`,
+    'state=open&state=all&per_page=100&page=1']) {
+    for (const numbers of [undefined, [1]]) {
+      await expect(fixture.provider.read(`${path}?${query}`, '.', numbers)).rejects.toThrow('Reader query')
+    }
+  }
+  expect(fixture.requests).toHaveLength(0)
+  await expect(fixture.provider.read(`${path}?state=open&per_page=100&page=1`)).resolves.toEqual([])
+  await expect(fixture.provider.read(`${path}?${poll.replace('&page=1', '&page=4')}`, '.', [1])).resolves.toEqual({
+    rows: [], count: 0, oldestUpdatedAt: null,
+  })
+})
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
   expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
-  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], ['releases?per_page=100&page=1', 'contents'], [`actions/runs?head_sha=${head}&event=push&per_page=100&page=1`, 'actions'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
+  expect(readerScope('/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1').permissions).toEqual({ metadata: 'read', pull_requests: 'read' })
+  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], ['releases?per_page=100&page=1', 'contents'], [`actions/runs?head_sha=${head}&per_page=100&page=1`, 'actions'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
     expect(readerScope(`/repos/fortresspower/cmsandbox/${suffix}`).permissions).toEqual({ metadata: 'read', [permission!]: 'read' })
   }
 })

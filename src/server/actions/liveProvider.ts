@@ -9,7 +9,8 @@ import { operationSchema, readerRepositories, type ActionOperation, type ActionS
 import { readActionJob, readActionSnapshot } from './evidence'
 import { BrokerEffectError, simulatedRequest } from './broker'
 import type { RunnerResource } from './sandbox'
-import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
+import { GithubRestBudget, GithubResponseError, isGithubRateLimit, isGithubResponseError, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
+import { minimizeReleasePullPage } from '../pulls/releasePullPage'
 
 const id = z.number().int().positive().safe()
 const app = z.object({ appId: id, installations: z.array(z.object({ installationId: id, repositories: z.record(id) }).strict()).min(1) }).strict()
@@ -38,13 +39,19 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
       reset: response.headers['x-ratelimit-reset']?.toString(), retryAfter: response.headers['retry-after'] }
     received?.({ status, headers })
     let bytes = 0; const chunks: Buffer[] = []
-    response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) request.destroy(); else chunks.push(chunk) })
+    response.on('data', (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > 4 * 1024 * 1024) {
+        if (status >= 200 && status < 300) reject(new GithubResponseError())
+        request.destroy()
+      } else chunks.push(chunk)
+    })
     response.on('error', () => reject(new Error('GitHub broker request failed')))
     response.on('end', () => {
       let data: unknown = null
       try { if (bytes) data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
       catch {
-        if (status >= 200 && status < 300) { reject(new Error('GitHub broker response was not JSON')); return }
+        if (status >= 200 && status < 300) { reject(new GithubResponseError()); return }
       }
       resolveResponse({ status, data, headers })
     })
@@ -56,7 +63,7 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
 
 /** Path scope prevents a caller turning Reader into an unrestricted HTTP proxy.
  * Permissions are derived here; callers cannot supply permissions or headers. */
-export function readerScope(path: string): { repository: string; permissions: Permissions } {
+export function readerScope(path: string): { repository: string; permissions: Permissions; releasePoll: boolean } {
   if (!path.startsWith('/repos/') || /[\\#\r\n]/.test(path)) throw new Error('Reader path outside approved scope')
   const parsed = new URL(path, 'https://api.github.com')
   if (parsed.pathname + parsed.search !== path || parsed.origin !== 'https://api.github.com') throw new Error('Reader path outside approved scope')
@@ -73,14 +80,22 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   else if (/^\/rules\/branches\/[^/]+$/.test(suffix)) { /* Active branch rules require metadata read only. */ }
   else if (/^\/branches\/[^/]+$/.test(suffix) || /^\/contents\/\.github\/workflows\/[\w.-]+\.ya?ml$/.test(suffix)) permissions.contents = 'read'
   else throw new Error('Reader operation outside PR evidence scope')
+  const query = parsed.searchParams
+  if (new Set(query.keys()).size !== query.size) throw new Error('Reader query has duplicate parameters')
+  if (suffix === '/pulls' && (query.has('sort') || query.has('direction') || query.get('state') === 'all')) {
+    if (query.size !== 5 || query.get('state') !== 'all' || query.get('sort') !== 'updated' ||
+        query.get('direction') !== 'desc' || query.get('per_page') !== '100' || !/^[1-4]$/.test(query.get('page') ?? '')) {
+      throw new Error('Reader query outside release poll scope')
+    }
+    return { repository: match[1]!, permissions, releasePoll: true }
+  }
   for (const [key, value] of parsed.searchParams) {
     if (key === 'page' && /^[1-9]\d{0,2}$/.test(value) || key === 'per_page' && /^(?:[1-9]\d?|100)$/.test(value) ||
-      key === 'state' && ['open', 'closed', 'all'].includes(value) || key === 'filter' && value === 'latest' ||
-      key === 'event' && value === 'push' && suffix === '/actions/runs' ||
+      key === 'state' && ['open', 'closed'].includes(value) || key === 'filter' && value === 'latest' ||
       key === 'head_sha' && /^[a-f0-9]{40,64}$/.test(value) || key === 'ref' && /^[a-f0-9]{40,64}$/.test(value)) continue
     throw new Error('Reader query outside PR evidence scope')
   }
-  return { repository: match[1]!, permissions }
+  return { repository: match[1]!, permissions, releasePoll: false }
 }
 
 export class LiveProvider {
@@ -151,22 +166,34 @@ export class LiveProvider {
     this.#tokens.set(cacheKey, { token: token.token, until: expires })
     return token.token
   }
-  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string) {
+  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string, pullNumbers?: number[], dispatched?: () => void) {
     let authorization: string
     try { this.rest.assertAvailable(); authorization = await this.token(profile, repository, permissions); await beforeSend?.(); this.rest.assertAvailable() }
     catch (error) { throw new BrokerEffectError(error instanceof Error ? error.message : 'Broker validation refused request', 'not-sent') }
     let response
-    try { response = await this.rest.send(received => this.transport({ method, path, body, authorization, etag }, received)) }
+    try {
+      response = await this.rest.send(received => {
+        dispatched?.()
+        return this.transport({ method, path, body, authorization, etag }, received)
+      })
+    }
     catch (error) {
       if (isGithubRateLimit(error)) throw new BrokerEffectError(error.message, 'not-sent')
+      if (pullNumbers && isGithubResponseError(error)) throw error
       throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown')
     }
     if (!(method === 'GET' && response.status === 304) && (response.status < 200 || response.status >= 300)) throw new BrokerEffectError(`GitHub broker request refused (${response.status}); no retry or permission expansion`, response.status >= 500 ? 'unknown' : 'not-sent')
-    return { ...response, data: this.redact(response.data) }
+    const data = pullNumbers && response.status !== 304 ? minimizeReleasePullPage(response.data, pullNumbers) : response.data
+    return { ...response, data: this.redact(data) }
   }
-  read = async (path: string, _projection = '.'): Promise<unknown> => {
-    const { repository, permissions } = readerScope(path)
-    return this.rest.get(path, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag))
+  read = async (path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number, sequence?: number) => void): Promise<unknown> => {
+    const { repository, permissions, releasePoll } = readerScope(path)
+    if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
+    if (onStart && !releasePoll && !/^\/pulls\/[1-9]\d*$/.test(path.split('?')[0]!.slice(`/repos/${repository}`.length))) {
+      throw new Error('Request timing is only available for Releases PR reads')
+    }
+    const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
+    return this.rest.get(key, (etag, dispatched) => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers, dispatched), onStart)
   }
   snapshot = (url: string) => readActionSnapshot(url, this.read)
   async identity() {

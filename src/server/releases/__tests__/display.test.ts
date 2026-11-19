@@ -70,18 +70,21 @@ describe('progressive Releases display', () => {
     { runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }], state: 'Running' },
     { runs: [{ ...nativeRun, conclusion: 'failure' }], state: 'Failed/unfinished components' },
     { runs: [], state: 'Deployment unknown' },
-  ])('expires cached Actions during a blocked catalog refresh and recovers $state', async ({ runs, state }) => {
+  ])('refreshes expired Actions without reloading the catalog and recovers $state', async ({ runs, state }) => {
     let clock = now(), blocked = false, finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve })
     const fixture = nativeFixtureRead({ runs })
-    const reader = new GithubReleaseReader(async path => {
-      if (blocked && path.includes('/tags?')) await gate
+    const read = vi.fn(async (path: string) => {
+      if (blocked && path.includes('/actions/runs?')) await gate
       return fixture(path)
-    }, () => clock)
+    })
+    const reader = new GithubReleaseReader(read, () => clock)
     const initial = await reader.get(data())
     expect(initial.status).toBe('fresh')
     expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
     const retainedRuns = initial.releases[0]!.github!.runs
+    const catalogCalls = () => read.mock.calls.filter(([path]) => /\/(tags\?|releases\?|branches\/main$)/.test(path))
+    const initialCatalogCalls = catalogCalls()
     clock += 60_000; blocked = true
     try {
       const expired = reader.display(data())
@@ -89,17 +92,44 @@ describe('progressive Releases display', () => {
       expect(expired.releases[0]).toMatchObject({ state: 'Unknown', provenance: { historical: true }, github: { runsStatus: 'unknown', runs: retainedRuns } })
       expect(expired.releases[0]!.provenance.asOf).toBe(initial.releases[0]!.provenance.asOf)
       expect(expired.releases[0]!.gaps).toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')
-      clock += 120_000
       const stillBlocked = reader.display(data())
       expect(stillBlocked).toMatchObject({ refreshing: true, status: 'partial' })
       expect(stillBlocked.releases[0]!.github!.runsStatus).toBe('unknown')
       expect(initial.releases[0]!.github!.runsStatus).toBe('fresh')
     } finally { blocked = false; finish() }
     const recovered = await reader.get(data())
+    expect(catalogCalls()).toEqual(initialCatalogCalls)
     expect(recovered.status).toBe('fresh')
     expect(recovered.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh', runs: retainedRuns } })
     expect(recovered.releases[0]!.gaps).not.toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')
     expect(reader.display(data()).releases[0]!.github!.runsStatus).toBe('fresh')
+  })
+
+  it('refreshes Actions while initial membership is still pending', async () => {
+    let clock = now(), finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const read = vi.fn(async (path: string) => {
+      if (path.includes('/compare/')) await gate
+      const runs = clock === now() ? [{ ...nativeRun, status: 'in_progress', conclusion: null }] : [nativeRun]
+      return nativeFixtureRead({ runs })(path)
+    })
+    const reader = new GithubReleaseReader(read, () => clock)
+    const initial = reader.get(data())
+    try {
+      await vi.waitFor(() => expect(read.mock.calls.some(([path]) => path.includes('/compare/'))).toBe(true))
+      expect(reader.display(data()).releases[0]!.state).toBe('Running')
+      read.mockClear()
+      clock += 60_000
+      reader.display(data())
+      reader.display(data())
+      await vi.waitFor(() => {
+        expect(reader.display(data()).releases[0]).toMatchObject({
+          state: 'Awaiting PROD verification', membership: { status: 'pending' }, github: { runsStatus: 'fresh' },
+        })
+      })
+      expect(read.mock.calls.map(([path]) => path)).toHaveLength(2)
+      expect(read.mock.calls.every(([path]) => path.includes('/actions/runs?'))).toBe(true)
+    } finally { finish(); await initial }
   })
 
   it('publishes tagged identities immediately while slow Actions reads remain pending', async () => {
@@ -161,6 +191,10 @@ describe('progressive Releases display', () => {
     expect(selected).toMatchObject({ scope: ['older-release.ts'], github: { runsStatus: 'fresh' }, membership: { status: 'complete', baseline: 'v1.9.0' } })
     expect(read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))).toHaveLength(1)
     expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${olderSha}`))).toBe(true)
+    await reader.get(data())
+    await reader.get(data(), older.version)
+    expect(read.mock.calls.filter(([path]) => /\/(tags\?|releases\?|branches\/main$)/.test(path))).toHaveLength(0)
+    expect(read.mock.calls.filter(([path]) => path.includes('/compare/'))).toHaveLength(1)
   })
 
   it.each([nativeHead, 'e'.repeat(40)])('invalidates Plan when a new baseline tag points to %s behind unchanged main', async baselineSha => {
@@ -181,7 +215,7 @@ describe('progressive Releases display', () => {
     expect(initial.membership.status).toBe('complete')
     expect(initial.pulls.map(pull => pull.number)).toEqual([3401])
     tags = [{ name: 'v1.25.0', commit: { sha: baselineSha } }, ...tags]
-    changed = true; clock += 61_000
+    changed = true; clock += 120_000
     const refreshing = reader.get(data())
     try {
       await vi.waitFor(() => expect(comparing).toBe(true))

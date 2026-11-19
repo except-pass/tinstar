@@ -20,7 +20,7 @@ afterEach(async () => { await Promise.all(cleanups.splice(0).map(cleanup => clea
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'releases-api-')), scene = { ...fixtureScene(), searchIndex: { documents: [], notes: [] } }
   const read = vi.fn().mockResolvedValue({ title: 'Real merged PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: 'a'.repeat(40) })
-  const api = new ReleasesApi({ scene: async () => scene }, root, new ReleasePullReader(read), async () => ['owner@example.com'])
+  const api = new ReleasesApi({ scene: async () => scene }, root, new ReleasePullReader(read, undefined, async () => ({ rows: [], count: 0, oldestUpdatedAt: null })), async () => ['owner@example.com'])
   // These HTTP authorization/audit fixtures are fully enriched. Slow progressive
   // display is exercised independently in display.test.ts.
   const server = createServer((req, res) => { void (async () => { if (req.method === 'GET' && req.url === '/api/releases') await api.read(); const handled = await api.handle(req, res); if (!handled) { res.writeHead(404); res.end() } })() })
@@ -59,7 +59,7 @@ describe('Releases HTTP boundary', () => {
     card.source.properties.Status!.value = 'Done'
     card.source.properties.Link = { id: 'link', type: 'url', value: 'https://github.com/owner/repo/pull/999', hasMore: false }
     const sources = { scene: async (_force = false, scope: { history?: boolean } = {}) => ({ ...scene, cards: scope.history ? [card] : [] }) }
-    const historyApi = new ReleasesApi(sources, root, new ReleasePullReader(read))
+    const historyApi = new ReleasesApi(sources, root, new ReleasePullReader(read, undefined, async () => ({ rows: [], count: 0, oldestUpdatedAt: null })))
     const data = await historyApi.read()
     expect(data.pulls.map(pull => pull.number)).toContain(999)
   })
