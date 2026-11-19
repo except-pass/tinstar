@@ -146,10 +146,7 @@ exit 1
   } finally {
     fault.close()
   }
-  equal((await post('delivery-update', update)).status, 204)
-  equal((await post('delivery-update', update, { url: webhook + '?triggeredByUser=123:synthetic-actor' })).status, 204)
-  equal((await post('delivery-update', update, { headers: { 'X-Atlassian-Webhook-Retry': '1' } })).status, 204)
-  equal((await post('new-header-same-changelog', update)).status, 204)
+  equal((await post('delivery-update', update, { url: triggeredByUser })).status, 204)
 
   const lines = output => output.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   const expected = ['description', 'owner', 'status', 'decisions', 'blockerType', 'blockerTarget', 'blockerCondition']
@@ -167,6 +164,10 @@ exit 1
   ok(Date.parse(updates[2].observed_at) >= occurred)
   ok(!JSON.stringify(updates).includes('private@example.test'))
   ok(!JSON.stringify(updates).includes('private payload metadata'))
+
+  equal((await post('delivery-update', update, { headers: { 'X-Atlassian-Webhook-Retry': '1' } })).status, 204)
+  equal((await post('new-header-same-changelog', update)).status, 204)
+  deepEqual(lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout), updates)
 
   equal((await post('missing-changelog', webhookEvent('jira:issue_updated'))).status, 204)
   match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira update omitted changelog items/)

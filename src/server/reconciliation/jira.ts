@@ -75,6 +75,7 @@ export class JiraClient {
         // matcher misses transitions Jira is offering. Ask for the English names
         // this contract compares.
         'Accept-Language': 'en',
+        'X-Force-Accept-Language': 'true',
         Authorization: this.authorization,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
     if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }

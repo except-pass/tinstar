@@ -140,8 +140,9 @@ async function fixture() {
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
       // Node fetch sends Accept-Language: *. Jira then translates these status names.
       const localized = new Map([['To Do', '待办'], ['In Progress', '正在进行'], ['Ready for Review', '准备审查'], ['Decision', '决策'], ['Canceled', '已取消'], ['Done', '完成']])
-      const language = new Headers(init?.headers).get('accept-language')
-      const offered = language === 'en' ? available : available.map(transition => ({
+      const headers = new Headers(init?.headers)
+      const english = headers.get('accept-language') === 'en' && headers.get('x-force-accept-language') === 'true'
+      const offered = english ? available : available.map(transition => ({
         ...transition, to: { ...transition.to, name: localized.get(transition.to.name) ?? transition.to.name },
       }))
       return response({ transitions: offered })
