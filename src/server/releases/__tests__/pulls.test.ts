@@ -79,6 +79,42 @@ describe('bounded read-only release PR observations', () => {
     expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
   })
 
+  it('orders later-page rows by their request time after an overlapping exact read', async () => {
+    let now = Date.now()
+    let finishOther!: () => void, finishFirstPage!: () => void
+    const otherGate = new Promise<void>(resolve => { finishOther = resolve })
+    const firstPageGate = new Promise<void>(resolve => { finishFirstPage = resolve })
+    const otherUrl = (number: number) => `https://github.com/owner/other/pull/${number}`
+    const read = vi.fn().mockResolvedValue({ ...merged, state: 'open', merged: false })
+    const list = vi.fn(async (path: string, _numbers: number[], onStart: (time: number) => void) => {
+      onStart(now)
+      if (path.includes('/other/')) {
+        await otherGate
+        return page([row(1, now, 'open'), row(2, now, 'open')])
+      }
+      if (path.endsWith('&page=1')) {
+        await firstPageGate
+        return page([row(2, now, 'open')], 100)
+      }
+      return page([row(1, now, 'closed')])
+    })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const point = reader.get([url(1), otherUrl(1), otherUrl(2)])
+    const batch = reader.get([url(1), url(2)])
+    now += 1_000
+    try {
+      finishOther()
+      expect((await point).get(url(1))).toMatchObject({ state: 'open', freshness: 'fresh' })
+      now += 1_000
+    } finally {
+      finishOther()
+      finishFirstPage()
+    }
+    expect((await batch).get(url(1))).toMatchObject({
+      state: 'closed', freshness: 'fresh', observedAt: new Date(now).toISOString(),
+    })
+  })
+
   it('stops after a full page resolves every linked PR', async () => {
     const now = Date.now()
     const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'closed')], 100))

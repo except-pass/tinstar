@@ -98,6 +98,15 @@ it('keeps only linked PR fields in live release polling and stored observations'
   vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
   try {
     await expect(githubJson(path)).rejects.toThrow('Linked PR numbers required')
+    for (const suffix of ['tags', 'actions/runs', 'pulls?state=open', 'pulls/1/reviews']) {
+      await expect(brokerData('/reader', { path: `/repos/fortresspower/cmsandbox/${suffix}`, withStartedAt: true }))
+        .rejects.toThrow('Request timing is only available for Releases PR reads')
+    }
+    expect(await brokerData('/reader', { path: '/repos/fortresspower/cmsandbox/pulls/1', withStartedAt: true }))
+      .toMatchObject({ data: { number: 1 }, startedAt: expect.any(Number) })
+    expect(await brokerData('/reader', { path, pullNumbers: [1, 2], withStartedAt: true }))
+      .toMatchObject({ data: { count: 3 }, startedAt: expect.any(Number) })
+
     expect(await readReleasePullPage(path, [1, 2])).toEqual({
       rows: [row, second], count: 3, oldestUpdatedAt: updatedAt,
     })

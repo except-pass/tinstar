@@ -120,12 +120,13 @@ export class ReleasePullReader {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
       for (let page = 1; page <= 4; page++) {
-        let origin = this.list === readReleasePullPage ? undefined : started
+        const pageStarted = this.now()
+        let origin = this.list === readReleasePullPage ? undefined : pageStarted
         const payload = releasePullPage.safeParse(await this.list(
-          `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers, time => { origin = Math.min(started, time) }))
+          `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers, time => { origin = Math.min(pageStarted, time) }))
         if (!payload.success) throw new GithubResponseError()
         const { rows, count, oldestUpdatedAt } = payload.data
-        const orderedAt = origin ?? started
+        const orderedAt = origin ?? pageStarted
         const observedAt = new Date(orderedAt).toISOString()
         for (const row of rows) {
           const url = byNumber.get(row.number)

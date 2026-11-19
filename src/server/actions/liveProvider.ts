@@ -185,6 +185,9 @@ export class LiveProvider {
   read = async (path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number) => void): Promise<unknown> => {
     const { repository, permissions, releasePoll } = readerScope(path)
     if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
+    if (onStart && !releasePoll && !/^\/pulls\/[1-9]\d*$/.test(path.split('?')[0]!.slice(`/repos/${repository}`.length))) {
+      throw new Error('Request timing is only available for Releases PR reads')
+    }
     const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
     return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers), onStart)
   }
