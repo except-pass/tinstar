@@ -185,6 +185,58 @@ describe('bounded read-only release PR observations', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
+  it.each([false, true])('handles overlapping exact failures during pagination (confirmed merge: %s)', async confirmed => {
+    let now = Date.now()
+    let releaseOther!: () => void, releaseFirst!: () => void, failExact!: () => void, secondStarted!: () => void
+    const otherGate = new Promise<void>(resolve => { releaseOther = resolve })
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const exactGate = new Promise<void>(resolve => { failExact = resolve })
+    const secondPage = new Promise<void>(resolve => { secondStarted = resolve })
+    const otherUrl = (number: number) => `https://github.com/owner/other/pull/${number}`
+    const read = vi.fn(async () => { await exactGate; throw new Error('HTTP 503') })
+    const list = vi.fn(async (path: string) => {
+      if (path.includes('/other/')) {
+        await otherGate
+        return page([row(1, now, 'open'), row(2, now, 'open')])
+      }
+      if (path.endsWith('&page=1')) {
+        await firstGate
+        return page([row(1, now, confirmed ? 'closed' : 'open', confirmed ? merged.merged_at : null)], 100)
+      }
+      if (path.endsWith('&page=2')) {
+        secondStarted()
+        await exactGate
+        return page([row(2, now, 'open')], 100)
+      }
+      throw new Error('Page unavailable')
+    })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const exact = reader.get([url(1), otherUrl(1), otherUrl(2)])
+    const batch = reader.get([url(1), url(2)])
+    try {
+      now += 1_000
+      releaseOther()
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1))
+      releaseFirst()
+      await secondPage
+      failExact()
+      const result = (await exact).get(url(1))
+      expect(result).toMatchObject(confirmed ? { state: 'merged', freshness: 'fresh', mergeSha: sha } : { state: 'open', freshness: 'stale' })
+    } finally {
+      releaseOther()
+      releaseFirst()
+      failExact()
+    }
+    const result = (await batch).get(url(1))
+    if (confirmed) {
+      expect(result).toMatchObject({ state: 'merged', freshness: 'fresh', mergeSha: sha })
+      expect(result?.readError).toBeUndefined()
+    } else {
+      expect(result).toMatchObject({ state: 'open', freshness: 'stale', readError: expect.stringContaining('for owner/repo;') })
+    }
+    expect(list).toHaveBeenCalledTimes(confirmed ? 3 : 4)
+  })
+
   it('stops after a full page resolves every linked PR', async () => {
     const now = Date.now()
     const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'closed')], 100))

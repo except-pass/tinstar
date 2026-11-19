@@ -176,6 +176,22 @@ it('omits dispatch timing when a spawn failure is followed by a blocked fallback
   expect(exec).toHaveBeenCalledTimes(2)
 })
 
+it.each([
+  { legacy: false, http: false }, { legacy: false, http: true },
+  { legacy: true, http: false }, { legacy: true, http: true },
+])('only reports failed CLI timing with response evidence (legacy: $legacy, HTTP: $http)', async ({ legacy, http }) => {
+  if (legacy) exec.mockImplementationOnce((_binary, _args, _options, done) =>
+    done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  const stdout = http && !legacy ? 'HTTP/2.0 503 Unavailable\r\n\r\n' : ''
+  const stderr = http && legacy ? 'HTTP 503' : 'Credential lookup failed'
+  exec.mockImplementationOnce((_binary, _args, _options, done) => {
+    done(Object.assign(new Error('CLI failed'), { stdout, stderr }))
+  })
+  const started = vi.fn()
+  await expect(github.githubCliJson(pulls, '.', undefined, true, started)).rejects.toThrow(http && !legacy ? 'GitHub read failed (HTTP 503)' : 'GitHub request failed')
+  expect(started).toHaveBeenCalledTimes(http ? 1 : 0)
+})
+
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
   const log = vi.spyOn(console, 'info').mockImplementation(() => {})
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]

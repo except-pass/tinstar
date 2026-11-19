@@ -89,18 +89,20 @@ export class ReleasePullReader {
 
   private current(url: string) { return (this.cache.get(url)?.until ?? -Infinity) > this.now() }
 
+  private fresh(url: string) {
+    return this.cache.get(url)?.value.freshness === 'fresh' && this.current(url)
+  }
+
   private pollError(url: string, failure?: PollFailure) {
     if (!failure) return undefined
     const cached = this.cache.get(url)
-    if (cached && this.current(url) && (failure.refreshed.has(url) || cached.value.freshness === 'fresh' &&
-        (failure.allowExact || cached.value.state === 'merged' || !failure.orderedAt ||
-          cached.orderedAt && compareOrder(cached.orderedAt, failure.orderedAt) >= 0))) return undefined
+    if (cached && this.fresh(url) && (failure.refreshed.has(url) || failure.allowExact || cached.value.state === 'merged' || !failure.orderedAt ||
+          cached.orderedAt && compareOrder(cached.orderedAt, failure.orderedAt) >= 0)) return undefined
     return failure.message
   }
 
   private freshMerge(url: string) {
-    const value = this.cache.get(url)?.value
-    return value?.state === 'merged' && value.freshness === 'fresh' && this.current(url)
+    return this.cache.get(url)?.value.state === 'merged' && this.fresh(url)
   }
 
   private poll(repository: string, group: Array<{ url: string; number: number }>) {
@@ -172,7 +174,7 @@ export class ReleasePullReader {
           }
         }
         if (count < pageSize || reachedCutoff || group.every(({ url }) =>
-          this.freshMerge(url) || refreshed.has(url) && this.current(url))) break
+          this.freshMerge(url) || refreshed.has(url) && this.fresh(url))) break
       }
     } catch (error) {
       return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error), orderedAt: origin } }
@@ -194,7 +196,7 @@ export class ReleasePullReader {
     const confirmedMerge = value.state === 'merged' && value.freshness === 'fresh'
     if (current) {
       const currentMerge = current.value.state === 'merged'
-      if (!orderedAt && current.value.freshness === 'fresh' && this.current(url)) return current.value
+      if ((!orderedAt || currentMerge && value.freshness !== 'fresh') && this.fresh(url)) return current.value
       const older = orderedAt && current.orderedAt && compareOrder(current.orderedAt, orderedAt) >= 0
       if ((older && (!confirmedMerge || currentMerge)) || (currentMerge && value.state !== 'merged')) {
         return this.current(url) || current.value.freshness === 'unknown' ? current.value : { ...current.value, freshness: 'stale' }

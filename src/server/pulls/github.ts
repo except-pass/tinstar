@@ -32,13 +32,16 @@ type CliLimits = typeof options
 
 type MarkDispatch = () => () => void
 
-async function execGet(binary: string, args: string[], limits: CliLimits, dispatched?: MarkDispatch) {
+async function execGet(binary: string, args: string[], limits: CliLimits, dispatched?: MarkDispatch, legacy = false) {
   const clear = dispatched?.()
   try {
     return await exec(binary, args, limits)
   } catch (error) {
     const failure = error as CliError
-    if (failure.syscall?.startsWith('spawn ') || failure.code === 'ENOENT' || failure.code === 'EACCES') clear?.()
+    const response = legacy
+      ? /\bHTTP(?:\/[^\s]+)? [1-5]\d{2}\b/.test(`${failure.stdout ?? ''}\n${failure.stderr ?? ''}`)
+      : failure.stdout && includedResponse(failure.stdout)
+    if (!response) clear?.()
     throw error
   }
 }
@@ -66,7 +69,7 @@ async function includedRequest(binary: string, path: string, projection: string,
 
 async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits, dispatched?: MarkDispatch): Promise<GithubRestResponse> {
   try {
-    const { stdout } = await execGet('gh-axi', args, commandOptions, dispatched)
+    const { stdout } = await execGet('gh-axi', args, commandOptions, dispatched, true)
     return { status: 200, data: decode(stdout) }
   } catch (error) {
     if (isGithubResponseError(error)) throw error
