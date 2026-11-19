@@ -198,9 +198,6 @@ export class Journal {
       INSERT INTO sources (source_id, description) VALUES (?, ?)
       ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
       WHERE json_extract(sources.description, '$.mode') IS json_extract(excluded.description, '$.mode')
-        OR (json_extract(excluded.description, '$.provider') = 'jira'
-          AND json_extract(excluded.description, '$.mode') IS NULL
-          AND json_extract(sources.description, '$.mode') = 'live')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
     if (!result.changes) throw new JournalConfigurationError(source.provider === 'jira'

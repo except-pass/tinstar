@@ -190,6 +190,7 @@ exit 1
       { type: 'paragraph', content: [{ type: 'text', text: '{"password":\'first\nTOKEN=123\n"TOKEN"="inner"\nprivate-tail\' }' }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
       { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nprivate-tail TOKEN="' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped {"TOKEN":"opaque phrase"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
     ] } },
@@ -200,7 +201,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -275,14 +276,14 @@ exit 1
   await watcher.stop()
   await publisher.stop()
 
-  const historical = new DatabaseSync(dbPath)
-  try {
-    historical.prepare("UPDATE sources SET description = json_set(description, '$.mode', 'fixture') WHERE source_id = ?").run(comment.source.source_id)
-    historical.prepare("UPDATE events SET envelope = json_set(envelope, '$.source.mode', 'fixture') WHERE event_id = ?").run(comment.event_id)
-  } finally {
-    historical.close()
+  for (const mode of ['fixture', 'live', 'unknown']) {
+    const historical = new DatabaseSync(dbPath)
+    try {
+      historical.prepare("UPDATE sources SET description = json_set(description, '$.mode', ?) WHERE source_id = ?").run(mode, comment.source.source_id)
+    } finally {
+      historical.close()
+    }
+    await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret } }),
+      error => error.code === 1 && error.stderr.includes('use a fresh journal for live Jira deliveries'))
   }
-  match((await run('replay', '--source', 'jira', '--after', '0')).stdout, /\[replay\/fixture\] jira\/ticket WORK-1 · comment 84001 created/)
-  await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret } }),
-    error => error.code === 1 && error.stderr.includes('use a fresh journal for live Jira deliveries'))
 })
