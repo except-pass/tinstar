@@ -26,9 +26,9 @@ allowlist, and `X-Tinstar-UI: 1` handshake.
 
 Preparation shows how many cards are ready, being prepared, and leased.
 When fewer than ten cards are claimable, Tin Star sends eligible cards up to
-a total of ten outstanding jobs. A card is sent only when its evidence has an
-open, unanswered Tin Star decision request for Will. Review submissions and merge
-asks qualify only with such a request record. Done, Archived, Waiting for Prod
+a total of ten outstanding jobs. A card is sent only when its evidence has
+exactly one open, unanswered Tin Star decision request for Will with a question.
+Review submissions and merge asks alone do not qualify. Done, Archived, Waiting for Prod
 Release, Delegated to person, synthetic,
 test (`[TEST ...]` titles), and Jira cards are not sent. Ownership or a Will
 action tag alone does not qualify. A card can have only one outstanding job.
@@ -62,7 +62,7 @@ retry or refill completes the handoff.
 Configure the `url` and `key` fields of Clavis secret
 `grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
 authentication. Its body contains `card_url`, a credential-scrubbed
-`source_question` from the oldest open decision request and an opaque
+`source_question` from the sole open decision request and an opaque
 `source_revision` token for the card revision. Workflow-generated questions can
 span multiple lines. Legacy requests contribute only the labeled Question line.
 The `publish` object names the callback tool in `publish.tool` and provides its

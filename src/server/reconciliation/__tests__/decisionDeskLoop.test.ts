@@ -175,12 +175,12 @@ describe('prepared-card loop', () => {
     const replacement = { request_id: 'fixture-replacement', requested_from: 'Will', question: 'Review the corrected fixture? Tin Star operation: ["waiting-on-main",' }
     expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-fixture', kind: 'request_decision',
       request_id, requested_from: 'Will', question: 'Review the first fixture?' })).toMatchObject({ outcome: 'saved' })
-    if (sibling) expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-sibling', kind: 'request_decision',
-      request_id: 'fixture-sibling', requested_from: 'Will', question: 'Review the sibling fixture?' })).toMatchObject({ outcome: 'saved' })
     await sources.preparation.replenish()
     const before = await web('snapshot')
     expect(before.data.ready).toHaveLength(1)
     const oldPacket = before.data.ready[0].id
+    if (sibling) expect(await tool('update_work', { card_id: card.id, operation_id: 'publish-sibling', kind: 'request_decision',
+      request_id: 'fixture-sibling', requested_from: 'Will', question: 'Review the sibling fixture?' })).toMatchObject({ outcome: 'saved' })
 
     const retraction = { card_id: card.id, operation_id: 'retract-fixture', kind, request_id, reason: 'Fixture needs correction: Tin Star prepared packet:',
       ...(kind === 'supersede_decision' ? { replacement } : {}) }
@@ -354,16 +354,17 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
 
-  it('sends only the oldest open request question and omits unlabeled legacy prose', async () => {
+  it('skips multiple open requests and sends only the remaining labeled legacy question', async () => {
     const card = page(1, { tag: 'Decision' })
     card.properties['Next action'] = rich('Deploy the current build')
     const newer = 'Requested from: Will\nQuestion: Should we pause?\nTin Star request: {"id":"newer","action":"Decision"}'
     const older = 'Requested from: Will\nQuestion: Should we cancel?\nInternal only: unrelated private notes\nTin Star request: {"id":"older","action":"Decision"}'
     card.comments.push(newer, older)
-    const { sources, jobs, createdTimes } = await setup([card], false)
-    createdTimes.set(newer, '2025-01-02T00:00:00Z')
-    createdTimes.set(older, '2025-01-01T00:00:00Z')
+    const { sources, jobs } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(0)
 
+    card.comments.push('Tin Star answer: "newer"')
     await sources.preparation.replenish()
     expect(jobs.map(job => job.source_question)).toEqual(['Should we cancel?'])
   })
@@ -712,7 +713,7 @@ describe('prepared-card loop', () => {
   })
 
   it.each(['Tin Star prepared packet:', 'Tin Star operation: ["waiting-on-main",'])(
-    'invalidates a callback when a new request quotes %s', async marker => {
+    'rejects publication with two open requests even when a request quotes %s', async marker => {
       const card = withOpenRequest(page(1, { tag: 'Decision' }))
       const { sources, jobs, tool } = await setup([card], false)
       await sources.preparation.replenish()
@@ -721,7 +722,7 @@ describe('prepared-card loop', () => {
         request_id: 'second-request', requested_from: 'Will', question: `Should we rename the ${marker} marker?` }))
         .toMatchObject({ outcome: 'saved' })
       expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
-        .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
+        .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('no longer an open owner decision') })
     },
   )
 
@@ -796,7 +797,7 @@ describe('prepared-card loop', () => {
     expect(jobs).toHaveLength(1)
   })
 
-  it.each(['comment', 'paragraph'])('binds identical %s requests to their source identity', async type => {
+  it.each(['comment', 'paragraph'])('preserves the legacy revision when identical %s text is reposted', async type => {
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources } = await setup([card], false)
     const work = await sources.currentCard(card.id)
@@ -805,7 +806,7 @@ describe('prepared-card loop', () => {
     const reposted = decisionCardSource(work, [{ ...request, id: 'reposted' }])
     expect(original.prepEligible).toBe(true)
     expect(reposted.prepEligible).toBe(true)
-    expect(reposted.revision).not.toBe(original.revision)
+    expect(reposted.revision).toBe(original.revision)
   })
 
   it('recovers capped Desk status from the background pass after restart with sending disabled', async () => {
