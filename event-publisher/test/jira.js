@@ -78,11 +78,6 @@ if [ "${'${EVENTS_JIRA_WEBHOOK_SECRET+x}'}" ]; then result=inherited; else resul
 printf '%s\\n' "$result" > "$FM_HOME/firstmate-env-check"
 exit 1
 `, { mode: 0o700 })
-  await writeFile(configPath, JSON.stringify({ jira: { ...jira, mode: 'fixture' }, homes: [] }))
-  await rejects(exec(process.execPath, [cli, 'serve', '--config', configPath, '--db', dbPath], {
-    env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret },
-  }), error => error.code === 1 && error.stderr.includes('Jira fixture mode is no longer supported'))
-  ok(!existsSync(dbPath))
   const { decisions: _missing, ...partialFields } = jira.fields
   await writeFile(configPath, JSON.stringify({ jira: { ...jira, fields: partialFields }, homes: [] }))
   await rejects(exec(process.execPath, [cli, 'serve', '--config', configPath, '--db', dbPath], {
@@ -191,7 +186,7 @@ exit 1
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
       { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped\nTOKEN="first\nprivate-tail"' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped\nTOKEN="first\nprivate-tail")' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'TO\u202eKEN=opaqueFixtureValue' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped {"TOKEN":"opaque phrase"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
@@ -203,7 +198,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted]\nTOKEN=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nTOKEN=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -277,15 +272,4 @@ exit 1
   match(partialReplay, /partial projection \(comment body\)/)
   await watcher.stop()
   await publisher.stop()
-
-  for (const mode of ['fixture', 'live', 'unknown']) {
-    const historical = new DatabaseSync(dbPath)
-    try {
-      historical.prepare("UPDATE sources SET description = json_set(description, '$.mode', ?) WHERE source_id = ?").run(mode, comment.source.source_id)
-    } finally {
-      historical.close()
-    }
-    await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret } }),
-      error => error.code === 1 && error.stderr.includes('use a fresh journal for live Jira deliveries'))
-  }
 })

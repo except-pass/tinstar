@@ -26,7 +26,6 @@ const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|github_pat_|gh[pousr]_)[a-z
 export class JiraWebhookConfigurationError extends Error {}
 
 export function jiraConfig(raw) {
-  if (raw?.mode === 'fixture') throw new JiraWebhookConfigurationError('Jira fixture mode is no longer supported')
   const { site, cloudId, projectId, fields } = raw ?? {}
   if (typeof site !== 'string' || !/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/.test(site) ||
       typeof cloudId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(cloudId) ||
@@ -50,7 +49,7 @@ export function jiraConfig(raw) {
 }
 
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote}|(?:\\[\s\S]|[^${quote}\\])*${quote}(?=[ \t]*(?:[\r\n,;}\]]|$))))`
+const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote}|(?:\\[\s\S]|[^${quote}\\])*${quote}(?=[ \t]*(?:[\r\n,;})>\]]|$))))`
 const quotedValue = (quote) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
 const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
 const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')

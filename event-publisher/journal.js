@@ -200,9 +200,7 @@ export class Journal {
       WHERE json_extract(sources.description, '$.mode') IS json_extract(excluded.description, '$.mode')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
-    if (!result.changes) throw new JournalConfigurationError(source.provider === 'jira'
-      ? 'use a fresh journal for live Jira deliveries'
-      : 'use a separate journal for live and fixture baselines')
+    if (!result.changes) throw new JournalConfigurationError('use a separate journal for live and fixture baselines')
   }
 
   record(observation) {

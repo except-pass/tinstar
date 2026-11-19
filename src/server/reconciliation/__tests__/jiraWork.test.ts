@@ -224,7 +224,10 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   const nativeNode = structuredClone(firstAnswer)
   expect(await edit('answer-two', { answers: [{ id: 'D2', answer: 'Keep the current label.' }] })).toMatchObject({ outcome: 'saved' })
   expect(issue.fields[config.fields.decisions].content).toContainEqual(nativeNode)
-  expect(await move('answer-status', 'Answer Decision', { to: 'In Progress' })).toMatchObject({ outcome: 'saved' })
+  expect(await move('answer-no-evidence', 'Answer Decision', { to: 'In Progress' })).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('requires evidence'),
+  })
+  expect(await move('answer-status', 'Answer Decision', { to: 'In Progress', evidence: 'The worker resumed execution.' })).toMatchObject({ outcome: 'saved' })
   expect(await edit('external', { blocker: { type: 'Actor', target: 'team:reviewers', unblocks_when: 'A reviewer grants access.' } })).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Actor' } } })
   expect(await move('wait', 'Block')).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
   expect(await edit('change-blocker', { blocker: { type: 'Event', target: 'event:approval-1', unblocks_when: 'The approval event is recorded.' } })).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Event' } } })
@@ -237,7 +240,10 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
     .every(request => request.fields === 'project')).toBe(true)
   expect(await move('wait-too-early', 'Resolve Wait', { to: 'In Progress', evidence: 'Claimed clear' })).toMatchObject({ outcome: 'not-saved' })
   expect(await link('remove', { action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'saved', card: { blocker: null } })
-  expect(await move('cleared', 'Resolve Wait', { to: 'In Progress', evidence: 'The dependency was accepted.' })).toMatchObject({ outcome: 'saved' })
+  expect(await move('wait-no-evidence', 'Resolve Wait', { to: 'In Progress' })).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('requires evidence'),
+  })
+  expect(await move('cleared', 'Resolve Wait', { to: 'In Progress', evidence: 'The blocker cleared and the worker resumed execution.' })).toMatchObject({ outcome: 'saved' })
   expect(await move('review', 'Submit for Review', { evidence: 'Fixture log is attached.' })).toMatchObject({ outcome: 'saved', card: { status: 'Ready for Review' } })
   expect(await move('accept', 'Accept Review', { evidence: 'Fixture was reviewed. A release remains.' })).toMatchObject({ outcome: 'saved', card: { status: 'Waiting for Prod Release' } })
   expect(await move('wrong-revision', 'Deployed', { required_revision: 'rev-a', live_revision: 'rev-b', evidence: 'Observed release status.' })).toMatchObject({ outcome: 'not-saved' })
@@ -555,9 +561,9 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail"\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nD2 [Open]: What follows?'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nD2 [Open]: What follows?'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?'
+  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?'
   expect(card.description).toBe(projectedDescription)
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ card: { description: projectedDescription } })
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
