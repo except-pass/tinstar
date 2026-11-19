@@ -115,6 +115,59 @@ describe('bounded read-only release PR observations', () => {
     })
   })
 
+  it.each([false, true])('keeps newer exact evidence after a page failure (exact pending: %s)', async exactPending => {
+    let now = Date.now()
+    let finishOther!: () => void, failPage!: () => void, finishExact!: () => void
+    let pageStarted!: () => void, exactStarted!: () => void
+    const otherGate = new Promise<void>(resolve => { finishOther = resolve })
+    const failedPage = new Promise<void>(resolve => { failPage = resolve })
+    const exactGate = new Promise<void>(resolve => { finishExact = resolve })
+    const pageInFlight = new Promise<void>(resolve => { pageStarted = resolve })
+    const exactInFlight = new Promise<void>(resolve => { exactStarted = resolve })
+    const otherUrl = (number: number) => `https://github.com/owner/other/pull/${number}`
+    const read = vi.fn(async () => {
+      exactStarted()
+      await exactGate
+      return { ...merged, merged: false }
+    })
+    const list = vi.fn(async (path: string) => {
+      if (path.includes('/other/')) {
+        await otherGate
+        return page([row(1, now, 'open'), row(2, now, 'open')])
+      }
+      if (path.endsWith('&page=1')) return page([row(2, now, 'open')], 100)
+      pageStarted()
+      await failedPage
+      throw new Error('HTTP 503')
+    })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const point = reader.get([url(1), otherUrl(1), otherUrl(2)])
+    const batch = reader.get([url(1), url(2)])
+    try {
+      await pageInFlight
+      now += 1_000
+      finishOther()
+      await exactInFlight
+      if (exactPending) {
+        failPage()
+        await new Promise<void>(resolve => setImmediate(resolve))
+      } else {
+        finishExact()
+        await point
+      }
+    } finally {
+      finishOther()
+      finishExact()
+      failPage()
+    }
+    for (const observations of [await point, await batch, await reader.get([url(1), url(2)])]) {
+      expect(observations.get(url(1))).toMatchObject({ state: 'closed', freshness: 'fresh' })
+      expect(observations.get(url(1))?.readError).toBeUndefined()
+    }
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(list).toHaveBeenCalledTimes(3)
+  })
+
   it('stops after a full page resolves every linked PR', async () => {
     const now = Date.now()
     const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'closed')], 100))

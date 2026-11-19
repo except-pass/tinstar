@@ -9,7 +9,7 @@ const refreshTtl = 120_000
 const pageSize = 100
 type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
 type CachedObservation = { until: number; value: Observation; orderedAt: number; coverageAt?: number }
-type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean }
+type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean; orderedAt: number }
 type RepositoryPoll = { until: number; failure?: PollFailure }
 
 /** Poll recent updates together. Point reads fill old or unusually busy gaps. */
@@ -54,9 +54,7 @@ export class ReleasePullReader {
     const failures = new Map<string, PollFailure>()
     for (const [repository, group] of groups) {
       const failure = this.polls.get(repository)?.failure
-      if (failure) for (const { url } of group) {
-        if (!failure.refreshed.has(url) || !this.current(url)) failures.set(url, failure)
-      }
+      if (failure) for (const { url } of group) failures.set(url, failure)
     }
     const start = this.cursor % Math.max(candidates.length, 1)
     const work: Promise<void>[] = []
@@ -66,20 +64,19 @@ export class ReleasePullReader {
       const cached = this.cache.get(url)
       const failure = failures.get(url)
       const current = this.current(url)
-      const pollError = failure && !(current && cached?.value.freshness === 'fresh' &&
-        (failure.allowExact || cached.value.state === 'merged')) ? failure.message : undefined
-      if (pollError && !failure?.allowExact) {
-        result.set(url, this.failed(url, pollError))
-        continue
-      }
+      const pollError = this.pollError(url, failure)
+      const blocked = pollError && !failure?.allowExact
       let pending = this.pending.get(url)
-      if (!pending && !current && this.pointReads.length < 4 && this.pending.size < 4) {
+      if (!pending && !blocked && !current && this.pointReads.length < 4 && this.pending.size < 4) {
         this.pointReads.push(this.now())
         this.cursor = (index + 1) % candidates.length
         pending = this.refresh(url).finally(() => this.pending.delete(url)); this.pending.set(url, pending)
       }
-      if (pending) work.push(pending.then(value => { result.set(url, value) }))
-      else if (pollError && !current) result.set(url, this.failed(url, pollError))
+      if (pending) work.push(pending.then(value => {
+        const error = failure?.allowExact ? undefined : this.pollError(url, failure)
+        result.set(url, error ? this.failed(url, error) : value)
+      }))
+      else if (pollError && (blocked || !current)) result.set(url, this.failed(url, pollError))
       else if (cached) result.set(url, { ...cached.value, freshness: cached.until <= this.now() && cached.value.freshness === 'fresh' ? 'stale' : cached.value.freshness })
     }
     await Promise.all(work)
@@ -87,6 +84,14 @@ export class ReleasePullReader {
   }
 
   private current(url: string) { return (this.cache.get(url)?.until ?? -Infinity) > this.now() }
+
+  private pollError(url: string, failure?: PollFailure) {
+    if (!failure) return undefined
+    const cached = this.cache.get(url)
+    if (cached && this.current(url) && (failure.refreshed.has(url) || cached.value.freshness === 'fresh' &&
+        (failure.allowExact || cached.value.state === 'merged' || cached.orderedAt > failure.orderedAt))) return undefined
+    return failure.message
+  }
 
   private freshMerge(url: string) {
     const value = this.cache.get(url)?.value
@@ -124,12 +129,14 @@ export class ReleasePullReader {
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
     const refreshed = new Set<string>()
+    let pageStarted = started
+    let origin: number | undefined
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
       for (let page = 1; page <= 4; page++) {
-        const pageStarted = this.now()
-        let origin = this.list === readReleasePullPage ? undefined : pageStarted
+        pageStarted = this.now()
+        origin = this.list === readReleasePullPage ? undefined : pageStarted
         const payload = releasePullPage.safeParse(await this.list(
           `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers, time => { origin = Math.min(pageStarted, time) }))
         if (!payload.success) throw new GithubResponseError()
@@ -162,7 +169,7 @@ export class ReleasePullReader {
           this.freshMerge(url) || refreshed.has(url) && this.current(url))) break
       }
     } catch (error) {
-      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
+      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error), orderedAt: origin ?? pageStarted } }
     }
     return { until: started + refreshTtl }
   }
