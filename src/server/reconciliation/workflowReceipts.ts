@@ -27,9 +27,8 @@ export interface JiraFieldChange { field: string; before: string; after: string 
 export interface JiraWorkReceiptState {
   confirmed?: true
   dispatchedAt?: number
-  startedAt?: number
   contradicted?: true
-  rejected?: true
+  rejected?: number
   fields?: JiraFieldChange[]
   priorCommentIds?: unknown[]
   sourceKey?: string

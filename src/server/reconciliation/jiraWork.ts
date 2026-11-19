@@ -130,6 +130,7 @@ export class JiraWork extends JiraClient {
     await this.checkProject(issueId)
     const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`)
     if (!Array.isArray(body.comments) || !Number.isInteger(body.total) || body.startAt !== startAt) throw new Error('Incomplete Jira comment readback')
+    await this.checkProject(issueId)
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, author_id: comment.author?.accountId,
     })), total: body.total as number }
@@ -163,6 +164,9 @@ export class JiraWork extends JiraClient {
     let pending = false
     let sent = false
     let state: JiraWorkReceiptState = {}
+    const rejection = (status: number) => ({
+      outcome: 'not-saved', code: 'jira-unavailable', operation_id: input.operation_id, message: `Jira returned HTTP ${status}`,
+    })
     let cardId = 'card_id' in input ? input.card_id : undefined
     let unlock: Awaited<ReturnType<typeof acquireLock>> | undefined
     try {
@@ -175,12 +179,12 @@ export class JiraWork extends JiraClient {
       if (prior && prior.input !== hash) throw new JiraWorkInputError('Operation ID was used for different input; use a new ID')
       cardId = prior?.cardId ?? cardId
       state = prior?.jiraWork ?? {}
-      pending = Boolean(state.dispatchedAt ?? state.startedAt ?? (verb === 'create' && prior?.cardId))
+      pending = state.dispatchedAt !== undefined
       if (state.confirmed && cardId) {
         pending = true
         return this.saved(await this.read(this.id(cardId), verb === 'create'), true)
       }
-      if (state.rejected) throw new JiraWorkUnconfirmed('Jira rejected the dispatched operation')
+      if (state.rejected) return rejection(state.rejected)
       const dispatched = pending
       const persist = () => this.receipts.putJiraWork(key, hash, cardId, state)
       if (!prior) await persist()
@@ -209,8 +213,8 @@ export class JiraWork extends JiraClient {
       })
     } catch (error) {
       if (sent && error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408) {
-        await this.receipts.putJiraWork(key, hash, cardId, { ...state, rejected: true })
-        return { outcome: 'not-saved', code: 'jira-unavailable', operation_id: input.operation_id, message: this.message(error) }
+        await this.receipts.putJiraWork(key, hash, cardId, { ...state, rejected: error.status })
+        return rejection(error.status)
       }
       return { outcome: pending ? 'partially-saved' : 'not-saved',
         code: pending ? 'unconfirmed' : error instanceof JiraWorkInputError ? 'invalid-work' : 'jira-unavailable',
@@ -270,7 +274,6 @@ export class JiraWork extends JiraClient {
       if (!typeId) throw new JiraWorkInputError(`Jira ${issueType} is not configured`)
       const stamp = attempt.marker
       if (attempt.state.contradicted) throw new JiraWorkUnconfirmed('Original Jira creation readback contradicted the request')
-      if (attempt.dispatched && !attempt.state.dispatchedAt) throw new JiraWorkUnconfirmed('Older Jira receipt lacks dispatch evidence')
       let id = attempt.prior?.cardId ? this.id(attempt.prior.cardId) : undefined
       if (attempt.dispatched) {
         id ??= await this.findCreated(stamp)
@@ -497,7 +500,7 @@ export class JiraWork extends JiraClient {
         if (link ? items.some(linkMatches) : fields!.every(field => items.some(item => this.fieldMatches(item, field)))) {
           if (note && !attempt.state.priorCommentIds) throw new JiraWorkUnconfirmed('Jira receipt lacks a comment baseline')
           const nextCommentWrite = Math.min(...candidates.filter(([, receipt]) =>
-            receipt.cardId === card.id && receipt.jiraWork?.priorCommentIds).map(([, receipt]) => receipt.jiraWork!.dispatchedAt!))
+            receipt.cardId === card.id && receipt.jiraWork?.priorCommentIds && receipt.jiraWork.dispatchedAt! > dispatchedAt).map(([, receipt]) => receipt.jiraWork!.dispatchedAt!))
           await this.checkComment(id, note, attempt.state.priorCommentIds ?? [], { accountId, from: dispatchedAt, before: nextCommentWrite })
           return attempt.confirm(card)
         }

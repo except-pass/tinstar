@@ -46,7 +46,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -118,6 +118,10 @@ async function fixture() {
     }
     if (part === 'changelog' && method === 'GET') return response({ startAt: 0, isLast: true, values: history[issue.id] ?? [] })
     if (part === 'comment' && method === 'GET') {
+      if (controls.moveDuringComments) {
+        issue.fields.project = { id: '10002' }
+        issue.comments.push({ id: 'foreign', body: 'Destination project comment' })
+      }
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
     }
@@ -271,10 +275,13 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(f.issues.get('60001')!.comments).toHaveLength(1)
   f.controls.refuseTransition = true
   const move = { card_id, operation_id: 'fast-track', verb: 'Fast-track', evidence: 'Fixture checks are named.' }
-  expect(await third.call('transition_work', move)).toMatchObject({ outcome: 'not-saved' })
+  const rejected = await third.call('transition_work', move)
+  expect(rejected).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('409') })
   expect((await third.call('get_work', { card_id })).card.status).toBe('Backlog')
   f.controls.refuseTransition = false
-  expect(await third.call('transition_work', move)).toMatchObject({ code: 'unconfirmed' })
+  const beforeRetry = f.requests.length
+  expect(await third.call('transition_work', move)).toEqual(rejected)
+  expect(f.requests).toHaveLength(beforeRetry)
   f.controls.loseEdit = true
   const nextMove = { ...move, operation_id: 'accepted-fast-track' }
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'unconfirmed' })
@@ -444,5 +451,38 @@ it('does not attribute a delayed earlier write to a newer dispatched receipt', a
   f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'summary', fromString: 'Original', toString: 'Changed' }] }]
   expect(await call('update_work', { ...edit, operation_id: 'newer' })).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)
+
+
+it('withholds a comment fetched while the issue moves projects', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Moving ticket' })
+  f.controls.moveDuringComments = true
+  const result = await call('get_work', { card_id })
+  expect(result).toMatchObject({ warnings: expect.arrayContaining([expect.stringContaining('comments')]) })
+  expect(result).not.toHaveProperty('comments')
+  expect(JSON.stringify(result)).not.toContain('Destination project comment')
+  expect(f.requests.slice(-2)).toEqual([
+    { method: 'GET', path: 'issue/60001/comment', fields: null },
+    { method: 'GET', path: 'issue/60001', fields: 'project' },
+  ])
+}, 30_000)
+
+it('recovers a later comment and field change despite an unrelated earlier dispatch', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
+  const edit = { kind: 'jira_edit', card_id }
+  f.controls.beforeWrite = 'PUT issue/60001'
+  expect(await call('update_work', { ...edit, operation_id: 'earlier', name: 'Uncertain title', note: 'Earlier note' }))
+    .toMatchObject({ code: 'unconfirmed' })
+  const later = { ...edit, operation_id: 'later', description: 'New description', note: 'Later note' }
+  f.controls.loseEdit = true
+  expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'description', fromString: null, toString: 'New description' }] }]
+  expect(await call('update_work', later)).toMatchObject({ code: 'already-saved', card: { description: 'New description' } })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
 }, 30_000)
