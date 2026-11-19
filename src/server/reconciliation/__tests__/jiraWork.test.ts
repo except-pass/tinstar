@@ -45,7 +45,7 @@ async function fixture() {
   expect(parsed.jiraWork).toMatchObject(settings)
   expect(parsed.jira).toBeUndefined()
   const history: Record<string, any[]> = {}
-  const requests: { method: string; path: string }[] = []
+  const requests: { method: string; path: string; fields: string | null }[] = []
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
@@ -64,7 +64,7 @@ async function fixture() {
     const path = url.pathname.replace(`/ex/jira/${cloudId}/rest/api/3/`, '')
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
-    requests.push({ method, path })
+    requests.push({ method, path, fields: url.searchParams.get('fields') })
     if (controls.beforeWrite === `${method} ${path}`) {
       controls.beforeWrite = ''
       throw new Error('Process stopped before Jira received the write')
@@ -104,6 +104,7 @@ async function fixture() {
     if (!issue) return response({}, 404)
     const part = match[2]
     if (!part && method === 'GET') {
+      if (url.searchParams.get('fields') === 'project') return response({ id: issue.id, fields: { project: issue.fields.project } })
       const issuelinks = [...links].filter(([, link]) => [link.inwardIssue, link.outwardIssue].includes(issue.id)).map(([id, link]) => {
         const inward = issue.id === link.outwardIssue
         const target = issues.get(inward ? link.inwardIssue : link.outwardIssue)!
@@ -400,4 +401,48 @@ it('leaves overlapping edit and reversed link history unconfirmed', async () => 
   f.history['60001']!.push(history([{ field: 'Link', from: null, to: 'WORK-2', toString: 'This issue blocks WORK-2' }]))
   expect(await call('link_work', add)).toMatchObject({ code: 'unconfirmed' })
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issueLink')).toHaveLength(2)
+}, 30_000)
+
+
+it('checks the live project before fetching moved ticket content or comments', async () => {
+  const f = await fixture()
+  const { client, call } = await f.connect()
+  const create = { provider: 'jira', operation_id: 'create', name: 'Moved ticket' }
+  const { card: { id: card_id } } = await call('create_work', create)
+  const schema = (await client.listTools()).tools.find(tool => tool.name === 'get_work')!.inputSchema
+  const validate = addFormats(new Ajv({ strict: false })).compile(schema)
+  expect(validate({ card_id, details: false })).toBe(true)
+  for (const options of [{ lease_token: 'lease' }, { refresh: false }, { implementation_contract: {} }]) {
+    expect(validate({ card_id, ...options })).toBe(false)
+    const before = f.requests.length
+    const result = await client.callTool({ name: 'get_work', arguments: { card_id, ...options } })
+    expect(result.isError).toBe(true)
+    expect(f.requests).toHaveLength(before)
+  }
+  expect(validate({ card_id: 'a'.repeat(32), refresh: true, implementation_contract: {} })).toBe(true)
+  f.issues.get('60001')!.fields.project = { id: '10002' }
+  const before = f.requests.length
+  expect(await call('get_work', { card_id })).toMatchObject({ outcome: 'unavailable' })
+  expect(await call('update_work', { card_id, kind: 'jira_edit', operation_id: 'edit', note: 'Note' })).toMatchObject({ outcome: 'not-saved' })
+  expect(await call('transition_work', { card_id, operation_id: 'move', verb: 'Prioritize' })).toMatchObject({ outcome: 'not-saved' })
+  expect(await call('link_work', { card_id, operation_id: 'link', action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'not-saved' })
+  expect(await call('create_work', create)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.slice(before)).toEqual(Array.from({ length: 5 }, () =>
+    ({ method: 'GET', path: 'issue/60001', fields: 'project' })))
+}, 30_000)
+
+it('does not attribute a delayed earlier write to a newer dispatched receipt', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Original' })
+  const edit = { kind: 'jira_edit', card_id, name: 'Changed' }
+  for (const operation_id of ['earlier', 'newer']) {
+    f.controls.beforeWrite = 'PUT issue/60001'
+    expect(await call('update_work', { ...edit, operation_id })).toMatchObject({ code: 'unconfirmed' })
+  }
+  f.issues.get('60001')!.fields.summary = 'Changed'
+  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'summary', fromString: 'Original', toString: 'Changed' }] }]
+  expect(await call('update_work', { ...edit, operation_id: 'newer' })).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
 }, 30_000)

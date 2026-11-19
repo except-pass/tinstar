@@ -29,6 +29,7 @@ export interface JiraWorkReceiptState {
   dispatchedAt?: number
   startedAt?: number
   contradicted?: true
+  rejected?: true
   fields?: JiraFieldChange[]
   priorCommentIds?: unknown[]
   sourceKey?: string
