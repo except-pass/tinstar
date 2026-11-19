@@ -41,6 +41,19 @@ it('projects titles only for linked rows in the CLI release list', async () => {
     .resolves.toEqual({ rows: [linked], count: 2, oldestUpdatedAt: updatedAt })
 })
 
+it('reports the originating timestamp to a coalesced CLI caller', async () => {
+  let complete!: (error: null, response: { stdout: string }) => void
+  exec.mockImplementationOnce((_binary, _args, _options, done) => { complete = done })
+  const first = github.githubCliJson(pulls)
+  vi.setSystemTime(clock + 8_000)
+  const started = vi.fn()
+  const joined = github.githubCliJson(pulls, '.', undefined, true, started)
+  complete(null, { stdout: 'HTTP/2.0 200 OK\r\n\r\n{"payload":[]}' })
+  expect(await Promise.all([first, joined])).toEqual([[], []])
+  expect(started.mock.calls).toEqual([[clock]])
+  expect(exec).toHaveBeenCalledTimes(1)
+})
+
 it('sends an ETag on a repeat GET, reuses the cached body on 304 and logs after a full hour', async () => {
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]
   const log = vi.spyOn(console, 'info').mockImplementation(() => {})

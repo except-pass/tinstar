@@ -8,12 +8,13 @@ const mergedTtl = 24 * 60 * 60_000
 const refreshTtl = 120_000
 const pageSize = 100
 type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
+type CachedObservation = { until: number; value: Observation; orderedAt: number; coverageAt?: number }
 type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean }
 type RepositoryPoll = { until: number; failure?: PollFailure }
 
 /** Poll recent updates together. Point reads fill old or unusually busy gaps. */
 export class ReleasePullReader {
-  private cache = new Map<string, { until: number; value: Observation }>()
+  private cache = new Map<string, CachedObservation>()
   private pending = new Map<string, Promise<Observation>>()
   private polls = new Map<string, RepositoryPoll>()
   private pollPending = new Map<string, Promise<RepositoryPoll>>()
@@ -75,7 +76,7 @@ export class ReleasePullReader {
       }
       if (pending) work.push(pending.then(value => { result.set(url, value) }))
       else if (pollError && !current) result.set(url, this.failed(url, pollError))
-      else if (cached) result.set(url, { ...cached.value, freshness: cached.until <= this.now() ? 'stale' : cached.value.freshness })
+      else if (cached) result.set(url, { ...cached.value, freshness: cached.until <= this.now() && cached.value.freshness === 'fresh' ? 'stale' : cached.value.freshness })
     }
     await Promise.all(work)
     return result
@@ -98,54 +99,57 @@ export class ReleasePullReader {
   }
 
   private async refreshRepository(repository: string, group: Array<{ url: string; number: number }>): Promise<RepositoryPoll> {
-    const started = this.now(), observedAt = new Date(started).toISOString()
+    const started = this.now()
     // An unchanged row may predate the newest page. Look back to the oldest
     // mutable observation, including the boundary second for equal timestamps.
-    const coverage = new Map<string, Observation>()
+    const coverage = new Map<string, CachedObservation>()
     let since = started - 1000
     for (const { url } of group) {
-      const value = this.cache.get(url)?.value
-      if (value?.observedAt && value.state !== 'merged') {
-        coverage.set(url, value)
-        since = Math.min(since, Date.parse(value.observedAt) - 1000)
+      const cached = this.cache.get(url)
+      if (cached?.coverageAt !== undefined && cached.value.state !== 'merged') {
+        coverage.set(url, cached)
+        since = Math.min(since, cached.coverageAt - 1000)
       }
     }
     const byNumber = new Map(group.map(({ number, url }) => [number, url]))
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
     const refreshed = new Set<string>()
-    let covered = false
+    let coveredAt: number | undefined
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
       for (let page = 1; page <= 4; page++) {
+        let origin = this.list === readReleasePullPage ? undefined : started
         const payload = releasePullPage.safeParse(await this.list(
-          `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers))
+          `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers, time => { origin = Math.min(started, time) }))
         if (!payload.success) throw new GithubResponseError()
         const { rows, count, oldestUpdatedAt } = payload.data
+        const orderedAt = origin ?? started
+        const observedAt = new Date(orderedAt).toISOString()
         for (const row of rows) {
           const url = byNumber.get(row.number)
           if (!url || observed.has(url) || this.cache.get(url)?.value.state === 'merged' && this.current(url)) continue
           observed.add(url)
           try {
             const value = this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt)
-            if (this.save(url, value, observedAt).freshness === 'fresh') refreshed.add(url)
+            if (this.save(url, value, orderedAt, origin).freshness === 'fresh') refreshed.add(url)
           } catch {
             // If the list row cannot establish merge evidence, try the exact PR.
-            const cached = this.cache.get(url)
-            if (cached && (cached.value.observedAt ?? '') < observedAt) cached.until = started
+            this.save(url, this.failed(url, 'List row lacks effective merge evidence'), orderedAt, undefined, orderedAt)
           }
         }
         const reachedCutoff = count === pageSize && oldestUpdatedAt !== null && Date.parse(oldestUpdatedAt) < since
-        covered = page === 1 && reachedCutoff
-        if (count < pageSize || reachedCutoff) break
+        if (page === 1 && reachedCutoff) coveredAt = origin
+        if (count < pageSize || reachedCutoff || group.every(({ url }) =>
+          this.current(url) && (refreshed.has(url) || this.cache.get(url)?.value.state === 'merged'))) break
       }
     } catch (error) {
       return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
     }
-    if (covered) for (const [url, previous] of coverage) {
-      if (!observed.has(url) && this.cache.get(url)?.value === previous) {
-        this.save(url, { ...previous, observedAt, freshness: 'fresh', readError: undefined }, observedAt)
+    if (coveredAt !== undefined) for (const [url, previous] of coverage) {
+      if (!observed.has(url) && this.cache.get(url) === previous) {
+        this.save(url, { ...previous.value, observedAt: new Date(coveredAt).toISOString(), freshness: 'fresh', readError: undefined }, coveredAt, coveredAt)
       }
     }
     return { until: started + refreshTtl }
@@ -157,21 +161,21 @@ export class ReleasePullReader {
 
   private failed(url: string, readError: string): Observation {
     const previous = this.cache.get(url)?.value
-    return previous ? { ...previous, freshness: 'stale', readError } : { title: null, state: 'unknown', mergedAt: null, mergeSha: null, observedAt: null, freshness: 'unknown', readError }
+    return previous ? { ...previous, freshness: previous.observedAt ? 'stale' : 'unknown', readError } : { title: null, state: 'unknown', mergedAt: null, mergeSha: null, observedAt: null, freshness: 'unknown', readError }
   }
 
-  private save(url: string, value: Observation, observedAt: string): Observation {
+  private save(url: string, value: Observation, orderedAt: number, coverageAt?: number, until?: number): Observation {
     const current = this.cache.get(url)
     const confirmedMerge = value.state === 'merged' && value.freshness === 'fresh'
     if (current) {
       const currentMerge = current.value.state === 'merged'
-      const older = (current.value.observedAt ?? '') >= observedAt
+      const older = current.orderedAt >= orderedAt
       if ((older && (!confirmedMerge || currentMerge)) || (currentMerge && value.state !== 'merged')) {
-        return this.current(url) ? current.value : { ...current.value, freshness: 'stale' }
+        return this.current(url) || current.value.freshness === 'unknown' ? current.value : { ...current.value, freshness: 'stale' }
       }
     }
     const delay = confirmedMerge ? mergedTtl : refreshTtl
-    this.cache.set(url, { until: this.now() + delay, value })
+    this.cache.set(url, { until: until ?? this.now() + delay, value, orderedAt, coverageAt })
     return value
   }
 
@@ -182,16 +186,17 @@ export class ReleasePullReader {
   }
 
   private async refresh(url: string): Promise<Observation> {
-    const observedAt = new Date(this.now()).toISOString()
+    const started = this.now()
+    let origin = this.read === readGithubScalars ? undefined : started
     let value: Observation
     try {
       const pull = releasePull(url)
       if (!pull) throw new Error('Unsupported PR')
-      const raw = await this.read(`/repos/${pull.repository}/pulls/${pull.number}`, '{title,state,merged,merged_at,merge_commit_sha,head_sha:.head.sha,base_ref:.base.ref}')
-      value = this.observation(raw, observedAt)
+      const raw = await this.read(`/repos/${pull.repository}/pulls/${pull.number}`, '{title,state,merged,merged_at,merge_commit_sha,head_sha:.head.sha,base_ref:.base.ref}', time => { origin = Math.min(started, time) })
+      value = this.observation(raw, new Date(origin ?? started).toISOString())
     } catch (error) {
       value = this.failed(url, this.readError(error, url))
     }
-    return this.save(url, value, observedAt)
+    return this.save(url, value, origin ?? started, value.freshness === 'fresh' ? origin : undefined)
   }
 }

@@ -182,11 +182,11 @@ export class LiveProvider {
     const data = pullNumbers && response.status !== 304 ? minimizeReleasePullPage(response.data, pullNumbers) : response.data
     return { ...response, data: this.redact(data) }
   }
-  read = async (path: string, _projection = '.', pullNumbers?: number[]): Promise<unknown> => {
+  read = async (path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number) => void): Promise<unknown> => {
     const { repository, permissions, releasePoll } = readerScope(path)
     if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
     const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
-    return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers))
+    return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers), onStart)
   }
   snapshot = (url: string) => readActionSnapshot(url, this.read)
   async identity() {

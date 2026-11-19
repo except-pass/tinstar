@@ -25,7 +25,7 @@ it.each([false, true])('observes a Releases PR through live Reader with merged=%
     state: merged ? 'merged' : 'open', mergedAt: merged ? '2026-11-08T11:00:00Z' : null,
     mergeSha: merged ? mergeSha : null, freshness: 'fresh', observedAt: new Date(now).toISOString() })
   expect(liveReaderJson).toHaveBeenCalledTimes(1)
-  expect(liveReaderJson).toHaveBeenCalledWith(path)
+  expect(liveReaderJson).toHaveBeenCalledWith(path, '.', undefined, expect.any(Function))
 })
 
 it('preserves Queue readiness and check projections through live Reader', async () => {

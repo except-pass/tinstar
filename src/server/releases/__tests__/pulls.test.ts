@@ -59,8 +59,8 @@ describe('bounded read-only release PR observations', () => {
     const secondPage = new Promise<void>(resolve => { reachedSecondPage = resolve })
     const read = vi.fn(async () => { await exactGate; return exact })
     const list = vi.fn()
-      .mockImplementationOnce(async () => page([row(1, now, listed), row(2, now, 'open')], 100))
-      .mockImplementationOnce(async () => { reachedSecondPage(); await listGate; return page([]) })
+      .mockImplementationOnce(async () => page([row(1, now, listed)], 100))
+      .mockImplementationOnce(async () => { reachedSecondPage(); await listGate; return page([row(2, now, 'open')]) })
     const reader = new ReleasePullReader(read, () => now, list)
     const point = reader.get([url(1)])
     now += 1_000
@@ -77,6 +77,60 @@ describe('bounded read-only release PR observations', () => {
     }
     expect((await batch).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
     expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+  })
+
+  it('stops after a full page resolves every linked PR', async () => {
+    const now = Date.now()
+    const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'closed')], 100))
+    const read = vi.fn()
+    const result = await new ReleasePullReader(read, () => now, list).get([url(1), url(2)])
+    expect(result.get(url(1))).toMatchObject({ state: 'open', freshness: 'fresh' })
+    expect(result.get(url(2))).toMatchObject({ state: 'closed', freshness: 'fresh' })
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('does not let an older open exact result mask a newer unresolved merge row', async () => {
+    let now = Date.now()
+    let finishExact!: () => void, finishList!: () => void, reachedSecondPage!: () => void
+    const exactGate = new Promise<void>(resolve => { finishExact = resolve })
+    const listGate = new Promise<void>(resolve => { finishList = resolve })
+    const secondPage = new Promise<void>(resolve => { reachedSecondPage = resolve })
+    const read = vi.fn().mockImplementationOnce(async () => {
+      await exactGate
+      return { ...merged, state: 'open', merged: false }
+    }).mockResolvedValue(merged)
+    const list = vi.fn()
+      .mockImplementationOnce(async () => page([{ ...row(1, now, 'closed', merged.merged_at), merge_commit_sha: null }], 100))
+      .mockImplementationOnce(async () => { reachedSecondPage(); await listGate; return page([row(2, now, 'open')]) })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const exact = reader.get([url(1)])
+    now += 1_000
+    const batch = reader.get([url(1), url(2)])
+    try {
+      await secondPage
+      finishExact()
+      expect((await exact).get(url(1))).toMatchObject({ state: 'unknown', freshness: 'unknown' })
+    } finally {
+      finishExact()
+      finishList()
+    }
+    expect((await batch).get(url(1))).toMatchObject({ state: 'merged', freshness: 'fresh', mergeSha: sha })
+  })
+
+  it('uses the shared exact request origin when deciding whether a list cutoff covers it', async () => {
+    const origin = Date.now()
+    let now = origin + 8_000
+    const read = vi.fn().mockImplementationOnce(async (_path, _projection, onStart: (time: number) => void) => {
+      onStart(origin)
+      return { ...merged, state: 'open', merged: false }
+    }).mockResolvedValue(merged)
+    const list = vi.fn().mockImplementationOnce(async () =>
+      page([row(2, now, 'open')], 100, new Date(origin + 4_000).toISOString())).mockResolvedValue(page([]))
+    const reader = new ReleasePullReader(read, () => now, list)
+    expect((await reader.get([url(1)])).get(url(1))?.observedAt).toBe(new Date(origin).toISOString())
+    now += pollInterval
+    expect((await reader.get([url(1), url(2)])).get(url(1))).toMatchObject({ state: 'merged', mergeSha: sha })
   })
 
   it.each([false, true])('does not renew an exact observation written during the list poll (warm: %s)', async warm => {
@@ -124,7 +178,7 @@ describe('bounded read-only release PR observations', () => {
       .mockResolvedValueOnce(page([], 100, new Date(now - 2 * pollInterval).toISOString()))
     const refreshed = await reader.get(urls)
     expect(refreshed.get(url(1))).toMatchObject({ state: 'merged', mergeSha: sha, freshness: 'fresh' })
-    expect(read.mock.calls).toEqual([['/repos/owner/repo/pulls/1', expect.any(String)]])
+    expect(read.mock.calls).toEqual([['/repos/owner/repo/pulls/1', expect.any(String), expect.any(Function)]])
   })
 
   it('preserves fresh rows from successful pages when a later page fails', async () => {
@@ -270,7 +324,7 @@ describe('bounded read-only release PR observations', () => {
     expect(refreshed.get(url(2))).toMatchObject({ state: 'open', freshness: 'fresh' })
     expect(refreshed.get(url(3))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
     expect(list).toHaveBeenCalledTimes(2)
-    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', [1, 2, 3])
+    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', [1, 2, 3], expect.any(Function))
     expect(read).not.toHaveBeenCalled()
   })
 

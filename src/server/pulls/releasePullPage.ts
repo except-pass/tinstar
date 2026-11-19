@@ -38,12 +38,12 @@ export function minimizeReleasePullPage(data: unknown, pullNumbers: number[]) {
   return page.data
 }
 
-export function readReleasePullPage(path: string, pullNumbers: number[]): Promise<unknown> {
-  if (liveActionsEnabled()) return liveReaderJson(path, '.', pullNumbers)
+export function readReleasePullPage(path: string, pullNumbers: number[], onStart?: (startedAt: number) => void): Promise<unknown> {
+  if (liveActionsEnabled()) return liveReaderJson(path, '.', pullNumbers, onStart)
   const projection = `${JSON.stringify(pullNumbers)} as $wanted | {
     count:length, oldestUpdatedAt:.[-1].updated_at,
     rows:[.[] | .number as $number | select($wanted | index($number) != null)
       | {number,title,state,merged,merged_at,closed_at,updated_at,merge_commit_sha,head:{sha:.head.sha},base:{ref:.base.ref}}]
   }`
-  return githubCliJson(path, projection)
+  return githubCliJson(path, projection, undefined, true, onStart)
 }

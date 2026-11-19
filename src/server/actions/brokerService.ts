@@ -38,8 +38,10 @@ export function brokerServer(config: BrokerConfig, provider = new LiveProvider(c
     void (async () => {
       try {
         if (req.url === '/reader' && req.method === 'POST') {
-          const { path, pullNumbers } = z.object({ path: z.string().max(2048), pullNumbers: z.array(z.number().int().positive().safe()).min(1).optional() }).strict().parse(await actionBody(req))
-          return ok(res, await provider.read(path, '.', pullNumbers))
+          const { path, pullNumbers, withStartedAt } = z.object({ withStartedAt: z.boolean().optional(), path: z.string().max(2048), pullNumbers: z.array(z.number().int().positive().safe()).min(1).optional() }).strict().parse(await actionBody(req))
+          let startedAt: number | undefined
+          const data = await provider.read(path, '.', pullNumbers, withStartedAt ? time => { startedAt = time } : undefined)
+          return ok(res, withStartedAt ? { data, startedAt } : data)
         }
         if (req.url === '/identity' && req.method === 'GET') return ok(res, await provider.identity())
         if (req.url === '/receipt' && req.method === 'POST') {

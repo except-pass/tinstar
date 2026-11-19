@@ -93,10 +93,10 @@ async function cliGet(binary: string, path: string, projection: string, etag: st
   }
 }
 
-export function githubCliJson(path: string, projection = '.', limits: CliLimits = options, allowFallback = true): Promise<unknown> {
+export function githubCliJson(path: string, projection = '.', limits: CliLimits = options, allowFallback = true, onStart?: (startedAt: number) => void): Promise<unknown> {
   const binary = allowFallback ? process.env.GH_BIN || 'gh' : 'gh'
   return budget.get(JSON.stringify([binary, path, projection, limits.timeout, limits.maxBuffer, allowFallback]), etag =>
-    cliGet(binary, path, projection, etag, limits, allowFallback))
+    cliGet(binary, path, projection, etag, limits, allowFallback), onStart)
 }
 
 export async function githubCliPost(path: string, input: string, limits: CliLimits): Promise<unknown> {
