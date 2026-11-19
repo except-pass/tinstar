@@ -79,7 +79,7 @@ describe('bounded read-only release PR observations', () => {
     expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
   })
 
-  it('orders later-page rows by their request time after an overlapping exact read', async () => {
+  it.each([0, 1_000])('orders later-page rows after an overlapping exact read (elapsed: %s)', async elapsed => {
     let now = Date.now()
     let finishOther!: () => void, finishFirstPage!: () => void
     const otherGate = new Promise<void>(resolve => { finishOther = resolve })
@@ -101,11 +101,11 @@ describe('bounded read-only release PR observations', () => {
     const reader = new ReleasePullReader(read, () => now, list)
     const point = reader.get([url(1), otherUrl(1), otherUrl(2)])
     const batch = reader.get([url(1), url(2)])
-    now += 1_000
+    now += elapsed
     try {
       finishOther()
       expect((await point).get(url(1))).toMatchObject({ state: 'open', freshness: 'fresh' })
-      now += 1_000
+      now += elapsed
     } finally {
       finishOther()
       finishFirstPage()

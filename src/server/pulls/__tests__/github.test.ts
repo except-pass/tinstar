@@ -45,13 +45,15 @@ it('projects titles only for linked rows in the CLI release list', async () => {
 it('reports the originating timestamp to a coalesced CLI caller', async () => {
   let complete!: (error: null, response: { stdout: string }) => void
   exec.mockImplementationOnce((_binary, _args, _options, done) => { complete = done })
-  const first = github.githubCliJson(pulls)
+  const original = vi.fn()
+  const first = github.githubCliJson(pulls, '.', undefined, true, original)
   vi.setSystemTime(clock + 8_000)
   const started = vi.fn()
   const joined = github.githubCliJson(pulls, '.', undefined, true, started)
   complete(null, { stdout: 'HTTP/2.0 200 OK\r\n\r\n{"payload":[]}' })
   expect(await Promise.all([first, joined])).toEqual([[], []])
-  expect(started.mock.calls).toEqual([[clock]])
+  expect(started.mock.calls).toEqual([[clock, expect.any(Number)]])
+  expect(started.mock.calls).toEqual(original.mock.calls)
   expect(exec).toHaveBeenCalledTimes(1)
 })
 

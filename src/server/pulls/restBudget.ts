@@ -40,7 +40,8 @@ export class GithubRestBudget {
   private blockedUntil = 0
   private cache = new Map<string, { etag: string; data: unknown; bytes: number }>()
   private cacheBytes = 0
-  private pending = new Map<string, { startedAt: number; work: Promise<unknown> }>()
+  private pending = new Map<string, { startedAt: number; sequence: number; work: Promise<unknown> }>()
+  private sequence = 0
   private hourly = { requests: 0, notModified: 0 }
   private reporting = false
 
@@ -88,15 +89,16 @@ export class GithubRestBudget {
     return response
   }
 
-  async get(key: string, send: (etag?: string) => Promise<GithubRestResponse>, onStart?: (startedAt: number) => void) {
+  async get(key: string, send: (etag?: string) => Promise<GithubRestResponse>, onStart?: (startedAt: number, sequence?: number) => void) {
     this.assertAvailable()
     const pending = this.pending.get(key)
     if (pending) {
-      onStart?.(pending.startedAt)
+      onStart?.(pending.startedAt, pending.sequence)
       return pending.work
     }
     const startedAt = this.now()
-    onStart?.(startedAt)
+    const sequence = ++this.sequence
+    onStart?.(startedAt, sequence)
     const cached = this.cache.get(key)
     const work = (async () => {
       const response = await send(cached?.etag)
@@ -117,7 +119,7 @@ export class GithubRestBudget {
       }
       return response.data
     })().finally(() => this.pending.delete(key))
-    this.pending.set(key, { startedAt, work })
+    this.pending.set(key, { startedAt, sequence, work })
     return work
   }
 }

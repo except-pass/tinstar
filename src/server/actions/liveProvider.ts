@@ -92,7 +92,6 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   for (const [key, value] of parsed.searchParams) {
     if (key === 'page' && /^[1-9]\d{0,2}$/.test(value) || key === 'per_page' && /^(?:[1-9]\d?|100)$/.test(value) ||
       key === 'state' && ['open', 'closed'].includes(value) || key === 'filter' && value === 'latest' ||
-      key === 'event' && value === 'push' && suffix === '/actions/runs' ||
       key === 'head_sha' && /^[a-f0-9]{40,64}$/.test(value) || key === 'ref' && /^[a-f0-9]{40,64}$/.test(value)) continue
     throw new Error('Reader query outside PR evidence scope')
   }
@@ -182,7 +181,7 @@ export class LiveProvider {
     const data = pullNumbers && response.status !== 304 ? minimizeReleasePullPage(response.data, pullNumbers) : response.data
     return { ...response, data: this.redact(data) }
   }
-  read = async (path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number) => void): Promise<unknown> => {
+  read = async (path: string, _projection = '.', pullNumbers?: number[], onStart?: (startedAt: number, sequence?: number) => void): Promise<unknown> => {
     const { repository, permissions, releasePoll } = readerScope(path)
     if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
     if (onStart && !releasePoll && !/^\/pulls\/[1-9]\d*$/.test(path.split('?')[0]!.slice(`/repos/${repository}`.length))) {

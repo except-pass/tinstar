@@ -38,7 +38,7 @@ export function minimizeReleasePullPage(data: unknown, pullNumbers: number[]) {
   return page.data
 }
 
-export function readReleasePullPage(path: string, pullNumbers: number[], onStart?: (startedAt: number) => void): Promise<unknown> {
+export function readReleasePullPage(path: string, pullNumbers: number[], onStart?: (startedAt: number, sequence?: number) => void): Promise<unknown> {
   if (liveActionsEnabled()) return liveReaderJson(path, '.', pullNumbers, onStart)
   const projection = `${JSON.stringify(pullNumbers)} as $wanted | {
     count:length, oldestUpdatedAt:.[-1].updated_at,

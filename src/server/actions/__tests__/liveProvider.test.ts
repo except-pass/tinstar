@@ -9,7 +9,7 @@ import { ActionExecutor } from '../executor'
 import { ActionStore } from '../store'
 import { head, snapshot, installed, policy, run, merge } from './fixtures'
 import { readerRepositories, type ActionOperation } from '../../../shared/actions'
-import { brokerData, brokerRequest } from '../liveClient'
+import { brokerData, brokerRequest, liveReaderJson } from '../liveClient'
 import { githubJson } from '../../pulls/github'
 import { PullReader } from '../../pulls/reader'
 import { readReleasePullPage } from '../../pulls/releasePullPage'
@@ -143,6 +143,14 @@ it('recovers linked observations when the live broker cannot read the list respo
   vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
   try {
     const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
+    const exactStart = vi.fn()
+    const failedStart = vi.fn()
+    const path = '/repos/fortresspower/cmsandbox/pulls'
+    await liveReaderJson(`${path}/1`, '.', undefined, exactStart)
+    await expect(liveReaderJson(`${path}?state=all&sort=updated&direction=desc&per_page=100&page=1`, '.', [1, 2], failedStart))
+      .rejects.toThrow(new GithubResponseError().message)
+    expect(failedStart.mock.calls).toEqual([[expect.any(Number), expect.any(Number)]])
+    expect(failedStart.mock.calls[0]![1]).toBeGreaterThan(exactStart.mock.calls[0]![1])
     const result = await new ReleasePullReader().get(urls)
     expect(result.size).toBe(2)
     for (const url of urls) expect(result.get(url)).toMatchObject({ title: 'Linked exact PR', freshness: 'fresh' })
@@ -184,7 +192,7 @@ it('rejects alternate release poll queries before any GitHub read and preserves 
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
   expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
   expect(readerScope('/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1').permissions).toEqual({ metadata: 'read', pull_requests: 'read' })
-  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], ['releases?per_page=100&page=1', 'contents'], [`actions/runs?head_sha=${head}&event=push&per_page=100&page=1`, 'actions'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
+  for (const [suffix, permission] of [[`commits/${head}/check-runs`, 'checks'], [`commits/${head}/status`, 'statuses'], ['actions/runs/1', 'actions'], ['branches/feature', 'contents'], [`compare/${head}...${'b'.repeat(40)}?per_page=100`, 'contents'], [`commits/${head}`, 'contents'], ['tags?per_page=100', 'contents'], ['releases?per_page=100&page=1', 'contents'], [`actions/runs?head_sha=${head}&per_page=100&page=1`, 'actions'], [`commits/${head}/pulls?per_page=100`, 'pull_requests']]) {
     expect(readerScope(`/repos/fortresspower/cmsandbox/${suffix}`).permissions).toEqual({ metadata: 'read', [permission!]: 'read' })
   }
 })

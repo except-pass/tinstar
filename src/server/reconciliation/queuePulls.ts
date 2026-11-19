@@ -17,7 +17,7 @@ export interface PullReadiness {
  * normalizes broker JSON to the Queue and Releases scalar contracts.
  * Reject unsupported output as unknown rather than mistaking it for green checks.
  */
-export async function readGithubScalars(path: string, projection: string, onStart?: (startedAt: number) => void): Promise<Record<string, unknown>> {
+export async function readGithubScalars(path: string, projection: string, onStart?: (startedAt: number, sequence?: number) => void): Promise<Record<string, unknown>> {
   if (liveActionsEnabled()) {
     const raw = await (onStart ? liveReaderJson(path, '.', undefined, onStart) : liveReaderJson(path)) as Record<string, unknown>
     if (/\/pulls\/\d+$/.test(path)) return {
