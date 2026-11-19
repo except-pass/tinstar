@@ -3,7 +3,9 @@ import type { WorkCard } from './workReader'
 import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
+import { decisionRecordRows, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
+import { mergeActionText } from './queuePulls'
+import { reviewResponsePrefix, reviewSubmissions } from '../../shared/reviews'
 import { actionableWillCard, currentWillRequests, deferredDecisionCard } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
@@ -37,15 +39,15 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
 
 export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
-const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person'].includes(String(status ?? '').trim().toLowerCase())
+const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person', 'completed', 'answered', 'resolved', 'merged'].includes(String(status ?? '').trim().toLowerCase())
 
 /** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
 const isTestDecisionCard = (card: WorkCard) => /^\s*\[TEST\b/i.test(String(value(card, 'Name') ?? ''))
 
-function openOwnerDecisionRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
-  // Unverified withdrawals are not a request list. The Desk hides them the same way.
-  if (hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
-  return currentWillRequests(requestHistory(blocks), value(card, 'Will action')).filter(request => !request.answered)
+export function needsMergeEvidence(card: WorkCard) {
+  const actions = value(card, 'Will action')
+  return !prepBlocked(card) && (Array.isArray(actions) ? actions : [actions]).some(action =>
+    typeof action === 'string' && action.trim().toLowerCase() === 'merge')
 }
 
 function prepBlocked(card: WorkCard) {
@@ -53,13 +55,28 @@ function prepBlocked(card: WorkCard) {
     deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
 }
 
-/** Who preparation may send. Claim and answer still use actionableDecisionCard. */
-function prepSendable(card: WorkCard, blocks: CardContextRead['blocks']) {
-  if (prepBlocked(card)) return false
-  return openOwnerDecisionRequests(card, blocks).length > 0
+function prepSendable(card: WorkCard, blocks: CardContextRead['blocks'], openMerge: boolean) {
+  if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return false
+  const history = requestHistory(blocks)
+  const deskAnswer = history.findLastIndex(note =>
+    note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
+  const earlierNotes = new Set(history.slice(0, deskAnswer + 1).map(note => note.id))
+  openMerge = openMerge && needsMergeEvidence(card)
+  const actions = value(card, 'Will action')
+  if (currentWillRequests(history, actions).some(request => !request.answered && !earlierNotes.has(request.sourceId) &&
+    (request.action.trim().toLowerCase() !== 'merge' || openMerge))) return true
+  if (deskAnswer >= 0) return false
+
+  if (value(card, 'Status') === 'Ready for Review') {
+    const submission = reviewSubmissions(history).at(-1)
+    if (submission && !decisionRecordRows(history, reviewResponsePrefix).some(row => row?.submission_key === submission.submission_key)) return true
+  }
+  const action = String(value(card, 'Next action') || value(card, 'Next Action') || '').trim()
+  return openMerge && mergeActionText(action) &&
+    !decisionRecordRows(history, 'Tin Star request: ').some(row => String(row?.action).trim().toLowerCase() === 'merge')
 }
 
-export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
+export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks'], openMerge = false) {
   const title = String(value(card, 'Name') || 'Decision card')
   return {
     card,
@@ -68,7 +85,7 @@ export function decisionCardSource(card: WorkCard, blocks: CardContextRead['bloc
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
-    prepEligible: prepSendable(card, blocks),
+    prepEligible: prepSendable(card, blocks, openMerge),
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>

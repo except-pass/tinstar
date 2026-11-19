@@ -9,7 +9,7 @@ import { ReconciliationSources } from '..'
 import { DecisionDeskApi } from '../decisionDeskApi'
 import { ReconciliationMcp } from '../mcp'
 import { NotionApi } from '../notionApi'
-import { DecisionPreparation, prepCapStop, prepIneligibleStop } from '../decisionPrep'
+import { DecisionPreparation } from '../decisionPrep'
 import { actionableDecisionCard, decisionCardSource, deskAnswerMarker } from '../decisionEvidence'
 import { jiraCardPrefix } from '../../../shared/workIdentity'
 import { waitLine } from '../../../shared/waitingForPolicy'
@@ -406,7 +406,7 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
   })
 
-  it('uses the fixed browser handoff and allows a new revision without replaying the old answer', async () => {
+  it('requires a new request after a browser answer', async () => {
     const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' })), other = withOpenRequest(page(2, { tag: 'Decision' }))
     const { sources, jobs, tool, web } = await setup([card, other], false)
     await sources.preparation.replenish()
@@ -443,7 +443,11 @@ describe('prepared-card loop', () => {
     expect(jobs).toHaveLength(2)
 
     card.properties.Status = { type: 'status', status: { name: 'In Progress' } }
-    card.body.push('A second question requires a new decision.')
+    card.body.push('An unrelated edit does not reopen the decision.')
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+
+    card.comments.push('Requested from: Will\nQuestion: Decide on the new request?\nTin Star request: {"id":"second-request","action":"Decision"}')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(3)
     expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
@@ -625,6 +629,49 @@ describe('prepared-card loop', () => {
     expect(jobs.some(job => job.card_url.includes(blocked.id))).toBe(false)
   })
 
+  it('prepares unanswered review submissions and rejects publication after a response', async () => {
+    const open = page(1, { owner: 'Will', status: 'Ready for Review' })
+    const answered = page(2, { owner: 'Will', status: 'Ready for Review' })
+    const sha = 'a'.repeat(40)
+    const receipt = 'https://example.test/receipt'
+    const submission = { submission_key: 'review-fixture', deliverable_id: 'fixture', summary: 'Review the fixture',
+      pulls: [{ url: 'https://github.com/except-pass/tinstar/pull/100', head: sha }],
+      deployment_id: 'deployment', deployed_sha: sha, live_url: 'https://example.test', instructions: 'Review the fixture',
+      proof: { kind: 'non-ui', tested_sha: sha, passed: true, receipt, alternative: 'Unit tests' }, remaining_scope: [] }
+    const response = 'Tin Star review response: {"submission_key":"review-fixture","action":"request_changes"}'
+    for (const card of [open, answered]) card.comments.push(`Tin Star review submission: ${JSON.stringify(submission)}`)
+    answered.comments.push(response)
+    const { sources, jobs, tool } = await setup([open, answered], false)
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(open.id)])
+    open.comments.push(response)
+    expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'operation-conflict' })
+  })
+
+  it('prepares an explicit merge ask only while its linked pull is verified open', async () => {
+    const open = page(1, { tag: 'Merge' })
+    const closed = page(2, { tag: 'Merge' })
+    const tagOnly = page(3, { tag: 'Merge' })
+    const pull = 'https://github.com/except-pass/tinstar/pull/'
+    open.properties.Link = rich(pull + '100')
+    open.properties['Next Action'] = rich('Merge this PR')
+    closed.properties.Evidence = rich(pull + '101')
+    closed.properties['Next action'] = rich('Merge this PR')
+    tagOnly.properties.Link = rich(pull + '100')
+    const { sources, jobs, tool } = await setup([open, closed, tagOnly], false)
+    let openState: 'open' | 'merged' = 'open'
+    sources.readPullReadiness = async urls => new Map(urls.map(url => [url, {
+      status: 'fresh', state: url === pull + '100' ? openState : 'closed', observedAt: null, expiresAt: null,
+      head: null, draft: false, checks: 'unknown', mergeability: 'unknown',
+    }]))
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(open.id)])
+    openState = 'merged'
+    expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'operation-conflict' })
+  })
+
   it('does not send a test card or a synthetic card', async () => {
     const named = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
     named.properties.Name = rich('[TEST] fixture card')
@@ -649,7 +696,7 @@ describe('prepared-card loop', () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
-    const { sources, jobs, web } = await setup([card], false)
+    const { sources, jobs } = await setup([card], false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
     now += 15 * 60_000
@@ -658,10 +705,45 @@ describe('prepared-card loop', () => {
     now += 15 * 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
-    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: prepCapStop })])
+    expect((await sources.preparation.status()).jobs).toContainEqual(expect.objectContaining({ id: jobs[1]!.publish.job_id, state: 'stopped' }))
     card.body.push('The request evidence changed.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(3)
+  })
+
+  it('reads a candidate after an in-progress withdrawal releases its card lock', async () => {
+    const withdrawing = withOpenRequest(page(1, { tag: 'Decision' }))
+    const sibling = withOpenRequest(page(2, { tag: 'Decision' }))
+    const { sources } = await setup([withdrawing, sibling], false)
+    const cards = await Promise.all([withdrawing, sibling].map(card => sources.currentCard(card.id)))
+    const release = Promise.withResolvers<void>()
+    const otherRead = Promise.withResolvers<void>()
+    let withdrawn = false
+    const withdrawal = sources.workflow.exclusive(withdrawing.id, async () => {
+      await release.promise
+      withdrawn = true
+    })
+    const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
+    const prep = new DecisionPreparation(sources.decisionPackets, {
+      refreshQueue: async () => cards,
+      read: async id => {
+        const first = id === withdrawing.id
+        if (!first) {
+          otherRead.resolve()
+          await withdrawal
+        }
+        const fixture = first ? withdrawing : sibling
+        const notes = first && withdrawn ? [] : [{ id: 'request', type: 'comment', text: fixture.comments[0]! }]
+        return decisionCardSource(cards[first ? 0 : 1]!, notes)
+      },
+      exclusive: (id, perform) => sources.workflow.exclusive(id, perform),
+    }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
+    const refilling = prep.replenish()
+    await otherRead.promise
+    release.resolve()
+    await refilling
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(String(push.mock.calls[0]?.[1]?.body)).card_url).toContain(sibling.id)
   })
 
   it('never sends an answered request and drops the job that was already queued', async () => {
@@ -674,6 +756,6 @@ describe('prepared-card loop', () => {
     waiting.comments.push(`Tin Star answer: ${JSON.stringify(requestIdFor(waiting))}`)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
-    expect((await sources.preparation.status()).jobs).toEqual([expect.objectContaining({ card: waiting.id, state: 'stopped', message: prepIneligibleStop })])
+    expect((await sources.preparation.status()).jobs).toEqual([expect.objectContaining({ card: waiting.id, state: 'stopped' })])
   })
 })

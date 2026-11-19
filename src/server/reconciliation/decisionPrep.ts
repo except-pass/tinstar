@@ -15,9 +15,6 @@ const exec = promisify(execFile)
 const retryAfter = 15 * 60_000
 /** A second send covers one lost packet. Further sends of an unchanged revision are how the same card was posted every 15 minutes. */
 export const prepSendCap = 2
-export const prepCapStop = 'Preparation stopped after 2 sends for this revision. It sends again when the open request or source revision changes.'
-export const prepIneligibleStop = 'Preparation stopped because this card is no longer an open owner decision.'
-const prepRevisionStop = 'Preparation stopped because the open request or source revision changed.'
 export const prepSecretName = 'grok/tinstar-decision-prep'
 export const preparerName = 'Tinstar Decision Prep'
 const webhookMissing = 'The preparer webhook is not configured.'
@@ -111,28 +108,13 @@ export class DecisionPreparation {
       .get(this.scope, card, revision, cutoff)
   }
 
-  private stopCard(db: DatabaseSync, card: string, message: string) {
-    db.prepare("UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE scope = ? AND card = ? AND state IN ('sending','sent','failed')")
-      .run(message, this.scope, card)
-  }
-
-  private noteCap(db: DatabaseSync, card: string, revision: string, cutoff: number) {
-    const inFlight = db.prepare("SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? AND revision = ? AND state IN ('sending','sent') AND at > ?")
-      .get(this.scope, card, revision, cutoff)
-    if (inFlight) return
-    const latest = db.prepare("SELECT id, message FROM decision_card_prep WHERE scope = ? AND card = ? AND revision = ? AND state != 'published' ORDER BY at DESC LIMIT 1")
-      .get(this.scope, card, revision) as { id: string; message: string | null } | undefined
-    if (latest && latest.message !== prepCapStop) db.prepare('UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ?').run('stopped', prepCapStop, latest.id)
-  }
-
-  /** Expired attempts may be retried once. The second unanswered attempt stops instead of being posted again. */
   private expireJobs(db: DatabaseSync, cutoff: number) {
-    const rows = db.prepare("SELECT id, card, revision FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent') AND at <= ?")
-      .all(this.scope, cutoff) as unknown as Array<{ id: string; card: string; revision: string }>
+    const rows = db.prepare(`SELECT id, card, revision FROM decision_card_prep
+      WHERE scope = ? AND state IN ('sending','sent') AND at <= ?`).all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
     const update = db.prepare('UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ?')
     for (const row of rows) {
       const capped = this.sendCount(db, row.card, row.revision) >= prepSendCap
-      update.run(capped ? 'stopped' : 'failed', capped ? prepCapStop : 'No packet received; retrying preparation', row.id)
+      update.run(capped ? 'stopped' : 'failed', capped ? null : 'No packet received; retrying preparation', row.id)
     }
   }
 
@@ -151,11 +133,11 @@ export class DecisionPreparation {
     }
     const queue = await this.source.refreshQueue()
     const cutoff = this.now() - retryAfter
-    const { candidates, prepared, openCards } = await this.packets.leases.writeStorage(db => {
+    const { candidates, prepared, liveCards } = await this.packets.leases.writeStorage(db => {
       this.expireJobs(db, cutoff)
       const prepared = queue.filter(card => this.packets.currentInStorage(db, card.id))
       const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
-      const openCards = (db.prepare("SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent','failed')")
+      const liveCards = (db.prepare("SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent')")
         .all(this.scope) as unknown as Array<{ card: string }>).map(row => row.card)
       // A failed attempt still inside the 15-minute gap is not due, and it must not take a slot from a card that is.
       const recent = new Set((db.prepare("SELECT card FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent','failed') AND at > ?")
@@ -163,7 +145,7 @@ export class DecisionPreparation {
       const fresh = capacity ? queue.filter(card => !recent.has(card.id) && !this.held(db, card.id)) : []
       const first = fresh.length ? this.candidateCursor % fresh.length : 0
       const selected = [...fresh.slice(first), ...fresh.slice(0, first)].slice(0, capacity)
-      return { candidates: selected, prepared, openCards }
+      return { candidates: selected, prepared, liveCards }
     })
     if (prepared.length) {
       const index = this.refreshCursor % prepared.length
@@ -175,37 +157,35 @@ export class DecisionPreparation {
     }
     const secret = this.secret
     if (!secret) { this.explanation = webhookMissing; return }
-    const ids = [...new Set([...candidates.map(card => card.id), ...openCards])]
-    const sources = await Promise.allSettled(ids.map(id => this.source.read(id, true)))
-    const jobs = await this.packets.leases.writeStorage(db => {
-      const cutoff = this.now() - retryAfter
-      const sendable = sources.flatMap(result => {
-        if (result.status !== 'fulfilled') return []
-        const source = result.value, card = source.card.id
-        if (!source.prepEligible) { this.stopCard(db, card, prepIneligibleStop); return [] }
-        db.prepare("UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE scope = ? AND card = ? AND revision != ? AND state IN ('sending','sent','failed')")
-          .run(prepRevisionStop, this.scope, card, source.revision)
-        if (this.held(db, card) || this.packets.answeredInStorage(db, card, source.revision)) return []
-        if (this.sendCount(db, card, source.revision) >= prepSendCap) { this.noteCap(db, card, source.revision, cutoff); return [] }
-        if (this.recentAttempt(db, card, source.revision, cutoff)) return []
-        return [source]
+    const candidateIds = new Set(candidates.map(card => card.id))
+    const ids = [...new Set([...liveCards, ...candidateIds])]
+    const attempts = await Promise.allSettled(ids.map(async id => {
+      const dispatch = await this.source.exclusive(id, async () => {
+        const source = await this.source.read(id, true)
+        const job = await this.packets.leases.writeStorage(db => {
+          db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = NULL
+            WHERE scope = ? AND card = ? AND state IN ('sending','sent') AND (revision != ? OR ? = 0)`)
+            .run(this.scope, id, source.revision, Number(source.prepEligible))
+          if (!candidateIds.has(id) || !source.prepEligible ||
+            this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
+          const cutoff = this.now() - retryAfter
+          if (!this.refillCapacity(db, queue, cutoff) || this.recentAttempt(db, id, source.revision, cutoff) ||
+            this.sendCount(db, id, source.revision) >= prepSendCap) return
+          const job = randomUUID()
+          db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'sending',?)")
+            .run(job, this.scope, id, source.revision, this.now())
+          return job
+        })
+        return job ? { completion: this.push(secret, job, source) } : undefined
       })
-      const capacity = this.refillCapacity(db, queue, cutoff)
-      const insert = db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'sending',?)")
-      return sendable.slice(0, capacity).map(source => {
-        const id = randomUUID()
-        insert.run(id, this.scope, source.card.id, source.revision, this.now())
-        return { id, source }
-      })
-    })
-    const freshIds = new Set(candidates.map(card => card.id))
-    const sentFresh = jobs.filter(job => freshIds.has(job.source.card.id)).length
-    if (sentFresh < candidates.length) this.candidateCursor += candidates.length - sentFresh
-    const results = await Promise.all(jobs.map(job => this.push(secret, job.id, job.source)))
-    const failures = results.filter(Boolean)
-    this.explanation = failures.length ? `${failures.length} of ${jobs.length} jobs could not be sent. ${failures[0]}` :
-      jobs.length ? `Sent ${jobs.length} cards to the preparer.` :
-      sources.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
+      return dispatch ? { message: await dispatch.completion } : undefined
+    }))
+    const sent = attempts.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
+    this.candidateCursor += candidates.length - sent.length
+    const failures = sent.flatMap(job => job.message ? [job.message] : [])
+    this.explanation = failures.length ? `${failures.length} of ${sent.length} jobs could not be sent. ${failures[0]}` :
+      sent.length ? `Sent ${sent.length} cards to the preparer.` :
+      attempts.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
   }
 
   private async push(secret: Secret, id: string, source: DecisionCardSource) {
@@ -223,9 +203,11 @@ export class DecisionPreparation {
       await response.body?.cancel().catch(() => {})
       if (!response.ok) message = `Preparer webhook returned HTTP ${response.status}.`
     } catch { message = 'Preparer webhook could not be reached.' }
-    await this.packets.leases.writeStorage(db => db.prepare(
-      "UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ? AND state = 'sending'",
-    ).run(message ? 'failed' : 'sent', message, id))
+    await this.packets.leases.writeStorage(db => {
+      const capped = message && this.sendCount(db, source.card.id, source.revision) >= prepSendCap
+      db.prepare("UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ? AND state = 'sending'")
+        .run(message ? capped ? 'stopped' : 'failed' : 'sent', message, id)
+    })
     return message
   }
 
@@ -245,14 +227,15 @@ export class DecisionPreparation {
         const changed = source.revision !== current.revision
         await this.packets.leases.writeStorage(db => {
           db.prepare("UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE id = ? AND packet_id IS NULL")
-            .run(changed ? 'Card changed while preparing' : prepIneligibleStop, job_id)
+            .run(changed ? 'Card changed while preparing' : null, job_id)
         })
         throw new DecisionDeskConflict(changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
       }
       return this.packets.leases.writeStorage(db => {
-        const latest = db.prepare('SELECT packet_id,at FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at'>
+        const latest = db.prepare('SELECT packet_id,at,state FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at' | 'state'>
         if (latest.packet_id) return { outcome: 'published', job_id, packet_id: latest.packet_id }
         if (latest.at <= this.now() - retryAfter) throw new DecisionDeskConflict('The preparation job expired')
+        if (latest.state === 'stopped') throw new DecisionDeskConflict('The preparation job stopped')
         const stored = this.packets.publishInStorage(db, source, packet)
         db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
         return { outcome: 'published', job_id, packet_id: stored.id }
