@@ -32,16 +32,17 @@ const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|gh[pousr]_)[a-zA-Z0-9_.~-]{
 export class JiraWebhookConfigurationError extends Error {}
 
 export function jiraConfig(raw) {
-  const { site, cloudId, projectId, mode = 'live', fields = {} } = raw ?? {}
+  const { site, cloudId, projectId, mode = 'live', fields } = raw ?? {}
   if (typeof site !== 'string' || !/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/.test(site) ||
       typeof cloudId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(cloudId) ||
       !nativeId(projectId) || !['live', 'fixture'].includes(mode)) {
     throw new JiraWebhookConfigurationError('Jira configuration needs a Cloud site URL, cloud ID, immutable project ID and optional live or fixture mode')
   }
   if (!fields || typeof fields !== 'object' || Array.isArray(fields) ||
+      Object.keys(fields).length !== Object.keys(projectFields).length ||
       Object.entries(fields).some(([key, id]) => !has(projectFields, key) || typeof id !== 'string' || !customField.test(id)) ||
       new Set(Object.values(fields)).size !== Object.keys(fields).length) {
-    throw new JiraWebhookConfigurationError('Jira field mappings need distinct native custom field IDs')
+    throw new JiraWebhookConfigurationError('Jira requires all five distinct native custom field IDs')
   }
   const normalizedCloud = cloudId.toLowerCase()
   return {

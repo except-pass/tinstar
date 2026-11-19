@@ -78,6 +78,11 @@ if [ "${'${EVENTS_JIRA_WEBHOOK_SECRET+x}'}" ]; then result=inherited; else resul
 printf '%s\\n' "$result" > "$FM_HOME/firstmate-env-check"
 exit 1
 `, { mode: 0o700 })
+  const { decisions: _missing, ...partialFields } = jira.fields
+  await writeFile(configPath, JSON.stringify({ jira: { ...jira, fields: partialFields }, homes: [] }))
+  await rejects(exec(process.execPath, [cli, 'serve', '--config', configPath, '--db', dbPath], {
+    env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret },
+  }), error => error.code === 1 && error.stderr.includes('all five distinct native custom field IDs'))
   await writeFile(configPath, JSON.stringify({ jira, homes: [{ id: 'example', path: directory, mode: 'fixture' }] }))
   const args = ['serve', '--config', configPath, '--db', dbPath]
   const run = (...flags) => exec(process.execPath, [cli, ...flags, '--db', dbPath])

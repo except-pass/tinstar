@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Ajv from 'ajv'
+import addFormats from 'ajv-formats'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, expect, it } from 'vitest'
@@ -44,7 +46,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, beforeWrite: '', loseLink: false }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -71,14 +73,15 @@ async function fixture() {
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
       expect(body.jql).toContain(`project = ${config.projectId}`)
-      return response({ isLast: true, issues: [...issues.values()].filter(issue => issue.fields.project.id === config.projectId) })
+      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === config.projectId) })
     }
     if (path === 'issue' && method === 'POST') {
       if (body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       const id = String(nextIssue++)
       const issue = make(id, `WORK-${Number(id) - 60000}`, config.projectId, body.fields)
+      if (controls.wrongCreate) issue.fields.summary = 'Unexpected Jira summary'
       issues.set(id, issue)
-      for (const property of body.properties) issue.properties[property.key] = property.value
+      for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       if (controls.loseCreate) { controls.loseCreate = false; throw new Error('Dropped response containing fixture-scoped-service-token') }
       return response({ id, key: issue.key }, 201)
     }
@@ -122,7 +125,7 @@ async function fixture() {
       if (!part && body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       if (part) issue.fields.status = transitions.find(transition => transition.id === body.transition.id)!.to
       Object.assign(issue.fields, body.fields)
-      for (const property of body.properties) issue.properties[property.key] = property.value
+      for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       for (const comment of body.update?.comment ?? []) {
         if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created: issue.fields.updated, author: { accountId: 'fixture-service' } })
       }
@@ -158,6 +161,12 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   for (const name of ['create_work', 'get_work', 'update_work', 'transition_work', 'link_work']) expect(names.filter(tool => tool === name)).toHaveLength(1)
   const created = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Synthetic Jira Work' })
   expect(created).toMatchObject({ outcome: 'saved', card: { key: 'WORK-1', issue_id: '60001', owner: null, status: 'Backlog', issue_type: 'Task' } })
+  const schema = (await client.listTools()).tools.find(tool => tool.name === 'create_work')!.inputSchema
+  const validate = addFormats(new Ajv({ strict: false })).compile(schema)
+  expect(validate({ provider: 'jira', operation_id: 'schema', name: 'Jira' })).toBe(true)
+  expect(validate({ provider: 'jira', operation_id: 'schema', name: 'Jira', owner: 'Avery', area: 'CI', status: 'Queued' })).toBe(false)
+  expect(validate({ operation_id: 'schema', name: 'Notion' })).toBe(false)
+  expect(validate({ operation_id: 'schema', name: 'Notion', owner: 'Avery', area: 'CI' })).toBe(true)
   const card_id = created.card.id
   const issue = f.issues.get('60001')!
   expect(issue.fields).not.toHaveProperty('assignee')
@@ -232,6 +241,9 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.rejectSearch = true
   expect(await second.call('create_work', args)).toMatchObject({ outcome: 'partially-saved' })
   f.controls.rejectSearch = false
+  f.controls.staleSearch = true
+  expect(await second.call('create_work', args)).toMatchObject({ code: 'unconfirmed' })
+  f.controls.staleSearch = false
   const confirmed = await second.call('create_work', args)
   expect(confirmed).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { issue_type: 'Epic', issue_id: '60001' } })
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
@@ -241,6 +253,12 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   const edit = { kind: 'jira_edit', card_id, operation_id: 'edit-proof', owner: 'Taylor', description: 'Inspect the test output.', note: 'One comment only.' }
   expect(await second.call('update_work', edit)).toMatchObject({ outcome: 'partially-saved' })
   f.issues.get('60001')!.fields[config.fields.owner] = { value: 'Avery' }
+  f.issues.get('60001')!.comments[0].body = 'Changed in Jira'
+  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items: [
+    { fieldId: config.fields.owner, fromString: null, toString: 'Taylor' },
+    { fieldId: 'description', fromString: null, toString: 'Inspect the test output.' },
+  ] }]
+
   const third = await f.connect()
   expect(await third.call('update_work', edit)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { owner: 'Avery' } })
   expect(f.issues.get('60001')!.comments).toHaveLength(1)
@@ -249,7 +267,13 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(await third.call('transition_work', move)).toMatchObject({ outcome: 'not-saved' })
   expect((await third.call('get_work', { card_id })).card.status).toBe('Backlog')
   f.controls.refuseTransition = false
-  expect(await third.call('transition_work', move)).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  expect(await third.call('transition_work', move)).toMatchObject({ code: 'unconfirmed' })
+  f.controls.loseEdit = true
+  const nextMove = { ...move, operation_id: 'accepted-fast-track' }
+  expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001']!.push({ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'status', fromString: 'Backlog', toString: 'Queued' }] })
+  expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'already-saved', card: { status: 'Queued' } })
   f.controls.omitComment = true
   expect(await third.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'omit', note: 'Jira omitted this' })).toMatchObject({ outcome: 'partially-saved' })
   expect(await third.call('transition_work', { card_id, operation_id: 'dequeue', verb: 'Dequeue' })).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
@@ -265,37 +289,72 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
 }, 30_000)
 
 
-it('retries writes interrupted before dispatch and isolates identical operation IDs by caller', async () => {
+it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatched receipts', async () => {
   const f = await fixture()
   const { call } = await f.connect()
   const create = { provider: 'jira', operation_id: 'shared', name: 'Retry', description: 'Verify the fixture runs.', owner: 'Avery' }
-  const retry = async (name: string, args: Record<string, unknown>, request: string) => {
-    f.controls.beforeWrite = request
-    expect(await call(name, args)).toMatchObject({ outcome: 'partially-saved' })
-    return call(name, args)
-  }
-  const created = await retry('create_work', create, 'POST issue')
+  const created = await call('create_work', create)
   expect(created).toMatchObject({ outcome: 'saved', card: { issue_id: '60001' } })
   const other = await f.connect('Other agent')
   expect(await other.call('create_work', create)).toMatchObject({ outcome: 'saved', card: { issue_id: '60002' } })
   const card_id = created.card.id
-  expect(await retry('update_work', { card_id, operation_id: 'edit', kind: 'jira_edit', name: 'Retried edit' }, 'PUT issue/60001'))
-    .toMatchObject({ outcome: 'saved', card: { name: 'Retried edit' } })
-  expect(await retry('transition_work', { card_id, operation_id: 'queue', verb: 'Fast-track', evidence: 'Ready' }, 'POST issue/60001/transitions'))
-    .toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  const edit = { card_id, operation_id: 'edit', kind: 'jira_edit', name: 'Retried edit' }
+  f.controls.beforeWrite = 'GET issue/60001'
+  expect(await call('update_work', edit)).toMatchObject({ outcome: 'not-saved' })
+  expect(await other.call('get_work', { card_id })).toMatchObject({ card: { name: 'Retry' } })
+  expect(await call('update_work', edit)).toMatchObject({ outcome: 'saved', card: { name: 'Retried edit' } })
+
   const add = { card_id, operation_id: 'add', action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'outward' }
-  expect(await retry('link_work', add, 'POST issueLink'))
-    .toMatchObject({ outcome: 'saved', card: { links: [{ id: '8001', direction: 'outward' }] } })
-  expect(await retry('link_work', { card_id, operation_id: 'remove', action: 'remove', link_id: '8001' }, 'DELETE issueLink/8001'))
-    .toMatchObject({ outcome: 'saved', card: { links: [] } })
-  f.controls.loseLink = true
-  const superseded = { ...add, operation_id: 'superseded' }
-  expect(await call('link_work', superseded)).toMatchObject({ outcome: 'partially-saved' })
+  expect(await call('link_work', add)).toMatchObject({ outcome: 'saved', card: { links: [{ id: '8001', direction: 'outward' }] } })
+  const remove = { card_id, operation_id: 'remove', action: 'remove', link_id: '8001' }
+  f.controls.beforeWrite = 'DELETE issueLink/8001'
+  expect(await call('link_work', remove)).toMatchObject({ code: 'unconfirmed' })
+  f.links.delete('8001')
+  expect(await call('link_work', { ...add, operation_id: 'replacement' })).toMatchObject({ outcome: 'saved' })
+  expect(await call('link_work', { ...remove, operation_id: 'remove-replacement', link_id: '8002' })).toMatchObject({ outcome: 'saved' })
   f.history['60001'] = [{
     created: new Date().toISOString(), author: { accountId: 'fixture-service' },
-    items: [{ field: 'Link', from: null, to: 'OTHER-1', toString: 'This issue blocks OTHER-1' }],
+    items: [{ field: 'Link', fromLinkId: '8002', from: 'OTHER-1', fromString: 'This issue blocks OTHER-1', to: null }],
   }]
-  f.links.delete('8002')
-  expect(await call('link_work', superseded)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { links: [] } })
+  expect(await call('link_work', remove)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'DELETE' && request.path === 'issueLink/8001')).toHaveLength(1)
+
+  f.controls.loseLink = true
+  const superseded = { ...add, operation_id: 'superseded' }
+  expect(await call('link_work', superseded)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001']!.push({
+    created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ field: 'Link', from: null, to: 'OTHER-1', toString: 'This issue blocks OTHER-1' }],
+  })
+  f.links.delete('8003')
+  expect(await call('link_work', superseded)).toMatchObject({ code: 'already-saved', card: { links: [] } })
   expect(f.links.size).toBe(0)
+
+  f.controls.wrongCreate = true
+  const wrong = { ...create, operation_id: 'wrong-create' }
+  expect(await call('create_work', wrong)).toMatchObject({ code: 'unconfirmed' })
+  f.issues.get('60003')!.fields.summary = wrong.name
+  expect(await call('create_work', wrong)).toMatchObject({ code: 'unconfirmed' })
+}, 30_000)
+
+it.each([false, true])('answers a Jira decision with native soft breaks=%s and preserves option marks', async softBreaks => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const created = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Decision layouts' })
+  const issue = f.issues.get('60001')!
+  const line = (text: string) => ({ type: 'text', text })
+  const option = { ...line('  Option: East'), marks: [{ type: 'link', attrs: { href: 'https://example.test/east' } }] }
+  const d2 = line('D2 [Open]: Choose a label?')
+  const br = { type: 'hardBreak' }
+  const para = (...content: Record<string, unknown>[]) => ({ type: 'paragraph', content })
+  const header = line('D1 [Open]: Choose a region?')
+  issue.fields[config.fields.decisions] = { type: 'doc', version: 1,
+    content: softBreaks ? [para(header, br, option, br, d2)] : [para(header), para(option), para(d2)] }
+  const result = await call('update_work', { card_id: created.card.id, operation_id: 'answer', kind: 'jira_edit',
+    answers: [{ id: 'D1', answer: 'East' }] })
+  expect(result).toMatchObject({ outcome: 'saved', card: { decision_questions: [
+    { id: 'D1', question: 'Choose a region?', options: ['East'], answer: 'East' }, { id: 'D2', question: 'Choose a label?' },
+  ] } })
+  expect(issue.fields[config.fields.decisions].content.flatMap((node: { content: unknown[] }) => node.content))
+    .toEqual(expect.arrayContaining([option, d2]))
 }, 30_000)

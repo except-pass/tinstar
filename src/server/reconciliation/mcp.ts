@@ -103,9 +103,8 @@ export class ReconciliationMcp {
     const catalog = createToolCatalog(server)
     const jira = this.readers.jiraWork
     const getSchema = jira ? getWorkSchema.extend({ card_id: z.union([cardIdSchema, jiraWorkIdSchema]) }) : getWorkSchema
-    const createSchema = jira ? z.union([jiraCreateSchema, createWorkSchema]) : createWorkSchema
-    const createDiscovery = jira ? createWorkSchema.extend({ owner: createWorkSchema.shape.owner.optional(), area: createWorkSchema.shape.area.optional(),
-      status: createWorkSchema.shape.status.removeDefault().optional(), description: jiraCreateSchema.shape.description, issue_type: jiraCreateSchema.shape.issue_type }) : undefined
+    const notionCreateSchema = createWorkSchema.extend({ provider: z.literal('notion').optional() })
+    const createSchema = jira ? z.union([jiraCreateSchema, notionCreateSchema]) : createWorkSchema
     const updateSchema = jira ? z.discriminatedUnion('kind', [...updateWorkSchema.options, jiraEditSchema]) : updateWorkSchema
     const caller = leaseCaller(actor, request?.headers ?? {})
     const cardCall = async <T extends { lease_token?: string }>(input: T, perform: (clean: CardInput<T>) => Promise<unknown>) => {
@@ -195,7 +194,7 @@ export class ReconciliationMcp {
     catalog.registerTool('create_work', { description: jira
       ? 'Create a Jira ticket with provider:jira, name and operation_id. Task is the default, Epic optional. Jira starts in Backlog with optional description and Owner. Omit provider for the existing Notion workflow.'
       : 'Create a configured-board card (Notion by default; provider:jira selects the isolated synthetic pilot) with declared owner/area, ordinary properties, brief and acceptance criteria. Firstmate assignment is Queued. Authenticated attribution, confirmed readback and retryable operation_id; no scene/window required.',
-    inputSchema: createSchema, discoverySchema: createDiscovery, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async (input: CreateWorkInput | JiraCreate) => {
+    inputSchema: createSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async (input: CreateWorkInput | JiraCreate) => {
       if (jira && input.provider === 'jira') {
         const parsed = jiraCreateSchema.safeParse(input)
         if (!parsed.success) return result({ outcome: 'not-saved', message: 'Jira creation accepts name, operation_id, owner, description and issue_type. Use transition_work after Backlog creation.' })

@@ -89,7 +89,7 @@ data. Replay notices go to stderr so the JSON payloads stay identical.
 
 Add one `jira` source to the publisher configuration. It can run alone or beside
 `homes`. The IDs below are examples. Get the cloud, project and field IDs from
-the real Jira project. The field mappings enable Owner, Decision Questions and
+the real Jira project. The five required field mappings identify Owner, Decision Questions and
 the three Waiting For fields.
 
 ```json
