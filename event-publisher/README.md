@@ -112,7 +112,8 @@ the three Waiting For fields.
 Inject the admin webhook secret into `EVENTS_JIRA_WEBHOOK_SECRET` at process
 start from Clavis. Run `events serve` to open the fixed loopback listener at
 `http://127.0.0.1:18573/webhooks/jira`. Give Jira the approved public HTTPS URL
-that proxies only this path, with the request bytes and Jira headers preserved.
+that proxies only this pathname, with the request bytes and Jira headers preserved.
+The listener ignores query parameters such as Jira's `triggeredByUser`.
 Keep the registration restricted to one immutable project ID using Jira JQL and
 include the JSON body. Select issue creation, issue updates and comment creation.
 Use a distinct secret for this registration. To retire or rotate it, disable or
