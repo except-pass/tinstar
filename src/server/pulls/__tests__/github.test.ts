@@ -22,6 +22,25 @@ function answer(status: number, body: unknown = null, headers = '') {
   })
 }
 
+it('projects titles only for linked rows in the CLI release list', async () => {
+  vi.stubEnv('TINSTAR_ACTIONS_LIVE', '')
+  const { spawnSync } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  const { readReleasePullPage } = await import('../releasePullPage')
+  const updatedAt = '2026-06-01T00:00:00Z'
+  const linked = { number: 1, title: 'A linked title', state: 'open', merged: null, merged_at: null,
+    closed_at: null, updated_at: updatedAt, merge_commit_sha: null, head: { sha: 'a'.repeat(40) }, base: { ref: 'main' } }
+  const input = [{ ...linked, body: 'private body', head: { ...linked.head, label: 'private label' } },
+    { ...linked, number: 2, title: 'An unlinked title' }]
+  exec.mockImplementationOnce((_binary, args: string[], _options, done) => {
+    const projection = args[args.indexOf('--jq') + 1]!
+    const result = spawnSync('jq', [projection], { input: JSON.stringify(input), encoding: 'utf8' })
+    if (result.status !== 0) done(result.error ?? new Error(result.stderr))
+    else done(null, { stdout: `HTTP/2.0 200 OK\r\n\r\n${result.stdout}` })
+  })
+  await expect(readReleasePullPage(`${pulls}?state=all&sort=updated&direction=desc&per_page=100&page=1`, [1]))
+    .resolves.toEqual({ rows: [linked], count: 2, oldestUpdatedAt: updatedAt })
+})
+
 it('sends an ETag on a repeat GET, reuses the cached body on 304 and logs after a full hour', async () => {
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]
   const log = vi.spyOn(console, 'info').mockImplementation(() => {})

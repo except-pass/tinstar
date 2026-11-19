@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
-import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from './restBudget'
+import { GithubRestBudget, GithubResponseError, isGithubRateLimit, isGithubResponseError, type GithubRestHeaders, type GithubRestResponse } from './restBudget'
 
 const exec = promisify(execFile)
 const budget = new GithubRestBudget('cli')
@@ -44,6 +44,7 @@ async function includedRequest(binary: string, path: string, projection: string,
   }
   const response = includedResponse(stdout)
   if (response) received(response)
+  if (failure?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && response && response.status >= 200 && response.status < 300) throw new GithubResponseError()
   if (failure && (!response || response.status < 300)) throw failure
   if (!response) throw new Error('GitHub response metadata unavailable')
   return response
@@ -54,6 +55,7 @@ async function legacyRequest(args: string[], decode: (stdout: string) => unknown
     const { stdout } = await exec('gh-axi', args, commandOptions)
     return { status: 200, data: decode(stdout) }
   } catch (error) {
+    if (isGithubResponseError(error)) throw error
     const failure = error as CliError
     const diagnostics = `${failure.stdout ?? ''}\n${failure.stderr ?? ''}`
     if (/^code: RATE_LIMITED\r?$/m.test(diagnostics) || /\bHTTP 429\b/.test(diagnostics)) {
@@ -71,21 +73,22 @@ async function cliGet(binary: string, path: string, projection: string, etag: st
   try {
     const response = await budget.send(received => includedRequest(binary, path, projection, etag, limits, received))
     if (response.status >= 200 && response.status < 300) {
-      if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new Error('Unsupported GitHub response')
+      if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new GithubResponseError()
       response.data = response.data.payload
     }
     return response
   }
   catch (error) {
     if (!allowFallback || (error as CliError).code !== 'ENOENT') {
-      if (isGithubRateLimit(error)) throw error
+      if (isGithubRateLimit(error) || isGithubResponseError(error)) throw error
       throw new Error('GitHub request failed: check CLI authentication, repository access and rate budget.')
     }
     return budget.send(() => legacyRequest(['api', 'GET', path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full'], stdout => {
       const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
       const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
-      if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new Error('Unsupported GitHub response')
-      return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+      if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new GithubResponseError()
+      try { return JSON.parse(Buffer.from(payload, 'base64').toString('utf8')) }
+      catch { throw new GithubResponseError() }
     }, limits))
   }
 }

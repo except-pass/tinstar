@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ReleasePullReader } from '../pulls'
+import { GithubResponseError } from '../../pulls/restBudget'
 const day = 24 * 60 * 60_000
 const pollInterval = 120_000
 const sha = 'a'.repeat(40), url = (number: number) => `https://github.com/owner/repo/pull/${number}`
 const merged = { title: 'Real PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: sha }
 const row = (number: number, updated: number, state: 'open' | 'closed', mergedAt: string | null = null) => ({
-  number, state, merged_at: mergedAt, merge_commit_sha: sha, updated_at: new Date(updated).toISOString(),
+  number, title: `Linked PR ${number}`, state, merged_at: mergedAt, merge_commit_sha: sha, updated_at: new Date(updated).toISOString(),
   head: { sha }, base: { ref: 'main' },
 })
 const page = (rows: ReturnType<typeof row>[], count = rows.length, oldestUpdatedAt = rows.at(-1)?.updated_at ?? null) => ({
@@ -110,26 +111,83 @@ describe('bounded read-only release PR observations', () => {
     expect(JSON.stringify(failed)).not.toContain('private access detail')
   })
 
-  it('uses one retry per inaccessible repository instead of retrying hundreds of historical URLs', async () => {
+  it('uses the exact request start to decide whether page one covers a missing PR', async () => {
     let now = Date.now()
-    const urls = Array.from({ length: 450 }, (_, index) => url(index + 1))
-    const read = vi.fn(), list = vi.fn().mockRejectedValue(new Error('GitHub read failed (HTTP 404)'))
+    const started = now
+    const read = vi.fn().mockImplementationOnce(async () => {
+      now += 8_000
+      return { ...merged, state: 'open', merged: false }
+    }).mockResolvedValue(merged)
+    const list = vi.fn()
     const reader = new ReleasePullReader(read, () => now, list)
-    const [first, concurrent] = await Promise.all([reader.get(urls), reader.get(urls)])
-    expect(first.size).toBe(urls.length)
-    expect(concurrent).toEqual(first)
-    expect(first.get(url(450))).toMatchObject({ state: 'unknown', freshness: 'unknown' })
-    expect(read).not.toHaveBeenCalled()
-    now += pollInterval - 1
+    expect((await reader.get([url(1)])).get(url(1))).toMatchObject({
+      state: 'open', observedAt: new Date(started).toISOString(),
+    })
+    now += pollInterval
+    list.mockResolvedValueOnce(page([row(2, now, 'open')], 100, new Date(started + 4_000).toISOString()))
+      .mockResolvedValueOnce(page([]))
+    const result = await reader.get([url(1), url(2)])
+    expect(result.get(url(1))).toMatchObject({ state: 'merged', freshness: 'fresh' })
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains the repository poll deadline across an omitted association snapshot', async () => {
+    let now = Date.now()
+    const urls = [url(1), url(2)]
+    const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'open')]))
+    const reader = new ReleasePullReader(vi.fn().mockResolvedValue({ ...merged, merged: false }), () => now, list)
+    await reader.get(urls)
+    now += 20_000
+    await reader.get([])
+    await reader.get([url(1)])
     await reader.get(urls)
     expect(list).toHaveBeenCalledTimes(1)
-    now += 1
-    list.mockResolvedValue(page([row(450, now, 'closed', merged.merged_at)]))
-    read.mockResolvedValue(merged)
-    expect((await reader.get(urls)).get(url(450))).toMatchObject({ state: 'merged', freshness: 'fresh', mergeSha: sha })
+    now += pollInterval - 20_000
+    await reader.get(urls)
     expect(list).toHaveBeenCalledTimes(2)
-    expect(read).toHaveBeenCalledTimes(4)
   })
+
+  it('uses bounded exact recovery after a confirmed list payload failure', async () => {
+    let now = Date.now()
+    const urls = Array.from({ length: 6 }, (_, index) => url(index + 1))
+    const list = vi.fn().mockRejectedValue(new GithubResponseError())
+    const read = vi.fn().mockResolvedValue({ ...merged, state: 'open', merged: false })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const first = await reader.get(urls)
+    expect(read).toHaveBeenCalledTimes(4)
+    expect(first.get(url(1))).toMatchObject({ state: 'open', freshness: 'fresh' })
+    expect(first.get(url(5))).toMatchObject({ state: 'unknown', readError: expect.any(String) })
+    expect(await reader.get(urls)).toEqual(first)
+    expect(read).toHaveBeenCalledTimes(4)
+    now += pollInterval
+    expect((await reader.get(urls)).get(url(5))).toMatchObject({ state: 'open', freshness: 'fresh' })
+    expect(read).toHaveBeenCalledTimes(8)
+  })
+
+  it.each(['GitHub read failed (HTTP 404)', 'GitHub REST rate limited'])(
+    'suppresses exact fan-out after %s', async message => {
+      let now = Date.now()
+      const urls = Array.from({ length: 450 }, (_, index) => url(index + 1))
+      const read = vi.fn(), list = vi.fn().mockRejectedValue(new Error(message))
+      const reader = new ReleasePullReader(read, () => now, list)
+      const [first, concurrent] = await Promise.all([reader.get(urls), reader.get(urls)])
+      expect(first.size).toBe(urls.length)
+      expect(concurrent).toEqual(first)
+      expect(first.get(url(450))).toMatchObject({ state: 'unknown', freshness: 'unknown' })
+      expect(read).not.toHaveBeenCalled()
+      now += pollInterval - 1
+      await reader.get([])
+      await reader.get([url(1)])
+      await reader.get(urls)
+      expect(read).not.toHaveBeenCalled()
+      expect(list).toHaveBeenCalledTimes(1)
+      now += 1
+      list.mockResolvedValue(page([row(450, now, 'closed', merged.merged_at)]))
+      read.mockResolvedValue(merged)
+      expect((await reader.get(urls)).get(url(450))).toMatchObject({ state: 'merged', freshness: 'fresh', mergeSha: sha })
+      expect(list).toHaveBeenCalledTimes(2)
+      expect(read).toHaveBeenCalledTimes(4)
+    })
 
   it('refreshes changed PRs in one list and leaves unchanged and merged PRs off the point-read loop', async () => {
     let now = Date.now()

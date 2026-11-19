@@ -1,14 +1,15 @@
 import { releasePull } from '../../shared/releases'
 import type { ReleasePull } from '../../shared/releases'
 import { readGithubScalars } from '../reconciliation/queuePulls'
-import { isGithubRateLimit } from '../pulls/restBudget'
+import { GithubResponseError, isGithubRateLimit, isGithubResponseError } from '../pulls/restBudget'
 import { readReleasePullPage, releasePullPage } from '../pulls/releasePullPage'
 
 const mergedTtl = 24 * 60 * 60_000
 const refreshTtl = 120_000
 const pageSize = 100
 type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
-type RepositoryPoll = { until: number; failure?: { message: string; refreshed: Set<string> } }
+type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean }
+type RepositoryPoll = { until: number; failure?: PollFailure }
 
 /** Poll recent updates together. Point reads fill old or unusually busy gaps. */
 export class ReleasePullReader {
@@ -31,19 +32,23 @@ export class ReleasePullReader {
       group.push({ url, number: pull.number })
       groups.set(pull.repository, group)
     }
-    for (const repository of this.polls.keys()) {
-      if (!groups.has(repository) && !this.pollPending.has(repository)) this.polls.delete(repository)
+    for (const [repository, poll] of this.polls) {
+      if (poll.until <= this.now()) this.polls.delete(repository)
     }
-    const errors = new Map<string, string>()
-    const batches = [...groups].filter(([, group]) => group.length > 1)
+    const batches = [...groups].filter(([repository, group]) => group.length > 1 || this.pollPending.has(repository))
     for (let offset = 0; offset < batches.length; offset += 4) {
       await Promise.all(batches.slice(offset, offset + 4).map(async ([repository, group]) => {
         if (group.every(({ url }) => this.cache.get(url)?.value.state === 'merged' && this.current(url))) return
-        const poll = await this.poll(repository, group)
-        if (poll.failure) for (const { url } of group) {
-          if (!poll.failure.refreshed.has(url) || !this.current(url)) errors.set(url, poll.failure.message)
-        }
+        if (group.length > 1) await this.poll(repository, group)
+        else await this.pollPending.get(repository)
       }))
+    }
+    const failures = new Map<string, PollFailure>()
+    for (const [repository, group] of groups) {
+      const failure = this.polls.get(repository)?.failure
+      if (failure) for (const { url } of group) {
+        if (!failure.refreshed.has(url) || !this.current(url)) failures.set(url, failure)
+      }
     }
     const start = this.cursor % Math.max(candidates.length, 1)
     const work: Promise<void>[] = []
@@ -51,18 +56,22 @@ export class ReleasePullReader {
     for (let offset = 0; offset < candidates.length; offset++) {
       const index = (start + offset) % candidates.length, url = candidates[index]!
       const cached = this.cache.get(url)
-      const error = errors.get(url)
-      if (error && !(cached?.value.state === 'merged' && this.current(url))) {
-        result.set(url, this.failed(url, error))
+      const failure = failures.get(url)
+      const current = this.current(url)
+      const pollError = failure && !(current && cached?.value.freshness === 'fresh' &&
+        (failure.allowExact || cached.value.state === 'merged')) ? failure.message : undefined
+      if (pollError && !failure?.allowExact) {
+        result.set(url, this.failed(url, pollError))
         continue
       }
       let pending = this.pending.get(url)
-      if (!pending && !this.current(url) && this.pointReads.length < 4 && this.pending.size < 4) {
+      if (!pending && !current && this.pointReads.length < 4 && this.pending.size < 4) {
         this.pointReads.push(this.now())
         this.cursor = (index + 1) % candidates.length
         pending = this.refresh(url).finally(() => this.pending.delete(url)); this.pending.set(url, pending)
       }
       if (pending) work.push(pending.then(value => { result.set(url, value) }))
+      else if (pollError && !current) result.set(url, this.failed(url, pollError))
       else if (cached) result.set(url, { ...cached.value, freshness: cached.until <= this.now() ? 'stale' : cached.value.freshness })
     }
     await Promise.all(work)
@@ -103,14 +112,16 @@ export class ReleasePullReader {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
       for (let page = 1; page <= 4; page++) {
-        const { rows, count, oldestUpdatedAt } = releasePullPage.parse(await this.list(
+        const payload = releasePullPage.safeParse(await this.list(
           `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers))
+        if (!payload.success) throw new GithubResponseError()
+        const { rows, count, oldestUpdatedAt } = payload.data
         for (const row of rows) {
           const url = byNumber.get(row.number)
           if (!url || observed.has(url) || this.cache.get(url)?.value.state === 'merged' && this.current(url)) continue
           observed.add(url)
           try {
-            this.save(url, this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt, this.cache.get(url)?.value.title ?? null))
+            this.save(url, this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt))
             refreshed.add(url)
           } catch {
             // If the list row cannot establish merge evidence, try the exact PR.
@@ -123,7 +134,7 @@ export class ReleasePullReader {
         if (count < pageSize || reachedCutoff) break
       }
     } catch (error) {
-      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed } }
+      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
     }
     if (covered) for (const { url } of group) {
       const previous = this.cache.get(url)?.value
@@ -148,21 +159,21 @@ export class ReleasePullReader {
     this.cache.set(url, { until: this.now() + delay, value })
   }
 
-  private observation(raw: Record<string, unknown>, observedAt: string, title: string | null): Observation {
-    if ((raw.state !== 'open' && raw.state !== 'closed') || typeof raw.merged !== 'boolean') throw new Error('Incomplete PR observation')
+  private observation(raw: Record<string, unknown>, observedAt: string): Observation {
+    if (typeof raw.title !== 'string' || (raw.state !== 'open' && raw.state !== 'closed') || typeof raw.merged !== 'boolean') throw new Error('Incomplete PR observation')
     if (raw.merged && (typeof raw.merged_at !== 'string' || !Number.isFinite(Date.parse(raw.merged_at)) || !/^[a-f0-9]{40,64}$/.test(String(raw.merge_commit_sha)))) throw new Error('Missing effective merge identity')
-    return { base: typeof raw.base_ref === 'string' && raw.base_ref.length > 0 ? raw.base_ref : null, head: /^[a-f0-9]{40,64}$/.test(String(raw.head_sha)) ? String(raw.head_sha) : null, title, state: raw.merged ? 'merged' : raw.state, mergedAt: raw.merged ? String(raw.merged_at) : null, mergeSha: raw.merged ? String(raw.merge_commit_sha) : null, observedAt, freshness: 'fresh' }
+    return { base: typeof raw.base_ref === 'string' && raw.base_ref.length > 0 ? raw.base_ref : null, head: /^[a-f0-9]{40,64}$/.test(String(raw.head_sha)) ? String(raw.head_sha) : null, title: raw.title, state: raw.merged ? 'merged' : raw.state, mergedAt: raw.merged ? String(raw.merged_at) : null, mergeSha: raw.merged ? String(raw.merge_commit_sha) : null, observedAt, freshness: 'fresh' }
   }
 
   private async refresh(url: string): Promise<Observation> {
     const previous = this.cache.get(url)
+    const observedAt = new Date(this.now()).toISOString()
     let value: Observation
     try {
       const pull = releasePull(url)
       if (!pull) throw new Error('Unsupported PR')
       const raw = await this.read(`/repos/${pull.repository}/pulls/${pull.number}`, '{title,state,merged,merged_at,merge_commit_sha,head_sha:.head.sha,base_ref:.base.ref}')
-      if (typeof raw.title !== 'string') throw new Error('Incomplete PR observation')
-      value = this.observation(raw, new Date(this.now()).toISOString(), raw.title)
+      value = this.observation(raw, observedAt)
     } catch (error) {
       value = this.failed(url, this.readError(error, url))
     }

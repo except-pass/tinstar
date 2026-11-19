@@ -14,6 +14,11 @@ import { githubJson } from '../../pulls/github'
 import { PullReader } from '../../pulls/reader'
 import { readReleasePullPage } from '../../pulls/releasePullPage'
 import { ReleasePullReader } from '../../releases/pulls'
+import { GithubResponseError } from '../../pulls/restBudget'
+import { releaseDocuments } from '../../../releases/model'
+import { releasePull } from '../../../shared/releases'
+import { SmartSearchIndex } from '../../../shared/smartSearch'
+import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { sourceDigest } from '../examples'
 import { stageTestRuntime } from './runtimeFixture'
 
@@ -78,12 +83,13 @@ it('mints only explicit repository IDs and minimal endpoint permissions; keeps J
 it('keeps only linked PR fields in live release polling and stored observations', async () => {
   const updatedAt = '2026-11-08T12:00:00Z'
   const path = '/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1'
-  const row = { number: 1, state: 'open', merged: false, merged_at: null, closed_at: null,
+  const row = { number: 1, title: 'Hydraulic interlock calibration', state: 'open', merged: false, merged_at: null, closed_at: null,
     updated_at: updatedAt, merge_commit_sha: null, head: { sha: head }, base: { ref: 'main' } }
+  const second = { ...row, number: 2, state: 'closed', title: 'Second linked title' }
   const fixture = await setup({ response: async ({ path: requested }) => requested === path ? [
-    { ...row, title: 'private title', body: 'private body', requested_reviewers: ['private reviewer'],
+    { ...row, body: 'private body', requested_reviewers: ['private reviewer'],
       head: { sha: head, label: 'private head' }, base: { ref: 'main', label: 'private base' } },
-    { ...row, number: 2, state: 'closed' },
+    second,
     { ...row, number: 3, title: 'unlinked PR' },
   ] : undefined })
   const { server } = brokerServer(fixture.config, fixture.provider)
@@ -93,18 +99,44 @@ it('keeps only linked PR fields in live release polling and stored observations'
   try {
     await expect(githubJson(path)).rejects.toThrow('Linked PR numbers required')
     expect(await readReleasePullPage(path, [1, 2])).toEqual({
-      rows: [row, { ...row, number: 2, state: 'closed' }], count: 3, oldestUpdatedAt: updatedAt,
+      rows: [row, second], count: 3, oldestUpdatedAt: updatedAt,
     })
     const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
     const pointRead = vi.fn()
     const reader = new ReleasePullReader(pointRead, () => Date.parse(updatedAt))
-    const expected = [row, { ...row, state: 'closed' }].map(({ state }, index) => [urls[index], {
-      title: null, state, head, base: 'main', mergedAt: null, mergeSha: null, freshness: 'fresh',
+    const expected = [row, second].map(({ state, title }, index) => [urls[index], {
+      title, state, head, base: 'main', mergedAt: null, mergeSha: null, freshness: 'fresh',
       observedAt: new Date(updatedAt).toISOString(),
     }])
-    expect([...(await reader.get(urls))]).toEqual(expected)
+    const observations = await reader.get(urls)
+    expect([...observations]).toEqual(expected)
+    const pulls = urls.map(url => ({
+      ...releasePull(url)!, ...observations.get(url)!, links: [], exceptions: [],
+    }))
+    const search = new SmartSearchIndex()
+    search.update(releaseDocuments(fixtureScene(), pulls))
+    expect(search.search('hydraulic interlock calibration')[0]?.document.target).toEqual({ kind: 'pull', id: pulls[0]!.id })
+    expect(search.search('unlinked PR').some(hit => hit.document.title === 'unlinked PR')).toBe(false)
     expect([...(await reader.get(urls))]).toEqual(expected)
     expect(pointRead).not.toHaveBeenCalled()
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+it('recovers linked observations when the live broker cannot read the list response', async () => {
+  const fixture = await setup({ response: async ({ path }) => {
+    if (path.includes('/pulls?')) throw new GithubResponseError()
+    if (/\/pulls\/\d+$/.test(path)) return { title: 'Linked exact PR', state: 'open', merged: false }
+  } })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair')
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  try {
+    const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
+    const result = await new ReleasePullReader().get(urls)
+    expect(result.size).toBe(2)
+    for (const url of urls) expect(result.get(url)).toMatchObject({ title: 'Linked exact PR', freshness: 'fresh' })
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }

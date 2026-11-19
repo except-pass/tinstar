@@ -9,7 +9,7 @@ import { operationSchema, readerRepositories, type ActionOperation, type ActionS
 import { readActionJob, readActionSnapshot } from './evidence'
 import { BrokerEffectError, simulatedRequest } from './broker'
 import type { RunnerResource } from './sandbox'
-import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
+import { GithubRestBudget, GithubResponseError, isGithubRateLimit, isGithubResponseError, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
 import { minimizeReleasePullPage } from '../pulls/releasePullPage'
 
 const id = z.number().int().positive().safe()
@@ -39,13 +39,19 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
       reset: response.headers['x-ratelimit-reset']?.toString(), retryAfter: response.headers['retry-after'] }
     received?.({ status, headers })
     let bytes = 0; const chunks: Buffer[] = []
-    response.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 4 * 1024 * 1024) request.destroy(); else chunks.push(chunk) })
+    response.on('data', (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > 4 * 1024 * 1024) {
+        if (status >= 200 && status < 300) reject(new GithubResponseError())
+        request.destroy()
+      } else chunks.push(chunk)
+    })
     response.on('error', () => reject(new Error('GitHub broker request failed')))
     response.on('end', () => {
       let data: unknown = null
       try { if (bytes) data = JSON.parse(Buffer.concat(chunks).toString('utf8')) }
       catch {
-        if (status >= 200 && status < 300) { reject(new Error('GitHub broker response was not JSON')); return }
+        if (status >= 200 && status < 300) { reject(new GithubResponseError()); return }
       }
       resolveResponse({ status, data, headers })
     })
@@ -169,6 +175,7 @@ export class LiveProvider {
     try { response = await this.rest.send(received => this.transport({ method, path, body, authorization, etag }, received)) }
     catch (error) {
       if (isGithubRateLimit(error)) throw new BrokerEffectError(error.message, 'not-sent')
+      if (pullNumbers && isGithubResponseError(error)) throw error
       throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown')
     }
     if (!(method === 'GET' && response.status === 304) && (response.status < 200 || response.status >= 300)) throw new BrokerEffectError(`GitHub broker request refused (${response.status}); no retry or permission expansion`, response.status >= 500 ? 'unknown' : 'not-sent')

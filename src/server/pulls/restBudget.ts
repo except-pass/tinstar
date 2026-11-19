@@ -14,6 +14,16 @@ export function isGithubRateLimit(error: unknown): error is Error {
   return error instanceof Error && error.message === rateLimitMessage
 }
 
+const invalidResponseMessage = 'GitHub request failed: response is too large or unreadable'
+
+export class GithubResponseError extends Error {
+  constructor() { super(invalidResponseMessage) }
+}
+
+export function isGithubResponseError(error: unknown): boolean {
+  return error instanceof Error && error.message === invalidResponseMessage
+}
+
 function holdUntil({ status, headers }: GithubRestHeaders, now: number, data?: unknown) {
   if (status !== 403 && status !== 429) return 0
   const message = (data as { message?: unknown } | null)?.message

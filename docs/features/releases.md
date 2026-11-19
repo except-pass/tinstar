@@ -162,8 +162,9 @@ and closed associations reuse their last observation when the first page alone
 covers the time since it was checked. The reader shares up to four individual
 reads across all repositories in any two-minute window, in rotating order. Links
 awaiting an exact read retain last-known evidence. If a later page fails, fresh
-observations from successful pages remain available and unresolved links retain
-last-known state until the next poll.
+observations from successful pages remain available. A list response that is too
+large or unreadable allows bounded exact recovery for unresolved links. Access
+failures and rate limits suppress that fallback until a later poll.
 
 ### Configure existing sources
 
