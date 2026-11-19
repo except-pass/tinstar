@@ -23,19 +23,7 @@ export interface ReviewReceiptState {
   note_pending?: boolean
   done?: boolean
 }
-export interface JiraFieldChange { field: string; beforeDigest: string; afterDigest: string }
-export interface JiraWorkReceiptState {
-  confirmed?: true
-  createDispatched?: true
-  dispatchedAt?: number
-  contradicted?: true
-  rejected?: number
-  fields?: JiraFieldChange[]
-  priorCommentIds?: unknown[]
-  commentHash?: string
-  link?: { id?: string; typeId: string; direction: 'inward' | 'outward'; targetId: string; label: string }
-}
-interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: JiraWorkReceiptState }
+interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: { dispatched: boolean } }
 const writers = new Map<string, Promise<unknown>>()
 
 /** Creation latches and handoff reconciliation state share this receipt store.
@@ -53,7 +41,6 @@ export class CreationReceipts {
       return value as typeof this.memory
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error }
   }
-  async entries(prefix: string) { return Object.entries(await this.read()).filter(([key]) => key.startsWith(prefix)) }
   async get(key: string) { return (await this.read())[key] }
   async list(prefix: string) { return Object.entries(await this.read()).filter(([key]) => key.startsWith(prefix)) }
   private change(edit: (values: Record<string, Receipt>) => void) {
@@ -75,8 +62,8 @@ export class CreationReceipts {
   put(key: string, input: string, cardId?: string, handoff?: HandoffReceiptState) {
     return this.change(values => { values[key] = { input, ...(cardId ? { cardId } : {}), ...(handoff ? { handoff } : {}) } })
   }
-  putJiraWork(key: string, input: string, cardId?: string, jiraWork: JiraWorkReceiptState = {}) {
-    return this.change(values => { values[key] = { input, cardId, jiraWork } })
+  putJiraWork(key: string, kind: string, dispatched: boolean) {
+    return this.change(values => { values[key] = { input: kind, jiraWork: { dispatched } } })
   }
   remove(key: string) { return this.change(values => { delete values[key] }) }
   putReview(key: string, input: string, cardId: string, review: ReviewReceiptState) {

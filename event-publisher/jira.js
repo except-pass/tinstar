@@ -24,7 +24,7 @@ const nativeId = value => {
   if (typeof value === 'number' && !Number.isSafeInteger(value)) return undefined
   return (typeof value === 'string' || typeof value === 'number') && /^[1-9]\d{0,29}$/.test(String(value)) ? String(value) : undefined
 }
-const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|gh[pousr]_)[a-zA-Z0-9_.~-]{16,}\b/g
+const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|github_pat_|gh[pousr]_)[a-zA-Z0-9_.~-]{16,}\b/g
 
 export class JiraWebhookConfigurationError extends Error {}
 
