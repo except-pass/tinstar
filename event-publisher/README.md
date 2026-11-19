@@ -67,7 +67,7 @@ events watch --type worker
 events watch --entity 'firstmate:task:example-west:sample-a'
 ```
 
-First attach captures a baseline. The tail shows changes as later polls commit
+First Mate captures a baseline on first attach. The tail shows changes as later polls commit
 them, with one line per changed field. It also reports health changes to
 stderr. Use the sequence number as a replay cursor. Pass the `event:…` ID
 shown on the same line to `events inspect`.
@@ -130,7 +130,7 @@ Ticket change previews are redacted and bounded. The journal preserves the
 immutable Jira issue ID, display key, source delivery ID, source timestamp when
 supplied, and the available before and after values. Link changes are recorded
 when present in the issue update changelog. A missing changelog is reported as
-partial coverage. Custom field changes are identified by their configured Jira field IDs. TSW is the owner's private project, and authenticated Tin Star MCP callers inherit the service account's TSW visibility while Hulk journal readers inherit the owner's TSW visibility. Authenticated MCP callers and Hulk journal readers may receive restricted comment metadata, including comment ID, time, action and author account ID. Restricted comment bodies are redacted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
+partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
 MCP and UI proof must be correlated with the actual ticket changes.
 
 ```sh
@@ -149,8 +149,9 @@ against the actual project before accepting the integration.
 
 Stop the publisher, run `events observe`, and check `events sources` before
 restarting it. This performs one fresh read of each configured First Mate home and updates
-the journal. Jira webhook collection runs in `events serve`. A source with incomplete coverage or an unsuccessful read makes
-the one-pass command exit with status 1. The continuous collector retries on
+the journal. Use `events serve` for Jira webhooks. The one-pass command requires
+at least one First Mate home and exits with status 1 if a source read fails or
+has incomplete coverage. The continuous collector retries on
 the next scheduled pass.
 
 - For an unavailable task source, check that the service account can execute

@@ -1,6 +1,6 @@
 # Shared workflow operations
 
-The optional [isolated Jira adapter pilot](jira-adapter.md) reuses these operations for explicitly configured synthetic TSSPIKE records. Its reference owns provider-specific persistence, configuration and limitations.
+The optional [isolated Jira adapter pilot](jira-adapter.md) reuses these operations for explicitly configured synthetic TSSPIKE records. See [native Jira work](jira-work.md) for the MCP operations available in Jira work mode.
 
 Tin Star owns workflow recording; each card has one authoritative provider. Notion remains authoritative for existing work. The Inspector’s
 **Update work** and **Start work** forms call the same backend operations as the
@@ -768,7 +768,7 @@ Required input:
 ```
 
 Use `target: {card_id: "<canonical card ID>"}` for a known card. Notion IDs
-remain 32-character page IDs; Jira identity is defined in the
+remain 32-character page IDs; pilot Jira identity is defined in the
 [adapter mapping](jira-adapter.md#field-mapping). An explicit ID is authoritative and must belong to the configured board. Otherwise,
 the existing receipt file binds the submission and external reference to one
 creation identity. `target.candidate_ids` supplies narrow candidates, but even a
@@ -801,7 +801,7 @@ null means pickup evidence is unavailable, including older delivery receipts
 that did not retain the notice kind. Delivery never confirms worker acceptance.
 
 In Notion, the executive brief is inserted at the top without deleting existing
-content. Jira persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
+content. Jira pilot persistence is described in the [adapter mapping](jira-adapter.md#field-mapping).
 The distinct **Implementation contract** section stores immutable version
 manifests, ordered raw-text chunks, and a completion marker. Markdown, Unicode,
 tables, code fences, acceptance, decisions, constraints and references are retained
