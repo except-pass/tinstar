@@ -130,6 +130,10 @@ it('re-reads an open selected tag on the fast cadence and leaves settled tags un
   const settledPaths = read.mock.calls.map(([path]) => path)
   expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${selected.commit.sha}`))).toBe(false)
   expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data(), selected.name)
+  expect(read.mock.calls.map(([path]) => path)).toEqual([expect.stringContaining(`/actions/runs?head_sha=${selected.commit.sha}`)])
 })
 
 it.each([
@@ -227,22 +231,22 @@ it('falls back to the slow cadence after failing to refresh an active component'
   expect(recovered.releases[0]).toMatchObject({ state: 'Running', github: { runsStatus: 'fresh' } })
 })
 
-it('does not re-read a candidate on the fast cadence once every workflow run has completed', async () => {
+it('re-reads a settled candidate on the slow cadence', async () => {
   let clock = now
   const read = vi.fn(nativeFixtureRead())
   const reader = new GithubReleaseReader(read, () => clock)
   await reader.get(data())
-  const actions = () => read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))
-  const initial = actions().length
-  expect(initial).toBeGreaterThan(0)
+  const candidateCalls = () => read.mock.calls.filter(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))
+  expect(candidateCalls()).toHaveLength(1)
+  read.mockClear()
   clock += 60_000
   const settled = await reader.get(data())
-  expect(actions()).toHaveLength(initial)
+  expect(candidateCalls()).toHaveLength(0)
   expect(settled.releases[0]).toMatchObject({ state: 'Awaiting PROD verification', github: { runsStatus: 'fresh' } })
+  read.mockClear()
   clock += 60_000
   await reader.get(data())
-  expect(actions().length).toBeGreaterThan(initial)
-  expect(actions().some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+  expect(candidateCalls()).toHaveLength(1)
 })
 
 it('shows an existing draft Release record rather than claiming it is missing', async () => {
