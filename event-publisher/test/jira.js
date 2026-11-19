@@ -230,6 +230,16 @@ exit 1
     equal(redacted.evidence.source_reference.comment_visibility_restricted, true)
     deepEqual(redacted.change, action === 'deleted' ? { field: 'comment', after: null } : { field: 'comment' })
   }
+  const missingValues = {
+    summary: 'summary', description: 'description', status: 'status', ...jira.fields, links: 'issuelinks',
+  }
+  equal((await post('missing-values', webhookEvent('jira:issue_updated', {
+    changelog: { id: '65004', items: Object.values(missingValues).map(fieldId => ({ fieldId })) },
+  }))).status, 204)
+  match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira omitted values for a tracked change/)
+  const observed = lines((await run('replay', '--source', 'jira', '--last', String(Object.keys(missingValues).length), '--json')).stdout)
+  deepEqual(observed.map(event => ({ type: event.event_type, change: event.change })),
+    Object.keys(missingValues).map(field => ({ type: `ticket.${field}.changed`, change: { field } })))
   await watcher.stop()
   await publisher.stop()
 })

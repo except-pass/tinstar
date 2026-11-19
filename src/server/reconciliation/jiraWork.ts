@@ -507,8 +507,12 @@ export class JiraWork extends JiraClient {
         if (!Array.isArray(change.items)) throw new Error('Incomplete Jira changelog items')
         const items = change.items as Record<string, unknown>[]
         if (link ? items.some(linkMatches) : fields!.every(field => items.some(item => this.fieldMatches(item, field)))) {
-          const nextCommentWrite = Math.min(...candidates.filter(([, receipt]) =>
-            receipt.cardId === card.id && receipt.jiraWork?.priorCommentIds && receipt.jiraWork.dispatchedAt! > dispatchedAt).map(([, receipt]) => receipt.jiraWork!.dispatchedAt!))
+          const nextCommentWrite = Math.min(...candidates.flatMap(([, receipt]) => {
+            const other = receipt.jiraWork
+            return receipt.cardId === card.id && other?.priorCommentIds && other.dispatchedAt !== undefined &&
+              other.dispatchedAt > dispatchedAt && (!other.commentHash || other.commentHash === attempt.state.commentHash)
+              ? [other.dispatchedAt] : []
+          }))
           await this.checkComment(id, note, attempt, { accountId, from: dispatchedAt, before: nextCommentWrite })
           return attempt.confirm(card)
         }

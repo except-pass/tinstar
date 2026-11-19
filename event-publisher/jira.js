@@ -182,7 +182,6 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
         const after = side(item, 'to', redact)
         if (before === undefined && after === undefined) {
           reason = 'Jira omitted values for a tracked change'
-          continue
         }
         events.push(entry(`${field}.changed`, {
           field, ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }),

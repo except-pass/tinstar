@@ -527,3 +527,24 @@ it('accepts transition revision arguments only for Deployed', async () => {
   }
   expect(f.requests).toHaveLength(before)
 }, 30_000)
+
+
+it('recovers a delayed comment after an independent dispatch with a different note', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
+  const edit = { kind: 'jira_edit', card_id }
+  const earlier = { ...edit, operation_id: 'earlier', name: 'Updated title', note: 'Earlier note' }
+  f.controls.beforeWrite = 'PUT issue/60001'
+  expect(await call('update_work', earlier)).toMatchObject({ code: 'unconfirmed' })
+  expect(await call('update_work', { ...edit, operation_id: 'later', description: 'New description', note: 'Later note' }))
+    .toMatchObject({ outcome: 'saved' })
+  const issue = f.issues.get('60001')!
+  const created = new Date().toISOString()
+  issue.fields.summary = earlier.name
+  issue.comments.push({ id: 'delayed', body: 'Earlier note\n\nRecorded via Tin Star (Fixture agent)', created, author: { accountId: 'fixture-service' } })
+  f.history['60001'] = [{ created, author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'summary', fromString: 'Ticket', toString: earlier.name }] }]
+  expect(await call('update_work', earlier)).toMatchObject({ code: 'already-saved', card: { name: earlier.name } })
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)

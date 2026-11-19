@@ -130,7 +130,7 @@ Ticket change previews are redacted and bounded. The journal preserves the
 immutable Jira issue ID, display key, source delivery ID, source timestamp when
 supplied, and the available before and after values. Link changes are recorded
 when present in the issue update changelog. A missing changelog is reported as
-partial coverage. Custom field changes are identified by their configured Jira field IDs. Authenticated MCP callers and Hulk journal readers may receive restricted comment metadata, including comment ID, time, action and author account ID. Restricted comment bodies are redacted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
+partial coverage. Custom field changes are identified by their configured Jira field IDs. TSW is the owner's private project, and all authenticated Tin Star callers and Hulk journal readers act for the owner and inherit the service account's TSW visibility, including tickets restricted to a role it holds. Authenticated MCP callers and Hulk journal readers may receive restricted comment metadata, including comment ID, time, action and author account ID. Restricted comment bodies are redacted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
 MCP and UI proof must be correlated with the actual ticket changes.
 
 ```sh
