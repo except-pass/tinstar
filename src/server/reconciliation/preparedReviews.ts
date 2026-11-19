@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets, type StoredDecisionPacket } from './decisionPackets'
-import type { DecisionPreparation } from './decisionPrep'
+import { isLivePreparation, type DecisionPreparation } from './decisionPrep'
 import type { WorkCard } from './workReader'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
@@ -15,7 +15,7 @@ export const preparedReleaseInput = z.object({ ...preparedClaimInput.omit({ card
 type ClaimInput = z.infer<typeof preparedClaimInput>
 interface Session { id: string; caller: string; scope: string; label: string; device: string; token_hash: string; operation: string; signature: string; created: number; expires: number; revoked: number | null }
 export interface PreparedBinding { session_id: string; card: string; generation: number; packet_id: string; packet_version: number; token_hash: string; claim_operation: string }
-export interface PreparedQueue { cards: WorkCard[]; coverage: 'complete' | 'unknown' }
+export interface PreparedQueue { cards: WorkCard[]; coverage: 'complete' | 'unknown'; revisionFor(card: WorkCard): string | undefined }
 export interface PreparedClaimResult { outcome: string; lease?: CardLease; lease_token?: string; packet?: StoredDecisionPacket | null; session_id?: string; message?: string; coverage?: string }
 
 /** Session capabilities identify the conversation. The card lease and the
@@ -24,7 +24,7 @@ export class PreparedReviews {
   private initialized?: Promise<void>
   constructor(readonly packets: DecisionPackets, private queue: () => PreparedQueue,
     private readSource: (card: string) => Promise<import('./decisionEvidence').DecisionCardSource>,
-    private preparation: Pick<DecisionPreparation, 'status'>, private now = Date.now) {}
+    private preparation: Pick<DecisionPreparation, 'status' | 'latestJobInStorage'>, private now = Date.now) {}
   get scope() { return this.packets.scope }
   private get leases() { return this.packets.leases }
   async initialize() {
@@ -79,20 +79,23 @@ export class PreparedReviews {
   async snapshot() {
     await this.initialize()
     const prep = await this.preparation.status()
+    const queue = this.queue()
     return this.leases.readStorage(db => {
-      const queue = this.queue()
-      const jobs = new Map([...prep.jobs].reverse().map(job => [job.card, job]))
+      const now = this.now()
       const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
-        const job = jobs.get(card.id)
+        const revision = queue.revisionFor(card)
+        const job = revision ? this.preparation.latestJobInStorage(db, card.id, revision) : undefined
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
-          job?.state === 'sent' || job?.state === 'sending' ? 'Preparing' : job?.state === 'failed' ? 'Retrying' : 'Queued'
+          job && isLivePreparation(job, now) ? 'Preparing' :
+          job?.state === 'expired' ? 'Retrying' :
+          job?.state === 'stopped' ? job.message || 'Preparation stopped' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }
       })
       const ready = rows.flatMap(row => row.ready ? [{ id: row.ready.id, card_id: row.card_id, title: row.title }] : [])
-      return { scope: this.scope, observed_at: new Date(this.now()).toISOString(), coverage: queue.coverage,
+      return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: queue.coverage,
         counts: { ready: ready.length, leased: rows.filter(row => row.state === 'Leased').length, preparing: prep.preparing },
         runner: prep, ready,
         pending: rows.filter(row => !row.ready).map(({ card_id, title, state }) => ({ card_id, title, state })),

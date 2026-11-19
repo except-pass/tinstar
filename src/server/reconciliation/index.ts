@@ -4,9 +4,9 @@ import { deferredDecisionCard } from './claimPolicy'
 import { PreparedSubmissions } from './preparedSubmissions'
 import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
-import { DecisionPreparation, readClavisValue } from './decisionPrep'
+import { DecisionPreparation, PreparationCardExcluded, readClavisValue } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { actionableDecisionCard, decisionCardSource } from './decisionEvidence'
+import { actionableDecisionCard, decisionCardSource, decisionPropertyRevision, prepBlocked } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -103,7 +103,7 @@ export class ReconciliationSources {
         await this.workReader.query({}, false, true)
         return this.decisionQueue().cards
       },
-      read: (card, background) => this.readDecisionCard(card, background),
+      read: (card, background, freshHistory, preparing) => this.readDecisionCard(card, background, freshHistory, preparing),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
@@ -111,7 +111,16 @@ export class ReconciliationSources {
       this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), answerer, canPost))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.workflow.onRecordedChange = id => { this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workReader.onConfirmed = card => {
+      this.decisionRevisionReads.delete(card.id)
+      if (!this.observedDecisionRevision(card)) this.decisionRevisions.delete(card.id)
+    }
+    this.workflow.onRecordedChange = id => {
+      this.decisionRevisionReads.delete(id)
+      this.decisionRevisions.delete(id)
+      this.context.invalidate(id)
+      this.invalidateQueueDisplays()
+    }
     this.workflow.onDecisionRetracted = async (id, auditTime) => {
       await this.decisionPackets.initialize()
       await this.leases.writeStorage(db => {
@@ -155,29 +164,51 @@ export class ReconciliationSources {
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
   }
 
+  private decisionRevisionReads = new Map<string, symbol>()
+  private decisionRevisions = new Map<string, { edited: string; properties: string; revision: string }>()
+
   private decisionQueue() {
     const observation = this.workReader.declarations()
     return { cards: (observation.data?.cards ?? []).filter(actionableDecisionCard).sort((a, b) => a.id.localeCompare(b.id)),
-      coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const }
+      coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const,
+      revisionFor: (card: WorkCard) => this.observedDecisionRevision(card),
+    }
   }
 
-  private async loadDecisionCard(id: string, background: boolean) {
-    const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
-    const [card, context] = await Promise.all([
-      this.workReader.card(id, true, background, signal),
-      this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch),
-    ])
-    this.workReader.confirm(card)
-    if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
-    await this.context.verifyRetractions(context)
-    return { card, blocks: context.blocks }
+  private observedDecisionRevision(card: WorkCard) {
+    const observed = this.decisionRevisions.get(card.id)
+    return observed?.edited === card.last_edited_time && observed.properties === decisionPropertyRevision(card)
+      ? observed.revision : undefined
   }
 
-  private async readDecisionCard(id: string, background: boolean) {
+  private async loadDecisionCard(id: string, background: boolean, freshHistory = false, preparing = false) {
+    const observation = Symbol()
+    this.decisionRevisionReads.set(id, observation)
+    try {
+      const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
+      const card = await this.workReader.card(id, true, background, signal)
+      if (this.decisionRevisionReads.get(id) === observation) {
+        this.workReader.confirm(card)
+        this.decisionRevisionReads.set(id, observation)
+      }
+      if (preparing && prepBlocked(card)) throw new PreparationCardExcluded()
+      const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
+      if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
+      await this.context.verifyRetractions(context)
+      const source = decisionCardSource(card, context.blocks)
+      if (this.decisionRevisionReads.get(id) === observation) {
+        this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
+      }
+      return { card, blocks: context.blocks, source }
+    } finally {
+      if (this.decisionRevisionReads.get(id) === observation) this.decisionRevisionReads.delete(id)
+    }
+  }
+
+  private async readDecisionCard(id: string, background: boolean, freshHistory = false, preparing = false) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
-    const { card, blocks } = await this.loadDecisionCard(id, background)
-    const source = decisionCardSource(card, blocks)
+    const { source } = await this.loadDecisionCard(id, background, freshHistory, preparing)
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {

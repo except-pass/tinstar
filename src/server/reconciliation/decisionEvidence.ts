@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { WorkCard } from './workReader'
-import type { CardContextRead } from './cardContext'
+import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
-import { actionableWillCard } from './claimPolicy'
+import { decisionRequests, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
+import { actionableWillCard, deferredDecisionCard, isCurrentWillRequest } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
@@ -37,15 +37,47 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
 
 export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
+const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person'].includes(String(status ?? '').trim().toLowerCase())
+
+/** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
+const isTestDecisionCard = (card: WorkCard) => /^\[TEST(?:\]| )/.test(String(value(card, 'Name') ?? ''))
+
+export function prepBlocked(card: WorkCard) {
+  return !!card.source?.synthetic || isTestDecisionCard(card) || isJiraCard(card.id) ||
+    deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
+}
+
+function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
+  if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
+  const history = requestHistory(blocks.filter(block => block.type !== 'code'))
+  const chronology = new Map(history.map((note, position) => [note.id, {
+    position, type: note.type, created: Date.parse(note.createdAt ?? note.created_time ?? ''),
+  }]))
+  const answers = history.filter(note =>
+    note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
+    .map(note => chronology.get(note.id)!)
+  return decisionRequests(history, { multilineQuestion: true }).filter(request => {
+    if (request.answered) return false
+    const source = chronology.get(request.sourceId)!
+    return answers.every(answer => Number.isFinite(source.created) && Number.isFinite(answer.created) && source.created !== answer.created
+      ? source.created > answer.created
+      : source.type === 'comment' && source.position > answer.position)
+  })
+}
+
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
+  const requests = openPrepRequests(card, blocks)
+  const request = requests.length === 1 ? requests[0] : undefined
+  const question = request && isCurrentWillRequest(request, value(card, 'Will action')) ? request.question?.trim() ?? '' : ''
   return {
     card,
     title,
-    question: String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
+    question,
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
+    prepEligible: !!question,
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>

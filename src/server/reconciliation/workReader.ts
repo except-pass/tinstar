@@ -22,6 +22,7 @@ export const scopeMatches = (card: WorkCard, scope: WorkScope) => {
 }
 export class WorkReader {
   leases?: CardLeases
+  onConfirmed?: (card: WorkCard) => void
   private queries = new Map<string, { scope: WorkScope; observation: CachedObservation<WorkData> }>()
   private cards = new Map<string, { until: number; value: Promise<WorkCard>; background: boolean }>()
   private known = new Map<string, { card: WorkCard; observedAt: string }>()
@@ -92,6 +93,7 @@ export class WorkReader {
     return references
   }
   confirm(card: WorkCard) {
+    this.onConfirmed?.(card)
     this.known.set(card.id, { card, observedAt: new Date().toISOString() })
     this.cards.set(card.id, { until: Date.now() + 60_000, value: Promise.resolve(card), background: false })
     for (const [key, { scope, observation }] of this.queries) observation.updateData(data => {

@@ -49,6 +49,10 @@ export class NotionCardReadError extends Error {
   constructor(readonly transient: boolean, status: number) { super(`Notion card read failed (HTTP ${status})`) }
 }
 
+export class NotionCardBoardMismatch extends Error {
+  constructor() { super('Notion card identity or source changed') }
+}
+
 const directFetch: NotionFetch = (input, init, timeoutMs = 5_000) => fetch(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) })
 
 /** Exact uncached page read used before inbox delivery and for closure.
@@ -94,7 +98,14 @@ async function readNotionCardOnce(config: NonNullable<ReconciliationConfig['noti
   const raw = record(JSON.parse(Buffer.concat(chunks).toString('utf8')))
   const result = notionCard(raw)
   const parent = record(raw.parent)
-  if (result.id !== id || notionPageId(parent.data_source_id) !== notionPageId(config.dataSourceId)) throw new Error('Notion card identity or source changed')
+  if (result.id !== id) throw new Error('Notion card identity or source changed')
+  const parentBoard = notionPageId(parent.data_source_id)
+  if (parentBoard !== notionPageId(config.dataSourceId)) {
+    if (parentBoard || notionPageId(parent.page_id) || notionPageId(parent.database_id) || parent.workspace === true) {
+      throw new NotionCardBoardMismatch()
+    }
+    throw new Error('Notion card identity or source changed')
+  }
   return result
 }
 
