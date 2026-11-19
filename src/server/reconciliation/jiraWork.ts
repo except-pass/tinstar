@@ -6,7 +6,7 @@ import { acquireLock } from '../infra/lock'
 import type { JiraWorkConfig } from './config'
 import { adfText, JiraClient, JiraWriteError, jiraText } from './jira'
 import {
-  checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitions, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
+  checkJiraTransition, editJiraDecisions, formatJiraDecisions, jiraTransitionDestination, jiraWorkIdentity, JiraWorkInputError, readJiraDecisions,
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
@@ -434,9 +434,8 @@ export class JiraWork extends JiraClient {
       const note = this.transitionAudit(input, actor)
       const current = await this.read(id)
       if (attempt.dispatched) {
-        const [, destinations] = jiraTransitions[input.verb]
-        const destination = input.to ?? (destinations.length === 1 ? destinations[0] : undefined)
-        if (!destination || !destinations.includes(destination) || current.status !== destination) {
+        const destination = jiraTransitionDestination(input)
+        if (!destination || current.status !== destination) {
           throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         }
         await this.checkComment(id, note)

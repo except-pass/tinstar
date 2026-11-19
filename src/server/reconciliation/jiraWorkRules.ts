@@ -19,9 +19,10 @@ const decisionExits = ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Wa
 const waitExits = [...decisionExits, 'Decision'] as const
 const dispositionVerbs = ['Park', 'Cancel', 'Stop and Requeue'] as const
 const interruptVerbs = ['Answer Decision', 'Resolve Wait'] as const
-const recovery: JiraStatus[] = ['To Do', 'Queued']
+const recovery = ['To Do', 'Queued'] as const
+const recoveryVerbs = ['Reject Review', 'Verification Failed', 'Release Rejected', 'Reopen'] as const
 
-export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]]> = {
+export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: readonly JiraStatus[]]> = {
   Prioritize: [['Backlog'], ['To Do']],
   Queue: [['To Do'], ['Queued']],
   'Fast-track': [['Backlog'], ['Queued']],
@@ -78,17 +79,18 @@ export const jiraEditSchema = z.object({
   blocker: externalBlocker.nullable().optional(), note: multiline.optional(),
 }).strict()
 const transitionArguments = z.object({
-  card_id: jiraWorkIdSchema, operation_id: operation, verb: z.enum(jiraVerbs), to: status.optional(),
+  card_id: jiraWorkIdSchema, operation_id: operation, verb: z.enum(jiraVerbs),
   reason: multiline.optional(), evidence: multiline.optional(),
 })
 const revisions = { required_revision: singleLine.optional(), live_revision: singleLine.optional() }
 export const jiraTransitionSchema = z.union([
-  transitionArguments.extend({ verb: z.literal('Deployed'), to: z.literal('Verify in Prod').optional(), ...revisions }).strict(),
+  transitionArguments.extend({ verb: z.literal('Deployed'), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.enum(interruptVerbs), to: z.literal('Verify in Prod'), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum(decisionExits) }).strict(),
   transitionArguments.extend({ verb: z.literal('Resolve Wait'), to: z.enum(waitExits) }).strict(),
+  transitionArguments.extend({ verb: z.enum(recoveryVerbs), to: z.enum(recovery) }).strict(),
   transitionArguments.extend({ verb: z.enum(dispositionVerbs), disposition: multiline.optional() }).strict(),
-  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', ...interruptVerbs, ...dispositionVerbs]) }).strict(
+  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', ...interruptVerbs, ...dispositionVerbs, ...recoveryVerbs]) }).strict(
     'Revision arguments are only accepted for Deployed or an interrupt exit into Verify in Prod',
   ),
 ])
@@ -172,11 +174,17 @@ export function editJiraDecisions(text: string, { add_questions = [], answers = 
   return formatJiraDecisions([...items.values()])
 }
 
+export function jiraTransitionDestination(input: JiraTransition) {
+  const [, destinations] = jiraTransitions[input.verb]
+  if ('to' in input) return destinations.includes(input.to) ? input.to : undefined
+  return destinations.length === 1 ? destinations[0] : undefined
+}
+
 type State = { status: string; owner: string | null; instructionText: string; decisions: string; blocker: boolean }
 export function checkJiraTransition(current: State, input: JiraTransition) {
   const [from, destinations] = jiraTransitions[input.verb]
-  const to = input.to ?? (destinations.length === 1 ? destinations[0] : undefined)
-  if (!to || !destinations.includes(to) || !from.includes(current.status as JiraStatus)) {
+  const to = jiraTransitionDestination(input)
+  if (!to || !from.includes(current.status as JiraStatus)) {
     throw new JiraWorkInputError(`${input.verb} is unavailable from ${current.status}; choose an allowed destination: ${destinations.join(', ')}`)
   }
   if (active.includes(to) && !current.owner) throw new JiraWorkInputError('Choose an Owner before entering a work status')

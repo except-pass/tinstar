@@ -65,6 +65,7 @@ function preview(text, secret) {
   const normalized = normalizePreview(text.replaceAll(secret, '[credential omitted]'))
   return (normalizedSecret ? normalized.replaceAll(normalizedSecret, '[credential omitted]') : normalized)
     .replace(tokenLike, '[credential omitted]')
+    .replace(/((?:\bauthorization|"authorization"|'authorization')[ \t]*[:=][ \t]*)basic[ \t]+[a-z0-9._~+\/=-]+/gi, '$1[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
     .replace(credentialAssignment, (_match, prefix, keyQuote, bareValue, offset, source) => {
       let suffix = ''
