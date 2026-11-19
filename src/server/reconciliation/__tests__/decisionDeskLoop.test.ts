@@ -827,6 +827,23 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
   })
 
+  it.each(['unchanged', 'edited timestamp', 'decision properties'])('keeps only matching Desk revisions when history fails after %s', async change => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, web, disableCommentReads } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    if (change === 'edited timestamp') card.last_edited_time = '2025-01-02T00:00:00Z'
+    if (change === 'decision properties') card.properties.Name = rich('Updated decision title')
+    disableCommentReads()
+
+    await sources.preparation.replenish()
+    expect((await web('snapshot')).data).toMatchObject({
+      counts: { preparing: 1 },
+      pending: [expect.objectContaining({ card_id: card.id, state: change === 'unchanged' ? 'Preparing' : 'Queued' })],
+    })
+    expect(jobs).toHaveLength(1)
+  })
+
   it.each(['refill', 'callback'])('retires a property-excluded card without history during %s', async path => {
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources, jobs, cardReads, disableCommentReads } = await setup([card], false)

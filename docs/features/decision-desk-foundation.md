@@ -35,7 +35,6 @@ action tag alone does not qualify. A card can have only one outstanding job.
 Jobs expire after 15 minutes without publication and are sent at most twice
 for one source revision. A changed source revision can be sent again while the
 request is open. A Desk answer closes the request until a new request is made.
-A request inserted between a Desk answer’s read and its comment is outside that answer’s scope.
 A job already queued for a card that stops being eligible is dropped.
 Published packets have no age limit. Editing decision properties, card text, or
 substantive discussion invalidates the packet. Sending happens only when the
