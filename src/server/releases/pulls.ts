@@ -121,12 +121,12 @@ export class ReleasePullReader {
           if (!url || observed.has(url) || this.cache.get(url)?.value.state === 'merged' && this.current(url)) continue
           observed.add(url)
           try {
-            this.save(url, this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt))
-            refreshed.add(url)
+            const value = this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt)
+            if (this.save(url, value, observedAt).freshness === 'fresh') refreshed.add(url)
           } catch {
             // If the list row cannot establish merge evidence, try the exact PR.
             const cached = this.cache.get(url)
-            if (cached) cached.until = started
+            if (cached && (cached.value.observedAt ?? '') < observedAt) cached.until = started
           }
         }
         const reachedCutoff = count === pageSize && oldestUpdatedAt !== null && Date.parse(oldestUpdatedAt) < since
@@ -139,7 +139,7 @@ export class ReleasePullReader {
     if (covered) for (const { url } of group) {
       const previous = this.cache.get(url)?.value
       if (!observed.has(url) && previous?.observedAt && previous.state !== 'merged') {
-        this.save(url, { ...previous, observedAt, freshness: 'fresh', readError: undefined })
+        this.save(url, { ...previous, observedAt, freshness: 'fresh', readError: undefined }, observedAt)
       }
     }
     return { until: started + refreshTtl }
@@ -154,9 +154,19 @@ export class ReleasePullReader {
     return previous ? { ...previous, freshness: 'stale', readError } : { title: null, state: 'unknown', mergedAt: null, mergeSha: null, observedAt: null, freshness: 'unknown', readError }
   }
 
-  private save(url: string, value: Observation) {
-    const delay = value.state === 'merged' && value.freshness === 'fresh' ? mergedTtl : refreshTtl
+  private save(url: string, value: Observation, observedAt: string): Observation {
+    const current = this.cache.get(url)
+    const confirmedMerge = value.state === 'merged' && value.freshness === 'fresh'
+    if (current) {
+      const currentMerge = current.value.state === 'merged'
+      const older = (current.value.observedAt ?? '') >= observedAt
+      if ((older && (!confirmedMerge || currentMerge)) || (currentMerge && value.state !== 'merged')) {
+        return this.current(url) ? current.value : { ...current.value, freshness: 'stale' }
+      }
+    }
+    const delay = confirmedMerge ? mergedTtl : refreshTtl
     this.cache.set(url, { until: this.now() + delay, value })
+    return value
   }
 
   private observation(raw: Record<string, unknown>, observedAt: string): Observation {
@@ -166,7 +176,6 @@ export class ReleasePullReader {
   }
 
   private async refresh(url: string): Promise<Observation> {
-    const previous = this.cache.get(url)
     const observedAt = new Date(this.now()).toISOString()
     let value: Observation
     try {
@@ -177,9 +186,6 @@ export class ReleasePullReader {
     } catch (error) {
       value = this.failed(url, this.readError(error, url))
     }
-    const current = this.cache.get(url)
-    if (current && current !== previous) return current.value
-    this.save(url, value)
-    return value
+    return this.save(url, value, observedAt)
   }
 }

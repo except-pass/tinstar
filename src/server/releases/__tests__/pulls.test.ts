@@ -48,6 +48,35 @@ describe('bounded read-only release PR observations', () => {
     expect(read).toHaveBeenCalledTimes(5)
   })
 
+  it.each([
+    { exact: merged, listed: 'open', state: 'merged', mergeSha: sha },
+    { exact: { ...merged, state: 'open', merged: false }, listed: 'closed', state: 'closed', mergeSha: null },
+  ] as const)('keeps $state evidence when an older exact read finishes after a list row', async ({ exact, listed, state, mergeSha }) => {
+    let now = Date.now()
+    let finishExact!: () => void, finishList!: () => void, reachedSecondPage!: () => void
+    const exactGate = new Promise<void>(resolve => { finishExact = resolve })
+    const listGate = new Promise<void>(resolve => { finishList = resolve })
+    const secondPage = new Promise<void>(resolve => { reachedSecondPage = resolve })
+    const read = vi.fn(async () => { await exactGate; return exact })
+    const list = vi.fn()
+      .mockImplementationOnce(async () => page([row(1, now, listed), row(2, now, 'open')], 100))
+      .mockImplementationOnce(async () => { reachedSecondPage(); await listGate; return page([]) })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const point = reader.get([url(1)])
+    now += 1_000
+    const batch = reader.get([url(1), url(2)])
+    try {
+      await secondPage
+      finishExact()
+      expect((await point).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+    } finally {
+      finishExact()
+      finishList()
+    }
+    expect((await batch).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+    expect((await reader.get([url(1)])).get(url(1))).toMatchObject({ state, mergeSha, freshness: 'fresh' })
+  })
+
   it('revalidates absent links when a later page reaches the cutoff', async () => {
     let now = Date.now()
     const urls = [url(1), url(2)]
