@@ -70,7 +70,7 @@ afterEach(async () => {
   for (const cleanup of fixtures.splice(0).reverse()) await cleanup()
 })
 
-async function setup(cards: ReturnType<typeof page>[], autoPublish = true, firstPatchFailure?: 'lost' | 'rejected') {
+async function setup(cards: ReturnType<typeof page>[], autoPublish = true, firstPatchFailure?: 'lost' | 'rejected', loseWebhookAckAt?: number) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-decision-loop-'))
   fixtures.push(() => rm(root, { recursive: true, force: true }))
   const published: unknown[] = []
@@ -86,6 +86,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
       for await (const chunk of req) chunks.push(Buffer.from(chunk))
       const job = JSON.parse(Buffer.concat(chunks).toString('utf8')) as (typeof jobs)[number]
       jobs.push(job)
+      if (jobs.length === loseWebhookAckAt) { res.destroy(); return }
       if (autoPublish) published.push(await tool(job.publish.tool, { job_id: job.publish.job_id, packet: contents }))
       res.writeHead(202).end()
     } catch { res.writeHead(500).end() }
@@ -665,6 +666,50 @@ describe('prepared-card loop', () => {
     card.comments.push(`Will chose: Approve\n${deskAnswerMarker}fixture-answer`)
     expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('no longer an open owner decision') })
+  })
+
+  it('dispatches and publishes a request titled [TEST-driven development] Approve rollout?', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    card.properties.Name = rich('[TEST-driven development] Approve rollout?')
+    const { sources, jobs, published } = await setup([card])
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    expect(published).toEqual([expect.objectContaining({ outcome: 'published' })])
+  })
+
+  it.each(['Tin Star prepared packet:', 'Tin Star operation: ["waiting-on-main",'])(
+    'invalidates a callback when a new request quotes %s', async marker => {
+      const card = withOpenRequest(page(1, { tag: 'Decision' }))
+      const { sources, jobs, tool } = await setup([card], false)
+      await sources.preparation.replenish()
+      expect(jobs).toHaveLength(1)
+      expect(await tool('update_work', { card_id: card.id, operation_id: 'second-request', kind: 'request_decision',
+        request_id: 'second-request', requested_from: 'Will', question: `Should we rename the ${marker} marker?` }))
+        .toMatchObject({ outcome: 'saved' })
+      expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
+        .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
+    },
+  )
+
+  it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, tool, web } = await setup([card], false, undefined, 2)
+    await sources.preparation.replenish()
+    now += 15 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+    now += (timely ? 14 : 15) * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+    if (!timely) {
+      expect((await web('snapshot')).data.pending).toEqual([
+        expect.objectContaining({ card_id: card.id, state: 'Preparation stopped after two sends without a packet' }),
+      ])
+    }
+    expect(await tool('publish_prepared_packet', { job_id: jobs[1]!.publish.job_id, packet: contents }))
+      .toMatchObject(timely ? { outcome: 'published' } : { outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
 
   it('does not send a test card or a synthetic card', async () => {

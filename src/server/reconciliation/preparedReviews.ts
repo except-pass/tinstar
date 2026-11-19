@@ -89,7 +89,8 @@ export class PreparedReviews {
         const job = jobs.get(card.id)
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
           job?.state === 'sent' || job?.state === 'sending' ? 'Preparing' :
-          job?.state === 'failed' ? 'Retrying' : 'Queued'
+          job?.state === 'failed' ? 'Retrying' :
+          job?.state === 'stopped' ? job.message || 'Preparation stopped' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }
       })
       const ready = rows.flatMap(row => row.ready ? [{ id: row.ready.id, card_id: row.card_id, title: row.title }] : [])

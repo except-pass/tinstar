@@ -109,12 +109,15 @@ export class DecisionPreparation {
   }
 
   private expireJobs(db: DatabaseSync, cutoff: number) {
-    const rows = db.prepare(`SELECT id, card, revision FROM decision_card_prep
-      WHERE scope = ? AND state IN ('sending','sent') AND at <= ?`).all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
+    const rows = db.prepare(`SELECT id, card, revision, state FROM decision_card_prep
+      WHERE scope = ? AND state IN ('sending','sent','failed') AND at <= ?`).all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision' | 'state'>[]
     const update = db.prepare('UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ?')
     for (const row of rows) {
-      const capped = this.sendCount(db, row.card, row.revision) >= prepSendCap
-      update.run(capped ? 'stopped' : 'failed', capped ? null : 'No packet received; retrying preparation', row.id)
+      if (this.sendCount(db, row.card, row.revision) >= prepSendCap) {
+        update.run('stopped', 'Preparation stopped after two sends without a packet', row.id)
+      } else if (row.state !== 'failed') {
+        update.run('failed', 'No packet received; retrying preparation', row.id)
+      }
     }
   }
 
@@ -203,11 +206,9 @@ export class DecisionPreparation {
       await response.body?.cancel().catch(() => {})
       if (!response.ok) message = `Preparer webhook returned HTTP ${response.status}.`
     } catch { message = 'Preparer webhook could not be reached.' }
-    await this.packets.leases.writeStorage(db => {
-      const capped = message && this.sendCount(db, source.card.id, source.revision) >= prepSendCap
-      db.prepare("UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ? AND state = 'sending'")
-        .run(message ? capped ? 'stopped' : 'failed' : 'sent', message, id)
-    })
+    await this.packets.leases.writeStorage(db => db.prepare(
+      "UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ? AND state = 'sending'",
+    ).run(message ? 'failed' : 'sent', message, id))
     return message
   }
 
