@@ -10,7 +10,7 @@ import { requestAnchor, type FirstMateRequest } from '../../shared/deskSource'
 import { ageObservation, type Observation } from './observation'
 import { reconcileScene } from './scene'
 import { record, text } from './values'
-import { cardMergePulls, mergeActionText, type PullReadiness } from './queuePulls'
+import type { PullReadiness } from './queuePulls'
 import type { NeedsWillItem } from './needsWill'
 import type { ExecutionWarning } from './workflowViews'
 import { cardWaitsForWill } from './claimPolicy'
@@ -230,7 +230,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     let tags = (Array.isArray(actions) ? actions : [actions]).filter((a): a is string => typeof a === 'string' && !!a.trim() && !/^(none|no|false|n\/a|answered|resolved)$/i.test(a.trim()))
     const owner = normalize(word(card, 'Owner') ?? '')
     const waitingForWill = /\bWill\b/.test(word(card, 'Waiting For') ?? '')
-    const linkedPulls = cardMergePulls(card, inventory)
+    const linkedPulls = queuePulls({ cardIds: [card.id], evidence: [word(card, 'Link'), word(card, 'Evidence')].flatMap(url => url ? [{ kind: 'pull-request', url }] : []) }, inventory)
     const pr = linkedPulls.length === 1 ? pullStates.get(linkedPulls[0]!.url) : undefined
     const resolvedMerge = tags.some(tag => normalize(tag) === 'merge') && linkedPulls.length === 1 &&
       (inventoryPullState(linkedPulls[0]!.url, inventory) === 'not-open' || pr?.status === 'fresh' &&
@@ -242,7 +242,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
     if ((owner !== 'will' || isReviewStatus(word(card, 'Status'))) && !tags.length && !waitingForWill) continue
     const action = word(card, 'Next action') ?? word(card, 'Next Action')
     const merge = tags.some(tag => normalize(tag) === 'merge')
-    const remainingAction = resolvedMerge && (!action || mergeActionText(action))
+    const remainingAction = resolvedMerge && (!action || /^(?:please\s+)?merge\b/i.test(action))
       ? [tags.join(', '), waitingForWill ? word(card, 'Waiting For') : null].filter(Boolean).join('; ') : action
     const item = blank(JSON.stringify(['card', card.id]), word(card, 'Name') ?? card.id, remainingAction, merge ? 'merge' : 'decision')
     if (resolvedMerge) resolvedMerges.add(item)
@@ -373,7 +373,7 @@ export function buildQueue(input: SourceSnapshot, pullStates: ReadonlyMap<string
   for (const item of candidates) {
     for (const pull of queuePulls(item, inventory)) link(item, pull.url)
     if (restrictAction(item, item.action, actionContexts.get(item))) tagOnlyCandidates.delete(item)
-    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && mergeActionText(item.action)))
+    const merge = !resolvedMerges.has(item) && item.kind !== 'blocked' && (item.kind === 'merge' || (!!item.action && /^(?:please\s+)?merge\b/i.test(item.action)))
     if (merge) item.kind = 'merge'
     if (!verifyPull(item)) continue
     for (const source of item.sources) if (source.request) Object.assign(source, { readiness: item.readiness, action: item.action, reasons: [...item.reasons] })

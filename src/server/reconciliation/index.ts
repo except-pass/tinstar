@@ -5,7 +5,7 @@ import { PreparedReviews } from './preparedReviews'
 import { DecisionPackets } from './decisionPackets'
 import { DecisionPreparation, readClavisValue } from './decisionPrep'
 import { cardSourceUrl } from '../../shared/workIdentity'
-import { actionableDecisionCard, decisionCardSource, needsMergeEvidence } from './decisionEvidence'
+import { actionableDecisionCard, decisionCardSource } from './decisionEvidence'
 import type { MainWaitRead } from '../../shared/waitingOnMain'
 import { releaseAssociations } from '../../shared/releases'
 import { ReviewDeploymentAudit } from './reviewDeployment'
@@ -27,7 +27,7 @@ import { ageObservation } from './observation'
 import { CardContextReader } from './cardContext'
 import { SceneReconciler } from './scene'
 import { buildQueue } from './queue'
-import { cardMergePulls, QueuePullReader } from './queuePulls'
+import { QueuePullReader } from './queuePulls'
 import { buildWorkerLinkReport } from './workerLinkReport'
 import { SearchDocumentCollector } from './searchIndex'
 import { NotionApi } from './notionApi'
@@ -100,7 +100,7 @@ export class ReconciliationSources {
         await this.workReader.query({}, false, true)
         return this.decisionQueue().cards
       },
-      read: (card, background) => this.readDecisionCard(card, background, true),
+      read: (card, background) => this.readDecisionCard(card, background),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
@@ -170,15 +170,11 @@ export class ReconciliationSources {
     return { card, blocks: context.blocks }
   }
 
-  private async readDecisionCard(id: string, background: boolean, preparation = false) {
+  private async readDecisionCard(id: string, background: boolean) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
     const { card, blocks } = await this.loadDecisionCard(id, background)
-    const pulls = preparation && needsMergeEvidence(card) ? cardMergePulls(card, null) : []
-    const url = pulls.length === 1 ? pulls[0]?.url : undefined
-    const pull = url ? (await (this.readPullReadiness?.([url]) ?? this.queuePulls.get([url]))).get(url) : undefined
-    const source = decisionCardSource(card, blocks, pull?.status === 'fresh' && pull.state === 'open' &&
-      (!pull.expiresAt || Date.parse(pull.expiresAt) > Date.now()))
+    const source = decisionCardSource(card, blocks)
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {

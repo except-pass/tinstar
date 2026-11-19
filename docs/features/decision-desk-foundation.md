@@ -27,14 +27,15 @@ allowlist, and `X-Tinstar-UI: 1` handshake.
 Preparation shows how many cards are ready, being prepared, and leased.
 When fewer than ten cards are claimable, Tin Star sends eligible cards up to
 a total of ten outstanding jobs. A card is sent only when its evidence has an
-open owner decision: an unanswered request, an unanswered Ready for Review
-submission, or an explicit Merge ask with a verified open pull request. Done, Archived, Waiting for Prod Release, Delegated to person, synthetic,
+open, unanswered Tin Star decision request for Will. Review submissions and merge
+asks qualify only with such a request record. Done, Archived, Waiting for Prod
+Release, Delegated to person, synthetic,
 test (`[TEST ...]` titles), and Jira cards are not sent. Ownership or a Will
 action tag alone does not qualify. A card can have only one outstanding job.
 Jobs expire after 15 minutes without publication and are sent at most twice
-for one source revision. A changed
-open request or source revision can be sent again. An answered request is not
-sent, and a job already queued for a card that stops being eligible is dropped.
+for one source revision. A changed source revision can be sent again while the
+request is open. A Desk answer closes the request until a new request is made.
+A job already queued for a card that stops being eligible is dropped.
 Published packets have no age limit. Editing decision properties, card text, or
 substantive discussion invalidates the packet. Sending happens only when the
 preparer webhook secret is configured.

@@ -629,47 +629,42 @@ describe('prepared-card loop', () => {
     expect(jobs.some(job => job.card_url.includes(blocked.id))).toBe(false)
   })
 
-  it('prepares unanswered review submissions and rejects publication after a response', async () => {
-    const open = page(1, { owner: 'Will', status: 'Ready for Review' })
-    const answered = page(2, { owner: 'Will', status: 'Ready for Review' })
+  it('requires a decision request record even for explicit review and merge asks', async () => {
+    const review = page(1, { owner: 'Will', status: 'Ready for Review' })
+    const merge = page(2, { tag: 'Merge' })
+    const decision = withOpenRequest(page(3, { tag: 'Decision' }))
     const sha = 'a'.repeat(40)
-    const receipt = 'https://example.test/receipt'
+    const pull = 'https://github.com/except-pass/tinstar/pull/100'
     const submission = { submission_key: 'review-fixture', deliverable_id: 'fixture', summary: 'Review the fixture',
-      pulls: [{ url: 'https://github.com/except-pass/tinstar/pull/100', head: sha }],
-      deployment_id: 'deployment', deployed_sha: sha, live_url: 'https://example.test', instructions: 'Review the fixture',
-      proof: { kind: 'non-ui', tested_sha: sha, passed: true, receipt, alternative: 'Unit tests' }, remaining_scope: [] }
-    const response = 'Tin Star review response: {"submission_key":"review-fixture","action":"request_changes"}'
-    for (const card of [open, answered]) card.comments.push(`Tin Star review submission: ${JSON.stringify(submission)}`)
-    answered.comments.push(response)
-    const { sources, jobs, tool } = await setup([open, answered], false)
+      pulls: [{ url: pull, head: sha }], deployment_id: 'deployment', deployed_sha: sha,
+      live_url: 'https://example.test', instructions: 'Review the fixture',
+      proof: { kind: 'non-ui', tested_sha: sha, passed: true, receipt: 'https://example.test/receipt', alternative: 'Unit tests' },
+      remaining_scope: [] }
+    review.comments.push(`Date: 2025-01-01\nBy: Firstmate\nTin Star review submission: ${JSON.stringify(submission)}`)
+    merge.properties.Link = rich(pull)
+    merge.properties['Next action'] = rich('Merge this PR')
+    const { sources, jobs } = await setup([review, merge, decision], false)
+    const readPulls = vi.fn(async () => null)
+    const readPullReadiness = vi.fn(async () => new Map([[pull, {
+      status: 'fresh' as const, state: 'open' as const, observedAt: null, expiresAt: null,
+      head: null, draft: false, checks: 'unknown' as const, mergeability: 'unknown' as const,
+    }]]))
+    sources.readPulls = readPulls
+    sources.readPullReadiness = readPullReadiness
     await sources.preparation.replenish()
-    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(open.id)])
-    open.comments.push(response)
-    expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
-      .toMatchObject({ outcome: 'operation-conflict' })
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(decision.id)])
+    expect(readPulls).not.toHaveBeenCalled()
+    expect(readPullReadiness).not.toHaveBeenCalled()
   })
 
-  it('prepares an explicit merge ask only while its linked pull is verified open', async () => {
-    const open = page(1, { tag: 'Merge' })
-    const closed = page(2, { tag: 'Merge' })
-    const tagOnly = page(3, { tag: 'Merge' })
-    const pull = 'https://github.com/except-pass/tinstar/pull/'
-    open.properties.Link = rich(pull + '100')
-    open.properties['Next Action'] = rich('Merge this PR')
-    closed.properties.Evidence = rich(pull + '101')
-    closed.properties['Next action'] = rich('Merge this PR')
-    tagOnly.properties.Link = rich(pull + '100')
-    const { sources, jobs, tool } = await setup([open, closed, tagOnly], false)
-    let openState: 'open' | 'merged' = 'open'
-    sources.readPullReadiness = async urls => new Map(urls.map(url => [url, {
-      status: 'fresh', state: url === pull + '100' ? openState : 'closed', observedAt: null, expiresAt: null,
-      head: null, draft: false, checks: 'unknown', mergeability: 'unknown',
-    }]))
+  it('rejects a callback when a Desk answer closes its request without changing the revision', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, tool } = await setup([card], false)
     await sources.preparation.replenish()
-    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(open.id)])
-    openState = 'merged'
+    expect(jobs).toHaveLength(1)
+    card.comments.push(`Will chose: Approve\n${deskAnswerMarker}fixture-answer`)
     expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
-      .toMatchObject({ outcome: 'operation-conflict' })
+      .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('no longer an open owner decision') })
   })
 
   it('does not send a test card or a synthetic card', async () => {

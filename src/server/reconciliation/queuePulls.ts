@@ -1,18 +1,6 @@
-import { queuePulls, type PullsRead } from '../../shared/pulls'
-import type { WorkCard } from './workReader'
 import { parsePullUrl } from '../fleet/attention'
 import { liveActionsEnabled, liveReaderJson } from '../actions/liveClient'
 import { githubCliJson } from '../pulls/github'
-
-export const mergeActionText = (action: string) => /^(?:please\s+)?merge\b/i.test(action)
-
-export function cardMergePulls(card: WorkCard, inventory: PullsRead | null) {
-  const evidence = ['Link', 'Evidence'].flatMap(field => {
-    const url = card.properties[field]?.value
-    return typeof url === 'string' && url.trim() ? [{ kind: 'pull-request', url: url.trim() }] : []
-  })
-  return queuePulls({ cardIds: [card.id], evidence }, inventory)
-}
 
 export interface PullReadiness {
   status: 'fresh' | 'stale' | 'unknown'

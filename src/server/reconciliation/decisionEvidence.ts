@@ -3,9 +3,7 @@ import type { WorkCard } from './workReader'
 import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
-import { decisionRecordRows, isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
-import { mergeActionText } from './queuePulls'
-import { reviewResponsePrefix, reviewSubmissions } from '../../shared/reviews'
+import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
 import { actionableWillCard, currentWillRequests, deferredDecisionCard } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
@@ -39,44 +37,27 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
 
 export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
-const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person', 'completed', 'answered', 'resolved', 'merged'].includes(String(status ?? '').trim().toLowerCase())
+const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person'].includes(String(status ?? '').trim().toLowerCase())
 
 /** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
 const isTestDecisionCard = (card: WorkCard) => /^\s*\[TEST\b/i.test(String(value(card, 'Name') ?? ''))
-
-export function needsMergeEvidence(card: WorkCard) {
-  const actions = value(card, 'Will action')
-  return !prepBlocked(card) && (Array.isArray(actions) ? actions : [actions]).some(action =>
-    typeof action === 'string' && action.trim().toLowerCase() === 'merge')
-}
 
 function prepBlocked(card: WorkCard) {
   return !!card.source?.synthetic || isTestDecisionCard(card) || isJiraCard(card.id) ||
     deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
 }
 
-function prepSendable(card: WorkCard, blocks: CardContextRead['blocks'], openMerge: boolean) {
+function prepSendable(card: WorkCard, blocks: CardContextRead['blocks']) {
   if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return false
   const history = requestHistory(blocks)
   const deskAnswer = history.findLastIndex(note =>
     note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
   const earlierNotes = new Set(history.slice(0, deskAnswer + 1).map(note => note.id))
-  openMerge = openMerge && needsMergeEvidence(card)
-  const actions = value(card, 'Will action')
-  if (currentWillRequests(history, actions).some(request => !request.answered && !earlierNotes.has(request.sourceId) &&
-    (request.action.trim().toLowerCase() !== 'merge' || openMerge))) return true
-  if (deskAnswer >= 0) return false
-
-  if (value(card, 'Status') === 'Ready for Review') {
-    const submission = reviewSubmissions(history).at(-1)
-    if (submission && !decisionRecordRows(history, reviewResponsePrefix).some(row => row?.submission_key === submission.submission_key)) return true
-  }
-  const action = String(value(card, 'Next action') || value(card, 'Next Action') || '').trim()
-  return openMerge && mergeActionText(action) &&
-    !decisionRecordRows(history, 'Tin Star request: ').some(row => String(row?.action).trim().toLowerCase() === 'merge')
+  return currentWillRequests(history, value(card, 'Will action')).some(request =>
+    !request.answered && !earlierNotes.has(request.sourceId))
 }
 
-export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks'], openMerge = false) {
+export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
   return {
     card,
@@ -85,7 +66,7 @@ export function decisionCardSource(card: WorkCard, blocks: CardContextRead['bloc
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
-    prepEligible: prepSendable(card, blocks, openMerge),
+    prepEligible: prepSendable(card, blocks),
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>
