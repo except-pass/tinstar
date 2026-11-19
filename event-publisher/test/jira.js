@@ -96,9 +96,9 @@ exit 1
 
   equal((await fetch(webhook)).status, 405)
   equal((await post('wrong-path', webhookEvent('jira:issue_created'), { url: localUrl + '/other' })).status, 404)
-  equal((await post('wrong-path', webhookEvent('jira:issue_created'), { url: webhook + '?extra' })).status, 404)
-  equal((await post('unsigned', '{ invalid JSON', { signed: false })).status, 401)
-  equal((await post('bad-body', '{ invalid JSON', { headers: { 'X-Hub-Signature': signature('different bytes') } })).status, 401)
+  const triggeredByUser = webhook + '?triggeredByUser=123:synthetic-actor'
+  equal((await post('unsigned', '{ invalid JSON', { signed: false, url: triggeredByUser })).status, 401)
+  equal((await post('bad-body', '{ invalid JSON', { url: triggeredByUser, headers: { 'X-Hub-Signature': signature('different bytes') } })).status, 401)
   equal((await post('signed-invalid-json', '{ invalid JSON')).status, 400)
   equal((await post(null, webhookEvent('jira:issue_created'))).status, 400)
   equal((await post('foreign-project', webhookEvent('jira:issue_created', {
@@ -147,6 +147,7 @@ exit 1
     fault.close()
   }
   equal((await post('delivery-update', update)).status, 204)
+  equal((await post('delivery-update', update, { url: webhook + '?triggeredByUser=123:synthetic-actor' })).status, 204)
   equal((await post('delivery-update', update, { headers: { 'X-Atlassian-Webhook-Retry': '1' } })).status, 204)
   equal((await post('new-header-same-changelog', update)).status, 204)
 

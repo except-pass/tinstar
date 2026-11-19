@@ -57,7 +57,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -137,13 +137,22 @@ async function fixture() {
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
     }
     if (part === 'transitions' && method === 'GET') {
-      const available = transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
-      return response({ transitions: available })
+      const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
+      // Node fetch sends Accept-Language: *. Jira then translates these status names.
+      const localized = new Map([['To Do', '待办'], ['In Progress', '正在进行'], ['Ready for Review', '准备审查'], ['Decision', '决策'], ['Canceled', '已取消'], ['Done', '完成']])
+      const language = new Headers(init?.headers).get('accept-language')
+      const offered = language === 'en' ? available : available.map(transition => ({
+        ...transition, to: { ...transition.to, name: localized.get(transition.to.name) ?? transition.to.name },
+      }))
+      return response({ transitions: offered })
     }
     if ((!part && method === 'PUT') || (part === 'transitions' && method === 'POST')) {
       if (part && controls.refuseTransition) return response({}, 409)
       if (!part && body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
-      if (part) issue.fields.status = transitions.find(transition => transition.id === body.transition.id)!.to
+      if (part) {
+        controls.lastTransitionId = body.transition.id
+        issue.fields.status = (controls.transitionList ?? transitions).find(transition => transition.id === body.transition.id)!.to
+      }
       Object.assign(issue.fields, body.fields)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       const created = jiraNow()
@@ -742,3 +751,47 @@ it('persists only Jira operation kinds and dispatch marks', async () => {
     { input: 'edit', jiraWork: { dispatched: true } },
   ])
 }, 30_000)
+
+it('resolves a named TSW transition when Jira translates the destination status', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'TSW shape', owner: 'Avery',
+    description: 'Run the listed transition.\nSuccess: the destination status matches.',
+  })
+  const issue = f.issues.get('60001')!
+  // Live GET /issue/TSW-2/transitions while Backlog, plus one unavailable same-named row.
+  const backlog = [
+    { id: '99', name: 'Prioritize', to: { id: '10005', name: 'To Do' }, isAvailable: false },
+    { id: '2', name: 'Prioritize', to: { id: '10997', name: 'To Do' }, isAvailable: true },
+    { id: '4', name: 'Fast-track', to: { id: '10998', name: 'Queued' }, isAvailable: true },
+    { id: '38', name: 'Cancel', to: { id: '11006', name: 'Canceled' }, isAvailable: true },
+  ]
+  f.controls.transitionList = backlog
+  expect(await call('transition_work', { card_id, operation_id: 'prioritize', verb: 'Prioritize' })).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
+  expect(f.controls.lastTransitionId).toBe('2')
+  const queued = [
+    { id: '5', name: 'Start', to: { id: '10999', name: 'In Progress' }, isAvailable: true },
+    { id: '13', name: 'Request Decision', to: { id: '11000', name: 'Decision' }, isAvailable: true },
+    { id: '14', name: 'Block', to: { id: '11001', name: 'Waiting For' }, isAvailable: true },
+    { id: '28', name: 'Dequeue', to: { id: '10997', name: 'To Do' }, isAvailable: true },
+    { id: '31', name: 'Return for Preparation', to: { id: '10997', name: 'To Do' }, isAvailable: true },
+    { id: '38', name: 'Cancel', to: { id: '11006', name: 'Canceled' }, isAvailable: true },
+  ]
+  issue.fields.status = { name: 'Queued' }
+  f.controls.transitionList = queued
+  expect(await call('transition_work', { card_id, operation_id: 'dequeue', verb: 'Dequeue' })).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
+  expect(f.controls.lastTransitionId).toBe('28')
+  issue.fields.status = { name: 'Queued' }
+  expect(await call('transition_work', { card_id, operation_id: 'start', verb: 'Start', evidence: 'The listed transition ran.' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
+  expect(f.controls.lastTransitionId).toBe('5')
+  issue.fields.status = { name: 'Queued' }
+  issue.fields[config.fields.decisions] = 'D1 [Open]: Which option?'
+  expect(await call('transition_work', { card_id, operation_id: 'decide', verb: 'Request Decision' })).toMatchObject({ outcome: 'saved', card: { status: 'Decision' } })
+  expect(f.controls.lastTransitionId).toBe('13')
+  issue.fields.status = { name: 'Backlog' }
+  f.controls.transitionList = backlog.filter(transition => transition.id !== '2')
+  expect(await call('transition_work', { card_id, operation_id: 'missing', verb: 'Prioritize' })).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('does not offer the requested named transition'),
+  })
+})

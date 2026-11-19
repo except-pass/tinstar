@@ -70,6 +70,11 @@ export class JiraClient {
     const deadline = AbortSignal.timeout(20_000)
     const response = await fetcher(`${this.baseUrl}/rest/api/3/${path}`, { ...init,
       redirect: 'error', signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline, headers: { Accept: 'application/json',
+        // Node fetch sends Accept-Language: *. Jira then translates built-in status
+        // names (To Do, In Progress, Decision, Canceled), and the named-transition
+        // matcher misses transitions Jira is offering. Ask for the English names
+        // this contract compares.
+        'Accept-Language': 'en',
         Authorization: this.authorization,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
     if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }
