@@ -11,8 +11,8 @@ type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'merg
 type RequestOrder = { startedAt: number; sequence?: number }
 const compareOrder = (a: RequestOrder, b: RequestOrder) =>
   a.startedAt - b.startedAt || (a.sequence !== undefined && b.sequence !== undefined ? a.sequence - b.sequence : 0)
-type CachedObservation = { until: number; value: Observation; orderedAt: RequestOrder; coverageAt?: number }
-type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean; orderedAt: RequestOrder }
+type CachedObservation = { until: number; value: Observation; orderedAt?: RequestOrder; coverageAt?: number }
+type PollFailure = { message: string; refreshed: Set<string>; allowExact: boolean; orderedAt?: RequestOrder }
 type RepositoryPoll = { until: number; failure?: PollFailure }
 
 /** Poll recent updates together. Point reads fill old or unusually busy gaps. */
@@ -93,7 +93,8 @@ export class ReleasePullReader {
     if (!failure) return undefined
     const cached = this.cache.get(url)
     if (cached && this.current(url) && (failure.refreshed.has(url) || cached.value.freshness === 'fresh' &&
-        (failure.allowExact || cached.value.state === 'merged' || compareOrder(cached.orderedAt, failure.orderedAt) >= 0))) return undefined
+        (failure.allowExact || cached.value.state === 'merged' || !failure.orderedAt ||
+          cached.orderedAt && compareOrder(cached.orderedAt, failure.orderedAt) >= 0))) return undefined
     return failure.message
   }
 
@@ -133,14 +134,13 @@ export class ReleasePullReader {
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
     const refreshed = new Set<string>()
-    let pageOrder: RequestOrder = { startedAt: started }
     let origin: RequestOrder | undefined
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
       for (let page = 1; page <= 4; page++) {
         const pageStarted = this.now()
-        pageOrder = { startedAt: pageStarted, sequence: this.list === readReleasePullPage ? undefined : ++this.sequence }
+        const pageOrder: RequestOrder = { startedAt: pageStarted, sequence: this.list === readReleasePullPage ? undefined : ++this.sequence }
         origin = this.list === readReleasePullPage ? undefined : pageOrder
         const payload = releasePullPage.safeParse(await this.list(
           `/repos/${repository}/pulls?state=all&sort=updated&direction=desc&per_page=${pageSize}&page=${page}`, numbers, (startedAt, sequence) => { origin = { startedAt, sequence: sequence ?? pageOrder.sequence } }))
@@ -175,7 +175,7 @@ export class ReleasePullReader {
           this.freshMerge(url) || refreshed.has(url) && this.current(url))) break
       }
     } catch (error) {
-      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error), orderedAt: origin ?? pageOrder } }
+      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error), orderedAt: origin } }
     }
     return { until: started + refreshTtl }
   }
@@ -189,18 +189,19 @@ export class ReleasePullReader {
     return previous ? { ...previous, freshness: previous.observedAt ? 'stale' : 'unknown', readError } : { title: null, state: 'unknown', mergedAt: null, mergeSha: null, observedAt: null, freshness: 'unknown', readError }
   }
 
-  private save(url: string, value: Observation, orderedAt: RequestOrder, coverageAt?: number, until?: number): Observation {
+  private save(url: string, value: Observation, orderedAt?: RequestOrder, coverageAt?: number, until?: number): Observation {
     const current = this.cache.get(url)
     const confirmedMerge = value.state === 'merged' && value.freshness === 'fresh'
     if (current) {
       const currentMerge = current.value.state === 'merged'
-      const older = compareOrder(current.orderedAt, orderedAt) >= 0
+      if (!orderedAt && current.value.freshness === 'fresh' && this.current(url)) return current.value
+      const older = orderedAt && current.orderedAt && compareOrder(current.orderedAt, orderedAt) >= 0
       if ((older && (!confirmedMerge || currentMerge)) || (currentMerge && value.state !== 'merged')) {
         return this.current(url) || current.value.freshness === 'unknown' ? current.value : { ...current.value, freshness: 'stale' }
       }
     }
     const delay = confirmedMerge ? mergedTtl : refreshTtl
-    this.cache.set(url, { until: until ?? this.now() + delay, value, orderedAt, coverageAt })
+    this.cache.set(url, { until: until ?? this.now() + delay, value, orderedAt: orderedAt ?? current?.orderedAt, coverageAt })
     return value
   }
 
@@ -223,6 +224,7 @@ export class ReleasePullReader {
     } catch (error) {
       value = this.failed(url, this.readError(error, url))
     }
-    return this.save(url, value, origin ?? requestOrder, value.freshness === 'fresh' && origin ? Math.min(started, origin.startedAt) : undefined)
+    const order = origin ?? (value.freshness === 'fresh' ? requestOrder : undefined)
+    return this.save(url, value, order, value.freshness === 'fresh' && origin ? Math.min(started, origin.startedAt) : undefined)
   }
 }

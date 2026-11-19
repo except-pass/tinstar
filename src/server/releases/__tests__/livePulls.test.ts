@@ -42,3 +42,56 @@ it('preserves Queue readiness and check projections through live Reader', async 
     checks: 'passed', mergeability: 'ready' })
   expect(liveReaderJson).toHaveBeenCalledTimes(3)
 })
+
+it('lets a dispatched list row replace an overlapping unsent exact failure', async () => {
+  let clock = now
+  let finishList!: () => void, finishOther!: () => void
+  const listGate = new Promise<void>(resolve => { finishList = resolve })
+  const otherGate = new Promise<void>(resolve => { finishOther = resolve })
+  const otherUrl = (number: number) => `https://github.com/fortresspower/other/pull/${number}`
+  const second = url.replace('/1', '/2')
+  const page = (state: string) => ({
+    rows: [1, 2].map(number => ({ ...pull, number, state, updated_at: new Date(now).toISOString() })),
+    count: 2, oldestUpdatedAt: new Date(now).toISOString(),
+  })
+  vi.mocked(liveReaderJson).mockImplementation(async (requested, _projection, _numbers, onStart) => {
+    if (requested === path) throw new Error('GitHub REST rate limited')
+    onStart?.(clock)
+    if (requested.includes('/other/')) {
+      await otherGate
+      return page('open')
+    }
+    await listGate
+    return page('closed')
+  })
+  const reader = new ReleasePullReader(undefined, () => clock)
+  const exact = reader.get([url, otherUrl(1), otherUrl(2)])
+  const batch = reader.get([url, second])
+  try {
+    clock += 1_000
+    finishOther()
+    expect((await exact).get(url)).toMatchObject({ state: 'unknown', readError: 'GitHub REST rate limited' })
+  } finally {
+    finishOther()
+    finishList()
+  }
+  expect((await batch).get(url)).toMatchObject({ state: 'closed', freshness: 'fresh' })
+})
+
+it('preserves dispatched evidence when a subsequent list attempt fails before dispatch', async () => {
+  let clock = now
+  vi.mocked(liveReaderJson).mockImplementation(async (requested, _projection, _numbers, onStart) => {
+    if (requested !== path) throw new Error('GitHub REST rate limited')
+    onStart?.(clock)
+    return pull
+  })
+  const reader = new ReleasePullReader(undefined, () => clock)
+  const first = await reader.get([url])
+  clock += 1_000
+  const second = url.replace('/1', '/2')
+  for (const result of [await reader.get([url, second]), await reader.get([url, second])]) {
+    expect(result.get(url)).toEqual(first.get(url))
+    expect(result.get(second)).toMatchObject({ state: 'unknown', readError: 'GitHub REST rate limited' })
+  }
+  expect(liveReaderJson).toHaveBeenCalledTimes(2)
+})
