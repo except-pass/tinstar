@@ -78,6 +78,16 @@ export interface RetractionAnswerSources {
 }
 export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
 
+function requestQuestion(lines: string[]) {
+  const start = lines.findIndex(line => line.startsWith('Question: '))
+  if (start < 0) return null
+  const record = lines.findLastIndex(line => line.startsWith('Tin Star request: '))
+  if (record <= start) return lines[start]!.slice('Question: '.length)
+  const recipient = start === 0 ? lines.findIndex(line => line.startsWith('Requested from: ')) : -1
+  const end = recipient > start && recipient < record ? recipient : record
+  return [lines[start]!.slice('Question: '.length), ...lines.slice(start + 1, end)].join('\n')
+}
+
 export function decisionRequests(notes: RequestNote[]) {
   const answered = new Set<string>()
   for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)
@@ -99,7 +109,7 @@ export function decisionRequests(notes: RequestNote[]) {
           : lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: replacement
           ? (typeof row.question === 'string' ? row.question : null)
-          : lines.find(line => line.startsWith('Question: '))?.slice('Question: '.length) ?? null,
+          : requestQuestion(lines),
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) || answered.has(note.id) }]
     } catch { return [] }
   }))

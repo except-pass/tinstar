@@ -17,6 +17,10 @@ const callbackStates = ['sending', 'sent', 'failed']
 const callbackStateSql = `state IN (${callbackStates.map(state => `'${state}'`).join(',')})`
 const liveJobSql = `${callbackStateSql} AND at > ?`
 
+export function isLivePreparation(job: Pick<Job, 'state' | 'at'>, now: number) {
+  return callbackStates.includes(job.state) && job.at > now - retryAfter
+}
+
 function requireLivePreparation(job: Pick<Job, 'state' | 'at'>, cutoff: number) {
   if (job.at <= cutoff) throw new DecisionDeskConflict('The preparation job expired')
   if (!callbackStates.includes(job.state)) throw new DecisionDeskConflict('The preparation job stopped')
@@ -93,16 +97,18 @@ export class DecisionPreparation {
       const jobs = db.prepare(
         'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? ORDER BY at DESC LIMIT 100',
       ).all(this.scope) as unknown as Job[]
-      const liveJobs = db.prepare(`SELECT card FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
-        .all(this.scope, this.now() - retryAfter) as Array<{ card: string }>
       return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
-        preparing: liveJobs.length, liveCards: liveJobs.map(job => job.card) }
+        preparing: this.liveCount(db, this.now() - retryAfter) }
     })
   }
 
-  latestJobInStorage(db: DatabaseSync, card: string) {
-    return db.prepare('SELECT state,message FROM decision_card_prep WHERE scope = ? AND card = ? ORDER BY at DESC, rowid DESC LIMIT 1')
-      .get(this.scope, card) as Pick<Job, 'state' | 'message'> | undefined
+  hasJobHistoryInStorage(db: DatabaseSync, card: string) {
+    return !!db.prepare('SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? LIMIT 1').get(this.scope, card)
+  }
+
+  latestJobInStorage(db: DatabaseSync, card: string, revision: string) {
+    return db.prepare('SELECT state,message,at FROM decision_card_prep WHERE scope = ? AND card = ? AND revision = ? ORDER BY at DESC, rowid DESC LIMIT 1')
+      .get(this.scope, card, revision) as Pick<Job, 'state' | 'message' | 'at'> | undefined
   }
 
   replenish(): Promise<void> {

@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets, type StoredDecisionPacket } from './decisionPackets'
-import type { DecisionPreparation } from './decisionPrep'
+import { isLivePreparation, type DecisionPreparation } from './decisionPrep'
 import type { WorkCard } from './workReader'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
@@ -24,7 +24,7 @@ export class PreparedReviews {
   private initialized?: Promise<void>
   constructor(readonly packets: DecisionPackets, private queue: () => PreparedQueue,
     private readSource: (card: string) => Promise<import('./decisionEvidence').DecisionCardSource>,
-    private preparation: Pick<DecisionPreparation, 'status'>, private now = Date.now) {}
+    private preparation: Pick<DecisionPreparation, 'status' | 'hasJobHistoryInStorage' | 'latestJobInStorage'>, private now = Date.now) {}
   get scope() { return this.packets.scope }
   private get leases() { return this.packets.leases }
   async initialize() {
@@ -78,18 +78,25 @@ export class PreparedReviews {
   }
   async snapshot() {
     await this.initialize()
-    const { liveCards, ...prep } = await this.preparation.status()
-    const preparing = new Set(liveCards)
+    const prep = await this.preparation.status()
+    const queue = this.queue()
+    const pending = this.leases.readStorage(db => queue.cards.filter(card =>
+      this.preparation.hasJobHistoryInStorage(db, card.id) &&
+      !this.packets.currentInStorage(db, card.id) &&
+      !this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))))
+    const revisions = new Map(await Promise.all(pending.map(async card => [
+      card.id, (await this.readSource(card.id).catch(() => undefined))?.revision,
+    ] as const)))
     return this.leases.readStorage(db => {
-      const queue = this.queue()
       const now = this.now()
       const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
-        const job = this.preparation.latestJobInStorage(db, card.id)
+        const revision = revisions.get(card.id)
+        const job = revision ? this.preparation.latestJobInStorage(db, card.id, revision) : undefined
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
-          preparing.has(card.id) ? 'Preparing' :
+          job && isLivePreparation(job, now) ? 'Preparing' :
           job?.state === 'expired' ? 'Retrying' :
           job?.state === 'stopped' ? job.message || 'Preparation stopped' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }

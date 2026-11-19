@@ -75,6 +75,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
   fixtures.push(() => rm(root, { recursive: true, force: true }))
   const published: unknown[] = []
   const jobs: Array<{ card_url: string; source_question: string; source_revision: string; publish: { tool: string; job_id: string } }> = []
+  const createdTimes = new Map<string, string>()
   const writes: Array<{ card: string; type: string; token: string | null }> = []
   type Call = (name: string, args: Record<string, unknown>) => Promise<any>
   let tool: Call
@@ -111,10 +112,10 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     if (method !== 'GET') writes.push({ card: card.id, type: method, token: new Headers(init?.headers).get('Authorization') })
     if (url.pathname === '/v1/comments') {
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
-      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
+      return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_time: createdTimes.get(entry), created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
     }
     if (url.pathname.endsWith('/children')) return Response.json({
-      results: card.body.map((entry, index) => ({ id: `block-${index}`, type: 'paragraph', paragraph: { rich_text: text(entry) } })),
+      results: card.body.map((entry, index) => ({ id: `block-${index}`, created_time: createdTimes.get(entry), type: 'paragraph', paragraph: { rich_text: text(entry) } })),
       has_more: false,
     })
     if (method === 'PATCH') {
@@ -157,7 +158,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -355,12 +356,12 @@ describe('prepared-card loop', () => {
     card.properties['Next action'] = rich('Deploy the current build')
     const { sources, jobs, published, tool, web } = await setup([card])
     expect(await tool('update_work', { card_id: card.id, operation_id: 'ask-about-rollout', kind: 'request_decision',
-      request_id: 'rollout', requested_from: 'Will', question: 'Should we cancel the rollout with token=fixture-private-token still active?' }))
+      request_id: 'rollout', requested_from: 'Will', question: 'Please decide the following:\nShould we cancel the rollout with token=fixture-private-token still active?' }))
       .toMatchObject({ outcome: 'saved' })
     await sources.preparation.replenish()
     expect(jobs).toEqual([{
       card_url: expect.stringContaining(card.id),
-      source_question: 'Should we cancel the rollout with token=[credential omitted] still active?',
+      source_question: 'Please decide the following:\nShould we cancel the rollout with token=[credential omitted] still active?',
       source_revision: expect.any(String),
       publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
     }])
@@ -411,9 +412,9 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('card changed') })
   })
 
-  it('requires a new request after a browser answer', async () => {
+  it.each(['comment', 'body'] as const)('requires a new %s request after a browser answer', async location => {
     const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' })), other = withOpenRequest(page(2, { tag: 'Decision' }))
-    const { sources, jobs, tool, web } = await setup([card, other], false)
+    const { sources, jobs, tool, web, createdTimes } = await setup([card, other], false)
     await sources.preparation.replenish()
     for (const { publish } of jobs) {
       expect(await tool(publish.tool, { job_id: publish.job_id, packet: { ...contents,
@@ -452,7 +453,19 @@ describe('prepared-card loop', () => {
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
 
-    card.comments.push('Requested from: Will\nQuestion: Decide on the new request?\nTin Star request: {"id":"second-request","action":"Decision"}')
+    const request = 'Requested from: Will\nQuestion: Decide on the new request?\nTin Star request: {"id":"second-request","action":"Decision"}'
+    if (location === 'body') {
+      createdTimes.set(kept!, '2025-01-02T00:00:00Z')
+      const older = request.replace('second-request', 'older-request')
+      createdTimes.set(older, '2025-01-01T00:00:00Z')
+      card.body.push(older)
+      await sources.preparation.replenish()
+      expect(jobs).toHaveLength(2)
+      createdTimes.set(request, '2025-01-03T00:00:00Z')
+      card.body.push(request)
+    } else {
+      card.comments.push(request)
+    }
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(3)
     expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
@@ -779,6 +792,9 @@ describe('prepared-card loop', () => {
     expect(snapshot.counts.preparing).toBe(state === 'live' ? 1 : 0)
     const label = state === 'live' ? 'Preparing' : state === 'expired' ? 'Retrying' : 'Preparation stopped after two sends without a packet'
     expect(snapshot.pending).toEqual([expect.objectContaining({ card_id: card.id, state: label })])
+
+    card.comments.push('Requested from: Will\nQuestion: Decide on the revised request?\nTin Star request: {"id":"revised","action":"Decision"}')
+    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Queued' })])
   })
 
   it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {

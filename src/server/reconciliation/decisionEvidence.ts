@@ -55,11 +55,19 @@ function prepBlocked(card: WorkCard) {
 function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
   if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
   const history = requestHistory(blocks)
-  const deskAnswer = history.findLastIndex(note =>
+  const chronology = new Map(history.map((note, position) => [note.id, {
+    position, type: note.type, created: Date.parse(note.createdAt ?? note.created_time ?? ''),
+  }]))
+  const answers = history.filter(note =>
     note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
-  const earlierNotes = new Set(history.slice(0, deskAnswer + 1).map(note => note.id))
-  return currentWillRequests(history, value(card, 'Will action')).filter(request =>
-    !request.answered && !earlierNotes.has(request.sourceId))
+    .map(note => chronology.get(note.id)!)
+  return currentWillRequests(history, value(card, 'Will action')).filter(request => {
+    if (request.answered) return false
+    const source = chronology.get(request.sourceId)!
+    return answers.every(answer => Number.isFinite(source.created) && Number.isFinite(answer.created) && source.created !== answer.created
+      ? source.created > answer.created
+      : source.type === 'comment' && source.position > answer.position)
+  })
 }
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
