@@ -42,6 +42,8 @@ Owner is one Jira single select with approved names and no default. Decision Que
 
 ## MCP calls
 
+Tin Star requests English status names from Jira Cloud for transition matching and readback, regardless of the service account's language preference.
+
 | Tool | Arguments and result |
 | --- | --- |
 | `create_work` | Set `provider: "jira"`, `name`, and `operation_id`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |

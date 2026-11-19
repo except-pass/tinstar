@@ -249,7 +249,9 @@ export async function startJiraWebhook(journal, config, secret) {
     res.end()
   }
   const receive = async (req, res) => {
-    if (req.url !== webhookPath) return respond(res, 404)
+    // Jira's signed admin webhook posts /webhooks/jira?triggeredByUser=<account id>.
+    const requestPath = (req.url ?? '').split('?')[0]
+    if (requestPath !== webhookPath) return respond(res, 404)
     if (req.method !== 'POST') return respond(res, 405)
     const signature = /^sha256=([a-f0-9]{64})$/i.exec(req.headers['x-hub-signature'] ?? '')
     if (!signature) return respond(res, 401)
