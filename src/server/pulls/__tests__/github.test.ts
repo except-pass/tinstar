@@ -158,13 +158,36 @@ it('classifies malformed quoted gh-axi output as an unreadable successful respon
   expect(exec).toHaveBeenCalledTimes(2)
 })
 
+it('omits dispatch timing when a spawn failure is followed by a blocked fallback', async () => {
+  let failSpawn!: (error: Error) => void
+  exec.mockImplementationOnce((_binary, _args, _options, done) => { failSpawn = done })
+  const original = vi.fn(), joined = vi.fn()
+  const first = github.githubCliJson(pulls, '.', undefined, true, original)
+  const concurrent = github.githubCliJson(pulls, '.', undefined, true, joined)
+  const rejected = Promise.allSettled([first, concurrent])
+  answer(429, null, 'Retry-After: 120\n')
+  await expect(github.githubJson('/repos/owner/other/pulls')).rejects.toThrow('GitHub REST rate limited')
+  failSpawn(Object.assign(new Error('gh unavailable'), { code: 'ENOENT' }))
+  for (const result of await rejected) {
+    expect(result).toMatchObject({ status: 'rejected', reason: { message: 'GitHub REST rate limited' } })
+  }
+  expect(original).not.toHaveBeenCalled()
+  expect(joined).not.toHaveBeenCalled()
+  expect(exec).toHaveBeenCalledTimes(2)
+})
+
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
   const log = vi.spyOn(console, 'info').mockImplementation(() => {})
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]
-  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  exec.mockImplementationOnce((_binary, _args, _options, done) => {
+    vi.setSystemTime(clock + 100)
+    done(Object.assign(new Error('missing gh'), { code: 'ENOENT' }))
+  })
   exec.mockImplementationOnce((_binary, _args, _options, done) => done(null, { stdout: `payload: ${Buffer.from(JSON.stringify(data)).toString('base64')}\n` }))
   const limits = { timeout: 5_000, maxBuffer: 64 * 1024 }
-  expect(await github.githubCliJson(pulls, '.', limits)).toEqual(data)
+  const started = vi.fn()
+  expect(await github.githubCliJson(pulls, '.', limits, true, started)).toEqual(data)
+  expect(started.mock.calls).toEqual([[clock + 100, expect.any(Number)]])
   expect(exec.mock.calls.map(call => call[2])).toEqual([limits, limits])
   expect(exec.mock.calls[1]?.slice(0, 2)).toEqual(['gh-axi', ['api', 'GET', pulls, '--jq', '{payload:(.|tojson|@base64)}', '--full']])
   await vi.advanceTimersByTimeAsync(3_600_000)

@@ -151,7 +151,7 @@ export class ReleasePullReader {
         const observedAt = new Date(coverageAt ?? pageStarted).toISOString()
         for (const row of rows) {
           const url = byNumber.get(row.number)
-          if (!url || observed.has(url) || this.freshMerge(url)) continue
+          if (!url || this.freshMerge(url)) continue
           observed.add(url)
           try {
             const value = this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt)

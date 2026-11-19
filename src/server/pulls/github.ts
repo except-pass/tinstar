@@ -30,12 +30,25 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
 type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string | null }
 type CliLimits = typeof options
 
-async function includedRequest(binary: string, path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (response: GithubRestHeaders) => void) {
+type MarkDispatch = () => () => void
+
+async function execGet(binary: string, args: string[], limits: CliLimits, dispatched?: MarkDispatch) {
+  const clear = dispatched?.()
+  try {
+    return await exec(binary, args, limits)
+  } catch (error) {
+    const failure = error as CliError
+    if (failure.syscall?.startsWith('spawn ') || failure.code === 'ENOENT' || failure.code === 'EACCES') clear?.()
+    throw error
+  }
+}
+
+async function includedRequest(binary: string, path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (response: GithubRestHeaders) => void, dispatched: MarkDispatch) {
   const args = ['api', path, '--method', 'GET', '--include', '--jq', `{payload:(${projection})}`]
   if (etag) args.push('--header', `If-None-Match:${etag}`)
   let stdout: string
   let failure: CliError | undefined
-  try { ({ stdout } = await exec(binary, args, limits)) }
+  try { ({ stdout } = await execGet(binary, args, limits, dispatched)) }
   catch (error) {
     // gh exits nonzero for 304, 403 and 429, but keeps HTTP metadata on stdout.
     failure = error as CliError
@@ -51,9 +64,9 @@ async function includedRequest(binary: string, path: string, projection: string,
   return response
 }
 
-async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits): Promise<GithubRestResponse> {
+async function legacyRequest(args: string[], decode: (stdout: string) => unknown, commandOptions: CliLimits, dispatched?: MarkDispatch): Promise<GithubRestResponse> {
   try {
-    const { stdout } = await exec('gh-axi', args, commandOptions)
+    const { stdout } = await execGet('gh-axi', args, commandOptions, dispatched)
     return { status: 200, data: decode(stdout) }
   } catch (error) {
     if (isGithubResponseError(error)) throw error
@@ -70,9 +83,9 @@ async function legacyRequest(args: string[], decode: (stdout: string) => unknown
   }
 }
 
-async function cliGet(binary: string, path: string, projection: string, etag: string | undefined, limits: CliLimits, allowFallback: boolean) {
+async function cliGet(binary: string, path: string, projection: string, etag: string | undefined, limits: CliLimits, allowFallback: boolean, dispatched: MarkDispatch) {
   try {
-    const response = await budget.send(received => includedRequest(binary, path, projection, etag, limits, received))
+    const response = await budget.send(received => includedRequest(binary, path, projection, etag, limits, received, dispatched))
     if (response.status >= 200 && response.status < 300) {
       if (!response.data || typeof response.data !== 'object' || !('payload' in response.data)) throw new GithubResponseError()
       response.data = response.data.payload
@@ -93,16 +106,14 @@ async function cliGet(binary: string, path: string, projection: string, etag: st
       } catch {
         throw new GithubResponseError()
       }
-    }, limits))
+    }, limits, dispatched))
   }
 }
 
 export function githubCliJson(path: string, projection = '.', limits: CliLimits = options, allowFallback = true, onStart?: (startedAt: number, sequence?: number) => void): Promise<unknown> {
   const binary = allowFallback ? process.env.GH_BIN || 'gh' : 'gh'
-  return budget.get(JSON.stringify([binary, path, projection, limits.timeout, limits.maxBuffer, allowFallback]), (etag, dispatched) => {
-    dispatched()
-    return cliGet(binary, path, projection, etag, limits, allowFallback)
-  }, onStart)
+  return budget.get(JSON.stringify([binary, path, projection, limits.timeout, limits.maxBuffer, allowFallback]), (etag, dispatched) =>
+    cliGet(binary, path, projection, etag, limits, allowFallback, dispatched), onStart)
 }
 
 export async function githubCliPost(path: string, input: string, limits: CliLimits): Promise<unknown> {

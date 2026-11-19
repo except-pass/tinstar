@@ -171,6 +171,20 @@ describe('bounded read-only release PR observations', () => {
     expect(list).toHaveBeenCalledTimes(3)
   })
 
+  it('uses a newer mutable row when a linked PR appears on two pages', async () => {
+    let now = Date.now()
+    const list = vi.fn().mockImplementationOnce(async () => {
+      const first = page([row(1, now, 'open')], 100)
+      now += 1_000
+      return first
+    }).mockImplementationOnce(async () => page([row(1, now, 'closed'), row(2, now, 'open')]))
+    const read = vi.fn()
+    const result = await new ReleasePullReader(read, () => now, list).get([url(1), url(2)])
+    expect(result.get(url(1))).toMatchObject({ state: 'closed', freshness: 'fresh', observedAt: new Date(now).toISOString() })
+    expect(result.get(url(2))).toMatchObject({ state: 'open', freshness: 'fresh' })
+    expect(read).not.toHaveBeenCalled()
+  })
+
   it('stops after a full page resolves every linked PR', async () => {
     const now = Date.now()
     const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'closed')], 100))

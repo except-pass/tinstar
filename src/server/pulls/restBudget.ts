@@ -36,7 +36,7 @@ function holdUntil({ status, headers }: GithubRestHeaders, now: number, data?: u
   return Number.isFinite(deadline) && deadline > now ? deadline : now + 60_000
 }
 
-type ReadDispatch = (etag: string | undefined, dispatched: () => void) => Promise<GithubRestResponse>
+type ReadDispatch = (etag: string | undefined, dispatched: () => () => void) => Promise<GithubRestResponse>
 type PendingRead = { work: Promise<unknown>; origin: { timing?: [startedAt: number, sequence: number] } }
 
 export class GithubRestBudget {
@@ -106,7 +106,10 @@ export class GithubRestBudget {
     const origin: PendingRead['origin'] = {}
     const cached = this.cache.get(key)
     const work = (async () => {
-      const response = await send(cached?.etag, () => { origin.timing ??= [this.now(), ++this.sequence] })
+      const response = await send(cached?.etag, () => {
+        origin.timing = [this.now(), ++this.sequence]
+        return () => { delete origin.timing }
+      })
       if (response.status === 304 && cached) return cached.data
       if (response.status < 200 || response.status >= 300) throw new Error(`GitHub read failed (HTTP ${response.status})`)
       if (cached) { this.cache.delete(key); this.cacheBytes -= cached.bytes }
