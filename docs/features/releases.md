@@ -58,13 +58,13 @@ mark association coverage incomplete and show a safe warning, including on a
 cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
-Catalog and Actions observations cache for two minutes. Only the recent five tags
+Catalog observations cache for two minutes. Actions observations cache for one minute. Only the recent five tags
 and an explicit historical selection receive Actions reads. Membership advances for
 the latest and selected releases and for untagged main. Catalogs paginate up to
 ten pages and report partial coverage at that limit. Source loss retains known
 observations with a visible unknown state; missing data never means no releases.
 Actions freshness is evaluated on every display from each detail read's cache
-timestamp. After two minutes, retained runs remain visible as last-known evidence,
+timestamp. After one minute, retained runs remain visible as last-known evidence,
 with unknown activity and partial source coverage even while the next catalog
 read is pending. A successful complete Actions read restores fresh evidence.
 
@@ -158,7 +158,7 @@ repositories with multiple linked PRs. It retains merged observations for 24 hou
 in memory, even if a PR temporarily leaves the requested set. Unchanged open
 and closed associations reuse their last observation when the list covers the
 time since it was checked. Older links outside the list window can use up to four
-individual reads per pass, with open work first. A failed repository poll retains
+individual reads per pass in rotating order. A failed repository poll retains
 last-known state and retries at the next interval.
 
 ### Configure existing sources

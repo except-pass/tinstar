@@ -5,13 +5,16 @@ const pollInterval = 120_000
 const sha = 'a'.repeat(40), url = (number: number) => `https://github.com/owner/repo/pull/${number}`
 const merged = { title: 'Real PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: sha }
 const row = (number: number, updated: number, state: 'open' | 'closed', mergedAt: string | null = null) => ({
-  number, title: 'Linked PR', state, merged_at: mergedAt, merge_commit_sha: sha, updated_at: new Date(updated).toISOString(),
+  number, state, merged_at: mergedAt, merge_commit_sha: sha, updated_at: new Date(updated).toISOString(),
   head: { sha }, base: { ref: 'main' },
+})
+const page = (rows: ReturnType<typeof row>[], count = rows.length, oldestUpdatedAt = rows.at(-1)?.updated_at ?? null) => ({
+  rows, count, oldestUpdatedAt,
 })
 describe('bounded read-only release PR observations', () => {
   it('uses GitHub effective merge commit, bounds calls, rotates coverage, and reuses stable merged evidence', async () => {
     let now = Date.now()
-    const read = vi.fn().mockResolvedValue(merged), list = vi.fn().mockResolvedValue([])
+    const read = vi.fn().mockResolvedValue(merged), list = vi.fn().mockResolvedValue(page([]))
     const reader = new ReleasePullReader(read, () => now, list)
     const urls = Array.from({ length: 8 }, (_, index) => url(index + 1))
     const first = await reader.get(urls)
@@ -67,7 +70,7 @@ describe('bounded read-only release PR observations', () => {
     await reader.get(urls)
     expect(list).toHaveBeenCalledTimes(1)
     now += 1
-    list.mockResolvedValue([row(450, now, 'closed', merged.merged_at)])
+    list.mockResolvedValue(page([row(450, now, 'closed', merged.merged_at)]))
     read.mockResolvedValue(merged)
     expect((await reader.get(urls)).get(url(450))).toMatchObject({ state: 'merged', freshness: 'fresh', mergeSha: sha })
     expect(list).toHaveBeenCalledTimes(2)
@@ -77,22 +80,21 @@ describe('bounded read-only release PR observations', () => {
   it('refreshes changed PRs in one list and leaves unchanged and merged PRs off the point-read loop', async () => {
     let now = Date.now()
     const urls = [url(1), url(2), url(3)]
-    const read = vi.fn(), list = vi.fn().mockResolvedValue([
+    const read = vi.fn(), list = vi.fn().mockResolvedValue(page([
       row(1, now, 'closed', merged.merged_at), row(2, now, 'closed'), row(3, now, 'open'),
-    ])
+    ]))
     const reader = new ReleasePullReader(read, () => now, list)
     const first = await reader.get(urls)
     expect(first.get(url(1))).toMatchObject({ state: 'merged', mergeSha: sha })
     expect(first.get(url(2))).toMatchObject({ state: 'closed', mergeSha: null })
     now += pollInterval
-    const older = Array.from({ length: 99 }, (_, index) => row(index + 4, now - 2 * pollInterval, 'closed'))
-    list.mockResolvedValue([row(2, now, 'open'), ...older])
+    list.mockResolvedValue(page([row(2, now, 'open')], 100, new Date(now - 2 * pollInterval).toISOString()))
     const refreshed = await reader.get(urls)
     expect(refreshed.get(url(1))).toEqual(first.get(url(1)))
     expect(refreshed.get(url(2))).toMatchObject({ state: 'open', freshness: 'fresh' })
     expect(refreshed.get(url(3))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
     expect(list).toHaveBeenCalledTimes(2)
-    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', expect.any(String))
+    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', [1, 2, 3])
     expect(read).not.toHaveBeenCalled()
   })
 

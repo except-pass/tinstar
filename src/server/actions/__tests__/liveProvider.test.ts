@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { LiveProvider, brokerConfigSchema, readerScope, type ProviderRequest, type ProviderTransport } from '../liveProvider'
-import { assertBrokerIdentity, listenBroker } from '../brokerService'
+import { assertBrokerIdentity, brokerServer, listenBroker } from '../brokerService'
 import { ActionExecutor } from '../executor'
 import { ActionStore } from '../store'
 import { head, snapshot, installed, policy, run, merge } from './fixtures'
@@ -12,6 +12,8 @@ import { readerRepositories, type ActionOperation } from '../../../shared/action
 import { brokerData, brokerRequest } from '../liveClient'
 import { githubJson } from '../../pulls/github'
 import { PullReader } from '../../pulls/reader'
+import { readReleasePullPage } from '../../pulls/releasePullPage'
+import { ReleasePullReader } from '../../releases/pulls'
 import { sourceDigest } from '../examples'
 import { stageTestRuntime } from './runtimeFixture'
 
@@ -72,6 +74,40 @@ it('mints only explicit repository IDs and minimal endpoint permissions; keeps J
   const externallyVisible = JSON.stringify([output, fixture.provider, logged.mock.calls, process.env])
   for (const value of [secret, privateKey, fixture.requests[0]!.authorization]) expect(externallyVisible).not.toContain(value)
   expect(fixture.requests.every(request => request.authorization !== process.env.GH_TOKEN)).toBe(true)
+})
+it('keeps only linked PR fields in live release polling and stored observations', async () => {
+  const updatedAt = '2026-11-08T12:00:00Z'
+  const path = '/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1'
+  const row = { number: 1, state: 'open', merged: false, merged_at: null, closed_at: null,
+    updated_at: updatedAt, merge_commit_sha: null, head: { sha: head }, base: { ref: 'main' } }
+  const fixture = await setup({ response: async ({ path: requested }) => requested === path ? [
+    { ...row, title: 'private title', body: 'private body', requested_reviewers: ['private reviewer'],
+      head: { sha: head, label: 'private head' }, base: { ref: 'main', label: 'private base' } },
+    { ...row, number: 2, state: 'closed' },
+    { ...row, number: 3, title: 'unlinked PR' },
+  ] : undefined })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTIONS_LIVE', 'reader-repair')
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  try {
+    await expect(githubJson(path)).rejects.toThrow('Linked PR numbers required')
+    expect(await readReleasePullPage(path, [1, 2])).toEqual({
+      rows: [row, { ...row, number: 2, state: 'closed' }], count: 3, oldestUpdatedAt: updatedAt,
+    })
+    const urls = [1, 2].map(number => `https://github.com/fortresspower/cmsandbox/pull/${number}`)
+    const pointRead = vi.fn()
+    const reader = new ReleasePullReader(pointRead, () => Date.parse(updatedAt))
+    const expected = [row, { ...row, state: 'closed' }].map(({ state }, index) => [urls[index], {
+      title: null, state, head, base: 'main', mergedAt: null, mergeSha: null, freshness: 'fresh',
+      observedAt: new Date(updatedAt).toISOString(),
+    }])
+    expect([...(await reader.get(urls))]).toEqual(expected)
+    expect([...(await reader.get(urls))]).toEqual(expected)
+    expect(pointRead).not.toHaveBeenCalled()
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
 })
 it('uses verified installation identity, separately from review author, on exactly ten repositories', async () => {
   const fixture = await setup()

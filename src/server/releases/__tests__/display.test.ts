@@ -82,7 +82,10 @@ describe('progressive Releases display', () => {
     expect(initial.status).toBe('fresh')
     expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
     const retainedRuns = initial.releases[0]!.github!.runs
-    clock += 120_000; blocked = true
+    clock += 60_000
+    expect(reader.display(data())).toMatchObject({ refreshing: false, status: 'partial' })
+    expect(reader.display(data()).releases[0]!.github).toMatchObject({ runsStatus: 'unknown', runs: retainedRuns })
+    clock += 60_000; blocked = true
     try {
       const expired = reader.display(data())
       expect(expired).toMatchObject({ refreshing: true, status: 'partial' })

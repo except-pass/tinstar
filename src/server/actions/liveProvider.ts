@@ -10,6 +10,7 @@ import { readActionJob, readActionSnapshot } from './evidence'
 import { BrokerEffectError, simulatedRequest } from './broker'
 import type { RunnerResource } from './sandbox'
 import { GithubRestBudget, isGithubRateLimit, type GithubRestHeaders, type GithubRestResponse } from '../pulls/restBudget'
+import { minimizeReleasePullPage } from '../pulls/releasePullPage'
 
 const id = z.number().int().positive().safe()
 const app = z.object({ appId: id, installations: z.array(z.object({ installationId: id, repositories: z.record(id) }).strict()).min(1) }).strict()
@@ -152,7 +153,7 @@ export class LiveProvider {
     this.#tokens.set(cacheKey, { token: token.token, until: expires })
     return token.token
   }
-  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string) {
+  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string, pullNumbers?: number[]) {
     let authorization: string
     try { this.rest.assertAvailable(); authorization = await this.token(profile, repository, permissions); await beforeSend?.(); this.rest.assertAvailable() }
     catch (error) { throw new BrokerEffectError(error instanceof Error ? error.message : 'Broker validation refused request', 'not-sent') }
@@ -163,11 +164,17 @@ export class LiveProvider {
       throw new BrokerEffectError('GitHub broker request failed; outcome unknown, no automatic retry', 'unknown')
     }
     if (!(method === 'GET' && response.status === 304) && (response.status < 200 || response.status >= 300)) throw new BrokerEffectError(`GitHub broker request refused (${response.status}); no retry or permission expansion`, response.status >= 500 ? 'unknown' : 'not-sent')
-    return { ...response, data: this.redact(response.data) }
+    const data = pullNumbers && response.status !== 304 ? minimizeReleasePullPage(response.data, pullNumbers) : response.data
+    return { ...response, data: this.redact(data) }
   }
-  read = async (path: string, _projection = '.'): Promise<unknown> => {
+  read = async (path: string, _projection = '.', pullNumbers?: number[]): Promise<unknown> => {
     const { repository, permissions } = readerScope(path)
-    return this.rest.get(path, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag))
+    const query = new URLSearchParams(path.split('?')[1])
+    const releasePoll = path.split('?')[0] === `/repos/${repository}/pulls` &&
+      [...query].some(([key, value]) => key === 'state' && value === 'all' || key === 'sort' || key === 'direction')
+    if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
+    const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
+    return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers))
   }
   snapshot = (url: string) => readActionSnapshot(url, this.read)
   async identity() {

@@ -22,5 +22,5 @@ export async function brokerData(path: string, body?: unknown) {
   if (!parsed.ok || response.status !== 200) throw new Error(parsed.error?.message ?? 'Live Reader/Repair unavailable')
   return parsed.data
 }
-export const liveReaderJson = (path: string, _projection = '.') => brokerData('/reader', { path })
+export const liveReaderJson = (path: string, _projection = '.', pullNumbers?: number[]) => brokerData('/reader', { path, pullNumbers })
 export const liveReaderIdentity = async () => z.object({ account: z.string(), owners: z.array(z.string()), repositories: z.array(z.string()), authenticatedActor: z.string(), credentialProfile: z.literal('Reader') }).parse(await brokerData('/identity'))
