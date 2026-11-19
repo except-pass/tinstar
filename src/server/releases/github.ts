@@ -264,9 +264,10 @@ export class GithubReleaseReader {
     for (let offset = 0; offset < recent.length; offset += 3) {
       await Promise.all(recent.slice(offset, offset + 3).map(async tag => {
         const key = `${tag.name}:${tag.commit.sha}`
+        const runs: z.infer<typeof runSchema>[] = []
+        let complete = false
+        let failed = false
         try {
-          const runs: z.infer<typeof runSchema>[] = []
-          let complete = false
           for (let page = 1; page <= 10; page++) {
             // Match exact tag/event locally. The existing Reader already supports
             // head_sha; an extra event query needlessly depends on broker rollout.
@@ -275,13 +276,19 @@ export class GithubReleaseReader {
             if (runs.length >= raw.total_count) { complete = true; break }
             if (!raw.workflow_runs.length) break
           }
-          const visibleRuns = runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null }))
-          const open = visibleRuns.some(run => run.status !== 'completed')
-          this.details.set(key, { at: this.now(), observedAt, known: complete, open, runs: visibleRuns })
         } catch {
-          const previous = this.details.get(key)
-          this.details.set(key, { at: this.now(), observedAt: previous?.observedAt ?? null, known: false, open: false, runs: previous?.runs ?? [] })
+          failed = true
         }
+        const visibleRuns = runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null }))
+        const open = visibleRuns.some(run => run.status !== 'completed')
+        const previous = this.details.get(key)
+        this.details.set(key, {
+          at: this.now(),
+          observedAt: failed ? previous?.observedAt ?? null : observedAt,
+          known: complete,
+          open,
+          runs: failed ? previous?.runs ?? [] : visibleRuns,
+        })
       }))
     }
   }

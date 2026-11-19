@@ -173,6 +173,33 @@ it.each([
   expect(read.mock.calls.filter(([path]) => path.includes(candidatePath))).toHaveLength(pagesAfterMinute)
 })
 
+it.each([
+  { path: nativeRun.path, callsAfterMinute: 2 },
+  { path: '.github/workflows/release-production.yml', callsAfterMinute: 0 },
+])('uses activity from the first Actions page with workflow $path when page two fails', async ({ path, callsAfterMinute }) => {
+  let clock = now
+  const fixture = nativeFixtureRead()
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (request: string) => {
+    if (!request.includes(candidatePath)) return fixture(request)
+    if (request.endsWith('&page=2')) throw new Error('unreadable')
+    return { total_count: 101, workflow_runs: [
+      { ...nativeRun, path, status: 'in_progress', conclusion: null },
+      ...Array.from({ length: 99 }, (_, index) => ({ ...nativeRun, id: index + 1 })),
+    ] }
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const candidateCalls = () => read.mock.calls.filter(([request]) => request.includes(candidatePath))
+  const initial = await reader.get(data())
+  expect(candidateCalls()).toHaveLength(2)
+  expect(initial.releases[0]).toMatchObject({ provenance: { historical: true }, github: { runsStatus: 'unknown' } })
+  read.mockClear()
+  clock += 60_000
+  const next = await reader.get(data())
+  expect(candidateCalls()).toHaveLength(callsAfterMinute)
+  expect(next.releases[0]?.github?.runsStatus).toBe('unknown')
+})
+
 it('falls back to the slow cadence after failing to refresh an active component', async () => {
   let clock = now, failed = false
   const fixture = nativeFixtureRead({ runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }] })

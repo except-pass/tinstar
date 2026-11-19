@@ -60,11 +60,11 @@ remain visible in each release's source gaps during native-data refreshes.
 
 The catalog of tags, Release records and main HEAD is refreshed on demand after
 two minutes. Actions for the recent five tags and any explicit historical selection
-refresh after one minute when the latest successful read returns a non-completed
-component run shown in Releases. Other reads follow the two-minute catalog
-interval, including failed reads and incomplete reads with no visible active runs.
-Incomplete and failed reads leave Actions evidence unknown. Membership for the latest release, selected release
-and untagged main can advance on a catalog refresh.
+refresh after one minute when any page fetched in the latest attempt returns a
+non-completed component run that matches the Releases view. Other reads follow
+the two-minute catalog interval. Incomplete reads, including later page failures,
+leave Actions evidence unknown. Membership for the latest release, selected
+release and untagged main can advance on a catalog refresh.
 Changing the selection can load missing membership within the current interval.
 Tags and Release records paginate up to ten pages and report partial coverage
 at that limit. Source loss retains known observations with a visible unknown state.
