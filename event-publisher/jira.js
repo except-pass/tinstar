@@ -50,20 +50,26 @@ export function jiraConfig(raw) {
 }
 
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote})`
+const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:\\[\s\S]|[^${quote}\\])*${quote})`
 const quotedValue = (quote) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
 const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
 const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
 
+function normalizePreview(text) {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')
+}
+
 function preview(text, secret) {
-  return text.replaceAll(secret, '[credential omitted]')
+  const normalizedSecret = normalizePreview(secret)
+  const normalized = normalizePreview(text.replaceAll(secret, '[credential omitted]'))
+  return (normalizedSecret ? normalized.replaceAll(normalizedSecret, '[credential omitted]') : normalized)
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
     .replace(credentialAssignment, (_match, quotedPrefix, _quote, bareKey) =>
       quotedPrefix ? `${quotedPrefix}"[credential omitted]"` : `${bareKey}=[credential omitted]`)
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')
 }
 
 function textOf(value, onOmission, depth = 0) {

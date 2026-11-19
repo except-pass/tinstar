@@ -15,6 +15,8 @@ type Verb = typeof jiraVerbs[number]
 const work: JiraStatus[] = ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod']
 const active: JiraStatus[] = [...work, 'Decision', 'Waiting For']
 const nonterminal: JiraStatus[] = ['Backlog', ...active]
+const decisionExits = ['Backlog', 'To Do', 'Queued', 'In Progress', 'Ready for Review'] as const
+const waitExits = [...decisionExits, 'Decision'] as const
 const recovery: JiraStatus[] = ['To Do', 'Queued']
 
 export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]]> = {
@@ -31,8 +33,8 @@ export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]
   'Complete Directly': [['In Progress'], ['Done']],
   'Request Decision': [active.filter(value => value !== 'Decision'), ['Decision']],
   Block: [active.filter(value => value !== 'Waiting For'), ['Waiting For']],
-  'Answer Decision': [['Decision'], work],
-  'Resolve Wait': [['Waiting For'], [...work, 'Decision']],
+  'Answer Decision': [['Decision'], [...decisionExits]],
+  'Resolve Wait': [['Waiting For'], [...waitExits]],
   Dequeue: [['Queued'], ['To Do']],
   Deprioritize: [['To Do'], ['Backlog']],
   'Stop and Requeue': [['In Progress'], ['Queued']],
@@ -79,7 +81,9 @@ const transitionArguments = z.object({
 })
 export const jiraTransitionSchema = z.union([
   transitionArguments.extend({ verb: z.literal('Deployed'), required_revision: singleLine.optional(), live_revision: singleLine.optional() }).strict(),
-  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed']) }).strict('Only Deployed accepts required_revision and live_revision'),
+  transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum(decisionExits) }).strict(),
+  transitionArguments.extend({ verb: z.literal('Resolve Wait'), to: z.enum(waitExits) }).strict(),
+  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', 'Answer Decision', 'Resolve Wait']) }).strict('Only Deployed accepts required_revision and live_revision'),
 ])
 export const jiraLinkSchema = z.object({
   card_id: jiraWorkIdSchema, operation_id: operation, action: z.enum(['add', 'remove']),
