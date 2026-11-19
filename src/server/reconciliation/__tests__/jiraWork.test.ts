@@ -281,13 +281,14 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(rejected).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('409') })
   expect((await third.call('get_work', { card_id })).card.status).toBe('Backlog')
   f.controls.refuseTransition = false
-  const beforeRetry = f.requests.filter(request => request.method === 'POST').length
-  expect(await third.call('transition_work', move)).toMatchObject({ code: 'unconfirmed' })
-  expect(f.requests.filter(request => request.method === 'POST')).toHaveLength(beforeRetry)
   f.controls.loseEdit = true
   const nextMove = { ...move, operation_id: 'accepted-fast-track' }
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'unconfirmed' })
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'already-saved', card: { status: 'Queued' } })
+  const restarted = await f.connect()
+  const beforeRetry = f.requests.length
+  expect(await restarted.call('transition_work', move)).toEqual(rejected)
+  expect(f.requests).toHaveLength(beforeRetry)
   f.controls.omitComment = true
   const omit = { kind: 'jira_edit', card_id, operation_id: 'omit', description: 'New instructions', note: 'Jira omitted this' }
   expect(await third.call('update_work', omit)).toMatchObject({ code: 'unconfirmed' })
@@ -299,7 +300,12 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
     third.call('transition_work', { card_id, operation_id, verb, ...fields })
   expect(await moveAgain('queue-again', 'Queue')).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('start-work', 'Start', { evidence: 'The test is running.' })).toMatchObject({ outcome: 'saved' })
-  expect(await moveAgain('stop-without-reconciling', 'Stop and Requeue', { evidence: 'Named test checks are ready.' })).toMatchObject({ outcome: 'not-saved' })
+  const refused = { card_id, operation_id: 'stop-without-reconciling', verb: 'Stop and Requeue', evidence: 'Named test checks are ready.' }
+  const invalid = await third.call('transition_work', refused)
+  expect(invalid).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
+  const beforeRefusedRetry = f.requests.length
+  expect(await restarted.call('transition_work', refused)).toEqual(invalid)
+  expect(f.requests).toHaveLength(beforeRefusedRetry)
   expect(await moveAgain('stop', 'Stop and Requeue', { disposition: 'The previous test process exited.', evidence: 'The reproduction and assertions are ready.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
   expect(await moveAgain('start-again', 'Start', { evidence: 'The reproduction started.' })).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('direct', 'Complete Directly', { evidence: 'The reproduction passed. No review or production change remains.' })).toMatchObject({ outcome: 'saved', card: { status: 'Done' } })
@@ -343,8 +349,12 @@ it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatche
 
   f.controls.wrongCreate = true
   const wrong = { ...create, operation_id: 'wrong-create' }
-  expect(await call('create_work', wrong)).toMatchObject({ code: 'unconfirmed' })
-  expect(await call('create_work', wrong)).toMatchObject({ code: 'already-saved' })
+  const contradicted = await call('create_work', wrong)
+  expect(contradicted).toMatchObject({ code: 'unconfirmed' })
+  const restarted = await f.connect()
+  const beforeRetry = f.requests.length
+  expect(await restarted.call('create_work', wrong)).toEqual(contradicted)
+  expect(f.requests).toHaveLength(beforeRetry)
 }, 30_000)
 
 it.each([false, true])('answers a Jira decision with native soft breaks=%s and preserves option marks', async softBreaks => {

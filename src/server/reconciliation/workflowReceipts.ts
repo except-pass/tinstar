@@ -23,7 +23,14 @@ export interface ReviewReceiptState {
   note_pending?: boolean
   done?: boolean
 }
-interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: { dispatched: boolean } }
+interface JiraWorkOutcome {
+  outcome: 'not-saved' | 'partially-saved'
+  code: 'invalid-work' | 'jira-unavailable' | 'unconfirmed'
+  operation_id: string
+  card_id?: string
+  message: string
+}
+interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: { dispatched: boolean; outcome?: JiraWorkOutcome } }
 const writers = new Map<string, Promise<unknown>>()
 
 /** Creation latches and handoff reconciliation state share this receipt store.
@@ -62,8 +69,8 @@ export class CreationReceipts {
   put(key: string, input: string, cardId?: string, handoff?: HandoffReceiptState) {
     return this.change(values => { values[key] = { input, ...(cardId ? { cardId } : {}), ...(handoff ? { handoff } : {}) } })
   }
-  putJiraWork(key: string, kind: string, dispatched: boolean) {
-    return this.change(values => { values[key] = { input: kind, jiraWork: { dispatched } } })
+  putJiraWork(key: string, kind: string, dispatched: boolean, outcome?: JiraWorkOutcome) {
+    return this.change(values => { values[key] = { input: kind, jiraWork: { dispatched, ...(outcome ? { outcome } : {}) } } })
   }
   remove(key: string) { return this.change(values => { delete values[key] }) }
   putReview(key: string, input: string, cardId: string, review: ReviewReceiptState) {

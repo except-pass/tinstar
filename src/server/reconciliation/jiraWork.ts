@@ -19,6 +19,7 @@ function text(value: unknown) {
   return adfText(value, true)
 }
 class JiraWorkUnconfirmed extends Error {}
+class JiraCreateContradiction extends JiraWorkUnconfirmed {}
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
@@ -157,19 +158,21 @@ export class JiraWork extends JiraClient {
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
     let sent = false
+    let receiptReady = false
     const cardId = 'card_id' in input ? input.card_id : undefined
     let unlock: Awaited<ReturnType<typeof acquireLock>> | undefined
     try {
-      if (cardId) this.id(cardId)
       await mkdir(this.root, { recursive: true, mode: 0o700 })
       // Link and blocker edits share a lock so two local callers cannot create
       // conflicting primaries or overwrite an answer derived from the same read.
       unlock = await acquireLock(join(this.root, 'jira-work-writes.lock'))
       const prior = await this.receipts.get(key)
       if (prior && prior.input !== verb) throw new JiraWorkInputError('Operation ID was used for another operation kind')
+      if (prior?.jiraWork?.outcome) return prior.jiraWork.outcome
       const dispatched = prior?.jiraWork?.dispatched === true
       pending = dispatched
       if (!prior) await this.receipts.putJiraWork(key, verb, false)
+      receiptReady = true
       return await run({
         marker, dispatched,
         dispatch: async () => {
@@ -180,12 +183,18 @@ export class JiraWork extends JiraClient {
         confirm: card => this.saved(card, dispatched),
       })
     } catch (error) {
-      if (sent && error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408) {
-        return { outcome: 'not-saved', code: 'jira-unavailable', operation_id: input.operation_id, message: this.message(error) }
+      const rejected = sent && error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408
+      const unconfirmed = pending && !rejected
+      const result = {
+        outcome: unconfirmed ? 'partially-saved' as const : 'not-saved' as const,
+        code: unconfirmed ? 'unconfirmed' as const : error instanceof JiraWorkInputError ? 'invalid-work' as const : 'jira-unavailable' as const,
+        operation_id: input.operation_id, ...(!rejected && cardId ? { card_id: cardId } : {}),
+        message: unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
       }
-      return { outcome: pending ? 'partially-saved' : 'not-saved',
-        code: pending ? 'unconfirmed' : error instanceof JiraWorkInputError ? 'invalid-work' : 'jira-unavailable',
-        operation_id: input.operation_id, ...(cardId ? { card_id: cardId } : {}), message: pending ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error) }
+      if (receiptReady && (rejected || (!pending && error instanceof JiraWorkInputError) || error instanceof JiraCreateContradiction)) {
+        await this.receipts.putJiraWork(key, verb, pending, result)
+      }
+      return result
     } finally { await unlock?.() }
   }
 
@@ -279,10 +288,13 @@ export class JiraWork extends JiraClient {
       const issue = await this.read(id, true)
       if (!attempt.dispatched && (issue.issue_type !== issueType || issue.status !== 'Backlog' || issue.name !== input.name ||
         issue.description !== (input.description ?? '') || issue.owner !== (input.owner ?? null))) {
-        throw new JiraWorkUnconfirmed('Jira creation readback differs from the requested ticket or Backlog default')
+        throw new JiraCreateContradiction('Jira creation readback differs from the requested ticket or Backlog default')
       }
       const source = await this.request(`issue/${id}/properties/${createProperty}`)
-      if (source.value !== stamp) throw new JiraWorkUnconfirmed('Jira did not confirm the creation receipt')
+      if (source.value !== stamp) {
+        const message = 'Jira did not confirm the creation receipt'
+        throw attempt.dispatched ? new JiraWorkUnconfirmed(message) : new JiraCreateContradiction(message)
+      }
       return attempt.confirm(issue)
     })
   }
