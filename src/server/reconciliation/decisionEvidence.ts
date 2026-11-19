@@ -52,26 +52,28 @@ function prepBlocked(card: WorkCard) {
     deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
 }
 
-function prepSendable(card: WorkCard, blocks: CardContextRead['blocks']) {
-  if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return false
+function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
+  if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
   const history = requestHistory(blocks)
   const deskAnswer = history.findLastIndex(note =>
     note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
   const earlierNotes = new Set(history.slice(0, deskAnswer + 1).map(note => note.id))
-  return currentWillRequests(history, value(card, 'Will action')).some(request =>
+  return currentWillRequests(history, value(card, 'Will action')).filter(request =>
     !request.answered && !earlierNotes.has(request.sourceId))
 }
 
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
+  const requests = openPrepRequests(card, blocks)
+  const requestQuestion = requests.length === 1 ? requests[0]?.question?.trim() : undefined
   return {
     card,
     title,
-    question: String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
+    question: requestQuestion || String(value(card, 'Next action') || value(card, 'Next Action') || value(card, 'Waiting For') || title),
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
-    prepEligible: prepSendable(card, blocks),
+    prepEligible: requests.length > 0,
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>

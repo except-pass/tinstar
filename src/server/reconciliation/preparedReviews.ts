@@ -83,12 +83,11 @@ export class PreparedReviews {
     return this.leases.readStorage(db => {
       const queue = this.queue()
       const now = this.now()
-      const jobs = new Map([...prep.jobs].reverse().map(job => [job.card, job]))
       const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
-        const job = jobs.get(card.id)
+        const job = this.preparation.latestJobInStorage(db, card.id)
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
           preparing.has(card.id) ? 'Preparing' :
           job?.state === 'expired' ? 'Retrying' :

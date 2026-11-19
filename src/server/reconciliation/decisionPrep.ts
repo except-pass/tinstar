@@ -81,7 +81,8 @@ export class DecisionPreparation {
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, card TEXT NOT NULL, revision TEXT NOT NULL,
         state TEXT NOT NULL, at INTEGER NOT NULL, packet_id TEXT, message TEXT
       );
-      CREATE INDEX IF NOT EXISTS decision_card_prep_lookup ON decision_card_prep(scope,state,card,at);`)))
+      CREATE INDEX IF NOT EXISTS decision_card_prep_lookup ON decision_card_prep(scope,state,card,at);
+      CREATE INDEX IF NOT EXISTS decision_card_prep_card_history ON decision_card_prep(scope,card,at);`)))
   }
 
   private get scope() { return this.packets.scope }
@@ -97,6 +98,11 @@ export class DecisionPreparation {
       return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
         preparing: liveJobs.length, liveCards: liveJobs.map(job => job.card) }
     })
+  }
+
+  latestJobInStorage(db: DatabaseSync, card: string) {
+    return db.prepare('SELECT state,message FROM decision_card_prep WHERE scope = ? AND card = ? ORDER BY at DESC, rowid DESC LIMIT 1')
+      .get(this.scope, card) as Pick<Job, 'state' | 'message'> | undefined
   }
 
   replenish(): Promise<void> {

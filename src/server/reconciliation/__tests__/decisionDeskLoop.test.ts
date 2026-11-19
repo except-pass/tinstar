@@ -208,7 +208,7 @@ describe('prepared-card loop', () => {
       expect(after.data.pending).toEqual([])
     } else {
       expect(jobs).toHaveLength(2)
-      expect(jobs[1]!.source_question).toBe('Throwaway card 1')
+      expect(jobs[1]!.source_question).toBe(kind === 'supersede_decision' ? replacement.question : 'Review the sibling fixture?')
       expect(after.data.ready).toHaveLength(1)
       expect(after.data.ready[0].id).not.toBe(oldPacket)
     }
@@ -351,13 +351,16 @@ describe('prepared-card loop', () => {
   })
 
   it('publishes a scrubbed webhook job through its callback and makes it Ready', async () => {
-    const card = withOpenRequest(page(1, { tag: 'Decision' }))
-    card.properties.Name = rich('Review token=fixture-private-token please')
-    const { sources, jobs, published, web } = await setup([card])
+    const card = page(1, { tag: 'Decision' })
+    card.properties['Next action'] = rich('Deploy the current build')
+    const { sources, jobs, published, tool, web } = await setup([card])
+    expect(await tool('update_work', { card_id: card.id, operation_id: 'ask-about-rollout', kind: 'request_decision',
+      request_id: 'rollout', requested_from: 'Will', question: 'Should we cancel the rollout with token=fixture-private-token still active?' }))
+      .toMatchObject({ outcome: 'saved' })
     await sources.preparation.replenish()
     expect(jobs).toEqual([{
       card_url: expect.stringContaining(card.id),
-      source_question: 'Review token=[credential omitted] please',
+      source_question: 'Should we cancel the rollout with token=[credential omitted] still active?',
       source_revision: expect.any(String),
       publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
     }])
@@ -748,12 +751,21 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
   })
 
-  it('shows live jobs older than the runner history limit', async () => {
+  it.each(['live', 'expired', 'stopped'] as const)('shows %s jobs older than the runner history limit', async state => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
-    const { sources, jobs, web } = await setup([card], false)
+    const { sources, jobs, web, disableSending } = await setup([card], false)
     await sources.preparation.replenish()
+    if (state !== 'live') {
+      now += 15 * 60_000
+      if (state === 'expired') disableSending()
+      await sources.preparation.replenish()
+      if (state === 'stopped') {
+        now += 15 * 60_000
+        await sources.preparation.replenish()
+      }
+    }
     now += 1_000
     await sources.leases.writeStorage(db => {
       const insert = db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'published',?)")
@@ -761,11 +773,12 @@ describe('prepared-card loop', () => {
     })
 
     const snapshot = (await web('snapshot')).data
-    expect(jobs).toHaveLength(1)
+    expect(jobs).toHaveLength(state === 'stopped' ? 2 : 1)
     expect(snapshot.runner.jobs).toHaveLength(100)
     expect(snapshot.runner.jobs.some((job: { id: string }) => job.id === jobs[0]!.publish.job_id)).toBe(false)
-    expect(snapshot.counts.preparing).toBe(1)
-    expect(snapshot.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Preparing' })])
+    expect(snapshot.counts.preparing).toBe(state === 'live' ? 1 : 0)
+    const label = state === 'live' ? 'Preparing' : state === 'expired' ? 'Retrying' : 'Preparation stopped after two sends without a packet'
+    expect(snapshot.pending).toEqual([expect.objectContaining({ card_id: card.id, state: label })])
   })
 
   it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {
