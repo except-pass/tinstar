@@ -7,6 +7,9 @@ import { ReleaseMembershipReader } from './membership'
 const repository = 'fortresspower/cmsandbox'
 const catalogTtl = 120_000
 const actionsTtl = 60_000
+const openRunStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending'])
+/** One minute while a fetched run is still open or the page set is incomplete; settled commits follow the catalog interval. */
+const actionsInterval = (open: boolean | undefined) => open ? actionsTtl : catalogTtl
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
 const tagSchema = z.object({ name: z.string(), commit: z.object({ sha }) })
 const recordSchema = z.object({ tag_name: z.string(), html_url: z.string(), body: z.string().nullable(), published_at: z.string().nullable(), draft: z.boolean(), prerelease: z.boolean().default(false) })
@@ -60,7 +63,7 @@ export class GithubReleaseReader {
   private selectedTag: string | undefined
   private pending: Promise<void> | null = null
   private actionsPending: Promise<void> | null = null
-  private details = new Map<string, { at: number; observedAt: string | null; runs: NativeReleaseEvidence['runs']; known: boolean }>()
+  private details = new Map<string, { at: number; observedAt: string | null; runs: NativeReleaseEvidence['runs']; known: boolean; open: boolean }>()
   private containment = new Map<string, ReleaseContainment & { retryAt: number }>()
   private containmentPending: Promise<void> | null = null
   private memberships: ReleaseMembershipReader
@@ -120,7 +123,7 @@ export class GithubReleaseReader {
       const pulls = release.pulls.map(pull => ({ ...pull, links: data.pulls.find(existing => existing.id === pull.id)?.links ?? [] }))
       const ids = new Set(pulls.map(pull => pull.id)), cards = new Set(pulls.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
       const detail = this.details.get(`${release.version}:${release.sourceSha}`)
-      const readable = value.status !== 'unknown' && !!detail?.known && detail.at > this.now() - actionsTtl
+      const readable = value.status !== 'unknown' && !!detail?.known && detail.at > this.now() - actionsInterval(detail.open)
       const runs = detail?.runs ?? []
       const latest = [...new Map([...runs].sort((a, b) => a.id - b.id).map(run => [run.workflow, run] as const)).values()]
       const actions = release.kind === 'production' && release.github ? {
@@ -247,7 +250,10 @@ export class GithubReleaseReader {
     const tags = this.cached.releases.flatMap(release => version(release.version) && release.sourceSha
       ? [{ name: release.version, commit: { sha: release.sourceSha } }] : [])
     const due = actionsTags(tags, selectedTag)
-      .filter(tag => (this.details.get(`${tag.name}:${tag.commit.sha}`)?.at ?? -Infinity) <= this.now() - actionsTtl)
+      .filter(tag => {
+        const detail = this.details.get(`${tag.name}:${tag.commit.sha}`)
+        return (detail?.at ?? -Infinity) <= this.now() - actionsInterval(detail?.open)
+      })
     if (!due.length) return
     this.actionsPending = this.refreshActions(due).finally(() => { this.actionsPending = null })
     await this.actionsPending
@@ -271,9 +277,11 @@ export class GithubReleaseReader {
             if (runs.length >= raw.total_count) { complete = true; break }
             if (!raw.workflow_runs.length) break
           }
-          this.details.set(key, { at: this.now(), observedAt, known: complete, runs: runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null })) })
+          const open = !complete || runs.some(run => openRunStatuses.has(run.status))
+          this.details.set(key, { at: this.now(), observedAt, known: complete, open, runs: runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null })) })
         } catch {
-          this.details.set(key, { at: this.now(), observedAt: this.details.get(key)?.observedAt ?? null, known: false, runs: this.details.get(key)?.runs ?? [] })
+          const previous = this.details.get(key)
+          this.details.set(key, { at: this.now(), observedAt: previous?.observedAt ?? null, known: false, open: previous?.open ?? false, runs: previous?.runs ?? [] })
         }
       }))
     }

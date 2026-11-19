@@ -59,15 +59,18 @@ cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
 The catalog of tags, Release records and main HEAD is refreshed on demand after
-two minutes. Actions refresh after one minute on Releases reads, using the recent
-five tags and any explicit historical selection. Membership for the latest
-release, selected release and untagged main can advance on a catalog refresh.
+two minutes. Actions for the recent five tags and any explicit historical selection
+refresh after one minute while that commit still has a queued, in-progress, waiting,
+requested, or pending workflow run, or the run list is still incomplete. Once a complete
+fetch shows every run for that commit has finished, those runs refresh on the same
+two-minute catalog interval. Membership for the latest release, selected release
+and untagged main can advance on a catalog refresh.
 Changing the selection can load missing membership within the current interval.
 Tags and Release records paginate up to ten pages and report partial coverage
 at that limit. Source loss retains known observations with a visible unknown state.
 Actions freshness is evaluated on every display from each detail read's cache
-timestamp. After one minute, retained runs remain visible as last-known evidence,
-with unknown activity and partial source coverage even while the next catalog
+timestamp and the same interval. When it has elapsed, retained runs remain visible as last-known evidence,
+with unknown activity and partial source coverage even while the next
 read is pending. A successful complete Actions read restores fresh evidence.
 
 A successful component workflow is **awaiting PROD verification**, exactly as the

@@ -66,11 +66,11 @@ describe('progressive Releases display', () => {
   })
 
   it.each([
-    { runs: [nativeRun], state: 'Awaiting PROD verification' },
-    { runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }], state: 'Running' },
-    { runs: [{ ...nativeRun, conclusion: 'failure' }], state: 'Failed/unfinished components' },
-    { runs: [], state: 'Deployment unknown' },
-  ])('refreshes expired Actions without reloading the catalog and recovers $state', async ({ runs, state }) => {
+    { runs: [nativeRun], state: 'Awaiting PROD verification', open: false },
+    { runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }], state: 'Running', open: true },
+    { runs: [{ ...nativeRun, conclusion: 'failure' }], state: 'Failed/unfinished components', open: false },
+    { runs: [], state: 'Deployment unknown', open: false },
+  ])('refreshes expired Actions without reloading the catalog and recovers $state', async ({ runs, state, open }) => {
     let clock = now(), blocked = false, finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve })
     const fixture = nativeFixtureRead({ runs })
@@ -84,8 +84,18 @@ describe('progressive Releases display', () => {
     expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
     const retainedRuns = initial.releases[0]!.github!.runs
     const catalogCalls = () => read.mock.calls.filter(([path]) => /\/(tags\?|releases\?|branches\/main$)/.test(path))
+    const actionCalls = () => read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))
     const initialCatalogCalls = catalogCalls()
-    clock += 60_000; blocked = true
+    const initialActionCalls = actionCalls().length
+    clock += 60_000
+    if (!open) {
+      const settled = await reader.get(data())
+      expect(actionCalls()).toHaveLength(initialActionCalls)
+      expect(catalogCalls()).toEqual(initialCatalogCalls)
+      expect(settled.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh', runs: retainedRuns } })
+      return
+    }
+    blocked = true
     try {
       const expired = reader.display(data())
       expect(expired).toMatchObject({ refreshing: true, status: 'partial' })
@@ -127,8 +137,7 @@ describe('progressive Releases display', () => {
           state: 'Awaiting PROD verification', membership: { status: 'pending' }, github: { runsStatus: 'fresh' },
         })
       })
-      expect(read.mock.calls.map(([path]) => path)).toHaveLength(2)
-      expect(read.mock.calls.every(([path]) => path.includes('/actions/runs?'))).toBe(true)
+      expect(read.mock.calls.map(([path]) => path)).toEqual([expect.stringContaining(`/actions/runs?head_sha=${nativeHead}`)])
     } finally { finish(); await initial }
   })
 

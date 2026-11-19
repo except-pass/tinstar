@@ -101,24 +101,66 @@ it('reuses prefetched historical Actions while enriching the selected release me
 })
 
 
-it('refreshes the selected tag outside the five recent tags without refreshing membership', async () => {
+it('re-reads an open selected tag on the fast cadence and leaves settled tags until the catalog interval', async () => {
   const older = Array.from({ length: 5 }, (_, index) => ({
     name: `v1.${20 - index}.0`, commit: { sha: String(index + 1).repeat(40) },
   }))
   const selected = older[4]!
-  let clock = now
-  const read = vi.fn(nativeFixtureRead({ tags: [...nativeTags, ...older] }))
+  let clock = now, selectedRunning = true
+  const fixture = nativeFixtureRead({ tags: [...nativeTags, ...older] })
+  const read = vi.fn(async (path: string) => {
+    if (path.includes(`/actions/runs?head_sha=${selected.commit.sha}`)) {
+      return { total_count: 1, workflow_runs: [{ ...nativeRun, head_sha: selected.commit.sha, head_branch: selected.name, status: selectedRunning ? 'in_progress' : 'completed', conclusion: selectedRunning ? null : 'success' }] }
+    }
+    return fixture(path)
+  })
   const reader = new GithubReleaseReader(read, () => clock)
   await reader.get(data(), selected.name)
   read.mockClear()
   clock += 60_000
-  const result = await reader.get(data(), selected.name)
-  expect(result.releases.find(release => release.version === selected.name)?.github?.runsStatus).toBe('fresh')
-  const paths = read.mock.calls.map(([path]) => path)
-  expect(paths).toHaveLength(6)
-  expect(paths.every(path => path.includes('/actions/runs?'))).toBe(true)
-  expect(paths.some(path => path.includes(selected.commit.sha))).toBe(true)
-  expect(paths.some(path => path.includes(older[3]!.commit.sha))).toBe(false)
+  selectedRunning = false
+  const running = await reader.get(data(), selected.name)
+  expect(running.releases.find(release => release.version === selected.name)?.github?.runsStatus).toBe('fresh')
+  const fastPaths = read.mock.calls.map(([path]) => path)
+  expect(fastPaths).toEqual([expect.stringContaining(`/actions/runs?head_sha=${selected.commit.sha}`)])
+  expect(fastPaths.some(path => path.includes(older[3]!.commit.sha))).toBe(false)
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data(), selected.name)
+  const settledPaths = read.mock.calls.map(([path]) => path)
+  expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${selected.commit.sha}`))).toBe(false)
+  expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+})
+
+it('keeps the fast cadence when the only open run is excluded from the release card', async () => {
+  let clock = now
+  const hidden = { ...nativeRun, id: 9, path: '.github/workflows/release-production.yml', status: 'in_progress', conclusion: null }
+  const read = vi.fn(nativeFixtureRead({ runs: [nativeRun, hidden] }))
+  const reader = new GithubReleaseReader(read, () => clock)
+  const first = await reader.get(data())
+  expect(first.releases[0]!.github!.runs.map(run => run.id)).not.toContain(9)
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+})
+
+it('does not re-read a candidate on the fast cadence once every workflow run has completed', async () => {
+  let clock = now
+  const read = vi.fn(nativeFixtureRead())
+  const reader = new GithubReleaseReader(read, () => clock)
+  await reader.get(data())
+  const actions = () => read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))
+  const initial = actions().length
+  expect(initial).toBeGreaterThan(0)
+  clock += 60_000
+  const settled = await reader.get(data())
+  expect(actions()).toHaveLength(initial)
+  expect(settled.releases[0]).toMatchObject({ state: 'Awaiting PROD verification', github: { runsStatus: 'fresh' } })
+  clock += 60_000
+  await reader.get(data())
+  expect(actions().length).toBeGreaterThan(initial)
+  expect(actions().some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
 })
 
 it('shows an existing draft Release record rather than claiming it is missing', async () => {
