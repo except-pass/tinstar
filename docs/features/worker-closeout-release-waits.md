@@ -50,12 +50,15 @@ the Releases screen, alongside the existing deployment reconciliation.
 when it falls outside the Changes range between consecutive tags. Missing
 ancestry stays unknown.
 
+## Advancing a release wait
+
 Tin Star retired the minute-by-minute job that moved cards to Done or In Progress
-when all linked pull requests appeared in published releases. Membership shows
-which merges are in the tagged history. Current deployment and feature acceptance
-require their own evidence. The owner can still verify in production and record
-the outcome through the existing card workflow, including an explicit audited
-`update_work complete` or `park` as appropriate.
+when all linked pull requests appeared in published production releases. Current
+deployment and feature acceptance require their own evidence. The owner can
+still verify in production and record the outcome through the existing card
+workflow, including an explicit audited `update_work complete` or `park` as
+appropriate. Proof-based, Jira-aware closure and any new Notion write authority
+require separate owner authorization.
 
 Past `Tin Star production wait: membership:` comments remain on their Notion
 cards. The existing source-write reconciliation can still resolve an uncertain
@@ -67,7 +70,9 @@ still use their existing operation IDs.
 Reverting the retirement re-enables automatic membership-based status writes
 immediately on startup and every minute thereafter. Obtain separate explicit
 owner authorization before reverting the retirement and redeploying. Without
-that authorization, roll back only unrelated changes.
+that authorization, roll back only unrelated changes. The [startup regression
+test](../../src/server/releases/__tests__/github.test.ts) asserts zero status
+and audit writes at startup and after a minute with published release membership.
 
 ## Remote home configuration
 

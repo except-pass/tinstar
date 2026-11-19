@@ -90,7 +90,7 @@ The old export reader remains for historical CLI fixtures/tests. The legacy
 Notion writer's scheduled pass is disabled and the API reports review-only.
 The source reads perform no GitHub/Notion writes, workflow dispatch, publication
 or production changes. Published release membership is available for review.
-[Production release waits](worker-closeout-release-waits.md) are advanced manually.
+See [production release waits](worker-closeout-release-waits.md#advancing-a-release-wait) for how to advance a card.
 
 Native upstream contracts:
 [release workflow](https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/release-production.yml),
@@ -128,8 +128,7 @@ The historical writer settings reader defaults to OFF and rejects invalid or
 unreadable settings. The live API ignores this file and the backend no longer
 schedules the writer; `enabled: true` does not activate it. There is no browser
 activation/execute endpoint. GET only reports legacy proposals. The [historical activation packet](../releases-activation.md)
-records the previous implementation and evidence limits; D.5 owns replacement
-policy and a separate later owner activation decision.
+records the previous implementation and evidence limits.
 
 The writer re-reads the authorized board, current associations/evidence and exact
 card immediately before each write. It requires an actual readable boolean
@@ -348,5 +347,4 @@ prerequisites.
 ### D.4 release notes
 
 [Release notes](../releases-notes.md) owns draft usage, editorial wording,
-exclusion reasons and publication activation/recovery. D.5 Notion closure and
-policy changes remain separate.
+exclusion reasons and publication activation/recovery.
