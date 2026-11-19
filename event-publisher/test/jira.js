@@ -214,6 +214,7 @@ exit 1
   match(terminal, /\[replay\/fixture\] jira\/ticket WORK-1 · comment 84001 created/)
   match(terminal, /↵ Second line/)
   ok(!terminal.includes(secret))
+  const partialEventIds = []
   for (const [index, action] of ['created', 'updated', 'deleted'].entries()) {
     const mixed = { ...evidence.comment, id: String(85001 + index), body: { type: 'doc', content: [
       { type: 'paragraph', content: [
@@ -223,6 +224,7 @@ exit 1
     ] } }
     equal((await post(`mixed-${action}`, webhookEvent(`comment_${action}`, { comment: mixed }))).status, 204)
     const partial = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+    partialEventIds.push(partial.event_id)
     equal(partial.change[action === 'deleted' ? 'before' : 'after'], 'Review with  before shipping')
     match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira comment body could only be partially projected/)
     const restricted = { ...mixed, id: String(86001 + index), visibility: { type: 'role', value: 'Administrators' } }
@@ -247,6 +249,23 @@ exit 1
   match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira omitted values for a tracked change/)
   const oneSided = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
   deepEqual(oneSided.change, { field: 'owner', after: null })
+  equal((await post('full-after-partial', webhookEvent('jira:issue_updated', {
+    changelog: { id: '65006', items: [change(jira.fields.owner, null, 'Avery')] },
+  }))).status, 204)
+  match((await run('sources')).stdout, /ok · signed-project-webhooks/)
+  partialEventIds.push(oneSided.event_id)
+  await until(() => partialEventIds.every(id => watcher.logs.stdout.includes(id)), () => watcher.logs.stderr)
+  const replayed = lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout)
+  for (const [index, id] of partialEventIds.entries()) {
+    const omissions = index === 3 ? ['before'] : ['comment body']
+    const inspected = JSON.parse((await run('inspect', id)).stdout)
+    deepEqual(inspected.observation.projection_omissions, omissions)
+    deepEqual(replayed.find(event => event.event_id === id), inspected)
+    deepEqual(lines(watcher.logs.stdout).find(event => event.event_id === id).observation.projection_omissions, omissions)
+  }
+  const partialReplay = (await run('replay', '--source', 'jira', '--after', '0')).stdout
+  match(partialReplay, /partial projection \(before\)/)
+  match(partialReplay, /partial projection \(comment body\)/)
   await watcher.stop()
   await publisher.stop()
 })

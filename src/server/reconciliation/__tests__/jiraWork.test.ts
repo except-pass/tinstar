@@ -391,7 +391,7 @@ it.each([false, true])('answers a Jira decision with native soft breaks=%s and p
 }, 30_000)
 
 
-it('leaves overlapping edit and reversed link history unconfirmed', async () => {
+it('recovers edits with distinct baselines and leaves reversed link history unconfirmed', async () => {
   const f = await fixture()
   const { call } = await f.connect()
   const first = await call('create_work', { provider: 'jira', operation_id: 'first', name: 'Original' })
@@ -403,11 +403,14 @@ it('leaves overlapping edit and reversed link history unconfirmed', async () => 
   f.issues.get('60001')!.fields.summary = 'Temporary'
   expect(await call('update_work', { ...edit, operation_id: 'saved-superset', owner: 'Avery' })).toMatchObject({ outcome: 'saved' })
   const history = (items: Record<string, unknown>[]) => ({ created: jiraNow(), author: { accountId: 'fixture-service' }, items })
-  f.history['60001'] = [history([
-    { fieldId: 'summary', fromString: 'Original', toString: 'Changed' },
-    { fieldId: config.fields.owner, fromString: null, toString: 'Avery' },
-  ])]
-  expect(await call('update_work', edit)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001'] = [
+    history([
+      { fieldId: 'summary', fromString: 'Temporary', toString: 'Changed' },
+      { fieldId: config.fields.owner, fromString: null, toString: 'Avery' },
+    ]),
+    history([{ fieldId: 'summary', fromString: 'Original', toString: 'Changed' }]),
+  ]
+  expect(await call('update_work', edit)).toMatchObject({ code: 'already-saved' })
 
   const add = { card_id, action: 'add', operation_id: 'lost-link', target_key: 'WORK-2', direction: 'outward', type: 'Blocks' }
   f.controls.beforeWrite = 'POST issueLink'

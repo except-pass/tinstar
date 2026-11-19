@@ -535,7 +535,7 @@ export class JiraWork extends JiraClient {
           (receipt.cardId === this.qualified(link.targetId) && other.targetId === id && other.direction !== link.direction)
       }
       return receipt.cardId === card.id && receipt.jiraWork?.fields?.some(other =>
-        fields?.some(field => field.field === other.field && field.afterDigest === other.afterDigest))
+        fields?.some(field => field.field === other.field && field.beforeDigest === other.beforeDigest && field.afterDigest === other.afterDigest))
     })
     const confirm = async () => {
       const nextCommentWrite = Math.min(...candidates.flatMap(([, receipt]) => {

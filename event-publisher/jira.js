@@ -160,7 +160,10 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
       confidence_basis: 'signed Jira delivery',
     },
   }
-  const entry = (suffix, change) => ({ ...envelope, event_type: `ticket.${suffix}`, change })
+  const entry = (suffix, change, omissions = []) => ({
+    ...envelope, event_type: `ticket.${suffix}`, change,
+    ...(omissions.length ? { observation: { ...envelope.observation, projection_omissions: omissions } } : {}),
+  })
   let events = []
   let reason
   if (event === 'jira:issue_created') {
@@ -178,12 +181,13 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
         if (!field) continue
         const before = side(item, 'from', redact)
         const after = side(item, 'to', redact)
-        if (before === undefined || after === undefined) {
-          reason = 'Jira omitted values for a tracked change'
-        }
+        const omissions = []
+        if (before === undefined) omissions.push('before')
+        if (after === undefined) omissions.push('after')
+        if (omissions.length) reason = 'Jira omitted values for a tracked change'
         events.push(entry(`${field}.changed`, {
           field, ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }),
-        }))
+        }, omissions))
       }
     }
   } else if (comment) {
@@ -199,7 +203,7 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
         field: 'comment',
         ...(comment === 'deleted' ? { ...(content === undefined ? {} : { before: content }), after: null } :
           { ...(content === undefined ? {} : { after: content }) }),
-      })]
+      }, reason ? ['comment body'] : [])]
     }
   }
   return { events, native, observedAt, reason }

@@ -201,7 +201,9 @@ function eventText(event, replay, health) {
   const { source, subject, change, evidence } = event
   const reference = evidence.source_reference
   if (source.provider === 'jira') {
-    return `${time} [${replay ? 'replay/' : ''}${source.mode}] jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
+    const omissions = event.observation?.projection_omissions
+    const projection = omissions?.length ? ` · partial projection (${omissions.join(', ')})` : ''
+    return `${time} [${replay ? 'replay/' : ''}${source.mode}] jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   let meaning = change.field
