@@ -331,23 +331,35 @@ export class JiraWork extends JiraClient {
         { start: end, end, answer: lines.map((line, i) => ({ type: 'text', text: i ? `    ${line}` : `  Answer: ${line}` })) }]
     })
     const rewrite = (node: any, start: number, blockAnswer?: number): any[] => {
-      if (!edits.some(edit => edit.start <= start + text(node).length && edit.end >= start)) return [node]
-      if (node.type === 'text') {
-        const end = start + node.text.length
-        const replacement = edits.find(edit => !edit.answer && edit.start < end && edit.end > start)
-        const insertion = edits.find(edit => edit.answer && edit.start !== blockAnswer && edit.start > start && edit.start <= end)
-        const slice = (until: number) => replacement
-          ? node.text.slice(0, Math.max(0, replacement.start - start)) +
-            (replacement.start >= start ? 'Answered' : '') + node.text.slice(replacement.end - start, until)
-          : node.text.slice(0, until)
-        if (insertion) {
-          const before = slice(insertion.start - start)
-          const after = node.text.slice(insertion.start - start)
-          return [{ ...node, text: before }, ...insertion.answer!.flatMap(line => [{ type: 'hardBreak' }, line]),
-            ...(after ? [{ ...node, text: after }] : [])]
+      const end = start + text(node).length
+      if (!edits.some(edit => edit.start <= end && edit.end >= start)) return [node]
+      if (node.type === 'text' || node.type === 'codeBlock') {
+        const codeBlock = node.type === 'codeBlock'
+        const value = codeBlock ? text(node) : node.text
+        const parts: any[] = []
+        let offset = start
+        const append = (value: string) => {
+          if (value) parts.push(codeBlock ? { type: 'text', text: value } : { ...node, text: value })
         }
-        const value = slice(node.text.length)
-        return value ? [value === node.text ? node : { ...node, text: value }] : []
+        for (const edit of edits) {
+          if (edit.answer) {
+            if (edit.start <= start || edit.start > end || edit.start === blockAnswer) continue
+            append(value.slice(offset - start, edit.start - start))
+            if (codeBlock) append('\n' + edit.answer.map(line => line.text).join('\n'))
+            else parts.push(...edit.answer.flatMap(line => [{ type: 'hardBreak' }, line]))
+            offset = edit.start
+          } else if (edit.start < end && edit.end > start) {
+            append(value.slice(offset - start, Math.max(offset, edit.start) - start))
+            if (edit.start >= start) append('Answered')
+            offset = Math.min(end, edit.end)
+          }
+        }
+        append(value.slice(offset - start))
+        if (codeBlock) {
+          const rewritten = parts.map(part => part.text).join('')
+          return [rewritten === value ? node : { ...node, content: [{ type: 'text', text: rewritten }] }]
+        }
+        return parts.length === 1 && parts[0].text === value ? [node] : parts
       }
       if (!Array.isArray(node.content)) {
         const insertion = edits.find(edit => edit.answer && edit.start !== blockAnswer && edit.start === start + text(node).length)
@@ -355,9 +367,9 @@ export class JiraWork extends JiraClient {
       }
       let offset = start
       const separator = ['paragraph', 'heading', 'codeBlock'].includes(node.type) ? 0 : 1
-      const content = node.content.flatMap((child: unknown) => {
+      const content = node.content.flatMap((child: { type?: string }) => {
         const end = offset + text(child).length
-        const answer = node.type === 'doc' ? edits.find(edit => edit.answer && edit.start === end) : undefined
+        const answer = node.type === 'doc' && child.type !== 'codeBlock' ? edits.find(edit => edit.answer && edit.start === end) : undefined
         const result = rewrite(child, offset, answer?.start ?? blockAnswer)
         offset = end + separator
         return answer ? [...result, ...answer.answer!.map(line => ({ type: 'paragraph', content: [line] }))] : result
@@ -430,7 +442,7 @@ export class JiraWork extends JiraClient {
         await this.checkComment(id, note)
         return attempt.confirm(current)
       }
-      const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
+      const blocker = input.verb === 'Block' || input.to === 'Waiting For' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
       const to = checkJiraTransition({ ...current, blocker }, input)
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)

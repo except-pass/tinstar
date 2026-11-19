@@ -25,7 +25,8 @@ const nextCredential = (quote: string) => String.raw`(?:\{?${quote}${credentialK
 const quotedValue = (quote: string) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
 const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
 const numericCredential = String.raw`-?\d+(?:\.\d+)?(?:e[+-]?\d+)?(?=\s|[,;})>\]]|$)`
-const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${numericCredential}|${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|${numericCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
+const shortCredential = String.raw`[a-z0-9]{1,5}(?=[\s"\x27,;)}\]]|$)`
+const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${numericCredential}|${quotedCredential}|${shortCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|${numericCredential}|${shortCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
 
 /** Redact likely credential literals before either snippets or the browser index.
  * This only handles published prose/allowlisted fields, never raw source objects. */

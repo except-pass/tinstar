@@ -383,6 +383,52 @@ it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatche
   expect(f.requests).toHaveLength(beforeRetry)
 }, 30_000)
 
+it('answers multiple entries in one native Jira code block', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Code block decisions',
+  })
+  const issue = f.issues.get('60001')!
+  const code = {
+    type: 'codeBlock', attrs: { language: 'text' },
+    content: [{ type: 'text', text: 'D1 [Open]: First?\nD2 [Open]: Second?\nD3 [Open]: Leave intact?' }],
+  }
+  issue.fields[config.fields.decisions] = { type: 'doc', version: 1, content: [code] }
+  expect(await call('update_work', { kind: 'jira_edit', card_id, operation_id: 'answer',
+    answers: [{ id: 'D1', answer: 'Yes.\nKeep the formatting.' }, { id: 'D2', answer: 'No.' }],
+  })).toMatchObject({ outcome: 'saved' })
+  expect(issue.fields[config.fields.decisions].content).toEqual([{
+    ...code, content: [{ type: 'text', text: 'D1 [Answered]: First?\n  Answer: Yes.\n    Keep the formatting.\nD2 [Answered]: Second?\n  Answer: No.\nD3 [Open]: Leave intact?' }],
+  }])
+})
+
+it('returns an answered blocked Decision to Waiting For before resuming work', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Blocked decision', owner: 'Avery', description: 'Run the checks.',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Decision' }
+  issue.fields[config.fields.decisions] = 'D1 [Answered]: Resume?\n  Answer: Yes.'
+  const answer = (to: string, revisions = {}) => call('transition_work', {
+    card_id, operation_id: to, verb: 'Answer Decision', to, evidence: 'Checks are complete.', ...revisions,
+  })
+  expect(await answer('Waiting For')).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('Set a primary blocker') })
+  issue.fields[config.fields.blockerType] = { value: 'Actor' }
+  issue.fields[config.fields.blockerTarget] = 'team:reviewers'
+  issue.fields[config.fields.blockerCondition] = 'A reviewer grants access.'
+  for (const to of ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod']) {
+    const revisions = to === 'Verify in Prod' ? { required_revision: 'rev-a', live_revision: 'rev-a' } : {}
+    expect(await answer(to, revisions)).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('Clear the primary blocker') })
+  }
+  issue.fields[config.fields.decisions] = 'D1 [Open]: Resume?'
+  expect(await answer('Waiting For')).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('must be answered') })
+  issue.fields[config.fields.decisions] = 'D1 [Answered]: Resume?\n  Answer: Yes.'
+  expect(await answer('Waiting For')).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For', blocker: { type: 'Actor' } } })
+})
+
 it.each([false, true])('answers a Jira decision with native soft breaks=%s and preserves option marks', async softBreaks => {
   const f = await fixture()
   const { call } = await f.connect()
@@ -649,9 +695,9 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nTOKEN=4821 count=4821\n{"password":123456789,"count":123456789,"token":-1.2e+3}\nD2 [Open]: What follows?'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nTOKEN=4821 PASSWORD=a7X9 count=4821\n{"password":123456789,"count":123456789,"token":-1.2e+3}\nD2 [Open]: What follows?'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nTOKEN=[credential omitted] count=4821\n{"password":"[credential omitted]","count":123456789,"token":"[credential omitted]"}\nD2 [Open]: What follows?'
+  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nTOKEN=[credential omitted] PASSWORD=[credential omitted] count=4821\n{"password":"[credential omitted]","count":123456789,"token":"[credential omitted]"}\nD2 [Open]: What follows?'
   expect(card.description).toBe(projectedDescription)
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ card: { description: projectedDescription } })
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
