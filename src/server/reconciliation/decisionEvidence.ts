@@ -49,7 +49,7 @@ export function prepBlocked(card: WorkCard) {
 
 function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
   if (prepBlocked(card) || hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
-  const history = requestHistory(blocks)
+  const history = requestHistory(blocks.filter(block => block.type !== 'code'))
   const chronology = new Map(history.map((note, position) => [note.id, {
     position, type: note.type, created: Date.parse(note.createdAt ?? note.created_time ?? ''),
   }]))

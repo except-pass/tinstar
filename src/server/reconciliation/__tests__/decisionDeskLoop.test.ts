@@ -980,6 +980,21 @@ describe('prepared-card loop', () => {
     expect((await prep.status()).jobs[0]?.state).toBe('published')
   })
 
+  it('keeps code examples in the revision without treating them as request or answer evidence', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources } = await setup([card], false)
+    const work = await sources.currentCard(card.id)
+    const request = { id: 'request', type: 'comment', text: card.comments[0]! }
+    const example = { id: 'example', type: 'code', text: request.text.replace(requestIdFor(card), 'example-request') }
+    const answer = { id: 'answer-example', type: 'code', text: `Tin Star answer: ${JSON.stringify(requestIdFor(card))}` }
+
+    expect(decisionCardSource(work, [example]).prepEligible).toBe(false)
+    const baseline = decisionCardSource(work, [request])
+    const withExamples = decisionCardSource(work, [request, example, answer])
+    expect(withExamples).toMatchObject({ prepEligible: true, question: baseline.question })
+    expect(withExamples.revision).not.toBe(baseline.revision)
+  })
+
   it.each(['comment', 'paragraph'])('preserves the legacy revision when identical %s text is reposted', async type => {
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources } = await setup([card], false)
