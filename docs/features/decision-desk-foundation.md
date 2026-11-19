@@ -26,19 +26,25 @@ allowlist, and `X-Tinstar-UI: 1` handshake.
 
 Preparation shows how many cards are ready, being prepared, and leased.
 When fewer than ten cards are claimable, Tin Star sends eligible cards up to
-a total of ten outstanding jobs. A card is sent only when its evidence has
-exactly one open, unanswered Tin Star decision request for Will with a question.
-Review submissions and merge asks alone do not qualify. Done, Archived, Waiting for Prod
-Release, Delegated to person, synthetic,
-test (`[TEST ...]` titles), and Jira cards are not sent. Ownership or a Will
-action tag alone does not qualify. A card can have only one outstanding job.
-Jobs expire after 15 minutes without publication and are sent at most twice
-for one source revision. A changed source revision can be sent again while the
-request is open. A Desk answer closes the request until a new request is made.
-A job already queued for a card that stops being eligible is dropped.
+a total of ten outstanding jobs. Candidates come from the Desk queue. A card
+must have exactly one open, unanswered Tin Star decision request across all
+addressees. That request must address Will, include a question, and have an
+action matching a current Will action tag. Review submissions and merge asks
+require a qualifying request record. Card code blocks count toward the source
+revision but cannot supply request or answer evidence.
+
+Preparation also excludes Waiting for Prod Release and Delegated to person
+cards, synthetic and Jira cards, and cards whose titles start with the
+case-sensitive prefix `[TEST]` or `[TEST `. A Desk answer closes the request
+until a new request is made.
+
+A card can have only one outstanding job. Each job expires after 15 minutes
+without publication, even if webhook delivery fails. Tin Star allows at most
+two send attempts per card revision. An eligible card with a new revision can
+be sent again. Monitoring stops outstanding jobs when the card changes
+revision or loses eligibility.
 Published packets have no age limit. Editing decision properties, card text, or
-substantive discussion invalidates the packet. Sending happens only when the
-preparer webhook secret is configured.
+substantive discussion invalidates the packet.
 
 For a prepared card with an open Notion request, see
 [withdrawing or superseding a decision request](workflow.md#decision-retractions).
@@ -59,9 +65,10 @@ retry or refill completes the handoff.
 
 ## Webhook publication
 
-Configure the `url` and `key` fields of Clavis secret
-`grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
-authentication. Its body contains `card_url`, a credential-scrubbed
+Sending is off until the owner explicitly enables it. To enable sending,
+make the `url` and `key` fields of Clavis secret
+`grok/tinstar-decision-prep` available to Tin Star. Tin Star sends a POST per
+job with Bearer authentication. Its body contains `card_url`, a credential-scrubbed
 `source_question` from the sole open decision request and an opaque
 `source_revision` token for the card revision. Workflow-generated questions can
 span multiple lines. Legacy requests contribute only the labeled Question line.
@@ -87,9 +94,11 @@ four packet content fields.
 Tin Star attaches the card ID and its revision, assigns option IDs, and reports
 invalid packet fields by path. Use HTTPS evidence links without embedded
 credentials to make them visible in browser review. The authoritative packet
-schema is exposed by MCP `tools/list`. A repeated publish for the same job
-returns the same packet ID. Jobs and packets from the former request-based protocol are kept
-in local storage for audit. Active cards receive new card-based preparations.
+schema is exposed by MCP `tools/list`. Initial publication requires an
+outstanding job and a fresh source check for eligibility and the original
+revision. A repeated publish for the same job returns the same packet ID.
+Jobs and packets from the former request-based protocol are kept in local
+storage for audit. Active cards receive new card-based preparations.
 
 ## ChatGPT claims
 
