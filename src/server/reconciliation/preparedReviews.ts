@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets, type StoredDecisionPacket } from './decisionPackets'
-import { isLivePreparation, type DecisionPreparation } from './decisionPrep'
+import type { DecisionPreparation } from './decisionPrep'
 import type { WorkCard } from './workReader'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
@@ -78,7 +78,8 @@ export class PreparedReviews {
   }
   async snapshot() {
     await this.initialize()
-    const prep = await this.preparation.status()
+    const { liveCards, ...prep } = await this.preparation.status()
+    const preparing = new Set(liveCards)
     return this.leases.readStorage(db => {
       const queue = this.queue()
       const now = this.now()
@@ -89,7 +90,7 @@ export class PreparedReviews {
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
         const job = jobs.get(card.id)
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
-          job && isLivePreparation(job, now) ? 'Preparing' :
+          preparing.has(card.id) ? 'Preparing' :
           job?.state === 'expired' ? 'Retrying' :
           job?.state === 'stopped' ? job.message || 'Preparation stopped' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }

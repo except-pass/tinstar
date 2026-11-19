@@ -127,8 +127,9 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     }
     return Response.json(card)
   }
+  let sendingEnabled = true
   const sources = new ReconciliationSources({ warnings: [], fleet: [], notion: { token: 'integration-writer', dataSourceId: board } },
-    provider, new NotionApi(provider, 0), root, async () => JSON.stringify({ url: webhook.url, key: 'fixture-webhook-key' }))
+    provider, new NotionApi(provider, 0), root, async () => sendingEnabled ? JSON.stringify({ url: webhook.url, key: 'fixture-webhook-key' }) : null)
   const mcp = new ReconciliationMcp(sources, root)
   const connect = async (actor = 'owner-chatgpt') => {
     const server = mcp.createServer(actor)
@@ -156,7 +157,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web }
+  return { sources, jobs, tool, connect, published, writes, web, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -691,6 +692,17 @@ describe('prepared-card loop', () => {
     },
   )
 
+  it('ignores marker text in ordinary comments when validating a callback', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, tool } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    card.comments.push('The Tin Star prepared packet: marker was mentioned.',
+      'The Tin Star operation: ["waiting-on-main", marker was also mentioned.')
+    expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'published' })
+  })
+
   it('counts a lost acknowledgement toward capacity and retires it when the card becomes ineligible', async () => {
     const cards = Array.from({ length: 11 }, (_, n) => withOpenRequest(page(n + 1, { tag: 'Decision' })))
     const { sources, jobs, tool, web } = await setup(cards, false, undefined, 1)
@@ -716,6 +728,46 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
   })
 
+  it('retires outstanding jobs while sending is disabled', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, tool, disableSending } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    disableSending()
+    now += 30_000
+    const originalStatus = card.properties.Status!
+    card.properties.Status = { type: 'status', status: { name: 'Waiting for Prod Release' } }
+    await sources.preparation.replenish()
+    expect(await sources.preparation.status()).toMatchObject({ configured: false, preparing: 0, jobs: [{ state: 'stopped' }] })
+    expect(jobs).toHaveLength(1)
+
+    card.properties.Status = originalStatus
+    expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
+  })
+
+  it('shows live jobs older than the runner history limit', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, web } = await setup([card], false)
+    await sources.preparation.replenish()
+    now += 1_000
+    await sources.leases.writeStorage(db => {
+      const insert = db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'published',?)")
+      for (let n = 0; n < 100; n++) insert.run(`history-${n}`, sources.decisionPackets.scope, id(n + 2), 'old', now)
+    })
+
+    const snapshot = (await web('snapshot')).data
+    expect(jobs).toHaveLength(1)
+    expect(snapshot.runner.jobs).toHaveLength(100)
+    expect(snapshot.runner.jobs.some((job: { id: string }) => job.id === jobs[0]!.publish.job_id)).toBe(false)
+    expect(snapshot.counts.preparing).toBe(1)
+    expect(snapshot.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Preparing' })])
+  })
+
   it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -731,13 +783,16 @@ describe('prepared-card loop', () => {
     now += (timely ? 14 : 15) * 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
+    const originalStatus = card.properties.Status!
+    if (!timely) card.properties.Status = { type: 'status', status: { name: 'Waiting for Prod Release' } }
+    expect(await tool('publish_prepared_packet', { job_id: jobs[1]!.publish.job_id, packet: contents }))
+      .toMatchObject(timely ? { outcome: 'published' } : { outcome: 'operation-conflict', message: expect.stringContaining('expired') })
     if (!timely) {
+      card.properties.Status = originalStatus
       expect((await web('snapshot')).data.pending).toEqual([
         expect.objectContaining({ card_id: card.id, state: 'Preparation stopped after two sends without a packet' }),
       ])
     }
-    expect(await tool('publish_prepared_packet', { job_id: jobs[1]!.publish.job_id, packet: contents }))
-      .toMatchObject(timely ? { outcome: 'published' } : { outcome: 'operation-conflict', message: expect.stringContaining('expired') })
   })
 
   it('does not send a test card or a synthetic card', async () => {

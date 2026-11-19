@@ -17,8 +17,9 @@ const callbackStates = ['sending', 'sent', 'failed']
 const callbackStateSql = `state IN (${callbackStates.map(state => `'${state}'`).join(',')})`
 const liveJobSql = `${callbackStateSql} AND at > ?`
 
-export function isLivePreparation(job: Pick<Job, 'state' | 'at'>, now: number) {
-  return callbackStates.includes(job.state) && job.at > now - retryAfter
+function requireLivePreparation(job: Pick<Job, 'state' | 'at'>, cutoff: number) {
+  if (job.at <= cutoff) throw new DecisionDeskConflict('The preparation job expired')
+  if (!callbackStates.includes(job.state)) throw new DecisionDeskConflict('The preparation job stopped')
 }
 /** A second send covers one lost packet. Further sends of an unchanged revision are how the same card was posted every 15 minutes. */
 export const prepSendCap = 2
@@ -91,8 +92,10 @@ export class DecisionPreparation {
       const jobs = db.prepare(
         'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? ORDER BY at DESC LIMIT 100',
       ).all(this.scope) as unknown as Job[]
+      const liveJobs = db.prepare(`SELECT card FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
+        .all(this.scope, this.now() - retryAfter) as Array<{ card: string }>
       return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
-        preparing: this.liveCount(db, this.now() - retryAfter) }
+        preparing: liveJobs.length, liveCards: liveJobs.map(job => job.card) }
     })
   }
 
@@ -167,7 +170,6 @@ export class DecisionPreparation {
       await Promise.allSettled(refresh.map(card => this.source.read(card.id, true)))
     }
     const secret = this.secret
-    if (!secret) { this.explanation = webhookMissing; return }
     const candidateIds = new Set(candidates.map(card => card.id))
     const ids = [...new Set([...liveCards, ...candidateIds])]
     const attempts = await Promise.allSettled(ids.map(async id => {
@@ -178,7 +180,7 @@ export class DecisionPreparation {
           db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = NULL
             WHERE scope = ? AND card = ? AND ${liveJobSql} AND (revision != ? OR ? = 0)`)
             .run(this.scope, id, cutoff, source.revision, Number(source.prepEligible))
-          if (!candidateIds.has(id) || !source.prepEligible ||
+          if (!secret || !candidateIds.has(id) || !source.prepEligible ||
             this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
           if (!this.refillCapacity(db, queue, cutoff) || this.hasLiveJob(db, id, cutoff) ||
             this.sendCount(db, id, source.revision) >= prepSendCap) return
@@ -187,14 +189,14 @@ export class DecisionPreparation {
             .run(job, this.scope, id, source.revision, this.now())
           return job
         })
-        return job ? { completion: this.push(secret, job, source) } : undefined
+        return job && secret ? { completion: this.push(secret, job, source) } : undefined
       })
       return dispatch ? { message: await dispatch.completion } : undefined
     }))
     const sent = attempts.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
     this.candidateCursor += candidates.length - sent.length
     const failures = sent.flatMap(job => job.message ? [job.message] : [])
-    this.explanation = failures.length ? `${failures.length} of ${sent.length} jobs could not be sent. ${failures[0]}` :
+    this.explanation = !secret ? webhookMissing : failures.length ? `${failures.length} of ${sent.length} jobs could not be sent. ${failures[0]}` :
       sent.length ? `Sent ${sent.length} cards to the preparer.` :
       attempts.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
   }
@@ -231,26 +233,25 @@ export class DecisionPreparation {
     return this.source.exclusive(job.card, async () => {
       const current = lookup()!
       if (current.packet_id) return { outcome: 'published', job_id, packet_id: current.packet_id }
+      requireLivePreparation(current, this.now() - retryAfter)
       const source = await this.source.read(current.card, false)
-      if (source.revision !== current.revision || !source.prepEligible) {
-        const changed = source.revision !== current.revision
-        await this.packets.leases.writeStorage(db => {
-          db.prepare("UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE id = ? AND packet_id IS NULL")
-            .run(changed ? 'Card changed while preparing' : null, job_id)
-        })
-        throw new DecisionDeskConflict(changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
-      }
-      return this.packets.leases.writeStorage(db => {
+      const changed = source.revision !== current.revision
+      const packetId = await this.packets.leases.writeStorage(db => {
         const latest = db.prepare('SELECT packet_id,at,state FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at' | 'state'>
-        if (latest.packet_id) return { outcome: 'published', job_id, packet_id: latest.packet_id }
-        const now = this.now()
-        if (!isLivePreparation(latest, now)) {
-          throw new DecisionDeskConflict(latest.at <= now - retryAfter ? 'The preparation job expired' : 'The preparation job stopped')
+        if (latest.packet_id) return latest.packet_id
+        const cutoff = this.now() - retryAfter
+        requireLivePreparation(latest, cutoff)
+        if (changed || !source.prepEligible) {
+          db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE id = ? AND ${liveJobSql}`)
+            .run(changed ? 'Card changed while preparing' : null, job_id, cutoff)
+          return null
         }
         const stored = this.packets.publishInStorage(db, source, packet)
         db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
-        return { outcome: 'published', job_id, packet_id: stored.id }
+        return stored.id
       })
+      if (!packetId) throw new DecisionDeskConflict(changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
+      return { outcome: 'published', job_id, packet_id: packetId }
     })
   }
 }

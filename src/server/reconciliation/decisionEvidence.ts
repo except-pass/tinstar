@@ -33,8 +33,8 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
     const receipt = workflowReceipt(block)
     if (isDecisionRetraction(block.text) && receipt || decisionRecordRows([history[index]!], 'Tin Star request: ').length) return true
     return !checkInReport(block.text) &&
-      !block.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker) &&
-      !receipt?.startsWith('Tin Star operation: ["waiting-on-main",')
+      !block.text.split('\n').at(-1)?.startsWith(deskAnswerMarker) &&
+      !block.text.includes('Tin Star prepared packet:') && !block.text.includes('Tin Star operation: ["waiting-on-main",')
   })
     .map(block => prose(block.text)).filter(Boolean).sort()
   return createHash('sha256').update(canonical([decisionProperties(card), body, comments])).digest('hex')
