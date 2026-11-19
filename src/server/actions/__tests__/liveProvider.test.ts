@@ -27,7 +27,7 @@ const secret = 'fake-installation-secret-with-no-format-assumption'
 let privateKey: string, publicKey: string
 beforeAll(() => { ({ privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } })) }, 30_000)
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
-async function setup(options: { credentials?: boolean; enabled?: boolean; response?: (input: ProviderRequest) => Promise<unknown> } = {}) {
+async function setup(options: { credentials?: boolean; enabled?: boolean; beforeToken?: () => Promise<void>; response?: (input: ProviderRequest) => Promise<unknown> } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tinstar-live-provider-')); roots.push(root)
   const custody = join(root, 'credentials'); await mkdir(custody, { mode: 0o700 })
   if (options.credentials !== false) for (const profile of ['reader', 'repair']) await writeFile(join(custody, `${profile}.pem`), privateKey, { mode: 0o600 })
@@ -38,6 +38,7 @@ async function setup(options: { credentials?: boolean; enabled?: boolean; respon
   const transport: ProviderTransport = async input => {
     requests.push(input)
     if (input.path.endsWith('/access_tokens')) {
+      await options.beforeToken?.()
       const payload = input.body as { repository_ids: number[]; permissions: Record<string, string> }
       const [header, body, signature] = input.authorization.split('.')
       expect(verify('RSA-SHA256', Buffer.from(`${header}.${body}`), publicKey, Buffer.from(signature!, 'base64url'))).toBe(true)
@@ -132,6 +133,54 @@ it('keeps only linked PR fields in live release polling and stored observations'
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 })
+it('orders live observations by dispatch when token mints finish out of order', async () => {
+  let releaseMint!: () => void, mintStarted!: () => void
+  const mintGate = new Promise<void>(resolve => { releaseMint = resolve })
+  const firstMintStarted = new Promise<void>(resolve => { mintStarted = resolve })
+  let mints = 0
+  const exactPath = '/repos/fortresspower/cmsandbox/pulls/1'
+  const listPath = '/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1'
+  const fixture = await setup({
+    beforeToken: async () => {
+      if (++mints !== 1) return
+      mintStarted()
+      await mintGate
+    },
+    response: async ({ path }) => {
+      if (path === exactPath) return { state: 'closed' }
+      if (path === listPath) return [{ number: 1, title: 'Linked PR', state: 'open',
+        merged_at: null, updated_at: new Date().toISOString(), merge_commit_sha: null, head: { sha: head }, base: { ref: 'main' } }]
+    },
+  })
+  const { server } = brokerServer(fixture.config, fixture.provider)
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(fixture.config.socket, resolve) })
+  vi.stubEnv('TINSTAR_ACTION_BROKER_SOCKET', fixture.config.socket)
+  const exactStart = vi.fn(), joinedStart = vi.fn(), listStart = vi.fn()
+  const exact = liveReaderJson(exactPath, '.', undefined, exactStart)
+  try {
+    await firstMintStarted
+    const joined = fixture.provider.read(exactPath, '.', undefined, joinedStart)
+    expect(await liveReaderJson(listPath, '.', [1], listStart)).toMatchObject({ rows: [{ state: 'open' }] })
+    releaseMint()
+    expect(await Promise.all([exact, joined])).toEqual([{ state: 'closed' }, { state: 'closed' }])
+    expect(exactStart.mock.calls).toEqual(joinedStart.mock.calls)
+    expect(exactStart.mock.calls[0]![1]).toBeGreaterThan(listStart.mock.calls[0]![1])
+    expect(fixture.requests.filter(request => request.method === 'GET').map(request => request.path)).toEqual([listPath, exactPath])
+  } finally {
+    releaseMint()
+    await exact.catch(() => {})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+it('does not report a dispatch origin when credentials are unavailable', async () => {
+  const fixture = await setup({ credentials: false })
+  const start = vi.fn()
+  await expect(fixture.provider.read('/repos/fortresspower/cmsandbox/pulls/1', '.', undefined, start)).rejects.toThrow()
+  expect(start).not.toHaveBeenCalled()
+  expect(fixture.requests).toEqual([])
+})
+
 it('recovers linked observations when the live broker cannot read the list response', async () => {
   const fixture = await setup({ response: async ({ path }) => {
     if (path.includes('/pulls?')) throw new GithubResponseError()

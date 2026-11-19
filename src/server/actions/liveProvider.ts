@@ -166,12 +166,17 @@ export class LiveProvider {
     this.#tokens.set(cacheKey, { token: token.token, until: expires })
     return token.token
   }
-  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string, pullNumbers?: number[]) {
+  private async call(profile: Profile, repository: string, permissions: Permissions, method: ProviderRequest['method'], path: string, body?: unknown, beforeSend?: () => Promise<void>, etag?: string, pullNumbers?: number[], dispatched?: () => void) {
     let authorization: string
     try { this.rest.assertAvailable(); authorization = await this.token(profile, repository, permissions); await beforeSend?.(); this.rest.assertAvailable() }
     catch (error) { throw new BrokerEffectError(error instanceof Error ? error.message : 'Broker validation refused request', 'not-sent') }
     let response
-    try { response = await this.rest.send(received => this.transport({ method, path, body, authorization, etag }, received)) }
+    try {
+      response = await this.rest.send(received => {
+        dispatched?.()
+        return this.transport({ method, path, body, authorization, etag }, received)
+      })
+    }
     catch (error) {
       if (isGithubRateLimit(error)) throw new BrokerEffectError(error.message, 'not-sent')
       if (pullNumbers && isGithubResponseError(error)) throw error
@@ -188,7 +193,7 @@ export class LiveProvider {
       throw new Error('Request timing is only available for Releases PR reads')
     }
     const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
-    return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers), onStart)
+    return this.rest.get(key, (etag, dispatched) => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers, dispatched), onStart)
   }
   snapshot = (url: string) => readActionSnapshot(url, this.read)
   async identity() {
