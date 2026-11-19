@@ -42,9 +42,13 @@ export class ReleasePullReader {
     const batches = [...groups].filter(([repository, group]) => group.length > 1 || this.pollPending.has(repository))
     for (let offset = 0; offset < batches.length; offset += 4) {
       await Promise.all(batches.slice(offset, offset + 4).map(async ([repository, group]) => {
-        if (group.every(({ url }) => this.cache.get(url)?.value.state === 'merged' && this.current(url))) return
-        if (group.length > 1) await this.poll(repository, group)
-        else await this.pollPending.get(repository)
+        const pending = this.pollPending.get(repository)
+        if (pending) {
+          await pending
+          return
+        }
+        const eligible = group.filter(({ url }) => !this.freshMerge(url))
+        if (eligible.length > 1) await this.poll(repository, eligible)
       }))
     }
     const failures = new Map<string, PollFailure>()
@@ -84,6 +88,11 @@ export class ReleasePullReader {
 
   private current(url: string) { return (this.cache.get(url)?.until ?? -Infinity) > this.now() }
 
+  private freshMerge(url: string) {
+    const value = this.cache.get(url)?.value
+    return value?.state === 'merged' && value.freshness === 'fresh' && this.current(url)
+  }
+
   private poll(repository: string, group: Array<{ url: string; number: number }>) {
     const previous = this.polls.get(repository)
     if (previous && previous.until > this.now()) return Promise.resolve(previous)
@@ -115,7 +124,7 @@ export class ReleasePullReader {
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
     const refreshed = new Set<string>()
-    let coveredAt: number | undefined
+    let firstPage: { origin: number; cutoff: number } | undefined
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
@@ -130,7 +139,7 @@ export class ReleasePullReader {
         const observedAt = new Date(orderedAt).toISOString()
         for (const row of rows) {
           const url = byNumber.get(row.number)
-          if (!url || observed.has(url) || this.cache.get(url)?.value.state === 'merged' && this.current(url)) continue
+          if (!url || observed.has(url) || this.freshMerge(url)) continue
           observed.add(url)
           try {
             const value = this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt)
@@ -140,17 +149,20 @@ export class ReleasePullReader {
             this.save(url, this.failed(url, 'List row lacks effective merge evidence'), orderedAt, undefined, orderedAt)
           }
         }
-        const reachedCutoff = count === pageSize && oldestUpdatedAt !== null && Date.parse(oldestUpdatedAt) < since
-        if (page === 1 && reachedCutoff) coveredAt = origin
+        const cutoff = count === pageSize && oldestUpdatedAt !== null ? Date.parse(oldestUpdatedAt) : undefined
+        const reachedCutoff = cutoff !== undefined && cutoff < since
+        if (page === 1 && cutoff !== undefined && origin !== undefined) firstPage = { origin, cutoff }
         if (count < pageSize || reachedCutoff || group.every(({ url }) =>
-          this.current(url) && (refreshed.has(url) || this.cache.get(url)?.value.state === 'merged'))) break
+          this.freshMerge(url) || refreshed.has(url) && this.current(url))) break
       }
     } catch (error) {
       return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
     }
-    if (coveredAt !== undefined) for (const [url, previous] of coverage) {
-      if (!observed.has(url) && this.cache.get(url) === previous) {
-        this.save(url, { ...previous.value, observedAt: new Date(coveredAt).toISOString(), freshness: 'fresh', readError: undefined }, coveredAt, coveredAt)
+    if (firstPage) for (const [url, previous] of coverage) {
+      if (previous.coverageAt !== undefined && firstPage.cutoff < previous.coverageAt - 1000 &&
+          !observed.has(url) && this.cache.get(url) === previous) {
+        const { origin } = firstPage
+        this.save(url, { ...previous.value, observedAt: new Date(origin).toISOString(), freshness: 'fresh', readError: undefined }, origin, origin)
       }
     }
     return { until: started + refreshTtl }

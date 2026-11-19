@@ -343,6 +343,44 @@ describe('bounded read-only release PR observations', () => {
       expect(read).toHaveBeenCalledTimes(4)
     })
 
+  it('uses an exact read when only one linked PR is eligible for a new poll', async () => {
+    let now = Date.now()
+    const list = vi.fn().mockResolvedValue(page([row(1, now, 'closed', merged.merged_at), row(2, now, 'open')]))
+    const read = vi.fn().mockResolvedValue({ ...merged, merged: false })
+    const reader = new ReleasePullReader(read, () => now, list)
+    const urls = [url(1), url(2)]
+    const first = await reader.get(urls)
+    now += pollInterval
+    const refresh = await reader.get(urls)
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(read.mock.calls.map(([path]) => path)).toEqual(['/repos/owner/repo/pulls/2'])
+    expect(refresh.get(url(1))).toEqual(first.get(url(1)))
+    expect(refresh.get(url(2))).toMatchObject({ state: 'closed', freshness: 'fresh' })
+  })
+
+  it('renews individually covered links while continuing pagination for an older link', async () => {
+    let now = Date.now()
+    const read = vi.fn().mockResolvedValueOnce({ ...merged, state: 'open', merged: false }).mockResolvedValue(merged)
+    const list = vi.fn()
+    const reader = new ReleasePullReader(read, () => now, list)
+    await reader.get([url(1)])
+    const older = now
+    now += pollInterval / 2
+    list.mockResolvedValueOnce(page([row(2, now, 'open'), row(3, now, 'open')]))
+    await reader.get([url(1), url(2), url(3)])
+    read.mockClear()
+
+    now += pollInterval
+    list.mockResolvedValueOnce(page([], 100, new Date(older + 2_000).toISOString())).mockResolvedValueOnce(page([]))
+    const result = await reader.get([url(1), url(2), url(3)])
+    expect(list).toHaveBeenCalledTimes(3)
+    expect(read.mock.calls.map(([path]) => path)).toEqual(['/repos/owner/repo/pulls/1'])
+    expect(result.get(url(1))).toMatchObject({ state: 'merged', freshness: 'fresh' })
+    for (const number of [2, 3]) {
+      expect(result.get(url(number))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
+    }
+  })
+
   it('keeps all exact-read slots available after renewing an unchanged PR outside page one', async () => {
     let now = Date.now()
     const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'open')]))
@@ -377,7 +415,7 @@ describe('bounded read-only release PR observations', () => {
     expect(refreshed.get(url(2))).toMatchObject({ state: 'open', freshness: 'fresh' })
     expect(refreshed.get(url(3))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
     expect(list).toHaveBeenCalledTimes(2)
-    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', [1, 2, 3], expect.any(Function))
+    expect(list).toHaveBeenCalledWith('/repos/owner/repo/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1', [2, 3], expect.any(Function))
     expect(read).not.toHaveBeenCalled()
   })
 
