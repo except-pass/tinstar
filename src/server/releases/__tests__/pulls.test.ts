@@ -5,8 +5,14 @@ const day = 24 * 60 * 60_000
 const pollInterval = 120_000
 const sha = 'a'.repeat(40), url = (number: number) => `https://github.com/owner/repo/pull/${number}`
 const merged = { title: 'Real PR', state: 'closed', merged: true, merged_at: '2026-11-06T18:00:00Z', merge_commit_sha: sha }
-const row = (number: number, updated: number, state: 'open' | 'closed', mergedAt: string | null = null) => ({
-  number, title: `Linked PR ${number}`, state, merged_at: mergedAt, merge_commit_sha: sha, updated_at: new Date(updated).toISOString(),
+const row = (
+  number: number,
+  updated: number,
+  state: 'open' | 'closed',
+  mergedAt: string | null = null,
+  mergeSha: string | null = sha,
+) => ({
+  number, title: `Linked PR ${number}`, state, merged_at: mergedAt, merge_commit_sha: mergeSha, updated_at: new Date(updated).toISOString(),
   head: { sha }, base: { ref: 'main' },
 })
 const page = (rows: ReturnType<typeof row>[], count = rows.length, oldestUpdatedAt = rows.at(-1)?.updated_at ?? null) => ({
@@ -86,8 +92,8 @@ describe('bounded read-only release PR observations', () => {
     const firstPageGate = new Promise<void>(resolve => { finishFirstPage = resolve })
     const otherUrl = (number: number) => `https://github.com/owner/other/pull/${number}`
     const read = vi.fn().mockResolvedValue({ ...merged, state: 'open', merged: false })
-    const list = vi.fn(async (path: string, _numbers: number[], onStart: (time: number) => void) => {
-      onStart(now)
+    const list = vi.fn(async (path: string, _numbers: number[], onStart?: (time: number) => void) => {
+      onStart?.(now)
       if (path.includes('/other/')) {
         await otherGate
         return page([row(1, now, 'open'), row(2, now, 'open')])
@@ -259,7 +265,7 @@ describe('bounded read-only release PR observations', () => {
       return { ...merged, state: 'open', merged: false }
     }).mockResolvedValue(merged)
     const list = vi.fn()
-      .mockImplementationOnce(async () => page([{ ...row(1, now, 'closed', merged.merged_at), merge_commit_sha: null }], 100))
+      .mockImplementationOnce(async () => page([row(1, now, 'closed', merged.merged_at, null)], 100))
       .mockImplementationOnce(async () => { reachedSecondPage(); await listGate; return page([row(2, now, 'open')]) })
     const reader = new ReleasePullReader(read, () => now, list)
     const exact = reader.get([url(1)])
