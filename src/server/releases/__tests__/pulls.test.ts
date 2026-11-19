@@ -358,28 +358,44 @@ describe('bounded read-only release PR observations', () => {
     expect(refresh.get(url(2))).toMatchObject({ state: 'closed', freshness: 'fresh' })
   })
 
-  it('renews individually covered links while continuing pagination for an older link', async () => {
-    let now = Date.now()
-    const read = vi.fn().mockResolvedValueOnce({ ...merged, state: 'open', merged: false }).mockResolvedValue(merged)
-    const list = vi.fn()
-    const reader = new ReleasePullReader(read, () => now, list)
-    await reader.get([url(1)])
-    const older = now
-    now += pollInterval / 2
-    list.mockResolvedValueOnce(page([row(2, now, 'open'), row(3, now, 'open')]))
-    await reader.get([url(1), url(2), url(3)])
-    read.mockClear()
+  it.each(['success', 'unavailable', 'unreadable', 'all resolved'])(
+    'retains page-one renewals when older evidence is %s', async outcome => {
+      let now = Date.now()
+      const read = vi.fn().mockResolvedValueOnce({ ...merged, state: 'open', merged: false }).mockResolvedValue(merged)
+      const list = vi.fn()
+      const reader = new ReleasePullReader(read, () => now, list)
+      await reader.get([url(1)])
+      const older = now
+      now += pollInterval / 2
+      list.mockResolvedValueOnce(page([row(2, now, 'open'), row(3, now, 'open')]))
+      await reader.get([url(1), url(2), url(3)])
+      read.mockClear()
 
-    now += pollInterval
-    list.mockResolvedValueOnce(page([], 100, new Date(older + 2_000).toISOString())).mockResolvedValueOnce(page([]))
-    const result = await reader.get([url(1), url(2), url(3)])
-    expect(list).toHaveBeenCalledTimes(3)
-    expect(read.mock.calls.map(([path]) => path)).toEqual(['/repos/owner/repo/pulls/1'])
-    expect(result.get(url(1))).toMatchObject({ state: 'merged', freshness: 'fresh' })
-    for (const number of [2, 3]) {
-      expect(result.get(url(number))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
-    }
-  })
+      now += pollInterval
+      const oldestUpdatedAt = new Date(older + 2_000).toISOString()
+      const olderRow = outcome === 'all resolved' ? [row(1, now, 'closed')] : []
+      list.mockResolvedValueOnce(page(olderRow, 100, oldestUpdatedAt))
+      if (outcome === 'unavailable') list.mockRejectedValueOnce(new Error('HTTP 503'))
+      else if (outcome === 'unreadable') list.mockResolvedValueOnce(null)
+      else if (outcome === 'success') list.mockResolvedValueOnce(page([]))
+
+      const result = await reader.get([url(1), url(2), url(3)])
+      expect(list).toHaveBeenCalledTimes(outcome === 'all resolved' ? 2 : 3)
+      if (outcome === 'unavailable') {
+        expect(read).not.toHaveBeenCalled()
+        expect(result.get(url(1))).toMatchObject({ state: 'open', freshness: 'stale', readError: expect.any(String) })
+      } else if (outcome === 'all resolved') {
+        expect(read).not.toHaveBeenCalled()
+        expect(result.get(url(1))).toMatchObject({ state: 'closed', freshness: 'fresh' })
+      } else {
+        expect(read.mock.calls.map(([path]) => path)).toEqual(['/repos/owner/repo/pulls/1'])
+        expect(result.get(url(1))).toMatchObject({ state: 'merged', freshness: 'fresh' })
+      }
+      for (const number of [2, 3]) {
+        expect(result.get(url(number))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
+        expect(result.get(url(number))?.readError).toBeUndefined()
+      }
+    })
 
   it('keeps all exact-read slots available after renewing an unchanged PR outside page one', async () => {
     let now = Date.now()

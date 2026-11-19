@@ -124,7 +124,6 @@ export class ReleasePullReader {
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
     const refreshed = new Set<string>()
-    let firstPage: { origin: number; cutoff: number } | undefined
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
       // still fill gaps when the list cannot reach the previous observation.
@@ -151,19 +150,19 @@ export class ReleasePullReader {
         }
         const cutoff = count === pageSize && oldestUpdatedAt !== null ? Date.parse(oldestUpdatedAt) : undefined
         const reachedCutoff = cutoff !== undefined && cutoff < since
-        if (page === 1 && cutoff !== undefined && origin !== undefined) firstPage = { origin, cutoff }
+        if (page === 1 && cutoff !== undefined && origin !== undefined) {
+          for (const [url, previous] of coverage) {
+            if (previous.coverageAt === undefined || cutoff >= previous.coverageAt - 1000 ||
+                observed.has(url) || this.cache.get(url) !== previous) continue
+            const value = { ...previous.value, observedAt, freshness: 'fresh' as const, readError: undefined }
+            if (this.save(url, value, origin, origin).freshness === 'fresh') refreshed.add(url)
+          }
+        }
         if (count < pageSize || reachedCutoff || group.every(({ url }) =>
           this.freshMerge(url) || refreshed.has(url) && this.current(url))) break
       }
     } catch (error) {
       return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed, allowExact: isGithubResponseError(error) } }
-    }
-    if (firstPage) for (const [url, previous] of coverage) {
-      if (previous.coverageAt !== undefined && firstPage.cutoff < previous.coverageAt - 1000 &&
-          !observed.has(url) && this.cache.get(url) === previous) {
-        const { origin } = firstPage
-        this.save(url, { ...previous.value, observedAt: new Date(origin).toISOString(), freshness: 'fresh', readError: undefined }, origin, origin)
-      }
     }
     return { until: started + refreshTtl }
   }
