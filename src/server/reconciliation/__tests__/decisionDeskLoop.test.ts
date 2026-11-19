@@ -837,6 +837,37 @@ describe('prepared-card loop', () => {
     }
   })
 
+  it.each(['publication', 'workflow edit'])('keeps a superseded monitor from restoring the Desk revision after %s', async action => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, tool, web, pauseNextBodyRead } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    const bodyStarted = Promise.withResolvers<void>()
+    const releaseBody = Promise.withResolvers<void>()
+    pauseNextBodyRead(() => {
+      bodyStarted.resolve()
+      return releaseBody.promise
+    })
+    const monitoring = sources.preparation.replenish()
+    await bodyStarted.promise
+    try {
+      if (action === 'publication') {
+        card.comments.push('New evidence changes the decision.')
+        await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
+          .rejects.toThrow('The card changed while preparing it')
+      } else {
+        expect(await tool('update_work', { card_id: card.id, operation_id: 'new-request-during-monitor', kind: 'request_decision',
+          request_id: 'new-request', requested_from: 'Will', question: 'Reconsider with the new evidence?' }))
+          .toMatchObject({ outcome: 'saved' })
+      }
+    } finally {
+      releaseBody.resolve()
+      await monitoring
+    }
+
+    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Queued' })])
+  })
+
   it('publishes while a retirement-only history read is pending', async () => {
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources } = await setup([card], false)

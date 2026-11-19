@@ -108,7 +108,12 @@ export class ReconciliationSources {
       this.workflow.recordDeskAnswer(stored.packet, selection, operation, () => this.loadDecisionCard(stored.packet.card_id, false), answerer, canPost))
     this.reviewAudit = new ReviewDeploymentAudit(receiptRoot)
     this.workflow.validateReview = async input => this.reviewAudit.validate(input, await this.scene(true), this.associations)
-    this.workflow.onRecordedChange = id => { this.decisionRevisions.delete(id); this.context.invalidate(id); this.invalidateQueueDisplays() }
+    this.workflow.onRecordedChange = id => {
+      this.decisionRevisionReads.delete(id)
+      this.decisionRevisions.delete(id)
+      this.context.invalidate(id)
+      this.invalidateQueueDisplays()
+    }
     this.workflow.onDecisionRetracted = async (id, auditTime) => {
       await this.decisionPackets.initialize()
       await this.leases.writeStorage(db => {
@@ -152,6 +157,7 @@ export class ReconciliationSources {
           attemptedAt: new Date().toISOString(), expiresAt: null, error: 'Fleet source refresh pending' } })) }
   }
 
+  private decisionRevisionReads = new Map<string, symbol>()
   private decisionRevisions = new Map<string, { edited: string; properties: string; revision: string }>()
 
   private decisionQueue() {
@@ -181,9 +187,17 @@ export class ReconciliationSources {
   private async readDecisionCard(id: string, background: boolean, freshHistory = false) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
-    const { card, blocks } = await this.loadDecisionCard(id, background, freshHistory)
-    const source = decisionCardSource(card, blocks)
-    this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
+    const observation = Symbol()
+    this.decisionRevisionReads.set(id, observation)
+    const source = await this.loadDecisionCard(id, background, freshHistory).then(({ card, blocks }) => {
+      const source = decisionCardSource(card, blocks)
+      if (this.decisionRevisionReads.get(id) === observation) {
+        this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
+      }
+      return source
+    }).finally(() => {
+      if (this.decisionRevisionReads.get(id) === observation) this.decisionRevisionReads.delete(id)
+    })
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {
