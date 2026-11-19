@@ -26,6 +26,7 @@ const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|github_pat_|gh[pousr]_)[a-z
 export class JiraWebhookConfigurationError extends Error {}
 
 export function jiraConfig(raw) {
+  if (raw?.mode === 'fixture') throw new JiraWebhookConfigurationError('Jira fixture mode is no longer supported')
   const { site, cloudId, projectId, fields } = raw ?? {}
   if (typeof site !== 'string' || !/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/.test(site) ||
       typeof cloudId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(cloudId) ||
@@ -49,17 +50,16 @@ export function jiraConfig(raw) {
 }
 
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*(?:["\x27]${credentialKey}["\x27][ \t]*[:=]|${credentialKey}[ \t]*[:=][ \t]*["\x27])`
-const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine})[^'\\])*'|["'][^\r\n]*`
-const bareKeyCredential = new RegExp(String.raw`\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|[^\s"',;]{6,})`, 'gi')
-const quotedKeyCredential = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})`, 'gi')
+const nextCredentialLine = (quote) => String.raw`(?:\r\n?|\n)[ \t{,]*(?:${quote}${credentialKey}${quote}[ \t]*[:=]|["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote})`
+const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine('"')})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine("'")})[^'\\])*'|["'][^\r\n]*`
+const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
 
 function preview(text, secret) {
   return text.replaceAll(secret, '[credential omitted]')
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(bareKeyCredential, '$1=[credential omitted]')
-    .replace(quotedKeyCredential, '$1"[credential omitted]"')
+    .replace(credentialAssignment, (_match, quotedPrefix, _quote, bareKey) =>
+      quotedPrefix ? `${quotedPrefix}"[credential omitted]"` : `${bareKey}=[credential omitted]`)
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
     .replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')

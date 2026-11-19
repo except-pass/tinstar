@@ -78,6 +78,11 @@ if [ "${'${EVENTS_JIRA_WEBHOOK_SECRET+x}'}" ]; then result=inherited; else resul
 printf '%s\\n' "$result" > "$FM_HOME/firstmate-env-check"
 exit 1
 `, { mode: 0o700 })
+  await writeFile(configPath, JSON.stringify({ jira: { ...jira, mode: 'fixture' }, homes: [] }))
+  await rejects(exec(process.execPath, [cli, 'serve', '--config', configPath, '--db', dbPath], {
+    env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret },
+  }), error => error.code === 1 && error.stderr.includes('Jira fixture mode is no longer supported'))
+  ok(!existsSync(dbPath))
   const { decisions: _missing, ...partialFields } = jira.fields
   await writeFile(configPath, JSON.stringify({ jira: { ...jira, fields: partialFields }, homes: [] }))
   await rejects(exec(process.execPath, [cli, 'serve', '--config', configPath, '--db', dbPath], {
@@ -182,7 +187,7 @@ exit 1
     user: undefined,
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe} and ${pat}\u001b[31m` }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nTOKEN=123\nprivate-tail"' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: '{"password":\'first\nTOKEN=123\n"TOKEN"="inner"\nprivate-tail\' }' }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
       { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
@@ -194,7 +199,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\nPASSWORD=[credential omitted]\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -216,7 +221,7 @@ exit 1
   deepEqual(JSON.parse((await run('inspect', comment.event_id)).stdout), comment)
   const terminal = (await run('replay', '--source', 'jira', '--last', '1')).stdout
   match(terminal, /\[replay\] jira\/ticket WORK-1 · comment 84001 created/)
-  match(terminal, /↵ PASSWORD=/)
+  match(terminal, /↵ Second line/)
   ok(!terminal.includes(secret))
   const mixed = { ...evidence.comment, id: '85001', body: { type: 'doc', content: [
     { type: 'paragraph', content: [
