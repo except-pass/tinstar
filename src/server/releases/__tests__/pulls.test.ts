@@ -115,7 +115,10 @@ describe('bounded read-only release PR observations', () => {
     })
   })
 
-  it.each([false, true])('keeps newer exact evidence after a page failure (exact pending: %s)', async exactPending => {
+  it.each([
+    { exactPending: false, elapsed: 0 }, { exactPending: true, elapsed: 0 },
+    { exactPending: false, elapsed: 1_000 }, { exactPending: true, elapsed: 1_000 },
+  ])('keeps exact evidence after a page failure (pending: $exactPending, elapsed: $elapsed)', async ({ exactPending, elapsed }) => {
     let now = Date.now()
     let finishOther!: () => void, failPage!: () => void, finishExact!: () => void
     let pageStarted!: () => void, exactStarted!: () => void
@@ -145,7 +148,7 @@ describe('bounded read-only release PR observations', () => {
     const batch = reader.get([url(1), url(2)])
     try {
       await pageInFlight
-      now += 1_000
+      now += elapsed
       finishOther()
       await exactInFlight
       if (exactPending) {

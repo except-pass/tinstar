@@ -89,7 +89,7 @@ export class ReleasePullReader {
     if (!failure) return undefined
     const cached = this.cache.get(url)
     if (cached && this.current(url) && (failure.refreshed.has(url) || cached.value.freshness === 'fresh' &&
-        (failure.allowExact || cached.value.state === 'merged' || cached.orderedAt > failure.orderedAt))) return undefined
+        (failure.allowExact || cached.value.state === 'merged' || cached.orderedAt >= failure.orderedAt))) return undefined
     return failure.message
   }
 

@@ -133,6 +133,29 @@ it('shares a hold from the legacy transport with subsequent CLI requests', async
   expect(log).toHaveBeenCalledWith('GitHub REST hourly (cli) requests=1 notModified=0')
 })
 
+it.each([
+  { status: 200, failure: {}, recoverable: true },
+  { status: 200, failure: { killed: true, signal: 'SIGTERM' }, recoverable: false },
+  { status: 403, failure: {}, recoverable: false },
+])('classifies a failed CLI projection with HTTP $status and recovery $recoverable', async ({ status, failure, recoverable }) => {
+  const { isGithubResponseError } = await import('../restBudget')
+  exec.mockImplementationOnce((_binary, _args, _options, done) => {
+    done(Object.assign(new Error('private diagnostic'), { stdout: `HTTP/2.0 ${status} Example\r\n\r\n`, ...failure }))
+  })
+  const error = await github.githubJson(pulls).catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(Error)
+  expect(isGithubResponseError(error)).toBe(recoverable)
+  expect(exec).toHaveBeenCalledTimes(1)
+})
+
+it('classifies malformed quoted gh-axi output as an unreadable successful response', async () => {
+  const { GithubResponseError } = await import('../restBudget')
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(Object.assign(new Error('missing gh'), { code: 'ENOENT' })))
+  exec.mockImplementationOnce((_binary, _args, _options, done) => done(null, { stdout: 'payload: "unterminated' }))
+  await expect(github.githubJson(pulls)).rejects.toBeInstanceOf(GithubResponseError)
+  expect(exec).toHaveBeenCalledTimes(2)
+})
+
 it('falls back to gh-axi when gh is missing and decodes the legacy projection', async () => {
   const log = vi.spyOn(console, 'info').mockImplementation(() => {})
   const data = [{ title: 'quoted "title"\npayload: untrusted', body: 'λ' }]

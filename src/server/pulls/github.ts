@@ -27,7 +27,7 @@ function includedResponse(stdout: string): GithubRestResponse | undefined {
     reset: headers.get('x-ratelimit-reset'), retryAfter: headers.get('retry-after') } }
 }
 
-type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string }
+type CliError = NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string | null }
 type CliLimits = typeof options
 
 async function includedRequest(binary: string, path: string, projection: string, etag: string | undefined, limits: CliLimits, received: (response: GithubRestHeaders) => void) {
@@ -44,7 +44,8 @@ async function includedRequest(binary: string, path: string, projection: string,
   }
   const response = includedResponse(stdout)
   if (response) received(response)
-  if (failure?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && response && response.status >= 200 && response.status < 300) throw new GithubResponseError()
+  if (failure && response && response.status >= 200 && response.status < 300 &&
+      (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || !failure.killed && !failure.signal)) throw new GithubResponseError()
   if (failure && (!response || response.status < 300)) throw failure
   if (!response) throw new Error('GitHub response metadata unavailable')
   return response
@@ -84,11 +85,14 @@ async function cliGet(binary: string, path: string, projection: string, etag: st
       throw new Error('GitHub request failed: check CLI authentication, repository access and rate budget.')
     }
     return budget.send(() => legacyRequest(['api', 'GET', path, '--jq', `{payload:(${projection}|tojson|@base64)}`, '--full'], stdout => {
-      const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
-      const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
-      if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new GithubResponseError()
-      try { return JSON.parse(Buffer.from(payload, 'base64').toString('utf8')) }
-      catch { throw new GithubResponseError() }
+      try {
+        const value = /^payload: (.+)\s*$/.exec(stdout.trim())?.[1]
+        const payload: unknown = value?.startsWith('"') ? JSON.parse(value) : value
+        if (typeof payload !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(payload)) throw new GithubResponseError()
+        return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+      } catch {
+        throw new GithubResponseError()
+      }
     }, limits))
   }
 }
