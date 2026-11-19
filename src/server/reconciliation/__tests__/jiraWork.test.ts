@@ -32,6 +32,7 @@ const types = [
 const transitions = jiraVerbs.flatMap((name, index) => jiraTransitions[name][1].map((to, destination) => ({
   id: String(index * 10 + destination + 1), name, to: { name: to },
 })))
+const jiraNow = () => new Date(Date.now() - 5000).toISOString()
 const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
@@ -70,6 +71,7 @@ async function fixture() {
       controls.beforeWrite = ''
       throw new Error('Process stopped before Jira received the write')
     }
+    if (path === 'serverInfo') return response({ serverTime: jiraNow() })
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
@@ -136,7 +138,7 @@ async function fixture() {
       if (part) issue.fields.status = transitions.find(transition => transition.id === body.transition.id)!.to
       Object.assign(issue.fields, body.fields)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
-      const created = new Date().toISOString()
+      const created = jiraNow()
       for (const comment of body.update?.comment ?? []) {
         if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created, updated: created, author: { accountId: 'fixture-service' } })
       }
@@ -271,7 +273,7 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   const edit = { kind: 'jira_edit', card_id, operation_id: 'edit-proof', owner: 'Taylor', description: 'Inspect the test output.', note: 'One comment only.' }
   expect(await second.call('update_work', edit)).toMatchObject({ outcome: 'partially-saved' })
   f.issues.get('60001')!.fields[config.fields.owner] = { value: 'Avery' }
-  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items: [
+  f.history['60001'] = [{ created: jiraNow(), author: { accountId: 'fixture-service' }, items: [
     { fieldId: config.fields.owner, fromString: null, toString: 'Taylor' },
     { fieldId: 'description', fromString: null, toString: 'Inspect the test output.' },
   ] }]
@@ -291,13 +293,13 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.loseEdit = true
   const nextMove = { ...move, operation_id: 'accepted-fast-track' }
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'unconfirmed' })
-  f.history['60001']!.push({ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+  f.history['60001']!.push({ created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'status', fromString: 'Backlog', toString: 'Queued' }] })
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'already-saved', card: { status: 'Queued' } })
   f.controls.omitComment = true
   const omit = { kind: 'jira_edit', card_id, operation_id: 'omit', description: 'New instructions', note: 'Jira omitted this' }
   expect(await third.call('update_work', omit)).toMatchObject({ code: 'unconfirmed' })
-  f.history['60001']!.push({ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items: [
+  f.history['60001']!.push({ created: jiraNow(), author: { accountId: 'fixture-service' }, items: [
     { fieldId: 'description', fromString: 'Inspect the test output.', toString: 'New instructions' },
   ] })
   expect(await third.call('update_work', omit)).toMatchObject({ code: 'unconfirmed' })
@@ -339,7 +341,7 @@ it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatche
   expect(await call('link_work', { ...add, operation_id: 'replacement' })).toMatchObject({ outcome: 'saved' })
   expect(await call('link_work', { ...remove, operation_id: 'remove-replacement', link_id: '8002' })).toMatchObject({ outcome: 'saved' })
   f.history['60001'] = [{
-    created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ field: 'Link', fromLinkId: '8002', from: 'OTHER-1', fromString: 'This issue blocks OTHER-1', to: null }],
   }]
   expect(await call('link_work', remove)).toMatchObject({ code: 'unconfirmed' })
@@ -349,7 +351,7 @@ it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatche
   const superseded = { ...add, operation_id: 'superseded' }
   expect(await call('link_work', superseded)).toMatchObject({ code: 'unconfirmed' })
   f.history['60001']!.push({
-    created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ field: 'Link', from: null, to: 'OTHER-1', toString: 'This issue blocks OTHER-1' }],
   })
   f.links.delete('8003')
@@ -399,7 +401,7 @@ it('leaves overlapping edit and reversed link history unconfirmed', async () => 
   f.controls.beforeWrite = 'PUT issue/60001'
   expect(await call('update_work', edit)).toMatchObject({ code: 'unconfirmed' })
   expect(await call('update_work', { ...edit, operation_id: 'saved-superset', owner: 'Avery' })).toMatchObject({ outcome: 'saved' })
-  const history = (items: Record<string, unknown>[]) => ({ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items })
+  const history = (items: Record<string, unknown>[]) => ({ created: jiraNow(), author: { accountId: 'fixture-service' }, items })
   f.history['60001'] = [history([
     { fieldId: 'summary', fromString: 'Original', toString: 'Changed' },
     { fieldId: config.fields.owner, fromString: null, toString: 'Avery' },
@@ -454,7 +456,7 @@ it('does not attribute a delayed earlier write to a newer dispatched receipt', a
     expect(await call('update_work', { ...edit, operation_id })).toMatchObject({ code: 'unconfirmed' })
   }
   f.issues.get('60001')!.fields.summary = 'Changed'
-  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+  f.history['60001'] = [{ created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'summary', fromString: 'Original', toString: 'Changed' }] }]
   expect(await call('update_work', { ...edit, operation_id: 'newer' })).toMatchObject({ code: 'unconfirmed' })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
@@ -487,7 +489,7 @@ it('recovers a later comment and field change despite an unrelated earlier dispa
   const later = { ...edit, operation_id: 'later', description: 'New description', note: 'Later note' }
   f.controls.loseEdit = true
   expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
-  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+  f.history['60001'] = [{ created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'description', fromString: null, toString: 'New description' }] }]
   expect(await call('update_work', later)).toMatchObject({ code: 'already-saved', card: { description: 'New description' } })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
@@ -505,7 +507,7 @@ it('does not confirm a later edit using an earlier dispatch’s identical note',
   f.controls.omitComment = true
   f.controls.delayedComment = 'Same note\n\nRecorded via Tin Star (Fixture agent)'
   expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
-  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+  f.history['60001'] = [{ created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'description', fromString: null, toString: 'New description' }] }]
   expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
@@ -543,7 +545,7 @@ it('recovers a delayed comment after an independent dispatch with a different no
   expect(await call('update_work', { ...edit, operation_id: 'later', description: 'New description', note: 'Later note' }))
     .toMatchObject({ outcome: 'saved' })
   const issue = f.issues.get('60001')!
-  const created = new Date().toISOString()
+  const created = jiraNow()
   issue.fields.summary = earlier.name
   issue.comments.push({ id: 'delayed', body: 'Earlier note\n\nRecorded via Tin Star (Fixture agent)', created, updated: created, author: { accountId: 'fixture-service' } })
   f.history['60001'] = [{ created, author: { accountId: 'fixture-service' },
@@ -572,7 +574,7 @@ it('uses immutable link target identity for historical keys, blockers, and recov
   f.controls.loseLink = true
   const pending = { ...add, operation_id: 'lost' }
   expect(await call('link_work', pending)).toMatchObject({ code: 'unconfirmed' })
-  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+  f.history['60001'] = [{ created: jiraNow(), author: { accountId: 'fixture-service' },
     items: [
       { field: 'Link', from: null, to: 'DELETED-1', toString: 'This issue blocks DELETED-1' },
       { field: 'Link', from: null, to: 'OLD-2', toString: 'This issue blocks OLD-2' },
@@ -625,4 +627,23 @@ it.each([
   expect(await call(tool, { card_id, operation_id: 'change', ...args })).toMatchObject({
     code: 'unconfirmed', message: expect.stringContaining('did not confirm the requested comment'),
   })
+}, 30_000)
+
+
+it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const description = '{"password":"two word passphrase"}'
+  const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
+  expect(card.description).toBe('{"password":"[credential omitted]"}')
+  const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Ticket' } : {}) }
+  f.controls.loseEdit = true
+  expect(await call('update_work', { ...edit, operation_id: 'saved-note' })).toMatchObject({ code: 'unconfirmed' })
+  expect(await call('update_work', { ...edit, operation_id: 'saved-note' })).toMatchObject({ code: 'already-saved' })
+  f.controls.omitComment = true
+  f.controls.loseEdit = true
+  const missing = { ...edit, note: 'Missing comment', operation_id: 'missing-note' }
+  expect(await call('update_work', missing)).toMatchObject({ code: 'unconfirmed' })
+  expect(await call('update_work', missing)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
 }, 30_000)

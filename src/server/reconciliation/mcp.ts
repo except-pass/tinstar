@@ -194,11 +194,7 @@ export class ReconciliationMcp {
       ? 'Create a Jira ticket with provider:jira, name and operation_id. Task is the default, Epic optional. Jira starts in Backlog with optional description and Owner. Omit provider for the existing Notion workflow.'
       : 'Create a configured-board card (Notion by default; provider:jira selects the isolated synthetic pilot) with declared owner/area, ordinary properties, brief and acceptance criteria. Firstmate assignment is Queued. Authenticated attribution, confirmed readback and retryable operation_id; no scene/window required.',
     inputSchema: createSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true } }, async (input: CreateWorkInput | JiraCreate) => {
-      if (jira && input.provider === 'jira') {
-        const parsed = jiraCreateSchema.safeParse(input)
-        if (!parsed.success) return result({ outcome: 'not-saved', message: 'Jira creation accepts name, operation_id, owner, description and issue_type. Use transition_work after Backlog creation.' })
-        return result(workReadback(await jira.create(parsed.data, actor)))
-      }
+      if (jira && !('area' in input)) return result(workReadback(await jira.create(input, actor)))
       const legacy = createWorkSchema.parse(input)
       return result(await this.readers.createWork?.(legacy, actor) ?? { outcome: 'not-saved', code: 'unavailable' })
     })

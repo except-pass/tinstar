@@ -181,7 +181,7 @@ exit 1
     user: undefined,
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe}\u001b[31m` }] },
-      { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value'` }] },
+      { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"}` }] },
     ] } },
   })
   equal((await post('comment', evidence)).status, 204)
@@ -190,7 +190,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted]')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"}')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')

@@ -193,7 +193,10 @@ export class JiraWork extends JiraClient {
       return await run({
         key, marker, prior, state, dispatched,
         dispatch: async evidence => {
-          Object.assign(state, evidence, { dispatchedAt: Date.now() })
+          const { serverTime } = await this.request('serverInfo')
+          const dispatchedAt = typeof serverTime === 'string' ? Date.parse(serverTime) : NaN
+          if (!Number.isFinite(dispatchedAt)) throw new Error('Missing Jira server time')
+          Object.assign(state, evidence, { dispatchedAt })
           await persist()
           pending = true
           sent = true
@@ -255,13 +258,13 @@ export class JiraWork extends JiraClient {
     if (ambiguous) throw new JiraWorkUnconfirmed('Jira comment may belong to another unresolved operation')
     const accountId = evidence?.accountId ?? await this.serviceAccountId()
     const page = await this.notes(id)
-    if (!page.comments.some(comment => {
+    if (page.comments.filter(comment => {
       const createdAt = Date.parse(comment.created_at)
       return !priorCommentIds.includes(comment.id) && comment.body === note && comment.author_id === accountId &&
         createdAt === Date.parse(comment.updated_at) && createdAt >= dispatchedAt &&
         (!evidence || createdAt < evidence.before)
-    })) {
-      throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+    }).length !== 1) {
+      throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment uniquely')
     }
   }
 
@@ -483,7 +486,7 @@ export class JiraWork extends JiraClient {
 
   private async recover(id: string, attempt: Attempt, note?: string) {
     const { dispatchedAt, fields, link } = attempt.state
-    if (!dispatchedAt || (!fields?.length && !link)) throw new JiraWorkUnconfirmed('Jira history cannot verify this operation')
+    if (!dispatchedAt || (!fields?.length && !link && !note)) throw new JiraWorkUnconfirmed('Jira history cannot verify this operation')
     const card = await this.read(id)
     const accountId = await this.serviceAccountId()
     const types = link && !link.id ? (await this.request('issueLinkType')).issueLinkTypes : undefined
@@ -525,6 +528,17 @@ export class JiraWork extends JiraClient {
       return receipt.cardId === card.id && receipt.jiraWork?.fields?.some(other =>
         fields?.some(field => isDeepStrictEqual(field, other)))
     })
+    const confirm = async () => {
+      const nextCommentWrite = Math.min(...candidates.flatMap(([, receipt]) => {
+        const other = receipt.jiraWork
+        return receipt.cardId === card.id && other?.priorCommentIds && other.dispatchedAt !== undefined &&
+          other.dispatchedAt > dispatchedAt && (!other.commentHash || other.commentHash === attempt.state.commentHash)
+          ? [other.dispatchedAt] : []
+      }))
+      await this.checkComment(id, note, attempt, { accountId, before: nextCommentWrite })
+      return attempt.confirm(card)
+    }
+    if (!fields?.length && !link) return confirm()
     for (let startAt = 0; ; ) {
       const page = await this.request(`issue/${id}/changelog?startAt=${startAt}&maxResults=100`)
       if (page.startAt !== startAt || !Array.isArray(page.values)) throw new Error('Incomplete Jira changelog')
@@ -546,14 +560,7 @@ export class JiraWork extends JiraClient {
           matched = fields!.every(field => items.some(item => this.fieldMatches(item, field)))
         }
         if (matched) {
-          const nextCommentWrite = Math.min(...candidates.flatMap(([, receipt]) => {
-            const other = receipt.jiraWork
-            return receipt.cardId === card.id && other?.priorCommentIds && other.dispatchedAt !== undefined &&
-              other.dispatchedAt > dispatchedAt && (!other.commentHash || other.commentHash === attempt.state.commentHash)
-              ? [other.dispatchedAt] : []
-          }))
-          await this.checkComment(id, note, attempt, { accountId, before: nextCommentWrite })
-          return attempt.confirm(card)
+          return confirm()
         }
       }
       if (page.isLast === true) throw new JiraWorkUnconfirmed('Jira history did not confirm the dispatched operation')
