@@ -21,7 +21,7 @@ export interface SearchIndexRead {
 export const searchTextLimit = 8192
 export const searchTotalLimit = 2 * 1024 * 1024
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*["\x27]?${credentialKey}["\x27]?[ \t]*[:=]`
+const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*(?:["\x27]${credentialKey}["\x27][ \t]*[:=]|${credentialKey}[ \t]*[:=][ \t]*["\x27])`
 const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine})[^'\\])*'|["'][^\r\n]*`
 const quotedKeyCredential = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})`, 'gi')
 const bareKeyCredential = new RegExp(String.raw`\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')

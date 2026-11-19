@@ -182,6 +182,7 @@ exit 1
     user: undefined,
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe} and ${pat}\u001b[31m` }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nTOKEN=123\nprivate-tail"' }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
       { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
@@ -193,7 +194,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\nPASSWORD=[credential omitted]\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -215,27 +216,23 @@ exit 1
   deepEqual(JSON.parse((await run('inspect', comment.event_id)).stdout), comment)
   const terminal = (await run('replay', '--source', 'jira', '--last', '1')).stdout
   match(terminal, /\[replay\] jira\/ticket WORK-1 · comment 84001 created/)
-  match(terminal, /↵ Second line/)
+  match(terminal, /↵ PASSWORD=/)
   ok(!terminal.includes(secret))
-  const partialEventIds = []
-  for (const [index, action] of ['created', 'updated', 'deleted'].entries()) {
-    const mixed = { ...evidence.comment, id: String(85001 + index), body: { type: 'doc', content: [
-      { type: 'paragraph', content: [
-        { type: 'text', text: 'Review with ' }, { type: 'mention', attrs: { id: 'account' } },
-        { type: 'text', text: ' before shipping' },
-      ] },
-    ] } }
-    equal((await post(`mixed-${action}`, webhookEvent(`comment_${action}`, { comment: mixed }))).status, 204)
-    const partial = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
-    partialEventIds.push(partial.event_id)
-    equal(partial.change[action === 'deleted' ? 'before' : 'after'], 'Review with  before shipping')
-    match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira comment body could only be partially projected/)
-    const restricted = { ...mixed, id: String(86001 + index), visibility: { type: 'role', value: 'Administrators' } }
-    equal((await post(`restricted-${action}`, webhookEvent(`comment_${action}`, { comment: restricted }))).status, 204)
-    const redacted = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
-    equal(redacted.evidence.source_reference.comment_visibility_restricted, true)
-    deepEqual(redacted.change, action === 'deleted' ? { field: 'comment', after: null } : { field: 'comment' })
-  }
+  const mixed = { ...evidence.comment, id: '85001', body: { type: 'doc', content: [
+    { type: 'paragraph', content: [
+      { type: 'text', text: 'Review with ' }, { type: 'mention', attrs: { id: 'account' } },
+      { type: 'text', text: ' before shipping' },
+    ] },
+  ] } }
+  equal((await post('mixed-created', webhookEvent('comment_created', { comment: mixed }))).status, 204)
+  const partial = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+  equal(partial.change.after, 'Review with  before shipping')
+  match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira comment body could only be partially projected/)
+  const restricted = { ...mixed, id: '86001', visibility: { type: 'role', value: 'Administrators' } }
+  equal((await post('restricted-created', webhookEvent('comment_created', { comment: restricted }))).status, 204)
+  const redacted = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+  equal(redacted.evidence.source_reference.comment_visibility_restricted, true)
+  deepEqual(redacted.change, { field: 'comment' })
   const missingValues = {
     summary: 'summary', description: 'description', status: 'status', ...jira.fields, links: 'issuelinks',
   }
@@ -256,11 +253,11 @@ exit 1
     changelog: { id: '65006', items: [change(jira.fields.owner, null, 'Avery')] },
   }))).status, 204)
   match((await run('sources')).stdout, /ok · signed-project-webhooks/)
-  partialEventIds.push(oneSided.event_id)
+  const partialEventIds = [partial.event_id, oneSided.event_id]
   await until(() => partialEventIds.every(id => watcher.logs.stdout.includes(id)), () => watcher.logs.stderr)
   const replayed = lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout)
   for (const [index, id] of partialEventIds.entries()) {
-    const omissions = index === 3 ? ['before'] : ['comment body']
+    const omissions = index === 1 ? ['before'] : ['comment body']
     const inspected = JSON.parse((await run('inspect', id)).stdout)
     deepEqual(inspected.observation.projection_omissions, omissions)
     deepEqual(replayed.find(event => event.event_id === id), inspected)
@@ -271,4 +268,15 @@ exit 1
   match(partialReplay, /partial projection \(comment body\)/)
   await watcher.stop()
   await publisher.stop()
+
+  const historical = new DatabaseSync(dbPath)
+  try {
+    historical.prepare("UPDATE sources SET description = json_set(description, '$.mode', 'fixture') WHERE source_id = ?").run(comment.source.source_id)
+    historical.prepare("UPDATE events SET envelope = json_set(envelope, '$.source.mode', 'fixture') WHERE event_id = ?").run(comment.event_id)
+  } finally {
+    historical.close()
+  }
+  match((await run('replay', '--source', 'jira', '--after', '0')).stdout, /\[replay\/fixture\] jira\/ticket WORK-1 · comment 84001 created/)
+  await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret } }),
+    error => error.code === 1 && error.stderr.includes('use a fresh journal for live Jira deliveries'))
 })

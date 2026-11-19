@@ -114,7 +114,7 @@ start from Clavis. Run `events serve` to open the fixed loopback listener at
 `http://127.0.0.1:18573/webhooks/jira`. Give Jira the approved public HTTPS URL
 that proxies only this path, with the request bytes and Jira headers preserved.
 Keep the registration restricted to one immutable project ID using Jira JQL and
-include the JSON body. Select issue creation, issue updates and comment events.
+include the JSON body. Select issue creation, issue updates and comment creation.
 Use a distinct secret for this registration. To retire or rotate it, disable or
 update the registration before removing or replacing the Clavis value.
 [Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)

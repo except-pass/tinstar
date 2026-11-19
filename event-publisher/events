@@ -203,7 +203,7 @@ function eventText(event, replay, health) {
   if (source.provider === 'jira') {
     const omissions = event.observation?.projection_omissions
     const projection = omissions?.length ? ` · partial projection (${omissions.join(', ')})` : ''
-    return `${time} ${replay ? '[replay] ' : ''}jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
+    return `${time} ${source.mode === 'fixture' ? (replay ? '[replay/fixture] ' : '[fixture] ') : replay ? '[replay] ' : ''}jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   let meaning = change.field

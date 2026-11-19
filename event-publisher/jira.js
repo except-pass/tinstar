@@ -15,9 +15,6 @@ const builtInFields = new Map([
   ['issuelinks', 'links'], ['Link', 'links'],
 ])
 const projectFields = new Set(['owner', 'decisions', 'blockerType', 'blockerTarget', 'blockerCondition'])
-const commentEvents = new Map([
-  ['comment_created', 'created'], ['comment_updated', 'updated'], ['comment_deleted', 'deleted'],
-])
 const decoder = new TextDecoder('utf-8', { fatal: true })
 const has = (value, key) => value != null && Object.hasOwn(value, key)
 const nativeId = value => {
@@ -52,7 +49,7 @@ export function jiraConfig(raw) {
 }
 
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*["\x27]?${credentialKey}["\x27]?[ \t]*[:=]`
+const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*(?:["\x27]${credentialKey}["\x27][ \t]*[:=]|${credentialKey}[ \t]*[:=][ \t]*["\x27])`
 const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine})[^'\\])*'|["'][^\r\n]*`
 const bareKeyCredential = new RegExp(String.raw`\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|[^\s"',;]{6,})`, 'gi')
 const quotedKeyCredential = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})`, 'gi')
@@ -138,14 +135,13 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
   const { webhookEvent: event, timestamp } = body
   const { source, fields } = config
   const changelogId = nativeId(body.changelog?.id)
-  const comment = commentEvents.get(event)
-  const commentId = comment && nativeId(body.comment?.id)
+  const commentId = event === 'comment_created' && nativeId(body.comment?.id)
   const accountId = user => typeof user?.accountId === 'string' && nativeIdentifier.test(user.accountId) ? redact(user.accountId) : undefined
   const actor = accountId(body.user)
   const author = commentId ? accountId(body.comment?.author) : undefined
   const native = event === 'jira:issue_created' ? `created:${issue.id}` :
     event === 'jira:issue_updated' && changelogId ? `changelog:${issue.id}:${changelogId}` :
-      commentId && comment !== 'updated' ? `comment:${comment}:${issue.id}:${commentId}` : null
+      commentId ? `comment:created:${issue.id}:${commentId}` : null
   const envelope = {
     schema: 'event-publisher.event.v1',
     source: {
@@ -196,7 +192,7 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
         }, omissions))
       }
     }
-  } else if (comment) {
+  } else if (event === 'comment_created') {
     if (!commentId) {
       reason = 'Jira comment delivery omitted a native comment ID'
     } else {
@@ -205,17 +201,15 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
       const content = restricted ? undefined : redact(body.comment.body, () => {
         reason = 'Jira comment body could only be partially projected'
       })
-      events = [entry(`comment.${comment}`, {
-        field: 'comment',
-        ...(comment === 'deleted' ? { ...(content === undefined ? {} : { before: content }), after: null } :
-          { ...(content === undefined ? {} : { after: content }) }),
+      events = [entry('comment.created', {
+        field: 'comment', ...(content === undefined ? {} : { after: content }),
       }, reason ? ['comment body'] : [])]
     }
   }
   return { events, native, observedAt, reason }
 }
 
-const acceptedEvents = new Set(['jira:issue_created', 'jira:issue_updated', ...commentEvents.keys()])
+const acceptedEvents = new Set(['jira:issue_created', 'jira:issue_updated', 'comment_created'])
 
 export async function startJiraWebhook(journal, config, secret) {
   if (typeof secret !== 'string' || !secret.trim()) {
