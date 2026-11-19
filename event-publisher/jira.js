@@ -58,7 +58,7 @@ function preview(text, secret) {
   return text.replaceAll(secret, '[credential omitted]')
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization))\s*[:=]\s*['"]?[^\s"',;]{6,}/gi, '$1=[credential omitted]')
+    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization))\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|[^\s"',;]{6,})/gi, '$1=[credential omitted]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
     .replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')

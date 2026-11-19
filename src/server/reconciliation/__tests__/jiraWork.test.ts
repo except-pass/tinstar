@@ -47,7 +47,7 @@ async function fixture() {
   const historicalKeys = new Map<string, string>()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -141,7 +141,7 @@ async function fixture() {
         if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created, updated: created, author: { accountId: 'fixture-service' } })
       }
       if (controls.delayedComment) {
-        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created, updated: created, author: { accountId: controls.delayedCommentAuthor } })
+        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: controls.delayedCommentTime || created, updated: controls.delayedCommentTime || created, author: { accountId: controls.delayedCommentAuthor } })
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -604,14 +604,18 @@ it('does not use a natively edited comment to confirm an earlier missing note', 
 }, 30_000)
 
 
-it.each(['update_work', 'transition_work'])('rejects an identical comment by another author during %s readback', async tool => {
+it.each([
+  ['update_work', 'another author'], ['transition_work', 'another author'],
+  ['update_work', 'before dispatch'], ['transition_work', 'before dispatch'],
+])('rejects an identical comment during %s readback when it is from %s', async (tool, reason) => {
   const f = await fixture()
   const { call } = await f.connect()
   const { card: { id: card_id } } = await call('create_work', {
     provider: 'jira', operation_id: 'create', name: 'Ticket', owner: 'Avery', description: 'Ready for work',
   })
   f.controls.omitComment = true
-  f.controls.delayedCommentAuthor = 'human-account'
+  if (reason === 'another author') f.controls.delayedCommentAuthor = 'human-account'
+  else f.controls.delayedCommentTime = '2020-01-01T00:00:00Z'
   const edit = tool === 'update_work'
   f.controls.delayedComment = edit
     ? 'Matching note\n\nRecorded via Tin Star (Fixture agent)'

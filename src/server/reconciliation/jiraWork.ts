@@ -128,10 +128,10 @@ export class JiraWork extends JiraClient {
       ...(blocker === undefined ? { external_blocker_fields: externalBlocker } : {}), ...(warnings.length ? { warnings } : {}) }
   }
 
-  private async notes(issueId: string, startAt = 0) {
+  private async notes(issueId: string) {
     await this.checkProject(issueId)
-    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`)
-    if (!Array.isArray(body.comments) || !Number.isInteger(body.total) || body.startAt !== startAt) throw new Error('Incomplete Jira comment readback')
+    const body = await this.request(`issue/${issueId}/comment?startAt=0&maxResults=50&orderBy=-created`)
+    if (!Array.isArray(body.comments) || !Number.isInteger(body.total) || body.startAt !== 0) throw new Error('Incomplete Jira comment readback')
     await this.checkProject(issueId)
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, updated_at: comment.updated, author_id: comment.author?.accountId,
@@ -242,7 +242,7 @@ export class JiraWork extends JiraClient {
     return accountId
   }
 
-  private async checkComment(id: string, note: string | undefined, attempt: Attempt, evidence?: { accountId: string; from: number; before: number }) {
+  private async checkComment(id: string, note: string | undefined, attempt: Attempt, evidence?: { accountId: string; before: number }) {
     if (!note) return
     const { dispatchedAt, priorCommentIds, commentHash } = attempt.state
     if (!dispatchedAt || !priorCommentIds || !commentHash) throw new JiraWorkUnconfirmed('Jira receipt lacks a comment baseline')
@@ -255,10 +255,12 @@ export class JiraWork extends JiraClient {
     if (ambiguous) throw new JiraWorkUnconfirmed('Jira comment may belong to another unresolved operation')
     const accountId = evidence?.accountId ?? await this.serviceAccountId()
     const page = await this.notes(id)
-    if (!page.comments.some(comment => !priorCommentIds.includes(comment.id) && comment.body === note &&
-      Date.parse(comment.created_at) === Date.parse(comment.updated_at) &&
-      comment.author_id === accountId && (!evidence || (
-        Date.parse(comment.created_at) >= evidence.from && Date.parse(comment.created_at) < evidence.before)))) {
+    if (!page.comments.some(comment => {
+      const createdAt = Date.parse(comment.created_at)
+      return !priorCommentIds.includes(comment.id) && comment.body === note && comment.author_id === accountId &&
+        createdAt === Date.parse(comment.updated_at) && createdAt >= dispatchedAt &&
+        (!evidence || createdAt < evidence.before)
+    })) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
   }
@@ -550,7 +552,7 @@ export class JiraWork extends JiraClient {
               other.dispatchedAt > dispatchedAt && (!other.commentHash || other.commentHash === attempt.state.commentHash)
               ? [other.dispatchedAt] : []
           }))
-          await this.checkComment(id, note, attempt, { accountId, from: dispatchedAt, before: nextCommentWrite })
+          await this.checkComment(id, note, attempt, { accountId, before: nextCommentWrite })
           return attempt.confirm(card)
         }
       }
