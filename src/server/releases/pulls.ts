@@ -8,7 +8,7 @@ const mergedTtl = 24 * 60 * 60_000
 const refreshTtl = 120_000
 const pageSize = 100
 type Observation = Pick<ReleasePull, 'base' | 'head' | 'title' | 'state' | 'mergedAt' | 'mergeSha' | 'observedAt' | 'freshness' | 'readError'>
-type RepositoryPoll = { until: number; error?: string }
+type RepositoryPoll = { until: number; failure?: { message: string; refreshed: Set<string> } }
 
 /** Poll recent updates together. Point reads fill old or unusually busy gaps. */
 export class ReleasePullReader {
@@ -17,6 +17,7 @@ export class ReleasePullReader {
   private polls = new Map<string, RepositoryPoll>()
   private pollPending = new Map<string, Promise<RepositoryPoll>>()
   private cursor = 0
+  private pointReads: number[] = []
   constructor(private read = readGithubScalars, private now = Date.now, private list = readReleasePullPage) {}
   async get(urls: string[]) {
     const result = new Map<string, Observation>(), candidates = [...new Set(urls)]
@@ -39,12 +40,14 @@ export class ReleasePullReader {
       await Promise.all(batches.slice(offset, offset + 4).map(async ([repository, group]) => {
         if (group.every(({ url }) => this.cache.get(url)?.value.state === 'merged' && this.current(url))) return
         const poll = await this.poll(repository, group)
-        if (poll.error) for (const { url } of group) errors.set(url, poll.error)
+        if (poll.failure) for (const { url } of group) {
+          if (!poll.failure.refreshed.has(url) || !this.current(url)) errors.set(url, poll.failure.message)
+        }
       }))
     }
     const start = this.cursor % Math.max(candidates.length, 1)
     const work: Promise<void>[] = []
-    let budget = 4
+    this.pointReads = this.pointReads.filter(started => started > this.now() - refreshTtl)
     for (let offset = 0; offset < candidates.length; offset++) {
       const index = (start + offset) % candidates.length, url = candidates[index]!
       const cached = this.cache.get(url)
@@ -54,8 +57,9 @@ export class ReleasePullReader {
         continue
       }
       let pending = this.pending.get(url)
-      if (!pending && !this.current(url) && budget > 0 && this.pending.size < 4) {
-        budget--; this.cursor = (index + 1) % candidates.length
+      if (!pending && !this.current(url) && this.pointReads.length < 4 && this.pending.size < 4) {
+        this.pointReads.push(this.now())
+        this.cursor = (index + 1) % candidates.length
         pending = this.refresh(url).finally(() => this.pending.delete(url)); this.pending.set(url, pending)
       }
       if (pending) work.push(pending.then(value => { result.set(url, value) }))
@@ -93,6 +97,7 @@ export class ReleasePullReader {
     const byNumber = new Map(group.map(({ number, url }) => [number, url]))
     const numbers = [...byNumber.keys()].sort((a, b) => a - b)
     const observed = new Set<string>()
+    const refreshed = new Set<string>()
     let covered = false
     try {
       // Bound catch-up after outages or a burst of updates. Exact reads can
@@ -106,17 +111,19 @@ export class ReleasePullReader {
           observed.add(url)
           try {
             this.save(url, this.observation({ ...row, merged: row.merged ?? (row.merged_at !== null), head_sha: row.head.sha, base_ref: row.base.ref }, observedAt, this.cache.get(url)?.value.title ?? null))
+            refreshed.add(url)
           } catch {
             // If the list row cannot establish merge evidence, try the exact PR.
             const cached = this.cache.get(url)
             if (cached) cached.until = started
           }
         }
-        covered = count === pageSize && oldestUpdatedAt !== null && Date.parse(oldestUpdatedAt) < since
-        if (count < pageSize || covered) break
+        const reachedCutoff = count === pageSize && oldestUpdatedAt !== null && Date.parse(oldestUpdatedAt) < since
+        covered = page === 1 && reachedCutoff
+        if (count < pageSize || reachedCutoff) break
       }
     } catch (error) {
-      return { until: started + refreshTtl, error: this.readError(error, repository) }
+      return { until: started + refreshTtl, failure: { message: this.readError(error, repository), refreshed } }
     }
     if (covered) for (const { url } of group) {
       const previous = this.cache.get(url)?.value

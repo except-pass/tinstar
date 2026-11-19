@@ -105,6 +105,33 @@ describe('progressive Releases display', () => {
     expect(reader.display(data()).releases[0]!.github!.runsStatus).toBe('fresh')
   })
 
+  it('refreshes Actions while initial membership is still pending', async () => {
+    let clock = now(), finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const read = vi.fn(async (path: string) => {
+      if (path.includes('/compare/')) await gate
+      const runs = clock === now() ? [{ ...nativeRun, status: 'in_progress', conclusion: null }] : [nativeRun]
+      return nativeFixtureRead({ runs })(path)
+    })
+    const reader = new GithubReleaseReader(read, () => clock)
+    const initial = reader.get(data())
+    try {
+      await vi.waitFor(() => expect(read.mock.calls.some(([path]) => path.includes('/compare/'))).toBe(true))
+      expect(reader.display(data()).releases[0]!.state).toBe('Running')
+      read.mockClear()
+      clock += 60_000
+      reader.display(data())
+      reader.display(data())
+      await vi.waitFor(() => {
+        expect(reader.display(data()).releases[0]).toMatchObject({
+          state: 'Awaiting PROD verification', membership: { status: 'pending' }, github: { runsStatus: 'fresh' },
+        })
+      })
+      expect(read.mock.calls.map(([path]) => path)).toHaveLength(2)
+      expect(read.mock.calls.every(([path]) => path.includes('/actions/runs?'))).toBe(true)
+    } finally { finish(); await initial }
+  })
+
   it('publishes tagged identities immediately while slow Actions reads remain pending', async () => {
     let finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve }), fixture = nativeFixtureRead()
@@ -164,6 +191,10 @@ describe('progressive Releases display', () => {
     expect(selected).toMatchObject({ scope: ['older-release.ts'], github: { runsStatus: 'fresh' }, membership: { status: 'complete', baseline: 'v1.9.0' } })
     expect(read.mock.calls.filter(([path]) => path.includes('/actions/runs?'))).toHaveLength(1)
     expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${olderSha}`))).toBe(true)
+    await reader.get(data())
+    await reader.get(data(), older.version)
+    expect(read.mock.calls.filter(([path]) => /\/(tags\?|releases\?|branches\/main$)/.test(path))).toHaveLength(0)
+    expect(read.mock.calls.filter(([path]) => path.includes('/compare/'))).toHaveLength(1)
   })
 
   it.each([nativeHead, 'e'.repeat(40)])('invalidates Plan when a new baseline tag points to %s behind unchanged main', async baselineSha => {

@@ -51,9 +51,15 @@ export function nativeReleaseSummary(body: string): Pick<NativeReleaseEvidence, 
  * Work is incremental to keep this shared API budget and HTTP latency bounded. */
 export class GithubReleaseReader {
   private cached: GithubReleaseRead | null = null
-  private until = 0
+  private catalog: {
+    until: number
+    observedAt: string
+    inputs: Awaited<ReturnType<GithubReleaseReader['readCatalog']>>
+    ranges: Map<string, Awaited<ReturnType<ReleaseMembershipReader['get']>>>
+  } | null = null
   private selectedTag: string | undefined
   private pending: Promise<void> | null = null
+  private actionsPending: Promise<void> | null = null
   private details = new Map<string, { at: number; observedAt: string | null; runs: NativeReleaseEvidence['runs']; known: boolean }>()
   private containment = new Map<string, ReleaseContainment & { retryAt: number }>()
   private containmentPending: Promise<void> | null = null
@@ -61,23 +67,17 @@ export class GithubReleaseReader {
   constructor(private read: Read = githubJson, private now = Date.now) { this.memberships = new ReleaseMembershipReader(read, now) }
 
   async get(data: ReleasesRead, tag?: string): Promise<GithubReleaseRead> {
-    while (this.pending || !this.cached || this.until <= this.now() || tag !== this.selectedTag) {
+    while (this.pending || !this.catalog || this.catalog.until <= this.now() || tag !== this.selectedTag) {
+      const refreshing = this.pending
       this.pending ??= this.refresh(tag).then(result => {
         this.cached = result
         this.selectedTag = tag
-        this.until = this.now() + catalogTtl
       }).finally(() => { this.pending = null })
-      await this.pending
+      if (refreshing) await Promise.all([refreshing, this.refreshPublishedActions(tag)])
+      else await this.pending
+      if (tag === this.selectedTag) break
     }
-    if (this.cached.status !== 'unknown') {
-      const tags = this.cached.releases.flatMap(release => version(release.version) && release.sourceSha
-        ? [{ name: release.version, commit: { sha: release.sourceSha } }] : [])
-      const due = actionsTags(tags, tag).filter(tag => (this.details.get(`${tag.name}:${tag.commit.sha}`)?.at ?? -Infinity) <= this.now() - actionsTtl)
-      if (due.length) {
-        this.pending = this.refreshActions(due).finally(() => { this.pending = null })
-        await this.pending
-      }
-    }
+    await this.refreshPublishedActions(tag)
     await this.refreshContainment(data)
     return this.project(data)
   }
@@ -143,7 +143,7 @@ export class GithubReleaseReader {
         gaps, pulls, containedPulls, supportingPulls: data.pulls.filter(pull => !ids.has(pull.id) && activeReleaseLinks(pull).some(link => cards.has(link.cardId))) }
     })
     const status = value.status === 'unknown' ? 'unknown' : value.warnings.length || releases.some(release => release.kind === 'production' && release.github?.runsStatus === 'unknown') ? 'partial' : 'fresh'
-    return { ...value, status, refreshing: !!this.pending, releases }
+    return { ...value, status, refreshing: !!(this.pending || this.actionsPending), releases }
   }
 
   private async list(path: string) {
@@ -159,10 +159,21 @@ export class GithubReleaseReader {
     return { rows: result, complete: false }
   }
 
+  private readCatalog() {
+    return Promise.allSettled([this.list(`/repos/${repository}/tags`), this.list(`/repos/${repository}/releases`), this.read(`/repos/${repository}/branches/main`)])
+  }
+
   private async refresh(selectedTag?: string): Promise<GithubReleaseRead> {
-    const observedAt = new Date(this.now()).toISOString(), warnings: string[] = []
-    const [tagRead, recordRead, mainRead] = await Promise.allSettled([this.list(`/repos/${repository}/tags`), this.list(`/repos/${repository}/releases`), this.read(`/repos/${repository}/branches/main`)])
+    const renewCatalog = !this.catalog || this.catalog.until <= this.now()
+    if (renewCatalog) {
+      const observedAt = new Date(this.now()).toISOString()
+      const inputs = await this.readCatalog()
+      this.catalog = { inputs, observedAt, until: this.now() + catalogTtl, ranges: new Map() }
+    }
+    const { inputs: [tagRead, recordRead, mainRead], observedAt, ranges } = this.catalog!
+    const warnings: string[] = []
     if (tagRead.status === 'rejected') {
+      if (!renewCatalog && this.cached) return this.cached
       return { status: 'unknown', observedAt: this.cached?.observedAt ?? null, warnings: ['GitHub version tags unavailable; release history is unknown.'], releases: (this.cached?.releases ?? []).map(release => ({ ...release, state: 'Unknown', provenance: { ...release.provenance, historical: true }, gaps: [...release.gaps, 'GitHub version tags unavailable; this is a last-known observation.'] })) }
     }
     let tags: z.infer<typeof tagSchema>[]
@@ -178,7 +189,6 @@ export class GithubReleaseReader {
     const mainSha = main?.success ? main.data.commit.sha : null
     if (!mainSha) warnings.push('Main HEAD is unavailable; untagged work is unknown.')
     const requested = tags.find(tag => tag.name === selectedTag)
-    const ranges = new Map<string, Awaited<ReturnType<ReleaseMembershipReader['get']>>>()
     // Publish identities before waiting for Actions, compare or per-commit PRs.
     const publish = () => {
       const releases = tags.map((tag): ReleaseObject => {
@@ -218,17 +228,29 @@ export class GithubReleaseReader {
       return { releases, observedAt, status: warnings.length ? 'partial' as const : 'fresh' as const, warnings: [...warnings] }
     }
     this.cached = publish()
-    await this.refreshActions(actionsTags(tags, selectedTag))
-    const selected = [tags[0], requested].filter((tag, index, rows): tag is z.infer<typeof tagSchema> => !!tag && rows.indexOf(tag) === index)
-    for (const tag of selected) {
+    await this.refreshPublishedActions(selectedTag)
+    for (const tag of new Set([tags[0], requested])) {
+      if (!tag || ranges.has(tag.name)) continue
       ranges.set(tag.name, await this.memberships.get(repository, tag.commit.sha, tag.name, tags, undefined, tag.commit.sha === mainSha, tag.commit.sha !== mainSha))
       this.cached = publish()
     }
-    if (tags[0] && mainSha && mainSha !== tags[0].commit.sha) {
+    if (!ranges.has('main') && tags[0] && mainSha && mainSha !== tags[0].commit.sha) {
       ranges.set('main', await this.memberships.since(repository, mainSha, tags[0]))
       this.cached = publish()
     }
     return publish()
+  }
+
+  private async refreshPublishedActions(selectedTag?: string) {
+    while (this.actionsPending) await this.actionsPending
+    if (!this.cached || this.cached.status === 'unknown') return
+    const tags = this.cached.releases.flatMap(release => version(release.version) && release.sourceSha
+      ? [{ name: release.version, commit: { sha: release.sourceSha } }] : [])
+    const due = actionsTags(tags, selectedTag)
+      .filter(tag => (this.details.get(`${tag.name}:${tag.commit.sha}`)?.at ?? -Infinity) <= this.now() - actionsTtl)
+    if (!due.length) return
+    this.actionsPending = this.refreshActions(due).finally(() => { this.actionsPending = null })
+    await this.actionsPending
   }
 
   private async refreshActions(recent: Tag[]) {
@@ -238,8 +260,6 @@ export class GithubReleaseReader {
     for (let offset = 0; offset < recent.length; offset += 3) {
       await Promise.all(recent.slice(offset, offset + 3).map(async tag => {
         const key = `${tag.name}:${tag.commit.sha}`
-        const known = this.details.get(key)
-        if (known?.known && known.at > this.now() - actionsTtl) return
         try {
           const runs: z.infer<typeof runSchema>[] = []
           let complete = false

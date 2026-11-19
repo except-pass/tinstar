@@ -59,8 +59,10 @@ cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
 Catalog observations cache for two minutes. Actions refresh after one minute on
-Releases reads, using the recent five tags and any explicit historical selection. Membership advances for
-the latest and selected releases and for untagged main. Catalogs paginate up to
+Releases reads, using the recent five tags and any explicit historical selection.
+Membership for the latest release, selected release, and untagged main advances
+once per two-minute catalog interval. Selecting a historical release can load its
+membership within the current interval. Catalogs paginate up to
 ten pages and report partial coverage at that limit. Source loss retains known
 observations with a visible unknown state; missing data never means no releases.
 Actions freshness is evaluated on every display from each detail read's cache
@@ -156,10 +158,12 @@ shell. In live mode, broker/access failures also remain sync errors; the reader 
 The legacy projection polls recent PR updates together every two minutes for
 repositories with multiple linked PRs. It retains merged observations for 24 hours
 in memory, even if a PR temporarily leaves the requested set. Unchanged open
-and closed associations reuse their last observation when the list covers the
-time since it was checked. Older links outside the list window can use up to four
-individual reads per pass in rotating order. A failed repository poll retains
-last-known state and retries at the next interval.
+and closed associations reuse their last observation when the first page alone
+covers the time since it was checked. The reader shares up to four individual
+reads across all repositories in any two-minute window, in rotating order. Links
+awaiting an exact read retain last-known evidence. If a later page fails, fresh
+observations from successful pages remain available and unresolved links retain
+last-known state until the next poll.
 
 ### Configure existing sources
 
