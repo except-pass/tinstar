@@ -190,7 +190,7 @@ exit 1
       { type: 'paragraph', content: [{ type: 'text', text: '{"password":\'first\nTOKEN=123\n"TOKEN"="inner"\nprivate-tail\' }' }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
       { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nprivate-tail TOKEN="' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped\nTOKEN="first\nprivate-tail"' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'TO\u202eKEN=opaqueFixtureValue' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'PASSWORD="clipped {"TOKEN":"opaque phrase"}' }] },
@@ -203,7 +203,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted]\nTOKEN=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\n{"password":"[credential omitted]" }\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted]\nTOKEN=[credential omitted]\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')

@@ -33,7 +33,7 @@ export interface JiraSection { id: string; type: string; text: string }
 export const jiraText = (text: string) => ({ type: 'doc', version: 1, content: text.split('\n').map(line => ({ type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [] })) })
 /** Read plain ADF without treating ordinary prose as workflow evidence. Unknown
  * structures make the read fail rather than proving a receipt is absent. */
-export function adfText(value: unknown, allowUnsupported = false): string {
+export function adfText(value: unknown, allowUnsupported: boolean | 'omit' = false): string {
   if (value == null) return ''
   const node = record(value), type = node.type
   if (type === 'text') return String(node.text ?? '')
@@ -42,7 +42,7 @@ export function adfText(value: unknown, allowUnsupported = false): string {
   if (type === 'emoji') return String(record(node.attrs).text ?? record(node.attrs).shortName ?? '')
   if (type === 'inlineCard') return String(record(node.attrs).url ?? '')
   if (!['doc', 'paragraph', 'heading', 'codeBlock', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'panel', 'table', 'tableRow', 'tableCell', 'tableHeader', 'rule'].includes(String(type))) {
-    if (allowUnsupported) return '[Rich content in Jira]'
+    if (allowUnsupported) return allowUnsupported === 'omit' ? '' : '[Rich content in Jira]'
     throw new Error(`Unsupported Jira document node: ${String(type)}`)
   }
   if (node.content !== undefined && !Array.isArray(node.content)) throw new Error('Malformed Jira document')

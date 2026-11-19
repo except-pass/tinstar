@@ -14,16 +14,16 @@ import { CreationReceipts } from './workflowReceipts'
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const nativeId = (id: unknown): id is string => typeof id === 'string' && /^[1-9]\d*$/.test(id)
-function text(value: unknown) {
+function text(value: unknown, unsupported: true | 'omit' = true) {
   if (typeof value === 'string') return value
-  return adfText(value, true)
+  return adfText(value, unsupported)
 }
 class JiraWorkUnconfirmed extends Error {}
 class JiraCreateContradiction extends JiraWorkUnconfirmed {}
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
-  description: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
+  description: string; instructionText: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
   externalBlocker: { type: string | null; target: string; unblocks_when: string };
 }
 type Attempt = {
@@ -84,7 +84,7 @@ export class JiraWork extends JiraClient {
       id: this.qualified(id), issue_id: id, key: raw.key, url: `${this.config.url}/browse/${encodeURIComponent(raw.key)}`,
       project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
       name: f.summary, status: f.status.name, updated_at: f.updated, owner: f[owner]?.value ?? null,
-      description: text(f.description), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
+      description: text(f.description), instructionText: text(f.description, 'omit'), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
       externalBlocker: { type: f[blockerType]?.value ?? null, target: text(f[blockerTarget]), unblocks_when: text(f[blockerCondition]) },
     }
   }
@@ -113,7 +113,7 @@ export class JiraWork extends JiraClient {
   }
 
   private view(issue: Issue) {
-    const { decisions, decisionDocument: _document, externalBlocker, ...card } = issue
+    const { decisions, decisionDocument: _document, instructionText: _instructions, externalBlocker, ...card } = issue
     let decision_questions, blocker
     const warnings: string[] = []
     try { decision_questions = readJiraDecisions(decisions) } catch (error) { warnings.push((error as Error).message) }

@@ -15,7 +15,7 @@ type Verb = typeof jiraVerbs[number]
 const work: JiraStatus[] = ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod']
 const active: JiraStatus[] = [...work, 'Decision', 'Waiting For']
 const nonterminal: JiraStatus[] = ['Backlog', ...active]
-const decisionExits = ['Backlog', 'To Do', 'Queued', 'In Progress', 'Ready for Review'] as const
+const decisionExits = ['To Do', 'Queued', 'In Progress', 'Ready for Review'] as const
 const waitExits = [...decisionExits, 'Decision'] as const
 const recovery: JiraStatus[] = ['To Do', 'Queued']
 
@@ -165,7 +165,7 @@ export function editJiraDecisions(text: string, { add_questions = [], answers = 
   return formatJiraDecisions([...items.values()])
 }
 
-type State = { status: string; owner: string | null; description: string; decisions: string; blocker: boolean }
+type State = { status: string; owner: string | null; instructionText: string; decisions: string; blocker: boolean }
 export function checkJiraTransition(current: State, input: JiraTransition) {
   const [from, destinations] = jiraTransitions[input.verb]
   const to = input.to ?? (destinations.length === 1 ? destinations[0] : undefined)
@@ -173,7 +173,7 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
     throw new JiraWorkInputError(`${input.verb} is unavailable from ${current.status}; choose an allowed destination: ${destinations.join(', ')}`)
   }
   if (active.includes(to) && !current.owner) throw new JiraWorkInputError('Choose an Owner before entering a work status')
-  if ((to === 'Queued' || input.verb === 'Start') && (!current.description.trim() || current.blocker)) {
+  if ((to === 'Queued' || input.verb === 'Start') && (!current.instructionText.trim() || current.blocker)) {
     throw new JiraWorkInputError('Queue and Start require instructions, a clear success condition and no primary blocker')
   }
   if (['Start', 'Submit for Review', 'Accept Review', 'Accept Final', 'Release Ready', 'Deployed', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb) && !input.evidence) {
