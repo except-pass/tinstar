@@ -442,7 +442,7 @@ export class JiraWork extends JiraClient {
         await this.checkComment(id, note)
         return attempt.confirm(current)
       }
-      const blocker = input.verb === 'Block' || input.to === 'Waiting For' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
+      const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
       const to = checkJiraTransition({ ...current, blocker }, input)
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)

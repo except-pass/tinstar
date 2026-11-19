@@ -35,7 +35,7 @@ export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]
   'Complete Directly': [['In Progress'], ['Done']],
   'Request Decision': [active.filter(value => value !== 'Decision'), ['Decision']],
   Block: [active.filter(value => value !== 'Waiting For'), ['Waiting For']],
-  'Answer Decision': [['Decision'], [...decisionExits, 'Verify in Prod', 'Waiting For']],
+  'Answer Decision': [['Decision'], [...decisionExits, 'Verify in Prod']],
   'Resolve Wait': [['Waiting For'], [...waitExits, 'Verify in Prod']],
   Dequeue: [['Queued'], ['To Do']],
   Deprioritize: [['To Do'], ['Backlog']],
@@ -85,7 +85,7 @@ const revisions = { required_revision: singleLine.optional(), live_revision: sin
 export const jiraTransitionSchema = z.union([
   transitionArguments.extend({ verb: z.literal('Deployed'), to: z.literal('Verify in Prod').optional(), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.enum(interruptVerbs), to: z.literal('Verify in Prod'), ...revisions }).strict(),
-  transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum([...decisionExits, 'Waiting For']) }).strict(),
+  transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum(decisionExits) }).strict(),
   transitionArguments.extend({ verb: z.literal('Resolve Wait'), to: z.enum(waitExits) }).strict(),
   transitionArguments.extend({ verb: z.enum(dispositionVerbs), disposition: multiline.optional() }).strict(),
   transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', ...interruptVerbs, ...dispositionVerbs]) }).strict(
@@ -180,7 +180,7 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
     throw new JiraWorkInputError(`${input.verb} is unavailable from ${current.status}; choose an allowed destination: ${destinations.join(', ')}`)
   }
   if (active.includes(to) && !current.owner) throw new JiraWorkInputError('Choose an Owner before entering a work status')
-  if (current.blocker && ((work.includes(to) && to !== 'To Do') || (input.verb === 'Answer Decision' && to !== 'Waiting For'))) {
+  if (current.blocker && work.includes(to) && to !== 'To Do') {
     throw new JiraWorkInputError('Clear the primary blocker before resuming work')
   }
   if ((to === 'Queued' || to === 'In Progress') && !current.instructionText.trim()) {
@@ -205,7 +205,7 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
     const items = readJiraDecisions(current.decisions)
     if (!items.length || items.some(item => item.answer === undefined)) throw new JiraWorkInputError('All Decision questions must be answered before leaving Decision with Answer Decision')
   }
-  if (to === 'Waiting For' && !current.blocker) throw new JiraWorkInputError('Set a primary blocker before blocking the ticket')
+  if (input.verb === 'Block' && !current.blocker) throw new JiraWorkInputError('Set a primary blocker before blocking the ticket')
   if (input.verb === 'Resolve Wait' && current.blocker) throw new JiraWorkInputError('Clear the primary blocker after it resolves')
   return to
 }

@@ -24,9 +24,7 @@ const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passw
 const nextCredential = (quote: string) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote}|(?:\\[\s\S]|[^${quote}\\])*${quote}(?=[ \t]*(?:[\r\n,;})>\]]|$))))`
 const quotedValue = (quote: string) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
 const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
-const numericCredential = String.raw`-?\d+(?:\.\d+)?(?:e[+-]?\d+)?(?=\s|[,;})>\]]|$)`
-const shortCredential = String.raw`[a-z0-9]{1,5}(?=[\s"\x27,;)}\]]|$)`
-const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${numericCredential}|${quotedCredential}|${shortCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|${numericCredential}|${shortCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
+const credentialAssignment = new RegExp(String.raw`((?:(["'])${credentialKey}\2|\b${credentialKey})\s*[:=]\s*)(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;)}>\]]+)`, 'gi')
 
 /** Redact likely credential literals before either snippets or the browser index.
  * This only handles published prose/allowlisted fields, never raw source objects. */
@@ -34,8 +32,8 @@ export function redactSourceText(input: unknown): string {
   return (typeof input === 'string' ? input : '')
     .replace(/\b(?:ATATT|ATCTT|secret_|ntn_|sk-|github_pat_|gh[pousr]_)[A-Za-z0-9_.~-]{16,}\b/g, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(credentialAssignment, (_match, quotedPrefix, _quote, bareKey) =>
-      quotedPrefix ? `${quotedPrefix}"[credential omitted]"` : `${bareKey}=[credential omitted]`)
+    .replace(credentialAssignment, (_match, prefix, keyQuote) =>
+      keyQuote ? `${prefix}"[credential omitted]"` : `${prefix}[credential omitted]`)
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
 
 }
