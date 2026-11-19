@@ -52,7 +52,7 @@ const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passw
 const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote}|(?:\\[\s\S]|[^${quote}\\])*${quote}(?=[ \t]*(?:[\r\n,;})>\]]|$))))`
 const quotedValue = (quote) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
 const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
-const credentialAssignment = new RegExp(String.raw`((?:(["'])${credentialKey}\2|\b${credentialKey})\s*[:=]\s*)(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]*[^\s"',;)}>\]])`, 'gi')
+const credentialAssignment = new RegExp(String.raw`((?:(["'])${credentialKey}\2|\b${credentialKey})\s*[:=]\s*)(?:${quotedCredential}|(?!\[credential omitted\])((?:(?![,;][ \t]*[a-z_][\w-]*[ \t]*=)[^\s"'])+))`, 'gi')
 
 function normalizePreview(text) {
   return text
@@ -66,8 +66,18 @@ function preview(text, secret) {
   return (normalizedSecret ? normalized.replaceAll(normalizedSecret, '[credential omitted]') : normalized)
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(credentialAssignment, (_match, prefix, keyQuote) =>
-      keyQuote ? `${prefix}"[credential omitted]"` : `${prefix}[credential omitted]`)
+    .replace(credentialAssignment, (_match, prefix, keyQuote, bareValue, offset, source) => {
+      let suffix = ''
+      if (bareValue) {
+        const closer = { '(': ')', '[': ']', '{': '}', '<': '>' }[source[offset - 1]]
+        const jsonObject = keyQuote === '"' && source.lastIndexOf('{', offset - 1) >
+          Math.max(source.lastIndexOf('}', offset - 1), source.lastIndexOf('\n', offset - 1))
+        const delimiter = closer ?? (jsonObject ? '}' : '')
+        if (delimiter && bareValue.endsWith(delimiter)) suffix = delimiter
+        else if (jsonObject && bareValue.endsWith(',')) suffix = ','
+      }
+      return keyQuote ? `${prefix}"[credential omitted]"${suffix}` : `${prefix}[credential omitted]${suffix}`
+    })
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
 }
 
