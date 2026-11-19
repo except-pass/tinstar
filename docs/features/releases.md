@@ -58,8 +58,8 @@ mark association coverage incomplete and show a safe warning, including on a
 cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
-Catalog observations cache for two minutes. Actions observations cache for one minute. Only the recent five tags
-and an explicit historical selection receive Actions reads. Membership advances for
+Catalog observations cache for two minutes. Actions refresh after one minute on
+Releases reads, using the recent five tags and any explicit historical selection. Membership advances for
 the latest and selected releases and for untagged main. Catalogs paginate up to
 ten pages and report partial coverage at that limit. Source loss retains known
 observations with a visible unknown state; missing data never means no releases.

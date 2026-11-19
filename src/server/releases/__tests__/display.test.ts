@@ -70,21 +70,21 @@ describe('progressive Releases display', () => {
     { runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }], state: 'Running' },
     { runs: [{ ...nativeRun, conclusion: 'failure' }], state: 'Failed/unfinished components' },
     { runs: [], state: 'Deployment unknown' },
-  ])('expires cached Actions during a blocked catalog refresh and recovers $state', async ({ runs, state }) => {
+  ])('refreshes expired Actions without reloading the catalog and recovers $state', async ({ runs, state }) => {
     let clock = now(), blocked = false, finish!: () => void
     const gate = new Promise<void>(resolve => { finish = resolve })
     const fixture = nativeFixtureRead({ runs })
-    const reader = new GithubReleaseReader(async path => {
-      if (blocked && path.includes('/tags?')) await gate
+    const read = vi.fn(async (path: string) => {
+      if (blocked && path.includes('/actions/runs?')) await gate
       return fixture(path)
-    }, () => clock)
+    })
+    const reader = new GithubReleaseReader(read, () => clock)
     const initial = await reader.get(data())
     expect(initial.status).toBe('fresh')
     expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
     const retainedRuns = initial.releases[0]!.github!.runs
-    clock += 60_000
-    expect(reader.display(data())).toMatchObject({ refreshing: false, status: 'partial' })
-    expect(reader.display(data()).releases[0]!.github).toMatchObject({ runsStatus: 'unknown', runs: retainedRuns })
+    const catalogCalls = () => read.mock.calls.filter(([path]) => /\/(tags\?|releases\?|branches\/main$)/.test(path))
+    const initialCatalogCalls = catalogCalls()
     clock += 60_000; blocked = true
     try {
       const expired = reader.display(data())
@@ -92,13 +92,13 @@ describe('progressive Releases display', () => {
       expect(expired.releases[0]).toMatchObject({ state: 'Unknown', provenance: { historical: true }, github: { runsStatus: 'unknown', runs: retainedRuns } })
       expect(expired.releases[0]!.provenance.asOf).toBe(initial.releases[0]!.provenance.asOf)
       expect(expired.releases[0]!.gaps).toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')
-      clock += 120_000
       const stillBlocked = reader.display(data())
       expect(stillBlocked).toMatchObject({ refreshing: true, status: 'partial' })
       expect(stillBlocked.releases[0]!.github!.runsStatus).toBe('unknown')
       expect(initial.releases[0]!.github!.runsStatus).toBe('fresh')
     } finally { blocked = false; finish() }
     const recovered = await reader.get(data())
+    expect(catalogCalls()).toEqual(initialCatalogCalls)
     expect(recovered.status).toBe('fresh')
     expect(recovered.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh', runs: retainedRuns } })
     expect(recovered.releases[0]!.gaps).not.toContain('Actions evidence is pending, stale or unreadable; retained runs are last known.')

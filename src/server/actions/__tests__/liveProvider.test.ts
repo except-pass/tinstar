@@ -123,6 +123,23 @@ it.each(['/repos/kunchenguid/firstmate/pulls', '/repos/fortresspower/other/pulls
   await expect(fixture.provider.read(path)).rejects.toThrow()
   expect(fixture.requests).toHaveLength(0)
 })
+it('rejects alternate release poll queries before any GitHub read and preserves open inventory', async () => {
+  const fixture = await setup()
+  const path = '/repos/fortresspower/cmsandbox/pulls'
+  const poll = 'state=all&sort=updated&direction=desc&per_page=100&page=1'
+  for (const query of ['state=all', 'sort=updated', 'direction=desc', poll.replace('state=all', 'state=closed'),
+    poll.replace('100', '99'), poll.replace('&page=1', '&page=5'), `${poll}&page=1`, `${poll}&filter=latest`,
+    'state=open&state=all&per_page=100&page=1']) {
+    for (const numbers of [undefined, [1]]) {
+      await expect(fixture.provider.read(`${path}?${query}`, '.', numbers)).rejects.toThrow('Reader query')
+    }
+  }
+  expect(fixture.requests).toHaveLength(0)
+  await expect(fixture.provider.read(`${path}?state=open&per_page=100&page=1`)).resolves.toEqual([])
+  await expect(fixture.provider.read(`${path}?${poll.replace('&page=1', '&page=4')}`, '.', [1])).resolves.toEqual({
+    rows: [], count: 0, oldestUpdatedAt: null,
+  })
+})
 it('derives only the minimum read permissions for checks, statuses, runs and contents', () => {
   expect(readerScope('/repos/fortresspower/cmsandbox/rules/branches/main?per_page=100').permissions).toEqual({ metadata: 'read' })
   expect(readerScope('/repos/fortresspower/cmsandbox/pulls?state=all&sort=updated&direction=desc&per_page=100&page=1').permissions).toEqual({ metadata: 'read', pull_requests: 'read' })

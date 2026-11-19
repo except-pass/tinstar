@@ -57,7 +57,7 @@ export const githubTransport: ProviderTransport = (input, received) => new Promi
 
 /** Path scope prevents a caller turning Reader into an unrestricted HTTP proxy.
  * Permissions are derived here; callers cannot supply permissions or headers. */
-export function readerScope(path: string): { repository: string; permissions: Permissions } {
+export function readerScope(path: string): { repository: string; permissions: Permissions; releasePoll: boolean } {
   if (!path.startsWith('/repos/') || /[\\#\r\n]/.test(path)) throw new Error('Reader path outside approved scope')
   const parsed = new URL(path, 'https://api.github.com')
   if (parsed.pathname + parsed.search !== path || parsed.origin !== 'https://api.github.com') throw new Error('Reader path outside approved scope')
@@ -74,15 +74,23 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   else if (/^\/rules\/branches\/[^/]+$/.test(suffix)) { /* Active branch rules require metadata read only. */ }
   else if (/^\/branches\/[^/]+$/.test(suffix) || /^\/contents\/\.github\/workflows\/[\w.-]+\.ya?ml$/.test(suffix)) permissions.contents = 'read'
   else throw new Error('Reader operation outside PR evidence scope')
+  const query = parsed.searchParams
+  if (new Set(query.keys()).size !== query.size) throw new Error('Reader query has duplicate parameters')
+  if (suffix === '/pulls' && (query.has('sort') || query.has('direction') || query.get('state') === 'all')) {
+    if (query.size !== 5 || query.get('state') !== 'all' || query.get('sort') !== 'updated' ||
+        query.get('direction') !== 'desc' || query.get('per_page') !== '100' || !/^[1-4]$/.test(query.get('page') ?? '')) {
+      throw new Error('Reader query outside release poll scope')
+    }
+    return { repository: match[1]!, permissions, releasePoll: true }
+  }
   for (const [key, value] of parsed.searchParams) {
     if (key === 'page' && /^[1-9]\d{0,2}$/.test(value) || key === 'per_page' && /^(?:[1-9]\d?|100)$/.test(value) ||
-      key === 'state' && ['open', 'closed', 'all'].includes(value) || key === 'filter' && value === 'latest' ||
-      suffix === '/pulls' && (key === 'sort' && value === 'updated' || key === 'direction' && value === 'desc') ||
+      key === 'state' && ['open', 'closed'].includes(value) || key === 'filter' && value === 'latest' ||
       key === 'event' && value === 'push' && suffix === '/actions/runs' ||
       key === 'head_sha' && /^[a-f0-9]{40,64}$/.test(value) || key === 'ref' && /^[a-f0-9]{40,64}$/.test(value)) continue
     throw new Error('Reader query outside PR evidence scope')
   }
-  return { repository: match[1]!, permissions }
+  return { repository: match[1]!, permissions, releasePoll: false }
 }
 
 export class LiveProvider {
@@ -168,10 +176,7 @@ export class LiveProvider {
     return { ...response, data: this.redact(data) }
   }
   read = async (path: string, _projection = '.', pullNumbers?: number[]): Promise<unknown> => {
-    const { repository, permissions } = readerScope(path)
-    const query = new URLSearchParams(path.split('?')[1])
-    const releasePoll = path.split('?')[0] === `/repos/${repository}/pulls` &&
-      [...query].some(([key, value]) => key === 'state' && value === 'all' || key === 'sort' || key === 'direction')
+    const { repository, permissions, releasePoll } = readerScope(path)
     if (releasePoll !== (pullNumbers !== undefined) || pullNumbers?.length === 0) throw new Error('Linked PR numbers required for release repository polling only')
     const key = pullNumbers ? JSON.stringify([path, pullNumbers]) : path
     return this.rest.get(key, etag => this.call('reader', repository, permissions, 'GET', path, undefined, undefined, etag, pullNumbers))

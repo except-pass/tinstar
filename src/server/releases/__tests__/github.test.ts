@@ -101,6 +101,26 @@ it('reuses prefetched historical Actions while enriching the selected release me
 })
 
 
+it('refreshes the selected tag outside the five recent tags without refreshing membership', async () => {
+  const older = Array.from({ length: 5 }, (_, index) => ({
+    name: `v1.${20 - index}.0`, commit: { sha: String(index + 1).repeat(40) },
+  }))
+  const selected = older[4]!
+  let clock = now
+  const read = vi.fn(nativeFixtureRead({ tags: [...nativeTags, ...older] }))
+  const reader = new GithubReleaseReader(read, () => clock)
+  await reader.get(data(), selected.name)
+  read.mockClear()
+  clock += 60_000
+  const result = await reader.get(data(), selected.name)
+  expect(result.releases.find(release => release.version === selected.name)?.github?.runsStatus).toBe('fresh')
+  const paths = read.mock.calls.map(([path]) => path)
+  expect(paths).toHaveLength(6)
+  expect(paths.every(path => path.includes('/actions/runs?'))).toBe(true)
+  expect(paths.some(path => path.includes(selected.commit.sha))).toBe(true)
+  expect(paths.some(path => path.includes(older[3]!.commit.sha))).toBe(false)
+})
+
 it('shows an existing draft Release record rather than claiming it is missing', async () => {
   const result = await new GithubReleaseReader(nativeFixtureRead({ records: [{ ...nativeRecord, draft: true, published_at: null }] }), () => now).get(data())
   expect(result.releases[0]!.kind).toBe('draft')
