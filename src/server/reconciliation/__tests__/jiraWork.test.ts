@@ -42,6 +42,11 @@ const types = [
 const transitions = jiraVerbs.flatMap((name, index) => jiraTransitions[name][1].map((to, destination) => ({
   id: String(index * 10 + destination + 1), name, to: { name: to },
 })))
+const localizedStatuses = new Map([
+  ['Backlog', '待处理'], ['To Do', '待办'], ['Queued', '已排队'], ['In Progress', '正在进行'],
+  ['Decision', '决策'], ['Waiting For', '等待中'], ['Ready for Review', '准备审查'],
+  ['Waiting for Prod Release', '等待发布'], ['Verify in Prod', '生产验证'], ['Done', '完成'], ['Canceled', '已取消'],
+])
 const jiraNow = () => new Date(Date.now() - 5000).toISOString()
 const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
@@ -71,7 +76,10 @@ async function fixture() {
   const fetcher: typeof fetch = async (raw, init) => {
     const url = new URL(String(raw))
     expect(url.origin).toBe('https://api.atlassian.com')
-    expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${config.token}`)
+    const headers = new Headers(init?.headers)
+    expect(headers.get('authorization')).toBe(`Bearer ${config.token}`)
+    const english = headers.get('accept-language') === 'en' && headers.get('x-force-accept-language') === 'true'
+    const statusName = (name: string) => english ? name : localizedStatuses.get(name) ?? name
     const path = url.pathname.replace(`/ex/jira/${cloudId}/rest/api/3/`, '')
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
@@ -122,7 +130,8 @@ async function fixture() {
         const target = issues.get(inward ? link.inwardIssue : link.outwardIssue)!
         return { id, type: link.type, [inward ? 'inwardIssue' : 'outwardIssue']: { id: target.id, key: target.key } }
       })
-      return response({ ...issue, fields: { ...issue.fields, issuelinks } })
+      const status = { ...issue.fields.status, name: statusName(issue.fields.status.name) }
+      return response({ ...issue, fields: { ...issue.fields, status, issuelinks } })
     }
     if (part?.startsWith('properties/') && method === 'GET') {
       const key = part.slice('properties/'.length)
@@ -138,12 +147,8 @@ async function fixture() {
     }
     if (part === 'transitions' && method === 'GET') {
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
-      // Node fetch sends Accept-Language: *. Jira then translates these status names.
-      const localized = new Map([['To Do', '待办'], ['In Progress', '正在进行'], ['Ready for Review', '准备审查'], ['Decision', '决策'], ['Canceled', '已取消'], ['Done', '完成']])
-      const headers = new Headers(init?.headers)
-      const english = headers.get('accept-language') === 'en' && headers.get('x-force-accept-language') === 'true'
-      const offered = english ? available : available.map(transition => ({
-        ...transition, to: { ...transition.to, name: localized.get(transition.to.name) ?? transition.to.name },
+      const offered = available.map(transition => ({
+        ...transition, to: { ...transition.to, name: statusName(transition.to.name) },
       }))
       return response({ transitions: offered })
     }
