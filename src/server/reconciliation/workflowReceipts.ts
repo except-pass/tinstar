@@ -49,6 +49,7 @@ export class CreationReceipts {
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error }
   }
   async get(key: string) { return (await this.read())[key] }
+  async entries(prefix: string) { return this.list(prefix) }
   async list(prefix: string) { return Object.entries(await this.read()).filter(([key]) => key.startsWith(prefix)) }
   private change(edit: (values: Record<string, Receipt>) => void) {
     const key = this.root ? join(this.root, 'workflow-create-receipts.json') : undefined
