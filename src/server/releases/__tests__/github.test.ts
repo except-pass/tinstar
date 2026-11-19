@@ -101,24 +101,152 @@ it('reuses prefetched historical Actions while enriching the selected release me
 })
 
 
-it('refreshes the selected tag outside the five recent tags without refreshing membership', async () => {
+it('re-reads an open selected tag on the fast cadence and leaves settled tags until the catalog interval', async () => {
   const older = Array.from({ length: 5 }, (_, index) => ({
     name: `v1.${20 - index}.0`, commit: { sha: String(index + 1).repeat(40) },
   }))
   const selected = older[4]!
-  let clock = now
-  const read = vi.fn(nativeFixtureRead({ tags: [...nativeTags, ...older] }))
+  let clock = now, selectedRunning = true
+  const fixture = nativeFixtureRead({ tags: [...nativeTags, ...older] })
+  const read = vi.fn(async (path: string) => {
+    if (path.includes(`/actions/runs?head_sha=${selected.commit.sha}`)) {
+      return { total_count: 1, workflow_runs: [{ ...nativeRun, head_sha: selected.commit.sha, head_branch: selected.name, status: selectedRunning ? 'in_progress' : 'completed', conclusion: selectedRunning ? null : 'success' }] }
+    }
+    return fixture(path)
+  })
   const reader = new GithubReleaseReader(read, () => clock)
   await reader.get(data(), selected.name)
   read.mockClear()
   clock += 60_000
-  const result = await reader.get(data(), selected.name)
-  expect(result.releases.find(release => release.version === selected.name)?.github?.runsStatus).toBe('fresh')
-  const paths = read.mock.calls.map(([path]) => path)
-  expect(paths).toHaveLength(6)
-  expect(paths.every(path => path.includes('/actions/runs?'))).toBe(true)
-  expect(paths.some(path => path.includes(selected.commit.sha))).toBe(true)
-  expect(paths.some(path => path.includes(older[3]!.commit.sha))).toBe(false)
+  selectedRunning = false
+  const running = await reader.get(data(), selected.name)
+  expect(running.releases.find(release => release.version === selected.name)?.github?.runsStatus).toBe('fresh')
+  const fastPaths = read.mock.calls.map(([path]) => path)
+  expect(fastPaths).toEqual([expect.stringContaining(`/actions/runs?head_sha=${selected.commit.sha}`)])
+  expect(fastPaths.some(path => path.includes(older[3]!.commit.sha))).toBe(false)
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data(), selected.name)
+  const settledPaths = read.mock.calls.map(([path]) => path)
+  expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${selected.commit.sha}`))).toBe(false)
+  expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data(), selected.name)
+  expect(read.mock.calls.map(([path]) => path)).toEqual([expect.stringContaining(`/actions/runs?head_sha=${selected.commit.sha}`)])
+})
+
+it.each([
+  { path: '.github/workflows/release-production.yml@refs/tags/v1.24.0' },
+  { event: 'workflow_dispatch' },
+  { head_sha: nativeBase },
+  { head_branch: 'main' },
+])('keeps Actions fresh on the slow cadence with excluded run %j', async exclusion => {
+  let clock = now
+  const hidden = { ...nativeRun, ...exclusion, id: 9, status: 'in_progress', conclusion: null }
+  const read = vi.fn(nativeFixtureRead({ runs: [nativeRun, hidden] }))
+  const reader = new GithubReleaseReader(read, () => clock)
+  const first = await reader.get(data())
+  expect(first.releases[0]!.github!.runs.map(run => run.id)).not.toContain(9)
+  read.mockClear()
+  clock += 60_000
+  const display = reader.display(data())
+  expect(display.refreshing).toBe(false)
+  expect(display.releases[0]).toMatchObject({ provenance: { historical: false }, github: { runsStatus: 'fresh' } })
+  await reader.get(data())
+  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(false)
+})
+
+it.each([
+  { status: 'completed', conclusion: 'success', pagesAfterMinute: 0 },
+  { status: 'in_progress', conclusion: null, pagesAfterMinute: 10 },
+])('keeps incomplete Actions evidence unknown with a $status component', async ({ status, conclusion, pagesAfterMinute }) => {
+  let clock = now
+  const fixture = nativeFixtureRead()
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (path: string) => {
+    if (!path.includes(candidatePath)) return fixture(path)
+    return { total_count: 11, workflow_runs: [{ ...nativeRun, status, conclusion }] }
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const initial = await reader.get(data())
+  expect(initial.releases[0]).toMatchObject({ provenance: { historical: true }, github: { runsStatus: 'unknown' } })
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(read.mock.calls.filter(([path]) => path.includes(candidatePath))).toHaveLength(pagesAfterMinute)
+})
+
+it.each([
+  { path: nativeRun.path, callsAfterMinute: 2 },
+  { path: '.github/workflows/release-production.yml', callsAfterMinute: 0 },
+])('uses activity from the first Actions page with workflow $path when page two fails', async ({ path, callsAfterMinute }) => {
+  let clock = now
+  const fixture = nativeFixtureRead()
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (request: string) => {
+    if (!request.includes(candidatePath)) return fixture(request)
+    if (request.endsWith('&page=2')) throw new Error('unreadable')
+    return { total_count: 101, workflow_runs: [
+      { ...nativeRun, path, status: 'in_progress', conclusion: null },
+      ...Array.from({ length: 99 }, (_, index) => ({ ...nativeRun, id: index + 1 })),
+    ] }
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const candidateCalls = () => read.mock.calls.filter(([request]) => request.includes(candidatePath))
+  const initial = await reader.get(data())
+  expect(candidateCalls()).toHaveLength(2)
+  expect(initial.releases[0]).toMatchObject({ provenance: { historical: true }, github: { runsStatus: 'unknown' } })
+  read.mockClear()
+  clock += 60_000
+  const next = await reader.get(data())
+  expect(candidateCalls()).toHaveLength(callsAfterMinute)
+  expect(next.releases[0]?.github?.runsStatus).toBe('unknown')
+})
+
+it('falls back to the slow cadence after failing to refresh an active component', async () => {
+  let clock = now, failed = false
+  const fixture = nativeFixtureRead({ runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }] })
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (path: string) => {
+    if (failed && path.includes(candidatePath)) throw new Error('unreadable')
+    return fixture(path)
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const initial = await reader.get(data())
+  clock += 60_000
+  failed = true
+  const unavailable = await reader.get(data())
+  expect(unavailable.releases[0]).toMatchObject({
+    provenance: { historical: true },
+    github: { runsStatus: 'unknown', runs: initial.releases[0]!.github!.runs },
+  })
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(read.mock.calls.some(([path]) => path.includes(candidatePath))).toBe(false)
+  clock += 60_000
+  failed = false
+  const recovered = await reader.get(data())
+  expect(recovered.releases[0]).toMatchObject({ state: 'Running', github: { runsStatus: 'fresh' } })
+})
+
+it('re-reads a settled candidate on the slow cadence', async () => {
+  let clock = now
+  const read = vi.fn(nativeFixtureRead())
+  const reader = new GithubReleaseReader(read, () => clock)
+  await reader.get(data())
+  const candidateCalls = () => read.mock.calls.filter(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))
+  expect(candidateCalls()).toHaveLength(1)
+  read.mockClear()
+  clock += 60_000
+  const settled = await reader.get(data())
+  expect(candidateCalls()).toHaveLength(0)
+  expect(settled.releases[0]).toMatchObject({ state: 'Awaiting PROD verification', github: { runsStatus: 'fresh' } })
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(candidateCalls()).toHaveLength(1)
 })
 
 it('shows an existing draft Release record rather than claiming it is missing', async () => {

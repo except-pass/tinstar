@@ -59,16 +59,23 @@ cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
 The catalog of tags, Release records and main HEAD is refreshed on demand after
-two minutes. Actions refresh after one minute on Releases reads, using the recent
-five tags and any explicit historical selection. Membership for the latest
-release, selected release and untagged main can advance on a catalog refresh.
+two minutes. Actions refresh on demand for the five most recent tags and any
+explicit historical selection. Each tag and source SHA uses a one-minute
+interval when any page fetched in the latest attempt returns a matching
+component run that has yet to complete. Otherwise, Actions use a two-minute
+interval, measured independently of the catalog. An incomplete attempt leaves
+Actions evidence unknown. If a page fails, Releases keeps the last-known rows
+and uses matching runs from pages already fetched to choose the retry interval.
+Membership for the latest release, selected release and untagged main can
+advance on a catalog refresh.
 Changing the selection can load missing membership within the current interval.
 Tags and Release records paginate up to ten pages and report partial coverage
 at that limit. Source loss retains known observations with a visible unknown state.
 Actions freshness is evaluated on every display from each detail read's cache
-timestamp. After one minute, retained runs remain visible as last-known evidence,
-with unknown activity and partial source coverage even while the next catalog
-read is pending. A successful complete Actions read restores fresh evidence.
+timestamp and its refresh interval. When the interval elapses, retained runs
+remain visible as last-known evidence, with unknown activity and partial source
+coverage even while the next read is pending. A successful complete Actions read
+restores fresh evidence.
 
 A successful component workflow is **awaiting PROD verification**, exactly as the
 native Release body states. Neither a tag, published Release nor green Actions
