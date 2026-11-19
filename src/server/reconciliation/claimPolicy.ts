@@ -33,9 +33,9 @@ export function cardWaitsForWill(card: WorkCard) {
     (isWillWait({ text: '', fields: wait }) || waitEntries(wait.waitingFor, wait).some(isWillWait))
 }
 
-export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown) {
+export function currentWillRequests(notes: Parameters<typeof decisionRequests>[0], actions: unknown, options?: Parameters<typeof decisionRequests>[1]) {
   const tags = (Array.isArray(actions) ? actions : [actions]).filter((action): action is string => typeof action === 'string').map(action => action.trim().toLowerCase())
-  return decisionRequests(notes).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
+  return decisionRequests(notes, options).filter(request => request.requestedFrom?.trim().toLowerCase() === 'will' && tags.includes(request.action.trim().toLowerCase()))
 }
 export function oldestOpenRequestSince(requests: ReturnType<typeof decisionRequests>) {
   return requests.filter(request => !request.answered).flatMap(request => request.since && Number.isFinite(Date.parse(request.since)) ? [request.since] : []).sort((a, b) => Date.parse(a) - Date.parse(b))[0] ?? null

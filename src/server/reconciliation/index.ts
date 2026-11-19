@@ -101,7 +101,6 @@ export class ReconciliationSources {
         return this.decisionQueue().cards
       },
       read: (card, background) => this.readDecisionCard(card, background),
-      revisionFor: card => this.observedDecisionRevision(card),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)

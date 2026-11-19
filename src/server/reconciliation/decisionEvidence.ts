@@ -56,7 +56,7 @@ function openPrepRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
   const answers = history.filter(note =>
     note.type === 'comment' && note.text.trimEnd().split('\n').at(-1)?.startsWith(deskAnswerMarker))
     .map(note => chronology.get(note.id)!)
-  return currentWillRequests(history, value(card, 'Will action')).filter(request => {
+  return currentWillRequests(history, value(card, 'Will action'), { multilineQuestion: true }).filter(request => {
     if (request.answered) return false
     const source = chronology.get(request.sourceId)!
     return answers.every(answer => Number.isFinite(source.created) && Number.isFinite(answer.created) && source.created !== answer.created

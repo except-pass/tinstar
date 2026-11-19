@@ -78,19 +78,19 @@ export interface RetractionAnswerSources {
 }
 export const withdrawnDecisionIds = (notes: WorkflowRecordSource[]) => new Set<string>(decisionRecordRows(notes, withdrawalPrefix))
 
-function requestQuestion(lines: string[]) {
+function requestQuestion(lines: string[], multilineQuestion: boolean) {
   const start = lines.findIndex(line => line.startsWith('Question: '))
   if (start < 0) return null
   const firstLine = lines[start]!.slice('Question: '.length)
   const record = lines.length - 2
-  if (start !== 5 || !lines[0]?.startsWith('Date: ') || !lines[1]?.startsWith('By: ') ||
+  if (!multilineQuestion || start !== 5 || !lines[0]?.startsWith('Date: ') || !lines[1]?.startsWith('By: ') ||
     lines[2] !== 'Operation: request_decision' || !lines[3]?.startsWith(`${workflowMarkers.decision} `) ||
     !lines[4]?.startsWith('Requested from: ') || record <= start ||
     !lines[record]?.startsWith('Tin Star request: ') || !receiptIdentity(lines.at(-1)!)) return firstLine
   return [firstLine, ...lines.slice(start + 1, record)].join('\n')
 }
 
-export function decisionRequests(notes: RequestNote[]) {
+export function decisionRequests(notes: RequestNote[], { multilineQuestion = false }: { multilineQuestion?: boolean } = {}) {
   const answered = new Set<string>()
   for (const id of decisionRecordRows(notes, 'Tin Star answer: ')) answered.add(id)
   const withdrawn = withdrawnDecisionIds(notes)
@@ -111,7 +111,7 @@ export function decisionRequests(notes: RequestNote[]) {
           : lines.find(line => line.startsWith('Requested from: '))?.slice('Requested from: '.length) ?? null,
         question: replacement
           ? (typeof row.question === 'string' ? row.question : null)
-          : requestQuestion(lines),
+          : requestQuestion(lines, multilineQuestion),
         since: note.createdAt ?? note.created_time ?? null, sourceId: note.id, answered: answered.has(row.id) || answered.has(note.id) }]
     } catch { return [] }
   }))

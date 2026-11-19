@@ -9,6 +9,7 @@ import { redactSourceText } from '../../shared/searchDocuments'
 import { cardSourceUrl } from '../../shared/workIdentity'
 import { DecisionDeskConflict, type DecisionPackets } from './decisionPackets'
 import type { DecisionCardSource } from './decisionEvidence'
+import { NotionCardBoardMismatch } from './notion'
 import type { WorkCard } from './workReader'
 
 const exec = promisify(execFile)
@@ -76,7 +77,6 @@ export class DecisionPreparation {
   constructor(readonly packets: DecisionPackets, private source: {
     refreshQueue(): Promise<WorkCard[]>
     read(card: string, background: boolean): Promise<DecisionCardSource>
-    revisionFor?(card: WorkCard): string | undefined
     exclusive<T>(card: string, perform: () => Promise<T>): Promise<T>
   }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
@@ -158,21 +158,17 @@ export class DecisionPreparation {
     }
     const queue = await this.source.refreshQueue()
     const cutoff = this.now() - retryAfter
-    const { candidates, refreshable, liveCards } = await this.packets.leases.writeStorage(db => {
+    const { candidates, refreshable, liveJobs } = await this.packets.leases.writeStorage(db => {
       this.expireJobs(db, cutoff)
       const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
-      const liveCards = (db.prepare(`SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
-        .all(this.scope, cutoff) as unknown as Array<{ card: string }>).map(row => row.card)
-      const liveIds = new Set(liveCards)
-      const fresh = capacity ? queue.filter(card => !liveIds.has(card.id) && !this.held(db, card.id)) : []
+      const liveJobs = db.prepare(`SELECT id,card,revision FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
+        .all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
+      const liveCards = new Set(liveJobs.map(job => job.card))
+      const fresh = capacity ? queue.filter(card => !liveCards.has(card.id) && !this.held(db, card.id)) : []
       const first = fresh.length ? this.candidateCursor % fresh.length : 0
       const selected = [...fresh.slice(first), ...fresh.slice(0, first)].slice(0, capacity)
-      for (const card of selected) liveIds.add(card.id)
-      const historical = db.prepare('SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? LIMIT 1')
-      const refreshable = queue.filter(card => !liveIds.has(card.id) &&
-        (this.packets.currentInStorage(db, card.id) ||
-          (this.source.revisionFor && !this.source.revisionFor(card) && historical.get(this.scope, card.id))))
-      return { candidates: selected, refreshable, liveCards }
+      const refreshable = queue.filter(card => !liveCards.has(card.id) && this.packets.currentInStorage(db, card.id))
+      return { candidates: selected, refreshable, liveJobs }
     })
     if (refreshable.length) {
       const index = this.refreshCursor % refreshable.length
@@ -180,19 +176,20 @@ export class DecisionPreparation {
       const refresh = [...refreshable.slice(index), ...refreshable.slice(0, index)].slice(0, 4)
       await Promise.allSettled(refresh.map(card => this.source.read(card.id, true)))
     }
+    const monitoring = Promise.allSettled(liveJobs.map(async job => {
+      const source = await this.readSource(job.card, true)
+      if (source?.prepEligible && source.revision === job.revision) return
+      await this.packets.leases.writeStorage(db => this.retireJobInStorage(db, job.id, this.now() - retryAfter, null))
+    }))
     const secret = this.secret
-    const candidateIds = new Set(candidates.map(card => card.id))
-    const ids = [...new Set([...liveCards, ...candidateIds])]
-    const attempts = await Promise.allSettled(ids.map(async id => {
+    const attempts = await Promise.allSettled(candidates.map(async ({ id }) => {
+      if (!secret) return
       const dispatch = await this.source.exclusive(id, async () => {
-        const source = await this.source.read(id, true)
+        const source = await this.readSource(id, true)
+        if (!source?.prepEligible) return
         const job = await this.packets.leases.writeStorage(db => {
           const cutoff = this.now() - retryAfter
-          db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = NULL
-            WHERE scope = ? AND card = ? AND ${liveJobSql} AND (revision != ? OR ? = 0)`)
-            .run(this.scope, id, cutoff, source.revision, Number(source.prepEligible))
-          if (!secret || !candidateIds.has(id) || !source.prepEligible ||
-            this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
+          if (this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
           if (!this.refillCapacity(db, queue, cutoff) || this.hasLiveJob(db, id, cutoff) ||
             this.sendCount(db, id, source.revision) >= prepSendCap) return
           const job = randomUUID()
@@ -200,16 +197,31 @@ export class DecisionPreparation {
             .run(job, this.scope, id, source.revision, this.now())
           return job
         })
-        return job && secret ? { completion: this.push(secret, job, source) } : undefined
+        return job ? { completion: this.push(secret, job, source) } : undefined
       })
       return dispatch ? { message: await dispatch.completion } : undefined
     }))
+    const monitored = await monitoring
     const sent = attempts.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : [])
     this.candidateCursor += candidates.length - sent.length
     const failures = sent.flatMap(job => job.message ? [job.message] : [])
     this.explanation = !secret ? webhookMissing : failures.length ? `${failures.length} of ${sent.length} jobs could not be sent. ${failures[0]}` :
       sent.length ? `Sent ${sent.length} cards to the preparer.` :
-      attempts.some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
+      [...attempts, ...monitored].some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
+  }
+
+  private async readSource(card: string, background: boolean) {
+    try {
+      return await this.source.read(card, background)
+    } catch (error) {
+      if (error instanceof NotionCardBoardMismatch) return null
+      throw error
+    }
+  }
+
+  private retireJobInStorage(db: DatabaseSync, id: string, cutoff: number, message: string | null) {
+    db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE scope = ? AND id = ? AND ${liveJobSql}`)
+      .run(message, this.scope, id, cutoff)
   }
 
   private async push(secret: Secret, id: string, source: DecisionCardSource) {
@@ -245,23 +257,22 @@ export class DecisionPreparation {
       const current = lookup()!
       if (current.packet_id) return { outcome: 'published', job_id, packet_id: current.packet_id }
       requireLivePreparation(current, this.now() - retryAfter)
-      const source = await this.source.read(current.card, false)
-      const changed = source.revision !== current.revision
+      const source = await this.readSource(current.card, false)
+      const changed = !!source && source.revision !== current.revision
       const packetId = await this.packets.leases.writeStorage(db => {
         const latest = db.prepare('SELECT packet_id,at,state FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at' | 'state'>
         if (latest.packet_id) return latest.packet_id
         const cutoff = this.now() - retryAfter
         requireLivePreparation(latest, cutoff)
-        if (changed || !source.prepEligible) {
-          db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = ? WHERE id = ? AND ${liveJobSql}`)
-            .run(changed ? 'Card changed while preparing' : null, job_id, cutoff)
+        if (changed || !source?.prepEligible) {
+          this.retireJobInStorage(db, job_id, cutoff, changed ? 'Card changed while preparing' : null)
           return null
         }
         const stored = this.packets.publishInStorage(db, source, packet)
         db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
         return stored.id
       })
-      if (!packetId) throw new DecisionDeskConflict(changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
+      if (!packetId) throw new DecisionDeskConflict(!source ? 'Notion card identity or source changed' : changed ? 'The card changed while preparing it' : 'This card is no longer an open owner decision')
       return { outcome: 'published', job_id, packet_id: packetId }
     })
   }

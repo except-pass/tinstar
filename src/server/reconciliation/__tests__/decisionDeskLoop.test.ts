@@ -11,6 +11,7 @@ import { ReconciliationMcp } from '../mcp'
 import { NotionApi } from '../notionApi'
 import { DecisionPreparation } from '../decisionPrep'
 import { actionableDecisionCard, decisionCardSource, deskAnswerMarker } from '../decisionEvidence'
+import { decisionRequests } from '../../../shared/workflowRequests'
 import { jiraCardPrefix } from '../../../shared/workIdentity'
 import { waitLine } from '../../../shared/waitingForPolicy'
 import type { PacketContents } from '../../../shared/decisionPacket'
@@ -383,6 +384,8 @@ describe('prepared-card loop', () => {
       source_revision: expect.any(String),
       publish: { tool: 'publish_prepared_packet', job_id: expect.any(String) },
     }])
+    expect(decisionRequests(card.comments.map((text, index) => ({ id: String(index), text })))[0]?.question)
+      .toBe('Please decide the following:')
     expect(jobs[0]!.source_revision).not.toBe(jobs[0]!.publish.job_id)
     expect(published).toEqual([{ outcome: 'published', job_id: jobs[0]!.publish.job_id, packet_id: expect.any(String) }])
     expect((await web('snapshot')).data).toMatchObject({ counts: { ready: 1 }, ready: [{ card_id: card.id }] })
@@ -782,19 +785,59 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
   })
 
-  it('checks the board before reading moved-card history during refill or publication', async () => {
+  it.each(['refill', 'callback'])('retires a moved-card job without reading its history during %s', async path => {
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources, jobs, cardReads } = await setup([card], false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
+    const publication = { job_id: jobs[0]!.publish.job_id, packet: contents }
 
     card.parent.data_source_id = id(999)
     cardReads.length = 0
-    await sources.preparation.replenish()
-    await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
-      .rejects.toThrow('Notion card identity or source changed')
-    expect(cardReads).toEqual([`/v1/pages/${card.id}`, `/v1/pages/${card.id}`])
+    if (path === 'refill') await sources.preparation.replenish()
+    else await expect(sources.preparation.publish(publication)).rejects.toThrow('Notion card identity or source changed')
+    expect(cardReads).toEqual([`/v1/pages/${card.id}`])
+    expect((await sources.preparation.status()).jobs[0]?.state).toBe('stopped')
+
+    card.parent.data_source_id = board
+    await expect(sources.preparation.publish(publication)).rejects.toThrow('The preparation job stopped')
     expect(jobs).toHaveLength(1)
+  })
+
+  it('publishes while a retirement-only history read is pending', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources } = await setup([card], false)
+    const work = await sources.currentCard(card.id)
+    const open = decisionCardSource(work, [{ id: 'ask', type: 'comment', text: card.comments[0]! }])
+    const monitorStarted = Promise.withResolvers<void>()
+    const releaseMonitor = Promise.withResolvers<void>()
+    let backgroundReads = 0
+    const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
+    const prep = new DecisionPreparation(sources.decisionPackets, {
+      refreshQueue: async () => [work],
+      read: async (_id, background) => {
+        if (background && ++backgroundReads > 1) {
+          monitorStarted.resolve()
+          await releaseMonitor.promise
+          return { ...open, prepEligible: false }
+        }
+        return open
+      },
+      exclusive: (id, perform) => sources.workflow.exclusive(id, perform),
+    }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
+    await prep.replenish()
+    const { publish: { job_id } } = JSON.parse(String(push.mock.calls[0]?.[1]?.body))
+    const monitoring = prep.replenish()
+    await monitorStarted.promise
+    const publication = prep.publish({ job_id, packet: contents })
+    try {
+      await vi.waitFor(async () => expect((await prep.status()).jobs[0]?.state).toBe('published'))
+      await expect(publication).resolves.toMatchObject({ outcome: 'published' })
+    } finally {
+      releaseMonitor.resolve()
+      await Promise.allSettled([monitoring, publication])
+    }
+    expect((await prep.status()).jobs[0]?.state).toBe('published')
   })
 
   it.each(['comment', 'paragraph'])('preserves the legacy revision when identical %s text is reposted', async type => {
@@ -809,7 +852,7 @@ describe('prepared-card loop', () => {
     expect(reposted.revision).toBe(original.revision)
   })
 
-  it('recovers capped Desk status from the background pass after restart with sending disabled', async () => {
+  it('does not reread stopped job history after restart with sending disabled', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const card = withOpenRequest(page(1, { tag: 'Decision' }))
@@ -821,12 +864,13 @@ describe('prepared-card loop', () => {
     await sources.preparation.replenish()
     disableSending()
     const restarted = restartSources()
+    const readsBeforeRestart = cardReads.length
     await restarted.preparation.replenish()
-    const readsAfterRefresh = cardReads.length
     expect((await restarted.preparedReviews.snapshot()).pending).toEqual([
-      expect.objectContaining({ card_id: card.id, state: 'Preparation stopped after two sends without a packet' }),
+      expect.objectContaining({ card_id: card.id, state: 'Queued' }),
     ])
-    expect(cardReads).toHaveLength(readsAfterRefresh)
+    expect((await restarted.preparation.status()).jobs[0]?.state).toBe('stopped')
+    expect(cardReads).toHaveLength(readsBeforeRestart)
     expect(jobs).toHaveLength(2)
   })
 
