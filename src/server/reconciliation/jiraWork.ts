@@ -201,7 +201,7 @@ export class JiraWork extends JiraClient {
   private transitionAudit(input: JiraTransition, actor: string) {
     const details = [
       input.reason && `Reason: ${input.reason}`, input.evidence && `Evidence: ${input.evidence}`,
-      input.disposition && `Disposition: ${input.disposition}`, input.verb === 'Deployed' && input.live_revision && `Live revision: ${input.live_revision}`,
+      'disposition' in input && input.disposition && `Disposition: ${input.disposition}`, 'live_revision' in input && input.live_revision && `Live revision: ${input.live_revision}`,
     ].filter(Boolean)
     return details.length ? [`${input.verb} via Tin Star (${actor})`, ...details].join('\n') : undefined
   }

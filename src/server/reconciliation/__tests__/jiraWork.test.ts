@@ -488,11 +488,11 @@ it('requires source text for a native Jira blocker condition', async () => {
   const issue = f.issues.get('60001')!
   issue.fields[config.fields.blockerType] = { value: 'Actor' }
   issue.fields[config.fields.blockerTarget] = 'team:reviewers'
-  const content = [{ type: 'mediaInline' }]
+  const content = [{ type: 'mediaInline' }, { type: 'emoji', attrs: { shortName: ':thumbsup:' } }]
   issue.fields[config.fields.blockerCondition] = { type: 'doc', version: 1, content: [{ type: 'paragraph', content }] }
   const read = await call('get_work', { card_id })
   expect(read.card).not.toHaveProperty('blocker')
-  expect(read.card.external_blocker_fields.unblocks_when).toBe('[Rich content in Jira]')
+  expect(read.card.external_blocker_fields.unblocks_when).toBe('[Rich content in Jira]:thumbsup:')
   const block = { card_id, operation_id: 'block', verb: 'Block' }
   expect(await call('transition_work', block)).toMatchObject({
     outcome: 'not-saved', message: expect.stringContaining('unblock condition'),
@@ -501,7 +501,7 @@ it('requires source text for a native Jira blocker condition', async () => {
     type: 'paragraph', content: [{ type: 'text', text: 'A reviewer grants access.' }],
   })
   expect(await call('transition_work', block)).toMatchObject({ outcome: 'saved', card: {
-    status: 'Waiting For', blocker: { unblocks_when: '[Rich content in Jira]\nA reviewer grants access.' },
+    status: 'Waiting For', blocker: { unblocks_when: '[Rich content in Jira]:thumbsup:\nA reviewer grants access.' },
   } })
 })
 
@@ -512,9 +512,9 @@ it('requires actual description text for Queue and Start', async () => {
     provider: 'jira', operation_id: 'create', name: 'Rich content only', owner: 'Avery',
   })
   const issue = f.issues.get('60001')!
-  const paragraph = { type: 'paragraph', content: [{ type: 'mediaInline' }] }
+  const paragraph = { type: 'paragraph', content: [{ type: 'mediaInline' }, { type: 'mention', attrs: { text: '@Avery' } }, { type: 'inlineCard', attrs: { url: 'https://example.test' } }] }
   issue.fields.description = { type: 'doc', version: 1, content: [paragraph] }
-  expect(await call('get_work', { card_id })).toMatchObject({ card: { description: '[Rich content in Jira]' } })
+  expect(await call('get_work', { card_id })).toMatchObject({ card: { description: '[Rich content in Jira]@Averyhttps://example.test' } })
   const move = (verb: string) => call('transition_work', { card_id, operation_id: verb, verb, evidence: 'Work began.' })
   expect(await move('Prioritize')).toMatchObject({ outcome: 'saved' })
   expect(await move('Queue')).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('require instructions') })
@@ -524,7 +524,7 @@ it('requires actual description text for Queue and Start', async () => {
   expect(await move('Start')).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
 })
 
-it('accepts transition revision arguments only for Deployed', async () => {
+it('scopes transition revisions and disposition to their supported paths', async () => {
   const f = await fixture()
   const { client, call } = await f.connect()
   const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
@@ -539,22 +539,61 @@ it('accepts transition revision arguments only for Deployed', async () => {
     const result = await client.callTool({ name: 'transition_work',
       arguments: { card_id, operation_id: field, verb: 'Queue', [field]: 'rev-a' } })
     expect(result.isError).toBe(true)
-    expect(JSON.stringify(result.content)).toContain('Only Deployed')
+    expect(JSON.stringify(result.content)).toContain('Revision arguments')
   }
   for (const verb of ['Answer Decision', 'Resolve Wait']) {
-    for (const to of ['Backlog', 'Verify in Prod', 'Waiting for Prod Release']) {
+    for (const to of ['Backlog']) {
       const args = { card_id, operation_id: 'interrupt', verb, to }
       expect(validate(args)).toBe(false)
       expect((await client.callTool({ name: 'transition_work', arguments: args })).isError).toBe(true)
     }
-    for (const to of ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Decision']) {
+    for (const to of ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Decision', 'Waiting for Prod Release', 'Verify in Prod']) {
       expect(validate({ card_id, operation_id: 'interrupt', verb, to })).toBe(to !== 'Decision' || verb === 'Resolve Wait')
     }
   }
+  for (const verb of jiraVerbs) {
+    const to = verb === 'Answer Decision' || verb === 'Resolve Wait' ? 'Verify in Prod' : undefined
+    expect(validate({ card_id, operation_id: 'check', verb, ...(to ? { to } : {}), disposition: 'Work reconciled.' }))
+      .toBe(['Park', 'Cancel', 'Stop and Requeue'].includes(verb))
+    if (to) {
+      expect(validate({ card_id, operation_id: 'check', verb, to, ...revisions })).toBe(true)
+      expect(validate({ card_id, operation_id: 'check', verb, to: 'Waiting for Prod Release', ...revisions })).toBe(false)
+    }
+  }
+  expect((await client.callTool({ name: 'transition_work',
+    arguments: { card_id, operation_id: 'check', verb: 'Prioritize', disposition: 'Unrelated.' } })).isError).toBe(true)
   expect(f.requests).toHaveLength(before)
 }, 30_000)
 
 
+
+it.each([
+  ['Answer Decision', 'Decision'],
+  ['Resolve Wait', 'Waiting For'],
+])('requires release evidence when resuming through %s', async (verb, status) => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Resume release', owner: 'Avery',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields[config.fields.decisions] = 'D1 [Answered]: Resume?\n  Answer: Yes.'
+  const input = { card_id, verb }
+  issue.fields.status = { name: status }
+  const release = { ...input, operation_id: 'release', to: 'Waiting for Prod Release' }
+  expect(await call('transition_work', release)).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('requires evidence') })
+  expect(await call('transition_work', { ...release, evidence: 'The completed work is accepted for release.' }))
+    .toMatchObject({ outcome: 'saved', card: { status: 'Waiting for Prod Release' } })
+
+  issue.fields.status = { name: status }
+  const verify = { ...input, operation_id: 'verify', to: 'Verify in Prod', evidence: 'Production is ready for verification.' }
+  expect(await call('transition_work', verify)).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('exact required revision') })
+  expect(await call('transition_work', { ...verify, required_revision: 'rev-a', live_revision: 'rev-b' }))
+    .toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('exact required revision') })
+  expect(await call('transition_work', { ...verify, required_revision: 'rev-a', live_revision: 'rev-a' }))
+    .toMatchObject({ outcome: 'saved', card: { status: 'Verify in Prod' } })
+  expect(JSON.stringify(issue.comments.at(-1)?.body)).toContain('Live revision: rev-a')
+})
 
 it('uses immutable link target identity for historical keys, blockers, and recovery', async () => {
   const f = await fixture()

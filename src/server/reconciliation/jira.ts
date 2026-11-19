@@ -38,9 +38,9 @@ export function adfText(value: unknown, allowUnsupported: boolean | 'omit' = fal
   const node = record(value), type = node.type
   if (type === 'text') return String(node.text ?? '')
   if (type === 'hardBreak') return '\n'
-  if (type === 'mention') return String(record(node.attrs).text ?? record(node.attrs).id ?? '')
-  if (type === 'emoji') return String(record(node.attrs).text ?? record(node.attrs).shortName ?? '')
-  if (type === 'inlineCard') return String(record(node.attrs).url ?? '')
+  if (type === 'mention') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).text ?? record(node.attrs).id ?? '')
+  if (type === 'emoji') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).text ?? record(node.attrs).shortName ?? '')
+  if (type === 'inlineCard') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).url ?? '')
   if (!['doc', 'paragraph', 'heading', 'codeBlock', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'panel', 'table', 'tableRow', 'tableCell', 'tableHeader', 'rule'].includes(String(type))) {
     if (allowUnsupported) return allowUnsupported === 'omit' ? '' : '[Rich content in Jira]'
     throw new Error(`Unsupported Jira document node: ${String(type)}`)

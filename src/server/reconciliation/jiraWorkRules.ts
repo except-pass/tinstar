@@ -15,8 +15,10 @@ type Verb = typeof jiraVerbs[number]
 const work: JiraStatus[] = ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod']
 const active: JiraStatus[] = [...work, 'Decision', 'Waiting For']
 const nonterminal: JiraStatus[] = ['Backlog', ...active]
-const decisionExits = ['To Do', 'Queued', 'In Progress', 'Ready for Review'] as const
+const decisionExits = ['To Do', 'Queued', 'In Progress', 'Ready for Review', 'Waiting for Prod Release'] as const
 const waitExits = [...decisionExits, 'Decision'] as const
+const dispositionVerbs = ['Park', 'Cancel', 'Stop and Requeue'] as const
+const interruptVerbs = ['Answer Decision', 'Resolve Wait'] as const
 const recovery: JiraStatus[] = ['To Do', 'Queued']
 
 export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]]> = {
@@ -33,8 +35,8 @@ export const jiraTransitions: Record<Verb, [from: JiraStatus[], to: JiraStatus[]
   'Complete Directly': [['In Progress'], ['Done']],
   'Request Decision': [active.filter(value => value !== 'Decision'), ['Decision']],
   Block: [active.filter(value => value !== 'Waiting For'), ['Waiting For']],
-  'Answer Decision': [['Decision'], [...decisionExits]],
-  'Resolve Wait': [['Waiting For'], [...waitExits]],
+  'Answer Decision': [['Decision'], [...decisionExits, 'Verify in Prod']],
+  'Resolve Wait': [['Waiting For'], [...waitExits, 'Verify in Prod']],
   Dequeue: [['Queued'], ['To Do']],
   Deprioritize: [['To Do'], ['Backlog']],
   'Stop and Requeue': [['In Progress'], ['Queued']],
@@ -77,13 +79,18 @@ export const jiraEditSchema = z.object({
 }).strict()
 const transitionArguments = z.object({
   card_id: jiraWorkIdSchema, operation_id: operation, verb: z.enum(jiraVerbs), to: status.optional(),
-  reason: multiline.optional(), evidence: multiline.optional(), disposition: multiline.optional(),
+  reason: multiline.optional(), evidence: multiline.optional(),
 })
+const revisions = { required_revision: singleLine.optional(), live_revision: singleLine.optional() }
 export const jiraTransitionSchema = z.union([
-  transitionArguments.extend({ verb: z.literal('Deployed'), required_revision: singleLine.optional(), live_revision: singleLine.optional() }).strict(),
+  transitionArguments.extend({ verb: z.literal('Deployed'), to: z.literal('Verify in Prod').optional(), ...revisions }).strict(),
+  transitionArguments.extend({ verb: z.enum(interruptVerbs), to: z.literal('Verify in Prod'), ...revisions }).strict(),
   transitionArguments.extend({ verb: z.literal('Answer Decision'), to: z.enum(decisionExits) }).strict(),
   transitionArguments.extend({ verb: z.literal('Resolve Wait'), to: z.enum(waitExits) }).strict(),
-  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', 'Answer Decision', 'Resolve Wait']) }).strict('Only Deployed accepts required_revision and live_revision'),
+  transitionArguments.extend({ verb: z.enum(dispositionVerbs), disposition: multiline.optional() }).strict(),
+  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed', ...interruptVerbs, ...dispositionVerbs]) }).strict(
+    'Revision arguments are only accepted for Deployed or an interrupt exit into Verify in Prod',
+  ),
 ])
 export const jiraLinkSchema = z.object({
   card_id: jiraWorkIdSchema, operation_id: operation, action: z.enum(['add', 'remove']),
@@ -176,17 +183,17 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
   if ((to === 'Queued' || to === 'In Progress') && (!current.instructionText.trim() || current.blocker)) {
     throw new JiraWorkInputError('Queue and Start require instructions, a clear success condition and no primary blocker')
   }
-  if ((to === 'In Progress' || to === 'Ready for Review' || ['Accept Review', 'Accept Final', 'Release Ready', 'Deployed', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb)) && !input.evidence) {
+  if ((['In Progress', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod'].includes(to) || ['Accept Final', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb)) && !input.evidence) {
     throw new JiraWorkInputError(`${input.verb} requires evidence of the stated outcome`)
   }
   if (['Reject Review', 'Verification Failed', 'Release Rejected', 'Cancel', 'Reopen'].includes(input.verb) && !input.reason) {
     throw new JiraWorkInputError(`${input.verb} requires a reason`)
   }
-  if (['Park', 'Cancel', 'Stop and Requeue'].includes(input.verb) && !input.disposition) {
+  if (dispositionVerbs.some(verb => verb === input.verb) && !('disposition' in input && input.disposition)) {
     throw new JiraWorkInputError(`${input.verb} requires the disposition of any live work`)
   }
-  if (input.verb === 'Deployed' && (!input.required_revision || input.required_revision !== input.live_revision)) {
-    throw new JiraWorkInputError('Deployed requires the exact required revision verified live')
+  if (to === 'Verify in Prod' && (!('required_revision' in input) || !input.required_revision || input.required_revision !== input.live_revision)) {
+    throw new JiraWorkInputError('Verify in Prod requires the exact required revision verified live')
   }
   if (to === 'Decision' && !readJiraDecisions(current.decisions).some(item => item.answer === undefined)) {
     throw new JiraWorkInputError('Add at least one open Decision question before requesting a decision')
