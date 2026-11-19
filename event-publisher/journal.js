@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { entityId, fleetCommand, prLinkSource, withPullRequests } from './firstmate.js'
 
+const insertEvent = 'INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)'
+
 const schema = `
 CREATE TABLE IF NOT EXISTS homes (
   home_id TEXT PRIMARY KEY,
@@ -48,6 +50,14 @@ CREATE TABLE IF NOT EXISTS worker_samples (
   PRIMARY KEY (source_id, entity_id)
 );
 CREATE INDEX IF NOT EXISTS worker_samples_inventory ON worker_samples (source_id, snapshot_id, entity_id);
+CREATE TABLE IF NOT EXISTS jira_deliveries (
+  source_id TEXT NOT NULL REFERENCES sources(source_id),
+  delivery_id TEXT NOT NULL,
+  native_id TEXT,
+  observed_at TEXT NOT NULL,
+  PRIMARY KEY (source_id, delivery_id),
+  UNIQUE (source_id, native_id)
+);
 CREATE TABLE IF NOT EXISTS events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -197,6 +207,39 @@ export class Journal {
     return this.recordAttempt(observation).written
   }
 
+  recordJiraDelivery(sourceId, deliveryId, { native, observedAt, events, reason }) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const registered = this.db.prepare(`
+        SELECT 1 FROM sources WHERE source_id = ?
+          AND json_extract(description, '$.provider') = 'jira'
+          AND COALESCE(json_extract(description, '$.configured'), 1) = 1
+      `).get(sourceId)
+      if (!registered) throw new Error('Jira webhook source is not configured')
+      // Claim the delivery and append the whole event group atomically so a
+      // lost acknowledgement can be retried safely after restart.
+      const accepted = this.db.prepare(`
+        INSERT INTO jira_deliveries (source_id, delivery_id, native_id, observed_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING
+      `).run(sourceId, deliveryId, native, observedAt).changes
+      if (accepted) {
+        const append = this.db.prepare(insertEvent)
+        for (const entry of events) {
+          const event_id = `event:${randomUUID()}`
+          append.run(event_id, sourceId, entry.subject.type, entry.subject.id, JSON.stringify({ ...entry, event_id }))
+        }
+        this.db.prepare(`
+          UPDATE sources SET last_attempt_at = ?, last_success_at = ?, health = ?, reason = ?
+          WHERE source_id = ?
+        `).run(observedAt, observedAt, reason ? 'partial' : 'ok', reason ?? null, sourceId)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   recordAttempt(observation) {
     return this.recordAttempts([observation])[0]
   }
@@ -313,9 +356,7 @@ export class Journal {
         observed_at = COALESCE(excluded.observed_at, observed_at),
         fields = COALESCE(excluded.fields, fields), evidence = COALESCE(excluded.evidence, evidence)
     `)
-    const append = this.db.prepare(`
-      INSERT INTO events (event_id, source_id, subject_type, subject_id, envelope) VALUES (?, ?, ?, ?, ?)
-    `)
+    const append = this.db.prepare(insertEvent)
     const saveWorker = isWorker ? this.db.prepare(`
       INSERT INTO worker_samples (source_id, entity_id, snapshot_id, observed_at, current_state, reason, evidence)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -488,25 +529,29 @@ export class Journal {
     return readEvent(this.db.prepare('SELECT sequence, envelope FROM events WHERE event_id = ?').get(id))
   }
 
-  cursorBeforeLast(through, count, { type, entity }) {
+  cursorBeforeLast(through, count, { type, entity, provider }) {
     const row = this.db.prepare(`
       SELECT sequence FROM events
       WHERE sequence <= ?
         AND (? IS NULL OR subject_type = ?)
         AND (? IS NULL OR subject_id = ?)
+        AND (? IS NULL OR source_id GLOB ?)
       ORDER BY sequence DESC LIMIT 1 OFFSET ?
-    `).get(through, type ?? null, type ?? null, entity ?? null, entity ?? null, count - 1)
+    `).get(through, type ?? null, type ?? null, entity ?? null, entity ?? null,
+      provider ?? null, provider ? `${provider}:*` : null, count - 1)
     return row ? row.sequence - 1 : 0
   }
 
-  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, type, entity } = {}) {
+  events({ after = 0, through = Number.MAX_SAFE_INTEGER, limit = 100, type, entity, provider } = {}) {
     const rows = this.db.prepare(`
       SELECT sequence, envelope FROM events
       WHERE sequence > ? AND sequence <= ?
         AND (? IS NULL OR subject_type = ?)
         AND (? IS NULL OR subject_id = ?)
+        AND (? IS NULL OR source_id GLOB ?)
       ORDER BY sequence LIMIT ?
-    `).all(after, through, type ?? null, type ?? null, entity ?? null, entity ?? null, limit)
+    `).all(after, through, type ?? null, type ?? null, entity ?? null, entity ?? null,
+      provider ?? null, provider ? `${provider}:*` : null, limit)
     return rows.map(readEvent)
   }
 }
