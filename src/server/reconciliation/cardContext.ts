@@ -68,9 +68,9 @@ export class CardContextReader {
     return { excluded, replacements }
   }
   /** Read the card text and comments used for the decision revision. */
-  decisionDetails(id: string, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher): Promise<CardContextRead> {
+  decisionDetails(id: string, signal = AbortSignal.timeout(decisionHistoryDeadlineMs), fetcher = this.fetcher, fresh = false): Promise<CardContextRead> {
     const cached = this.decisionCache.get(id)
-    if (cached && !cached.signal.aborted && (fetcher === this.fetcher || fetcher === cached.fetcher)) return cached.value
+    if (!fresh && cached && !cached.signal.aborted && (fetcher === this.fetcher || fetcher === cached.fetcher)) return cached.value
     if (this.decisionCache.size >= 100) this.decisionCache.delete(this.decisionCache.keys().next().value!)
     const observed = Date.now()
     const comments = this.readComments(id, signal, fetcher)

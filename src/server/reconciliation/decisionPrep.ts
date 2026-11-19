@@ -76,7 +76,7 @@ export class DecisionPreparation {
 
   constructor(readonly packets: DecisionPackets, private source: {
     refreshQueue(): Promise<WorkCard[]>
-    read(card: string, background: boolean): Promise<DecisionCardSource>
+    read(card: string, background: boolean, freshHistory?: boolean): Promise<DecisionCardSource>
     exclusive<T>(card: string, perform: () => Promise<T>): Promise<T>
   }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
@@ -185,7 +185,7 @@ export class DecisionPreparation {
     const attempts = await Promise.allSettled(candidates.map(async ({ id }) => {
       if (!secret) return
       const dispatch = await this.source.exclusive(id, async () => {
-        const source = await this.readSource(id, true)
+        const source = await this.readSource(id, true, true)
         if (!source?.prepEligible) return
         const job = await this.packets.leases.writeStorage(db => {
           const cutoff = this.now() - retryAfter
@@ -210,9 +210,9 @@ export class DecisionPreparation {
       [...attempts, ...monitored].some(result => result.status === 'rejected') ? 'Some card reads failed. The next pass will retry.' : 'Tops up to 10 outstanding jobs when fewer than 10 cards are ready.'
   }
 
-  private async readSource(card: string, background: boolean) {
+  private async readSource(card: string, background: boolean, freshHistory = false) {
     try {
-      return await this.source.read(card, background)
+      return await this.source.read(card, background, freshHistory)
     } catch (error) {
       if (error instanceof NotionCardBoardMismatch) return null
       throw error
@@ -257,7 +257,7 @@ export class DecisionPreparation {
       const current = lookup()!
       if (current.packet_id) return { outcome: 'published', job_id, packet_id: current.packet_id }
       requireLivePreparation(current, this.now() - retryAfter)
-      const source = await this.readSource(current.card, false)
+      const source = await this.readSource(current.card, false, true)
       const changed = !!source && source.revision !== current.revision
       const packetId = await this.packets.leases.writeStorage(db => {
         const latest = db.prepare('SELECT packet_id,at,state FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at' | 'state'>

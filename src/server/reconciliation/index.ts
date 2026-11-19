@@ -100,7 +100,7 @@ export class ReconciliationSources {
         await this.workReader.query({}, false, true)
         return this.decisionQueue().cards
       },
-      read: (card, background) => this.readDecisionCard(card, background),
+      read: (card, background, freshHistory) => this.readDecisionCard(card, background, freshHistory),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
@@ -168,20 +168,20 @@ export class ReconciliationSources {
       ? observed.revision : undefined
   }
 
-  private async loadDecisionCard(id: string, background: boolean) {
+  private async loadDecisionCard(id: string, background: boolean, freshHistory = false) {
     const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
     const card = await this.workReader.card(id, true, background, signal)
-    const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch)
+    const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
     this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
     await this.context.verifyRetractions(context)
     return { card, blocks: context.blocks }
   }
 
-  private async readDecisionCard(id: string, background: boolean) {
+  private async readDecisionCard(id: string, background: boolean, freshHistory = false) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
-    const { card, blocks } = await this.loadDecisionCard(id, background)
+    const { card, blocks } = await this.loadDecisionCard(id, background, freshHistory)
     const source = decisionCardSource(card, blocks)
     this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
     // A slower background read may finish after a newer publication.

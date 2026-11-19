@@ -40,7 +40,7 @@ export const actionableDecisionCard = (card: WorkCard) => !card.source?.syntheti
 const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person'].includes(String(status ?? '').trim().toLowerCase())
 
 /** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
-const isTestDecisionCard = (card: WorkCard) => /^\s*\[TEST(?:\]| )/i.test(String(value(card, 'Name') ?? ''))
+const isTestDecisionCard = (card: WorkCard) => /^\[TEST(?:\]| )/.test(String(value(card, 'Name') ?? ''))
 
 function prepBlocked(card: WorkCard) {
   return !!card.source?.synthetic || isTestDecisionCard(card) || isJiraCard(card.id) ||

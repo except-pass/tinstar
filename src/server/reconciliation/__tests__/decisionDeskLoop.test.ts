@@ -95,6 +95,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     } catch { res.writeHead(500).end() }
   })
   fixtures.push(webhook.close)
+  let beforeBodyRead: (() => Promise<void>) | undefined
   const provider: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
     if (url.origin === webhook.url) return fetch(input, init)
@@ -117,10 +118,15 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
       if (method === 'POST') card.comments.push(body.rich_text.map((item: { text: { content: string } }) => item.text.content).join(''))
       return Response.json({ results: card.comments.map((entry, index) => ({ id: `comment-${index}`, created_time: createdTimes.get(entry), created_by: { id: 'fixture-writer' }, rich_text: text(entry) })), has_more: false })
     }
-    if (url.pathname.endsWith('/children')) return Response.json({
-      results: card.body.map((entry, index) => ({ id: `block-${index}`, created_time: createdTimes.get(entry), type: 'paragraph', paragraph: { rich_text: text(entry) } })),
-      has_more: false,
-    })
+    if (url.pathname.endsWith('/children')) {
+      const pause = beforeBodyRead
+      beforeBodyRead = undefined
+      await pause?.()
+      return Response.json({
+        results: card.body.map((entry, index) => ({ id: `block-${index}`, created_time: createdTimes.get(entry), type: 'paragraph', paragraph: { rich_text: text(entry) } })),
+        has_more: false,
+      })
+    }
     if (method === 'PATCH') {
       if (firstPatchFailure === 'rejected') {
         firstPatchFailure = undefined
@@ -162,7 +168,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, pauseNextBodyRead: (pause: () => Promise<void>) => { beforeBodyRead = pause }, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -706,14 +712,16 @@ describe('prepared-card loop', () => {
       .toMatchObject({ outcome: 'operation-conflict', message: expect.stringContaining('no longer an open owner decision') })
   })
 
-  it('dispatches and publishes a request titled [TEST-driven development] Approve rollout?', async () => {
-    const card = withOpenRequest(page(1, { tag: 'Decision' }))
-    card.properties.Name = rich('[TEST-driven development] Approve rollout?')
-    const { sources, jobs, published } = await setup([card])
-    await sources.preparation.replenish()
-    expect(jobs).toHaveLength(1)
-    expect(published).toEqual([expect.objectContaining({ outcome: 'published' })])
-  })
+  it.each(['[TEST-driven development] Approve rollout?', ' [TEST] rollout', '[test] rollout'])(
+    'dispatches and publishes a request titled %s', async title => {
+      const card = withOpenRequest(page(1, { tag: 'Decision' }))
+      card.properties.Name = rich(title)
+      const { sources, jobs, published } = await setup([card])
+      await sources.preparation.replenish()
+      expect(jobs).toHaveLength(1)
+      expect(published).toEqual([expect.objectContaining({ outcome: 'published' })])
+    },
+  )
 
   it.each(['Tin Star prepared packet:', 'Tin Star operation: ["waiting-on-main",'])(
     'rejects publication with two open requests even when a request quotes %s', async marker => {
@@ -802,6 +810,31 @@ describe('prepared-card loop', () => {
     card.parent.data_source_id = board
     await expect(sources.preparation.publish(publication)).rejects.toThrow('The preparation job stopped')
     expect(jobs).toHaveLength(1)
+  })
+
+  it('rereads current comments for publication while monitoring an older history', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, pauseNextBodyRead } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    const bodyStarted = Promise.withResolvers<void>()
+    const releaseBody = Promise.withResolvers<void>()
+    pauseNextBodyRead(() => {
+      bodyStarted.resolve()
+      return releaseBody.promise
+    })
+    const monitoring = sources.preparation.replenish()
+    await bodyStarted.promise
+    card.comments.push(`Will chose: Approve\n${deskAnswerMarker}fixture-answer`)
+    const publication = sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents })
+    const rejection = expect(publication).rejects.toThrow('This card is no longer an open owner decision')
+    try {
+      await vi.waitFor(async () => expect((await sources.preparation.status()).jobs[0]?.state).toBe('stopped'))
+      await rejection
+    } finally {
+      releaseBody.resolve()
+      await Promise.allSettled([monitoring, rejection])
+    }
   })
 
   it('publishes while a retirement-only history read is pending', async () => {
