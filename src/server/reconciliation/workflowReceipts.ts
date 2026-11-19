@@ -23,7 +23,7 @@ export interface ReviewReceiptState {
   note_pending?: boolean
   done?: boolean
 }
-export interface JiraWorkReceiptState { confirmed?: true; linkTarget?: string }
+export interface JiraWorkReceiptState { confirmed?: true; startedAt?: number; linkChange?: { targetId: string; targetKey: string; label: string } }
 interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: JiraWorkReceiptState }
 const writers = new Map<string, Promise<unknown>>()
 

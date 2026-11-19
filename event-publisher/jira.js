@@ -63,20 +63,25 @@ function preview(text, secret) {
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')
 }
 
-function textOf(value, depth = 0) {
+function textOf(value, onOmission, depth = 0) {
   if (typeof value === 'string' || value === null) return value
-  if (depth === 24 || typeof value !== 'object' || !value) return undefined
+  if (depth === 24 || typeof value !== 'object' || !value) {
+    onOmission()
+    return undefined
+  }
   if (value.type === 'text' && typeof value.text === 'string') return value.text
   if (value.type === 'hardBreak') return '\n'
-  if (!Array.isArray(value.content)) return undefined
-  const children = value.content.map(child => textOf(child, depth + 1))
-  return children.some(child => child === undefined) ? undefined :
-    children.join(['paragraph', 'heading', 'codeBlock'].includes(value.type) ? '' : '\n')
+  if (!Array.isArray(value.content)) {
+    onOmission()
+    return undefined
+  }
+  const children = value.content.map(child => textOf(child, onOmission, depth + 1))
+  return children.filter(child => child !== undefined).join(['paragraph', 'heading', 'codeBlock'].includes(value.type) ? '' : '\n')
 }
 
 function projector(secret) {
-  return value => {
-    const text = textOf(value)
+  return (value, onOmission = () => {}) => {
+    const text = textOf(value, onOmission)
     if (typeof text !== 'string') return text
     const output = preview(text, secret)
     return output.length > previewLimit ? output.slice(0, previewLimit).toWellFormed() + '…' : output
@@ -104,7 +109,7 @@ function changedField(item, fields) {
     return builtInFields.get(item.fieldId) ?? Object.keys(fields).find(name => fields[name] === item.fieldId)
   }
   if (typeof item?.field !== 'string') return undefined
-  if (item.fieldtype === 'custom') return Object.keys(fields).find(name => projectFields[name] === item.field)
+  if (item.fieldtype === 'custom') return undefined
   return builtInFields.get(item.field)
 }
 
@@ -187,7 +192,11 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
     if (!commentId) {
       reason = 'Jira comment delivery omitted a native comment ID'
     } else {
-      const content = redact(body.comment?.body)
+      const restricted = body.comment.visibility != null
+      if (restricted) envelope.evidence.source_reference.comment_visibility_restricted = true
+      const content = restricted ? undefined : redact(body.comment.body, () => {
+        reason = 'Jira comment body could only be partially projected'
+      })
       events = [entry(`comment.${comment}`, {
         field: 'comment',
         ...(comment === 'deleted' ? { ...(content === undefined ? {} : { before: content }), after: null } :

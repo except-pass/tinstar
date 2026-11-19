@@ -199,7 +199,7 @@ export class ReconciliationMcp {
       if (jira && input.provider === 'jira') {
         const parsed = jiraCreateSchema.safeParse(input)
         if (!parsed.success) return result({ outcome: 'not-saved', message: 'Jira creation accepts name, operation_id, owner, description and issue_type. Use transition_work after Backlog creation.' })
-        return result(workReadback(await jira.create(parsed.data)))
+        return result(workReadback(await jira.create(parsed.data, actor)))
       }
       const legacy = createWorkSchema.parse(input)
       return result(await this.readers.createWork?.(legacy, actor) ?? { outcome: 'not-saved', code: 'unavailable' })
@@ -218,7 +218,7 @@ export class ReconciliationMcp {
       catalog.registerTool('link_work', {
         description: 'Add a native Jira issue link from the ticket to a visible target key, including across projects. Inward Blocks means this ticket is blocked by the target. Remove a link by the exact ID returned by get_work. Retry the same operation ID and inputs.',
         inputSchema: jiraLinkSchema, annotations: { ...writeAnnotations, destructiveHint: true },
-      }, async input => result(workReadback(await jira.link(input))))
+      }, async input => result(workReadback(await jira.link(input, actor))))
     }
     catalog.registerTool('list_ui_sessions', { description: 'List authorized tabs with copyable session_code, owner designation, route, surface, rendered time, selection and visibility. Match the code the user sees or their designated tab; never guess by last_seen. Multiple undesignated tabs are ambiguous.', inputSchema: {}, annotations: readAnnotations }, async () => result({ sessions: this.sessions.list(), targeting: this.sessions.resolve() }))
     catalog.registerTool('get_scene', { description: 'Read this window’s applied arrangement, selection, filters, expansion and source freshness.', inputSchema: { scene_id: z.string().uuid().optional(), session_code: z.string().regex(/^[a-fA-F0-9]{6}$/).optional() }, annotations: readAnnotations }, async input => {

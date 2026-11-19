@@ -119,7 +119,8 @@ exit 1
     change('description', 'Before', 'Résumé after'),
     change(jira.fields.owner, null, 'Avery'),
     change('status', 'To Do', 'Decision'),
-    { fieldtype: 'custom', field: 'Decision Questions', fromString: 'D1 [Open]\nD2 [Open]', toString: 'D1 [Answered]\nD2 [Open]' },
+    change(jira.fields.decisions, 'D1 [Open]\nD2 [Open]', 'D1 [Answered]\nD2 [Open]'),
+    { fieldtype: 'custom', field: 'Decision Questions', toString: 'private payload metadata' },
     change(jira.fields.blockerType, 'Actor', 'Event'),
     change(jira.fields.blockerTarget, 'actor:reviewer', 'event:approval'),
     change(jira.fields.blockerCondition, 'Reviewer replies', 'Approval is recorded'),
@@ -207,6 +208,23 @@ exit 1
   match(terminal, /\[replay\/fixture\] jira\/ticket WORK-1 · comment 84001 created/)
   match(terminal, /↵ Second line/)
   ok(!terminal.includes(secret))
+  for (const [index, action] of ['created', 'updated', 'deleted'].entries()) {
+    const mixed = { ...evidence.comment, id: String(85001 + index), body: { type: 'doc', content: [
+      { type: 'paragraph', content: [
+        { type: 'text', text: 'Review with ' }, { type: 'mention', attrs: { id: 'account' } },
+        { type: 'text', text: ' before shipping' },
+      ] },
+    ] } }
+    equal((await post(`mixed-${action}`, webhookEvent(`comment_${action}`, { comment: mixed }))).status, 204)
+    const partial = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+    equal(partial.change[action === 'deleted' ? 'before' : 'after'], 'Review with  before shipping')
+    match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira comment body could only be partially projected/)
+    const restricted = { ...mixed, id: String(86001 + index), visibility: { type: 'role', value: 'Administrators' } }
+    equal((await post(`restricted-${action}`, webhookEvent(`comment_${action}`, { comment: restricted }))).status, 204)
+    const redacted = lines((await run('replay', '--source', 'jira', '--last', '1', '--json')).stdout)[0]
+    equal(redacted.evidence.source_reference.comment_visibility_restricted, true)
+    deepEqual(redacted.change, action === 'deleted' ? { field: 'comment', after: null } : { field: 'comment' })
+  }
   await watcher.stop()
   await publisher.stop()
 })

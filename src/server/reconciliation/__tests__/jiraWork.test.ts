@@ -42,8 +42,9 @@ async function fixture() {
   const parsed = loadReconciliationConfig(root)
   expect(parsed.jiraWork).toMatchObject(settings)
   expect(parsed.jira).toBeUndefined()
+  const history: Record<string, any[]> = {}
   const requests: { method: string; path: string }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, beforeWrite: '', loseLink: false }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -62,6 +63,11 @@ async function fixture() {
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     requests.push({ method, path })
+    if (controls.beforeWrite === `${method} ${path}`) {
+      controls.beforeWrite = ''
+      throw new Error('Process stopped before Jira received the write')
+    }
+    if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
       expect(body.jql).toContain(`project = ${config.projectId}`)
@@ -80,10 +86,11 @@ async function fixture() {
     if (path === 'issueLink' && method === 'POST') {
       const type = types.find(type => type.id === body.type.id)!
       links.set(String(nextLink++), { type, inwardIssue: body.inwardIssue.id, outwardIssue: body.outwardIssue.id })
-      return response(undefined, 204)
+      if (controls.loseLink) { controls.loseLink = false; throw new Error('Dropped link response') }
+      return response(undefined, 201)
     }
     const linkPath = /^issueLink\/(\d+)$/.exec(path)
-    if (linkPath && method === 'DELETE') return links.delete(linkPath[1]!) ? response(undefined, 204) : response({}, 404)
+    if (linkPath && method === 'DELETE') return links.delete(linkPath[1]!) ? response(undefined, 200) : response({}, 404)
     const match = /^issue\/([^/]+)(?:\/(.*))?$/.exec(path)
     if (!match) throw new Error(`Unexpected fixture request ${method} ${path}`)
     const issue = issues.get(match[1]!) ?? [...issues.values()].find(issue => issue.key === match[1])
@@ -101,6 +108,7 @@ async function fixture() {
       const key = part.slice('properties/'.length)
       return Object.hasOwn(issue.properties, key) ? response({ key, value: issue.properties[key] }) : response({}, 404)
     }
+    if (part === 'changelog' && method === 'GET') return response({ startAt: 0, isLast: true, values: history[issue.id] ?? [] })
     if (part === 'comment' && method === 'GET') {
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
@@ -123,11 +131,11 @@ async function fixture() {
     }
     throw new Error(`Unexpected fixture request ${method} ${path}`)
   }
-  async function connect() {
+  async function connect(actor = 'Fixture agent') {
     const sources = new ReconciliationSources(parsed, fetcher, undefined, root)
     const mcp = new ReconciliationMcp(sources, root)
     const [remote, local] = InMemoryTransport.createLinkedPair()
-    const server = mcp.createServer('Fixture agent')
+    const server = mcp.createServer(actor)
     await server.connect(local)
     const client = new Client({ name: 'jira-work-test', version: '1' })
     clients.push(client)
@@ -140,7 +148,7 @@ async function fixture() {
     }
     return { client, call }
   }
-  return { connect, requests, controls, issues, links }
+  return { connect, requests, controls, issues, links, history }
 }
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
@@ -162,6 +170,10 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   expect(await edit('prepare', { owner: 'Avery', description: 'Run the fixture and confirm two question IDs.', note: 'Preparation evidence' })).toMatchObject({ outcome: 'saved' })
   expect(await move('select', 'Prioritize')).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
   expect(await move('queue', 'Queue', { evidence: 'The fixture prints both IDs.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  expect(await edit('clear-instructions', { description: null })).toMatchObject({ outcome: 'not-saved', message: expect.stringContaining('To Do') })
+  expect(await edit('stage-blocker', { blocker: { type: 'Actor', target: 'actor:reviewer', unblocks_when: 'The reviewer responds.' } })).toMatchObject({ outcome: 'saved' })
+  expect(await move('blocked-start', 'Start', { evidence: 'Fixture run is active.' })).toMatchObject({ outcome: 'not-saved' })
+  expect(await edit('clear-staged', { blocker: null })).toMatchObject({ outcome: 'saved' })
   expect(await move('start', 'Start', { evidence: 'Fixture run is active.' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
   expect(await edit('ask', { add_questions: [
     { id: 'D1', question: 'Choose a region?', options: ['East', 'West'] },
@@ -174,7 +186,11 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   ] } })
   expect(await edit('rewrite', { answers: [{ id: 'D1', answer: 'West' }] })).toMatchObject({ outcome: 'not-saved' })
   expect(await move('premature-answer', 'Answer Decision', { to: 'In Progress' })).toMatchObject({ outcome: 'not-saved' })
+  const firstAnswer = issue.fields[config.fields.decisions].content.find((node: any) => node.content[0]?.text.startsWith('  Answer:'))!
+  firstAnswer.content[0].marks = [{ type: 'link', attrs: { href: 'https://example.test/evidence' } }]
+  const nativeNode = structuredClone(firstAnswer)
   expect(await edit('answer-two', { answers: [{ id: 'D2', answer: 'Keep the current label.' }] })).toMatchObject({ outcome: 'saved' })
+  expect(issue.fields[config.fields.decisions].content).toContainEqual(nativeNode)
   expect(await move('answer-status', 'Answer Decision', { to: 'In Progress' })).toMatchObject({ outcome: 'saved' })
   expect(await edit('external', { blocker: { type: 'Actor', target: 'team:reviewers', unblocks_when: 'A reviewer grants access.' } })).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Actor' } } })
   expect(await move('wait', 'Block')).toMatchObject({ outcome: 'saved', card: { status: 'Waiting For' } })
@@ -193,8 +209,11 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   expect(await move('verify', 'Verify Passed', { evidence: 'Production fixture prints both question IDs.' })).toMatchObject({ outcome: 'saved', card: { status: 'Done' } })
   expect(await move('reopen', 'Reopen', { to: 'To Do', reason: 'A new acceptance requirement applies.' })).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
   expect(await move('cancel', 'Cancel', { reason: 'Requirement was withdrawn.', disposition: 'No worker remains active.' })).toMatchObject({ outcome: 'saved', card: { status: 'Canceled' } })
+  issue.comments.push({ id: 'restricted', body: 'Private note', visibility: { type: 'role', value: 'Administrator' } })
   const read = await call('get_work', { card_id })
   expect(read).toMatchObject({ outcome: 'available', card: { id: card_id, key: 'WORK-1' }, comments: expect.arrayContaining([expect.objectContaining({ body: expect.stringContaining('Requirement was withdrawn.') })]) })
+  expect(read.comments.find((comment: { id: string }) => comment.id === 'restricted')).toEqual({ id: 'restricted' })
+  expect(JSON.stringify(read)).not.toContain('Private note')
   const before = f.requests.length
   const denied = await call('get_work', { card_id: card_id.replace('10001', '10002') })
   expect(denied).toMatchObject({ outcome: 'unavailable' })
@@ -221,8 +240,9 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.loseEdit = true
   const edit = { kind: 'jira_edit', card_id, operation_id: 'edit-proof', owner: 'Taylor', description: 'Inspect the test output.', note: 'One comment only.' }
   expect(await second.call('update_work', edit)).toMatchObject({ outcome: 'partially-saved' })
+  f.issues.get('60001')!.fields[config.fields.owner] = { value: 'Avery' }
   const third = await f.connect()
-  expect(await third.call('update_work', edit)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { owner: 'Taylor' } })
+  expect(await third.call('update_work', edit)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { owner: 'Avery' } })
   expect(f.issues.get('60001')!.comments).toHaveLength(1)
   f.controls.refuseTransition = true
   const move = { card_id, operation_id: 'fast-track', verb: 'Fast-track', evidence: 'Fixture checks are named.' }
@@ -242,4 +262,40 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(await moveAgain('stop', 'Stop and Requeue', { disposition: 'The previous test process exited.', evidence: 'The reproduction and assertions are ready.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
   expect(await moveAgain('start-again', 'Start', { evidence: 'The reproduction started.' })).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('direct', 'Complete Directly', { evidence: 'The reproduction passed. No review or production change remains.' })).toMatchObject({ outcome: 'saved', card: { status: 'Done' } })
+}, 30_000)
+
+
+it('retries writes interrupted before dispatch and isolates identical operation IDs by caller', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const create = { provider: 'jira', operation_id: 'shared', name: 'Retry', description: 'Verify the fixture runs.', owner: 'Avery' }
+  const retry = async (name: string, args: Record<string, unknown>, request: string) => {
+    f.controls.beforeWrite = request
+    expect(await call(name, args)).toMatchObject({ outcome: 'partially-saved' })
+    return call(name, args)
+  }
+  const created = await retry('create_work', create, 'POST issue')
+  expect(created).toMatchObject({ outcome: 'saved', card: { issue_id: '60001' } })
+  const other = await f.connect('Other agent')
+  expect(await other.call('create_work', create)).toMatchObject({ outcome: 'saved', card: { issue_id: '60002' } })
+  const card_id = created.card.id
+  expect(await retry('update_work', { card_id, operation_id: 'edit', kind: 'jira_edit', name: 'Retried edit' }, 'PUT issue/60001'))
+    .toMatchObject({ outcome: 'saved', card: { name: 'Retried edit' } })
+  expect(await retry('transition_work', { card_id, operation_id: 'queue', verb: 'Fast-track', evidence: 'Ready' }, 'POST issue/60001/transitions'))
+    .toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
+  const add = { card_id, operation_id: 'add', action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'outward' }
+  expect(await retry('link_work', add, 'POST issueLink'))
+    .toMatchObject({ outcome: 'saved', card: { links: [{ id: '8001', direction: 'outward' }] } })
+  expect(await retry('link_work', { card_id, operation_id: 'remove', action: 'remove', link_id: '8001' }, 'DELETE issueLink/8001'))
+    .toMatchObject({ outcome: 'saved', card: { links: [] } })
+  f.controls.loseLink = true
+  const superseded = { ...add, operation_id: 'superseded' }
+  expect(await call('link_work', superseded)).toMatchObject({ outcome: 'partially-saved' })
+  f.history['60001'] = [{
+    created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ field: 'Link', from: null, to: 'OTHER-1', toString: 'This issue blocks OTHER-1' }],
+  }]
+  f.links.delete('8002')
+  expect(await call('link_work', superseded)).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { links: [] } })
+  expect(f.links.size).toBe(0)
 }, 30_000)
