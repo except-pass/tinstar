@@ -691,6 +691,31 @@ describe('prepared-card loop', () => {
     },
   )
 
+  it('counts a lost acknowledgement toward capacity and retires it when the card becomes ineligible', async () => {
+    const cards = Array.from({ length: 11 }, (_, n) => withOpenRequest(page(n + 1, { tag: 'Decision' })))
+    const { sources, jobs, tool, web } = await setup(cards, false, undefined, 1)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(10)
+    const unacknowledged = jobs[0]!
+    const card = cards.find(candidate => unacknowledged.card_url.includes(candidate.id))!
+    expect((await web('snapshot')).data).toMatchObject({
+      counts: { preparing: 10 },
+      pending: expect.arrayContaining([expect.objectContaining({ card_id: card.id, state: 'Preparing' })]),
+    })
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(10)
+
+    const originalStatus = card.properties.Status!
+    card.properties.Status = { type: 'status', status: { name: 'Waiting for Prod Release' } }
+    await sources.preparation.replenish()
+    expect((await sources.preparation.status()).jobs).toContainEqual(expect.objectContaining({
+      id: unacknowledged.publish.job_id, state: 'stopped',
+    }))
+    card.properties.Status = originalStatus
+    expect(await tool('publish_prepared_packet', { job_id: unacknowledged.publish.job_id, packet: contents }))
+      .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
+  })
+
   it.each([true, false])('honors the final callback deadline after a lost acknowledgement, timely=%s', async timely => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -700,6 +725,9 @@ describe('prepared-card loop', () => {
     now += 15 * 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
+    expect((await sources.preparation.status()).jobs).toContainEqual(expect.objectContaining({
+      id: jobs[0]!.publish.job_id, state: 'expired',
+    }))
     now += (timely ? 14 : 15) * 60_000
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)

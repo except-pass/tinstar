@@ -13,6 +13,13 @@ import type { WorkCard } from './workReader'
 
 const exec = promisify(execFile)
 const retryAfter = 15 * 60_000
+const callbackStates = ['sending', 'sent', 'failed']
+const callbackStateSql = `state IN (${callbackStates.map(state => `'${state}'`).join(',')})`
+const liveJobSql = `${callbackStateSql} AND at > ?`
+
+export function isLivePreparation(job: Pick<Job, 'state' | 'at'>, now: number) {
+  return callbackStates.includes(job.state) && job.at > now - retryAfter
+}
 /** A second send covers one lost packet. Further sends of an unchanged revision are how the same card was posted every 15 minutes. */
 export const prepSendCap = 2
 export const prepSecretName = 'grok/tinstar-decision-prep'
@@ -20,7 +27,7 @@ export const preparerName = 'Tinstar Decision Prep'
 const webhookMissing = 'The preparer webhook is not configured.'
 
 export const publishPacketInput = z.object({ job_id: z.string().uuid(), packet: packetContents })
-interface Job { id: string; card: string; revision: string; state: 'sending' | 'sent' | 'failed' | 'stopped' | 'published'; at: number; packet_id: string | null; message: string | null }
+interface Job { id: string; card: string; revision: string; state: 'sending' | 'sent' | 'failed' | 'expired' | 'stopped' | 'published'; at: number; packet_id: string | null; message: string | null }
 type Secret = { url: string; key: string }
 
 /** Read one Clavis bundle as JSON. Failures and empty results are absence; stdout is never logged. */
@@ -80,11 +87,13 @@ export class DecisionPreparation {
 
   async status() {
     await this.initialize()
-    const jobs = this.packets.leases.readStorage(db => db.prepare(
-      'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? ORDER BY at DESC LIMIT 100',
-    ).all(this.scope) as unknown as Job[])
-    return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
-      preparing: jobs.filter(job => job.state === 'sending' || job.state === 'sent').length }
+    return this.packets.leases.readStorage(db => {
+      const jobs = db.prepare(
+        'SELECT id,card,revision,state,at,packet_id,message FROM decision_card_prep WHERE scope = ? ORDER BY at DESC LIMIT 100',
+      ).all(this.scope) as unknown as Job[]
+      return { configured: !!this.secret, preparer: preparerName, explanation: this.explanation, jobs,
+        preparing: this.liveCount(db, this.now() - retryAfter) }
+    })
   }
 
   replenish(): Promise<void> {
@@ -103,27 +112,28 @@ export class DecisionPreparation {
       .get(this.scope, card, revision) as { count: number }).count
   }
 
-  private recentAttempt(db: DatabaseSync, card: string, revision: string, cutoff: number) {
-    return !!db.prepare("SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? AND revision = ? AND state IN ('sending','sent','failed') AND at > ?")
-      .get(this.scope, card, revision, cutoff)
+  private hasLiveJob(db: DatabaseSync, card: string, cutoff: number) {
+    return !!db.prepare(`SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? AND ${liveJobSql}`)
+      .get(this.scope, card, cutoff)
   }
 
   private expireJobs(db: DatabaseSync, cutoff: number) {
-    const rows = db.prepare(`SELECT id, card, revision, state FROM decision_card_prep
-      WHERE scope = ? AND state IN ('sending','sent','failed') AND at <= ?`).all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision' | 'state'>[]
-    const update = db.prepare('UPDATE decision_card_prep SET state = ?, message = ? WHERE id = ?')
+    const rows = db.prepare(`SELECT id, card, revision FROM decision_card_prep
+      WHERE scope = ? AND ${callbackStateSql} AND at <= ?`).all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
+    const update = db.prepare('UPDATE decision_card_prep SET state = ?, message = COALESCE(?, message) WHERE id = ?')
     for (const row of rows) {
-      if (this.sendCount(db, row.card, row.revision) >= prepSendCap) {
-        update.run('stopped', 'Preparation stopped after two sends without a packet', row.id)
-      } else if (row.state !== 'failed') {
-        update.run('failed', 'No packet received; retrying preparation', row.id)
-      }
+      const capped = this.sendCount(db, row.card, row.revision) >= prepSendCap
+      update.run(capped ? 'stopped' : 'expired', capped ? 'Preparation stopped after two sends without a packet' : null, row.id)
     }
   }
 
+  private liveCount(db: DatabaseSync, cutoff: number) {
+    return (db.prepare(`SELECT count(*) AS count FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
+      .get(this.scope, cutoff) as { count: number }).count
+  }
+
   private refillCapacity(db: DatabaseSync, queue: WorkCard[], cutoff: number) {
-    const { count } = db.prepare("SELECT count(*) AS count FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent') AND at > ?")
-      .get(this.scope, cutoff) as { count: number }
+    const count = this.liveCount(db, cutoff)
     if (count >= refillSize || queue.filter(card => this.packets.claimableInStorage(db, card)).length >= refillSize) return 0
     return refillSize - count
   }
@@ -140,12 +150,10 @@ export class DecisionPreparation {
       this.expireJobs(db, cutoff)
       const prepared = queue.filter(card => this.packets.currentInStorage(db, card.id))
       const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
-      const liveCards = (db.prepare("SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent')")
-        .all(this.scope) as unknown as Array<{ card: string }>).map(row => row.card)
-      // A failed attempt still inside the 15-minute gap is not due, and it must not take a slot from a card that is.
-      const recent = new Set((db.prepare("SELECT card FROM decision_card_prep WHERE scope = ? AND state IN ('sending','sent','failed') AND at > ?")
-        .all(this.scope, cutoff) as unknown as Array<{ card: string }>).map(row => row.card))
-      const fresh = capacity ? queue.filter(card => !recent.has(card.id) && !this.held(db, card.id)) : []
+      const liveCards = (db.prepare(`SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
+        .all(this.scope, cutoff) as unknown as Array<{ card: string }>).map(row => row.card)
+      const liveIds = new Set(liveCards)
+      const fresh = capacity ? queue.filter(card => !liveIds.has(card.id) && !this.held(db, card.id)) : []
       const first = fresh.length ? this.candidateCursor % fresh.length : 0
       const selected = [...fresh.slice(first), ...fresh.slice(0, first)].slice(0, capacity)
       return { candidates: selected, prepared, liveCards }
@@ -166,13 +174,13 @@ export class DecisionPreparation {
       const dispatch = await this.source.exclusive(id, async () => {
         const source = await this.source.read(id, true)
         const job = await this.packets.leases.writeStorage(db => {
+          const cutoff = this.now() - retryAfter
           db.prepare(`UPDATE decision_card_prep SET state = 'stopped', message = NULL
-            WHERE scope = ? AND card = ? AND state IN ('sending','sent') AND (revision != ? OR ? = 0)`)
-            .run(this.scope, id, source.revision, Number(source.prepEligible))
+            WHERE scope = ? AND card = ? AND ${liveJobSql} AND (revision != ? OR ? = 0)`)
+            .run(this.scope, id, cutoff, source.revision, Number(source.prepEligible))
           if (!candidateIds.has(id) || !source.prepEligible ||
             this.held(db, id) || this.packets.answeredInStorage(db, id, source.revision)) return
-          const cutoff = this.now() - retryAfter
-          if (!this.refillCapacity(db, queue, cutoff) || this.recentAttempt(db, id, source.revision, cutoff) ||
+          if (!this.refillCapacity(db, queue, cutoff) || this.hasLiveJob(db, id, cutoff) ||
             this.sendCount(db, id, source.revision) >= prepSendCap) return
           const job = randomUUID()
           db.prepare("INSERT INTO decision_card_prep (id,scope,card,revision,state,at) VALUES (?,?,?,?,'sending',?)")
@@ -235,8 +243,10 @@ export class DecisionPreparation {
       return this.packets.leases.writeStorage(db => {
         const latest = db.prepare('SELECT packet_id,at,state FROM decision_card_prep WHERE scope = ? AND id = ?').get(this.scope, job_id) as Pick<Job, 'packet_id' | 'at' | 'state'>
         if (latest.packet_id) return { outcome: 'published', job_id, packet_id: latest.packet_id }
-        if (latest.at <= this.now() - retryAfter) throw new DecisionDeskConflict('The preparation job expired')
-        if (latest.state === 'stopped') throw new DecisionDeskConflict('The preparation job stopped')
+        const now = this.now()
+        if (!isLivePreparation(latest, now)) {
+          throw new DecisionDeskConflict(latest.at <= now - retryAfter ? 'The preparation job expired' : 'The preparation job stopped')
+        }
         const stored = this.packets.publishInStorage(db, source, packet)
         db.prepare("UPDATE decision_card_prep SET state = 'published', packet_id = ?, message = NULL WHERE id = ?").run(stored.id, job_id)
         return { outcome: 'published', job_id, packet_id: stored.id }

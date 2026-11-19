@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { cardIdSchema } from '../../shared/workIdentity'
 import { CardLeaseError, leaseHash, publicLease, SourceWritePending, type CardLease } from './cardLeases'
 import { DecisionDeskConflict, DecisionPackets, type StoredDecisionPacket } from './decisionPackets'
-import type { DecisionPreparation } from './decisionPrep'
+import { isLivePreparation, type DecisionPreparation } from './decisionPrep'
 import type { WorkCard } from './workReader'
 
 export const reviewSessionInput = z.object({ operation_id: z.string().min(1).max(128), label: z.string().trim().min(1).max(100), device: z.enum(['phone', 'desktop', 'other']).default('other') }).strict()
@@ -81,6 +81,7 @@ export class PreparedReviews {
     const prep = await this.preparation.status()
     return this.leases.readStorage(db => {
       const queue = this.queue()
+      const now = this.now()
       const jobs = new Map([...prep.jobs].reverse().map(job => [job.card, job]))
       const rows = queue.cards.map(card => {
         const prepared = this.packets.currentInStorage(db, card.id)
@@ -88,13 +89,13 @@ export class PreparedReviews {
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
         const job = jobs.get(card.id)
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
-          job?.state === 'sent' || job?.state === 'sending' ? 'Preparing' :
-          job?.state === 'failed' ? 'Retrying' :
+          job && isLivePreparation(job, now) ? 'Preparing' :
+          job?.state === 'expired' ? 'Retrying' :
           job?.state === 'stopped' ? job.message || 'Preparation stopped' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }
       })
       const ready = rows.flatMap(row => row.ready ? [{ id: row.ready.id, card_id: row.card_id, title: row.title }] : [])
-      return { scope: this.scope, observed_at: new Date(this.now()).toISOString(), coverage: queue.coverage,
+      return { scope: this.scope, observed_at: new Date(now).toISOString(), coverage: queue.coverage,
         counts: { ready: ready.length, leased: rows.filter(row => row.state === 'Leased').length, preparing: prep.preparing },
         runner: prep, ready,
         pending: rows.filter(row => !row.ready).map(({ card_id, title, state }) => ({ card_id, title, state })),
