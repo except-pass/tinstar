@@ -633,9 +633,10 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"}'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  expect(card.description).toBe('{"password":"[credential omitted]"}')
+  expect(card.description).toBe('{"password":"[credential omitted]"} and password=[credential omitted]')
+  expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
   const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Ticket' } : {}) }
   f.controls.loseEdit = true
   expect(await call('update_work', { ...edit, operation_id: 'saved-note' })).toMatchObject({ code: 'unconfirmed' })

@@ -181,7 +181,7 @@ export class JiraWork extends JiraClient {
       if (prior && prior.input !== hash) throw new JiraWorkInputError('Operation ID was used for different input; use a new ID')
       cardId = prior?.cardId ?? cardId
       state = prior?.jiraWork ?? {}
-      pending = state.dispatchedAt !== undefined
+      pending = state.createDispatched === true || state.dispatchedAt !== undefined
       if (state.confirmed && cardId) {
         pending = true
         return this.saved(await this.read(this.id(cardId), verb === 'create'), true)
@@ -193,10 +193,14 @@ export class JiraWork extends JiraClient {
       return await run({
         key, marker, prior, state, dispatched,
         dispatch: async evidence => {
-          const { serverTime } = await this.request('serverInfo')
-          const dispatchedAt = typeof serverTime === 'string' ? Date.parse(serverTime) : NaN
-          if (!Number.isFinite(dispatchedAt)) throw new Error('Missing Jira server time')
-          Object.assign(state, evidence, { dispatchedAt })
+          if (verb === 'create') {
+            state.createDispatched = true
+          } else {
+            const { serverTime } = await this.request('serverInfo')
+            const dispatchedAt = typeof serverTime === 'string' ? Date.parse(serverTime) : NaN
+            if (!Number.isFinite(dispatchedAt)) throw new Error('Missing Jira server time')
+            Object.assign(state, evidence, { dispatchedAt })
+          }
           await persist()
           pending = true
           sent = true

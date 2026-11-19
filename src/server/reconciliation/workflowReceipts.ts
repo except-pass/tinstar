@@ -26,6 +26,7 @@ export interface ReviewReceiptState {
 export interface JiraFieldChange { field: string; before: string; after: string }
 export interface JiraWorkReceiptState {
   confirmed?: true
+  createDispatched?: true
   dispatchedAt?: number
   contradicted?: true
   rejected?: number
