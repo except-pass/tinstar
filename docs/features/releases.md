@@ -3,9 +3,9 @@
 Releases (`?view=releases`) reads **fortresspower/cmsandbox version tags,
 GitHub Release records and component Actions runs**, through the
 [shared GitHub reader](pr-operations.md#sources-and-scope). No coordinator export or repository configuration is
-needed. New version tags appear on refresh. Release identity is repository/tag;
-the current tagged commit is retained separately so a moved tag does not reuse
-its old source evidence.
+needed. New version tags appear after the next catalog refresh. Release
+identity is repository/tag. The current tagged commit is retained separately
+so a moved tag does not reuse its old source evidence.
 
 Plan opens on Changes for **untagged main work since the latest version tag**.
 Already-tagged versions always belong to Verify/history, even when Actions data
@@ -58,13 +58,13 @@ mark association coverage incomplete and show a safe warning, including on a
 cold failure. Recovery clears that warning. Acceptance receipt store warnings
 remain visible in each release's source gaps during native-data refreshes.
 
-Catalog observations cache for two minutes. Actions refresh after one minute on
-Releases reads, using the recent five tags and any explicit historical selection.
-Membership for the latest release, selected release, and untagged main advances
-once per two-minute catalog interval. Selecting a historical release can load its
-membership within the current interval. Catalogs paginate up to
-ten pages and report partial coverage at that limit. Source loss retains known
-observations with a visible unknown state; missing data never means no releases.
+The catalog of tags, Release records and main HEAD is refreshed on demand after
+two minutes. Actions refresh after one minute on Releases reads, using the recent
+five tags and any explicit historical selection. Membership for the latest
+release, selected release and untagged main can advance on a catalog refresh.
+Changing the selection can load missing membership within the current interval.
+Tags and Release records paginate up to ten pages and report partial coverage
+at that limit. Source loss retains known observations with a visible unknown state.
 Actions freshness is evaluated on every display from each detail read's cache
 timestamp. After one minute, retained runs remain visible as last-known evidence,
 with unknown activity and partial source coverage even while the next catalog
@@ -84,8 +84,6 @@ Notion writer's scheduled pass is disabled and the API reports review-only.
 The source reads perform no GitHub/Notion writes, workflow dispatch, publication
 or production changes. A separate scheduled writer handles
 [native production release waits](worker-closeout-release-waits.md).
-The following export/activation contracts are
-**historical**, not instructions for configuring the live Releases view.
 
 Native upstream contracts:
 [release workflow](https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/release-production.yml),
@@ -93,7 +91,24 @@ Native upstream contracts:
 [non-deploying proof](https://github.com/fortresspower/cmsandbox/blob/main/docs/releases/github-native-release-proof.md),
 [current operator guide](https://github.com/fortresspower/cmsandbox/blob/main/docs/releases/github-native-release-guide.md).
 
+## Linked PR observations
+
+The legacy projection polls on demand at most once every two minutes per
+repository when multiple linked PRs need observation. The poll reads up to four
+pages of 100 PRs ordered by most recent update. It retains confirmed merges for
+24 hours in memory, even if a PR temporarily leaves the requested set or an
+overlapping read fails. Unchanged open and closed associations reuse their last
+observation when the first page alone covers the time since it was checked.
+The reader shares up to four individual reads across all repositories in any
+two-minute window, in rotating order. Links awaiting an exact read retain
+last-known evidence. If a later page fails, fresh observations from successful
+pages remain available. A list response that is too large or unreadable allows
+bounded exact recovery for unresolved links. Access failures and rate limits
+suppress that fallback until a later poll.
+
 ## Historical coordinator reconciliation and writer (inactive)
+
+The export and activation contracts below describe the retired coordinator workflow.
 
 The optional trusted operator file
 `<getConfigRoot()>/releases/automation.json` is separate from deployment evidence:
@@ -154,17 +169,6 @@ retains safe read errors in `readError` and `githubSync.errors`; the release
 projection names unavailable Git history in its source gaps. Neither exposes
 stderr/credentials. Fix the **service** PATH/auth, not only an interactive
 shell. In live mode, broker/access failures also remain sync errors; the reader never falls back to CLI authentication. Recovered reads clear the error; stale prior facts remain labeled.
-
-The legacy projection polls recent PR updates together every two minutes for
-repositories with multiple linked PRs. It retains merged observations for 24 hours
-in memory, even if a PR temporarily leaves the requested set. Unchanged open
-and closed associations reuse their last observation when the first page alone
-covers the time since it was checked. The reader shares up to four individual
-reads across all repositories in any two-minute window, in rotating order. Links
-awaiting an exact read retain last-known evidence. If a later page fails, fresh
-observations from successful pages remain available. A list response that is too
-large or unreadable allows bounded exact recovery for unresolved links. Access
-failures and rate limits suppress that fallback until a later poll.
 
 ### Configure existing sources
 

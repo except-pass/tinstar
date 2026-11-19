@@ -7,7 +7,8 @@ installs dev dependencies, runs typecheck, verifies the unit suite, and builds
 the shipped client/server. It then idempotently installs the English voice
 model and prints voice status using the service’s `TINSTAR_CONFIG_HOME`, before
 restarting the floor, facade and tunnel in that order.
-When Live Reader is enabled, update the broker before the floor.
+When Live Reader is enabled, deploy and restart the updated broker before
+restarting the floor so the broker can accept the Releases reader's request fields.
 Voice install/status failures print a warning and continue;
 they never latch a deploy block or roll back a deployment. No unit
 is restarted if a build gate fails, unless an operator supplies an audited override.
