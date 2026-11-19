@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { WorkCard } from './workReader'
-import type { CardContextRead } from './cardContext'
+import { hasUnverifiedRetractions, requestHistory, type CardContextRead } from './cardContext'
 import { checkInReport } from './checkInWatchdog'
 import { isJiraCard } from '../../shared/workIdentity'
 import { isDecisionRetraction, workflowReceipt } from '../../shared/workflowRequests'
-import { actionableWillCard } from './claimPolicy'
+import { actionableWillCard, currentWillRequests, deferredDecisionCard } from './claimPolicy'
 
 export const deskAnswerMarker = 'Tin Star Desk answer: '
 const value = (card: WorkCard, name: string) => card.properties[name]?.value
@@ -37,6 +37,28 @@ function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks'])
 
 export const actionableDecisionCard = (card: WorkCard) => !card.source?.synthetic && !isJiraCard(card.id) && actionableWillCard(card)
 
+const prepStatusExcluded = (status: unknown) => ['waiting for prod release', 'delegated to person'].includes(String(status ?? '').trim().toLowerCase())
+
+/** `[TEST ...]` titles are scripted fixtures, not owner decisions, so preparation must not send them. */
+const isTestDecisionCard = (card: WorkCard) => /^\s*\[TEST\b/i.test(String(value(card, 'Name') ?? ''))
+
+function openOwnerDecisionRequests(card: WorkCard, blocks: CardContextRead['blocks']) {
+  // Unverified withdrawals are not a request list. The Desk hides them the same way.
+  if (hasUnverifiedRetractions({ outcome: 'available', blocks })) return []
+  return currentWillRequests(requestHistory(blocks), value(card, 'Will action')).filter(request => !request.answered)
+}
+
+function prepBlocked(card: WorkCard) {
+  return !!card.source?.synthetic || isTestDecisionCard(card) || isJiraCard(card.id) ||
+    deferredDecisionCard(card) || prepStatusExcluded(value(card, 'Status'))
+}
+
+/** Who preparation may send. Claim and answer still use actionableDecisionCard. */
+function prepSendable(card: WorkCard, blocks: CardContextRead['blocks']) {
+  if (prepBlocked(card)) return false
+  return openOwnerDecisionRequests(card, blocks).length > 0
+}
+
 export function decisionCardSource(card: WorkCard, blocks: CardContextRead['blocks']) {
   const title = String(value(card, 'Name') || 'Decision card')
   return {
@@ -46,6 +68,7 @@ export function decisionCardSource(card: WorkCard, blocks: CardContextRead['bloc
     propertyRevision: decisionPropertyRevision(card),
     revision: decisionCardRevision(card, blocks),
     actionable: actionableDecisionCard(card),
+    prepEligible: prepSendable(card, blocks),
   }
 }
 export type DecisionCardSource = ReturnType<typeof decisionCardSource>

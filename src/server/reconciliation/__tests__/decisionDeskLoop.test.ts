@@ -9,7 +9,7 @@ import { ReconciliationSources } from '..'
 import { DecisionDeskApi } from '../decisionDeskApi'
 import { ReconciliationMcp } from '../mcp'
 import { NotionApi } from '../notionApi'
-import { DecisionPreparation } from '../decisionPrep'
+import { DecisionPreparation, prepCapStop, prepIneligibleStop } from '../decisionPrep'
 import { actionableDecisionCard, decisionCardSource, deskAnswerMarker } from '../decisionEvidence'
 import { jiraCardPrefix } from '../../../shared/workIdentity'
 import { waitLine } from '../../../shared/waitingForPolicy'
@@ -36,6 +36,15 @@ function page(n: number, { owner = 'Firstmate', status = 'In Progress', tag = ''
   return { object: 'page', id: id(n), parent: { data_source_id: board },
     last_edited_time: '2025-01-01T00:00:00Z', properties, comments: [] as string[], body: ['Review this isolated fixture.'] }
 }
+
+const requestIdFor = (card: { id: string }) => `request-${card.id.slice(-4)}`
+function withOpenRequest(card: ReturnType<typeof page>, action = 'Decision') {
+  const property = card.properties['Will action']
+  if (property?.type === 'multi_select' && !property.multi_select.some(item => item.name === action)) property.multi_select.push({ name: action })
+  card.comments.push(`Requested from: Will\nQuestion: Decide on this fixture?\nTin Star request: ${JSON.stringify({ id: requestIdFor(card), action, preserve_action: false })}`)
+  return card
+}
+const answerComments = (card: { comments: string[] }) => card.comments.filter(comment => comment.includes(deskAnswerMarker))
 
 const contents: PacketContents = {
   summary: 'A fixture packet prepared from a card without any request record.',
@@ -225,8 +234,8 @@ describe('prepared-card loop', () => {
   })
 
   it('pushes batches of ten and claims, reads and answers ten throwaway cards through ChatGPT', async () => {
-    const cards = Array.from({ length: 22 }, (_, n) => page(n + 1,
-      n % 3 === 0 ? { tag: 'Decision' } : n % 3 === 1 ? { owner: 'Will' } : { status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' }))
+    const cards = Array.from({ length: 22 }, (_, n) => withOpenRequest(page(n + 1,
+      n % 3 === 0 ? { tag: 'Decision' } : n % 3 === 1 ? { owner: 'Will' } : { status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' })))
     const deferred = statuses.slice(-4).map((status, n) => page(100 + n, { status, owner: 'Will', tag: 'Decision' }))
     const { sources, jobs, tool, connect, published, writes, web } = await setup([...cards, ...deferred])
     await sources.preparation.replenish()
@@ -259,7 +268,7 @@ describe('prepared-card loop', () => {
       const result = await tool('submit_prepared_decision', input)
       expect(result.outcome).toBe(i < 9 ? 'recorded' : 'recorded-empty')
       expect((await tool('submit_prepared_decision', input)).outcome).toBe(result.outcome)
-      expect(card.comments).toEqual([expect.stringContaining(`Will chose: Approve the fixture\n\n${answer}\n${deskAnswerMarker}`)])
+      expect(answerComments(card)).toEqual([expect.stringContaining(`Will chose: Approve the fixture\n\n${answer}\n${deskAnswerMarker}`)])
       expect(card.properties).toMatchObject({ Owner: waiting ? { select: { name: 'Firstmate' } } : previous.Owner,
         Status: waiting ? { status: { name: 'Queued' } } : previous.Status,
         'Will action': { multi_select: [] }, 'Waiting For': { rich_text: [] }, 'Waiting For Type': { select: null },
@@ -284,7 +293,7 @@ describe('prepared-card loop', () => {
     ['Tin Star MCP', "Chosen on Will's behalf (not by Will)"],
     ['reviewer@example.test', "Chosen on Will's behalf (not by Will)"],
   ])('attributes a prepared answer submitted by %s', async (actor, attribution) => {
-    const card = page(1, { tag: 'Decision' })
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources, connect } = await setup([card])
     const notify = vi.fn(async () => {})
     sources.workflow.onChange = notify
@@ -295,14 +304,14 @@ describe('prepared-card loop', () => {
     const answer = 'Proceed with the fixture.'
     const input = { operation_id: 'attribution-answer', lease_token: held.lease_token, answer, option_id: '1' }
     expect(await caller('submit_prepared_decision', input)).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toEqual([expect.stringContaining(`${attribution}: Approve the fixture\n\n${answer}\n${deskAnswerMarker}`)])
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: card.comments }))
+    expect(answerComments(card)).toEqual([expect.stringContaining(`${attribution}: Approve the fixture\n\n${answer}\n${deskAnswerMarker}`)])
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: [expect.stringContaining(`${attribution}: Approve the fixture`)] }))
   })
 
   it('keeps exactly ten jobs outstanding across refill ticks while callbacks are slow', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const cards = Array.from({ length: 50 }, (_, n) => page(n + 1, { owner: 'Will' }))
+    const cards = Array.from({ length: 50 }, (_, n) => withOpenRequest(page(n + 1, { owner: 'Will' })))
     const { sources, jobs, web } = await setup(cards, false)
     await sources.preparation.replenish()
     for (let tick = 0; tick < 3; tick++) {
@@ -316,7 +325,7 @@ describe('prepared-card loop', () => {
   it('tops up nine jobs around a stalled callback and reuses its slot at expiry', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const cards = Array.from({ length: 20 }, (_, n) => page(n + 1, { owner: 'Will' }))
+    const cards = Array.from({ length: 20 }, (_, n) => withOpenRequest(page(n + 1, { owner: 'Will' })))
     const { sources, tool, jobs } = await setup(cards, false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(10)
@@ -340,7 +349,7 @@ describe('prepared-card loop', () => {
   })
 
   it('publishes a scrubbed webhook job through its callback and makes it Ready', async () => {
-    const card = page(1, { tag: 'Decision' })
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
     card.properties.Name = rich('Review token=fixture-private-token please')
     const { sources, jobs, published, web } = await setup([card])
     await sources.preparation.replenish()
@@ -374,7 +383,7 @@ describe('prepared-card loop', () => {
   it('names missing publication fields, keeps packets across time, and invalidates changed card content', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const card = page(1, { tag: 'Decision' })
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
     const { sources, jobs, tool } = await setup([card], false)
     await sources.preparation.replenish()
     const job_id = jobs[0]!.publish.job_id
@@ -388,7 +397,7 @@ describe('prepared-card loop', () => {
     card.comments.push('A new fact changes which option is best.')
     expect(await tool('submit_prepared_decision', { operation_id: 'stale-answer', lease_token: held.lease_token, answer: 'Do it', option_id: '1' }))
       .toMatchObject({ outcome: 'packet-invalidated' })
-    expect(card.comments).toEqual(['A new fact changes which option is best.'])
+    expect(card.comments.filter(comment => !comment.includes('Tin Star request:'))).toEqual(['A new fact changes which option is best.'])
     await tool('release_prepared_decision', { operation_id: 'release-stale', lease_token: held.lease_token })
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
@@ -398,7 +407,7 @@ describe('prepared-card loop', () => {
   })
 
   it('uses the fixed browser handoff and allows a new revision without replaying the old answer', async () => {
-    const card = page(1, { owner: 'Will', tag: 'Decision', status: 'Waiting for Prod Release' }), other = page(2, { tag: 'Decision' })
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' })), other = withOpenRequest(page(2, { tag: 'Decision' }))
     const { sources, jobs, tool, web } = await setup([card, other], false)
     await sources.preparation.replenish()
     for (const { publish } of jobs) {
@@ -416,11 +425,11 @@ describe('prepared-card loop', () => {
       option_id: '2', answer: 'Leave this with Alice.\nThank you.' }
     expect((await web('submit', answer)).data).toMatchObject({ outcome: 'recorded-empty', next: { outcome: 'no-prepared-decisions' } })
     expect(card.properties).toMatchObject({ Owner: { select: { name: 'Will' } }, 'Will action': { multi_select: [] },
-      Status: { status: { name: 'Waiting for Prod Release' } }, 'Waiting For': { rich_text: [] },
+      Status: { status: { name: 'In Progress' } }, 'Waiting For': { rich_text: [] },
       'Waiting For Type': { select: null }, 'Waiting For ID': { rich_text: [] } })
-    expect(card.comments).toHaveLength(1)
-    expect(card.comments[0]?.split('\n')[0]).toBe('Will chose: Keep reviewing')
-    expect(card.comments[0]).toContain('\n\nLeave this with Alice.\nThank you.')
+    const kept = card.comments.find(comment => comment.startsWith('Will chose:'))
+    expect(kept?.split('\n')[0]).toBe('Will chose: Keep reviewing')
+    expect(kept).toContain('\n\nLeave this with Alice.\nThank you.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
     expect(await tool('claim_card', { operation_id: 'answered', card_id: card.id })).toMatchObject({ outcome: 'no-prepared-decisions' })
@@ -433,21 +442,22 @@ describe('prepared-card loop', () => {
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(2)
 
+    card.properties.Status = { type: 'status', status: { name: 'In Progress' } }
     card.body.push('A second question requires a new decision.')
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(3)
     expect(await tool('publish_prepared_packet', { job_id: jobs[2]!.publish.job_id, packet: contents })).toMatchObject({ outcome: 'published' })
     expect((await web('submit', answer)).data).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toHaveLength(1)
+    expect(card.comments.filter(comment => comment.startsWith('Will chose:'))).toHaveLength(1)
     const reopened = await web('claim', { operation_id: 'reopened', review_session_token, card_id: card.id })
     expect(reopened.data).toMatchObject({ outcome: 'claimed' })
     expect((await web('submit', { ...answer, operation_id: 'second-answer', lease_token: reopened.data.lease_token })).data)
       .toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toHaveLength(2)
+    expect(card.comments.filter(comment => comment.startsWith('Will chose:'))).toHaveLength(2)
   })
 
   it('keeps Alice assigned when Will answers a tag-only card waiting on deployment', async () => {
-    const card = page(1, { owner: 'Alice', tag: 'Decision', status: 'Waiting For', waitingId: 'deploy', wait: 'Deployment pending' })
+    const card = withOpenRequest(page(1, { owner: 'Alice', tag: 'Decision', status: 'Waiting For', waitingId: 'deploy', wait: 'Deployment pending' }))
     card.properties['Waiting For Type'] = select('Event')
     const { sources, tool } = await setup([card])
     await sources.preparation.replenish()
@@ -458,7 +468,7 @@ describe('prepared-card loop', () => {
     expect(await tool('submit_prepared_decision', { operation_id: 'alice-answer', lease_token: held.lease_token,
       option_id: '1', answer: 'Alice should continue after deployment.' })).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties).toEqual(properties)
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
   })
 
   it.each(['retry', 'released retry', 'released refill'] as const)('completes a saved answer through %s and retains independent waits', async recovery => {
@@ -467,8 +477,8 @@ describe('prepared-card loop', () => {
     const deploy = waitLine({ type: 'Event', id: 'deploy', dependency: 'Production deployment',
       unblocks_when: 'Deployment completes', follow_up_by: 'Firstmate' })
     const willPrimary = recovery === 'retry'
-    const card = page(1, { owner: 'Firstmate', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
-      wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') })
+    const card = withOpenRequest(page(1, { owner: 'Firstmate', status: 'Waiting For', waitingId: willPrimary ? 'Will' : 'deploy',
+      wait: (willPrimary ? [will, deploy] : [deploy, will]).join('\n') }))
     card.properties['Waiting For Type'] = select(willPrimary ? 'Actor' : 'Event')
     const { sources, connect, writes, jobs } = await setup([card], true, 'rejected')
     const tool = await connect('Firstmate')
@@ -479,11 +489,11 @@ describe('prepared-card loop', () => {
     expect(held).toMatchObject({ outcome: 'claimed' })
     const answer = { operation_id: 'wait-answer', lease_token: held.lease_token, option_id: '1', answer: 'Proceed when deployed.' }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
-    expect(card.comments).toHaveLength(1)
-    const expectedNote = card.comments[0]!
+    const answerIndex = card.comments.findIndex(comment => comment.startsWith('Firstmate chose on Will\'s behalf:'))
+    const expectedNote = card.comments[answerIndex]!
     expect(expectedNote).toMatch(/^Firstmate chose on Will's behalf: /)
     const legacyNote = expectedNote.replace(/^Firstmate chose on Will's behalf:/, 'Will chose:')
-    card.comments[0] = legacyNote
+    card.comments[answerIndex] = legacyNote
     if (recovery !== 'retry') {
       expect(await sources.leases.ownerRelease(card.id, held.lease.generation, 'Release fixture lease')).toMatchObject({ outcome: 'released' })
       expect(await tool('claim_card', { operation_id: 'competing-wait', card_id: card.id })).not.toHaveProperty('packet')
@@ -496,7 +506,7 @@ describe('prepared-card loop', () => {
       'Waiting For': { rich_text: text(deploy) }, 'Waiting For Type': { select: { name: 'Event' } },
       'Waiting For ID': { rich_text: text('deploy') } })
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toEqual([legacyNote])
+    expect(card.comments).toEqual([expect.stringContaining('Tin Star request:'), legacyNote])
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ notes: [expectedNote] }))
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
     expect(sources.leases.status(card.id)).toBeNull()
@@ -505,7 +515,7 @@ describe('prepared-card loop', () => {
   })
 
   it.each(['retry', 'refill'] as const)('recovers a tag-only Firstmate card through %s', async recovery => {
-    const card = page(1, { owner: 'Firstmate', tag: 'Decision' })
+    const card = withOpenRequest(page(1, { owner: 'Firstmate', tag: 'Decision' }))
     const { sources, tool, writes } = await setup([card], true, 'rejected')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'tag-only-claim', card_id: card.id })
@@ -517,12 +527,12 @@ describe('prepared-card loop', () => {
     }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties).toMatchObject({ Owner: select('Firstmate'), 'Will action': tags('') })
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH', 'PATCH'])
   })
 
   it.each(['retry', 'refill'] as const)('preserves a later assignment during %s recovery', async recovery => {
-    const card = page(1, { owner: 'Will', tag: 'Decision', status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' })
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision', status: 'Waiting For', waitingId: 'Will', wait: 'Will: Decide' }))
     const { sources, tool, writes } = await setup([card], true, 'rejected')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'claim-before-reassignment', card_id: card.id })
@@ -537,12 +547,12 @@ describe('prepared-card loop', () => {
     }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties).toEqual(properties)
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
 
   it('preserves a replacement Merge tag when recovering a saved Decision answer', async () => {
-    const card = page(1, { owner: 'Firstmate', tag: 'Decision' })
+    const card = withOpenRequest(page(1, { owner: 'Firstmate', tag: 'Decision' }))
     const { sources, tool, writes } = await setup([card], true, 'rejected')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'claim-decision-tag', card_id: card.id })
@@ -551,12 +561,12 @@ describe('prepared-card loop', () => {
     card.properties['Will action'] = tags('Merge')
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
     expect(card.properties['Will action']).toEqual(tags('Merge'))
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
 
   it.each(['closed', 'new discussion'] as const)('preserves a saved answer and leaves properties alone after %s', async change => {
-    const card = page(1, { owner: 'Will', tag: 'Decision' })
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
     const { sources, tool, writes } = await setup([card], true, 'rejected')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'claim-before-change', card_id: card.id })
@@ -580,21 +590,90 @@ describe('prepared-card loop', () => {
   it('resumes an uncertain answer on the same lease after timeout without duplicating the comment or PATCH', async () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const card = page(1, { owner: 'Will', tag: 'Decision' })
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
     const { sources, tool, writes } = await setup([card], true, 'lost')
     await sources.preparation.replenish()
     const held = await tool('claim_card', { operation_id: 'before-interrupted-write', card_id: card.id })
     const answer = { operation_id: 'interrupted-write', lease_token: held.lease_token, option_id: '1', answer: 'Keep my answer exactly.' }
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'save-unconfirmed' })
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
     expect(sources.leases.pendingWrites()).toHaveLength(1)
     now += 61 * 60_000
     await sources.recoverSourceWrites()
     expect(await tool('claim_card', { operation_id: 'competing-chat', card_id: card.id })).not.toHaveProperty('lease')
     expect(await tool('submit_prepared_decision', answer)).toMatchObject({ outcome: 'recorded-empty' })
-    expect(card.comments).toHaveLength(1)
+    expect(answerComments(card)).toHaveLength(1)
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
     expect(sources.leases.pendingWrites()).toHaveLength(0)
     expect(sources.leases.status(card.id)).toBeNull()
+  })
+
+  it('does not send a Will-owned card that has no open decision request', async () => {
+    const card = page(1, { owner: 'Will', tag: 'Decision' })
+    const { sources, jobs } = await setup([card])
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(0)
+    expect(await sources.preparation.status()).toMatchObject({ jobs: [] })
+  })
+
+  it.each(['Waiting for Prod Release', 'Delegated to person', 'Done', 'Archived'])('does not send a %s card that has an open decision request', async status => {
+    const blocked = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision', status }))
+    const open = withOpenRequest(page(2, { owner: 'Will', tag: 'Decision' }))
+    const { sources, jobs } = await setup([blocked, open])
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(open.id)])
+    expect(jobs.some(job => job.card_url.includes(blocked.id))).toBe(false)
+  })
+
+  it('does not send a test card or a synthetic card', async () => {
+    const named = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    named.properties.Name = rich('[TEST] fixture card')
+    const { sources, jobs } = await setup([named])
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(0)
+
+    const live = await sources.currentCard(named.id)
+    const synthetic = { ...live, id: id(2), source: { provider: 'jira' as const, instanceId: 'fixture', collectionId: '10638', itemId: '1', displayKey: 'TSSPIKE-1', synthetic: true as const } }
+    synthetic.properties.Name = { ...synthetic.properties.Name!, value: 'Open owner decision' }
+    const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
+    const prep = new DecisionPreparation(sources.decisionPackets, {
+      refreshQueue: async () => [synthetic],
+      read: async () => decisionCardSource(synthetic, [{ id: 'ask', type: 'comment', text: named.comments[0]! }]),
+      exclusive: (card, perform) => sources.workflow.exclusive(card, perform),
+    }, async () => JSON.stringify({ url: 'https://example.test/webhook', key: 'fixture' }), push)
+    await prep.replenish()
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('sends a card with an open decision request, stops after two sends, and sends again when the revision changes', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const { sources, jobs, web } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    now += 15 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+    now += 15 * 60_000
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(2)
+    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: prepCapStop })])
+    card.body.push('The request evidence changed.')
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(3)
+  })
+
+  it('never sends an answered request and drops the job that was already queued', async () => {
+    const waiting = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const answered = withOpenRequest(page(2, { owner: 'Will', tag: 'Decision' }))
+    answered.comments.push(`Tin Star answer: ${JSON.stringify(requestIdFor(answered))}`)
+    const { sources, jobs } = await setup([waiting, answered], false)
+    await sources.preparation.replenish()
+    expect(jobs.map(job => job.card_url)).toEqual([expect.stringContaining(waiting.id)])
+    waiting.comments.push(`Tin Star answer: ${JSON.stringify(requestIdFor(waiting))}`)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+    expect((await sources.preparation.status()).jobs).toEqual([expect.objectContaining({ card: waiting.id, state: 'stopped', message: prepIneligibleStop })])
   })
 })

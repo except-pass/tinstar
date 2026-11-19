@@ -87,8 +87,10 @@ export class PreparedReviews {
         const ready = this.packets.claimableInStorage(db, card)
         const leased = this.leases.activeInStorage(this.leases.rowInStorage(db, card.id))
         const job = jobs.get(card.id)
+        const stopped = job?.state === 'stopped' ? job.message || 'Preparation stopped' : null
         const state = ready ? 'Ready' : leased ? 'Leased' : prepared ? 'Saving answer' :
-          job?.state === 'sent' || job?.state === 'sending' ? 'Preparing' : job?.state === 'failed' ? 'Retrying' : 'Queued'
+          job?.state === 'sent' || job?.state === 'sending' ? 'Preparing' : stopped ? stopped :
+          job?.state === 'failed' ? 'Retrying' : 'Queued'
         return { card_id: card.id, title: String(card.properties.Name?.value || 'Decision card'), ready, state }
       })
       const ready = rows.flatMap(row => row.ready ? [{ id: row.ready.id, card_id: row.card_id, title: row.title }] : [])
