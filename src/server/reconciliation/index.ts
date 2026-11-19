@@ -179,29 +179,29 @@ export class ReconciliationSources {
   }
 
   private async loadDecisionCard(id: string, background: boolean, freshHistory = false) {
-    const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
-    const card = await this.workReader.card(id, true, background, signal)
-    const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
-    if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
-    await this.context.verifyRetractions(context)
-    return { card, blocks: context.blocks }
+    const observation = Symbol()
+    this.decisionRevisionReads.set(id, observation)
+    try {
+      const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
+      const card = await this.workReader.card(id, true, background, signal)
+      const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
+      if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
+      await this.context.verifyRetractions(context)
+      const source = decisionCardSource(card, context.blocks)
+      if (this.decisionRevisionReads.get(id) === observation) {
+        this.workReader.confirm(card)
+        this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
+      }
+      return { card, blocks: context.blocks, source }
+    } finally {
+      if (this.decisionRevisionReads.get(id) === observation) this.decisionRevisionReads.delete(id)
+    }
   }
 
   private async readDecisionCard(id: string, background: boolean, freshHistory = false) {
     await this.decisionPackets.initialize()
     const observedPacket = this.leases.readStorage(db => this.decisionPackets.currentInStorage(db, id))
-    const observation = Symbol()
-    this.decisionRevisionReads.set(id, observation)
-    const source = await this.loadDecisionCard(id, background, freshHistory).then(({ card, blocks }) => {
-      const source = decisionCardSource(card, blocks)
-      if (this.decisionRevisionReads.get(id) === observation) {
-        this.workReader.confirm(card)
-        this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
-      }
-      return source
-    }).finally(() => {
-      if (this.decisionRevisionReads.get(id) === observation) this.decisionRevisionReads.delete(id)
-    })
+    const { source } = await this.loadDecisionCard(id, background, freshHistory)
     // A slower background read may finish after a newer publication.
     if (observedPacket && observedPacket.packet.source_revision !== source.revision) {
       await this.leases.writeStorage(db => {

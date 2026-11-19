@@ -627,6 +627,21 @@ describe('prepared-card loop', () => {
     expect(writes.map(write => write.type)).toEqual(['POST', 'PATCH'])
   })
 
+  it('removes a closed card from the Desk after rejecting its held packet', async () => {
+    const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
+    const { sources, tool, web, writes } = await setup([card])
+    await sources.preparation.replenish()
+    const held = await tool('claim_card', { operation_id: 'claim-before-close', card_id: card.id })
+    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Leased' })])
+
+    card.properties.Status = { type: 'status', status: { name: 'Done' } }
+    expect(await tool('submit_prepared_decision', {
+      operation_id: 'answer-after-close', lease_token: held.lease_token, option_id: '1', answer: 'Proceed.',
+    })).toMatchObject({ outcome: 'packet-invalidated' })
+    expect((await web('snapshot')).data).toMatchObject({ ready: [], pending: [] })
+    expect(writes).toEqual([])
+  })
+
   it.each(['closed', 'new discussion'] as const)('preserves a saved answer and leaves properties alone after %s', async change => {
     const card = withOpenRequest(page(1, { owner: 'Will', tag: 'Decision' }))
     const { sources, tool, writes } = await setup([card], true, 'rejected')
