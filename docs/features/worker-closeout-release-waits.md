@@ -64,9 +64,10 @@ its receipts and Decision Desk records remain readable. There is no scheduled
 release-wait write left to retry or deduplicate. Manual workflow operations
 still use their existing operation IDs.
 
-To roll back the retirement, revert the retirement commit and redeploy. That
-restores the former startup and one-minute sweeps, including membership-based
-status changes.
+Reverting the retirement re-enables automatic membership-based status writes
+immediately on startup and every minute thereafter. Obtain separate explicit
+owner authorization before reverting the retirement and redeploying. Without
+that authorization, roll back only unrelated changes.
 
 ## Remote home configuration
 

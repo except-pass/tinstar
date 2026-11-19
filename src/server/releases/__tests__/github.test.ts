@@ -22,6 +22,10 @@ import { releaseChanges } from '../../../shared/releaseChanges'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
 import { nativeBase, nativeBody, nativeFixtureRead, nativeHead, nativeRecord, nativeRepo, nativeRun, nativeTags, nativeTime } from '../../../../test-fixtures/releases/github-native'
 
+vi.mock('../../logger', () => ({
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}))
+
 const data = () => releaseAssociations(fixtureScene())
 const now = Date.parse(nativeTime)
 describe('GitHub-native releases', () => {
