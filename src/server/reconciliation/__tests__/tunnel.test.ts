@@ -138,7 +138,8 @@ it.each(['2026-07-28', '2025-11-25', '2025-06-18'])('publishes self-contained dr
   const tools: Tool[] = JSON.parse(text).result.tools
   expect(tools).toHaveLength(33)
   const approvedTools = JSON.parse(await readFile(new URL('../../../../scripts/deploy/approved-tools.json', import.meta.url), 'utf8'))
-  expect(tools.map(tool => tool.name).sort()).toEqual(approvedTools)
+  // Jira work mode adds these two tools. This fixture leaves that mode off, so they are absent here and present in the approved catalog.
+  expect(approvedTools).toEqual([...tools.map(tool => tool.name), 'link_work', 'transition_work'].sort())
   // About 65 KiB with structured waits and exact replacement inputs.
   // Catch accidental catalog expansion without an exact byte snapshot.
   expect(Buffer.byteLength(text)).toBeLessThan(72 * 1024)

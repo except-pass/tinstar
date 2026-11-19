@@ -15,6 +15,7 @@
   "get_work_views",
   "get_worker_link_report",
   "get_workflow_rules",
+  "link_work",
   "list_prepared_review_sessions",
   "list_prs",
   "list_ui_sessions",
@@ -31,5 +32,6 @@
   "start_work",
   "submit_handoff",
   "submit_prepared_decision",
+  "transition_work",
   "update_work"
 ]

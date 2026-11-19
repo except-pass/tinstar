@@ -9,6 +9,7 @@ import { AskApi } from '../../src/server/ask/routes'
 import { ReviewDeploymentAudit, ReviewDeploymentReconciler } from '../../src/server/reconciliation/reviewDeployment'
 import { AssociationStore } from '../../src/server/releases/associations'
 import { fixtureScene } from '../../test-fixtures/reconciliation/scenes'
+import type { JiraWork } from '../../src/server/reconciliation/jiraWork'
 import { compareCatalogs, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
 
 const exec = promisify(execFile)
@@ -524,6 +525,8 @@ it('lists the real facade catalog using the same wire request as the smoke', asy
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-mcp-')); roots.push(root)
   const mcp = new ReconciliationMcp({ scene: async () => fixtureScene(), card: async () => ({ outcome: 'unavailable' }),
     queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Unavailable' }), workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
+    // Production smoke compares this catalog to approved-tools.json, which includes the Jira work tools.
+    jiraWork: {} as JiraWork,
   }, root)
   const backend = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(backend)
   await new Promise<void>(done => backend.listen(0, '127.0.0.1', done))
