@@ -9,7 +9,6 @@ import { WorkflowContent, richText } from '../reconciliation/workflowContent'
 import { readAutomationSettings } from './automation'
 
 export interface ReleaseTransport {
-  recoverAppliedWrite?(id: string): Promise<void> | undefined
   card(id: string): Promise<WorkCard>
   hasNote(id: string, marker: string): Promise<boolean>
   note(id: string, text: string, marker: string): Promise<void>
@@ -20,7 +19,6 @@ export interface ReleaseTransport {
 export function notionReleaseTransport(reader: WorkReader): ReleaseTransport {
   const content = new WorkflowContent(reader)
   return {
-    recoverAppliedWrite: id => content.recoverAppliedWrite(id),
     card: id => reader.card(id, true),
     hasNote: async (id, marker) => (await content.notes(id)).some(note => note.text.split('\n').includes(marker)),
     note: (id, text, marker) => content.note(id, text, marker),

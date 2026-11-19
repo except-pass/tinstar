@@ -45,31 +45,34 @@ audited note. It leaves status and generic wait fields intact. Generic `wait`
 still refuses to convert a release wait to `Waiting For`.
 
 `get_release_status` exposes the same native `releases` and `releaseSource` as
-the Releases screen, alongside the existing deployment reconciliation. A scheduled
-pass every minute advances a release wait once every actively associated PR is
-in a published production release. The shared native reader exposes
-`containedPulls`: effective merge ancestry in the production source, independent
-of the incremental Changes range between tags. Earlier required PRs and changes
-first tagged in a prerelease can therefore qualify after a cold restart. Unknown
-ancestry stays explicit; bounded comparison reads continue on later refreshes.
+the Releases screen, alongside the existing deployment reconciliation.
+`containedPulls` shows whether each linked merge is in the tagged source, even
+when it falls outside the Changes range between consecutive tags. Missing
+ancestry stays unknown.
 
-The writer rechecks associations, owner, production verification and independent
-typed blockers before writing. It preserves both destinations while an active
-Actor/Event/Work blocker remains; resolve that blocker through the shared
-workflow first. The existing Notion release transport saves a durable audit
-marker before the status change. A stable source-operation identity lets a later
-pass recover an applied audit after a lost response, even across restart or a new
-production release. An uncertain mutable status PATCH retains its fence for the
-existing audited source-write reconciliation; matching mutable properties alone
-do not clear it. Reads remain read-only.
+## Advancing a release wait
 
-The existing `Requires production verification` checkbox routes to `In Progress`
-for the named owner; otherwise the release wait goes to `Done`. The audit states
-that release membership does not establish current deployment or feature acceptance.
-Draft, missing, unknown and historical evidence cannot resolve the wait. Existing
-audited `update_work complete`/`park` remain available for an explicit owner
-corrective disposition. The older coordinator-based automation stays inactive;
-its historical receipts and Desk routes stay readable.
+Tin Star retired the minute-by-minute job that moved cards to Done or In Progress
+when all linked pull requests appeared in published production releases. Current
+deployment and feature acceptance require their own evidence. The owner can
+still verify in production and record the outcome through the existing card
+workflow, including an explicit audited `update_work complete` or `park` as
+appropriate. Proof-based, Jira-aware closure and any new Notion write authority
+require separate owner authorization.
+
+Past `Tin Star production wait: membership:` comments remain on their Notion
+cards. The existing source-write reconciliation can still resolve an uncertain
+write from before retirement. The older coordinator writer stays inactive and
+its receipts and Decision Desk records remain readable. There is no scheduled
+release-wait write left to retry or deduplicate. Manual workflow operations
+still use their existing operation IDs.
+
+Reverting the retirement re-enables automatic membership-based status writes
+immediately on startup and every minute thereafter. Obtain separate explicit
+owner authorization before reverting the retirement and redeploying. Without
+that authorization, roll back only unrelated changes. The [startup regression
+test](../../src/server/releases/__tests__/github.test.ts) asserts zero status
+and audit writes at startup and after a minute with published release membership.
 
 ## Remote home configuration
 
