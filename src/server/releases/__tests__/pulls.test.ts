@@ -343,6 +343,23 @@ describe('bounded read-only release PR observations', () => {
       expect(read).toHaveBeenCalledTimes(4)
     })
 
+  it('keeps all exact-read slots available after renewing an unchanged PR outside page one', async () => {
+    let now = Date.now()
+    const list = vi.fn().mockResolvedValue(page([row(1, now, 'open'), row(2, now, 'open')]))
+    const read = vi.fn().mockResolvedValue(merged)
+    const reader = new ReleasePullReader(read, () => now, list)
+    await reader.get([url(1), url(2)])
+
+    now += pollInterval
+    list.mockResolvedValueOnce(page([row(2, now, 'open')], 100, new Date(now - 2 * pollInterval).toISOString()))
+    const unresolved = [3, 4, 5, 6]
+    const result = await reader.get([url(1), url(2), ...unresolved.map(url)])
+
+    expect(result.get(url(1))).toMatchObject({ state: 'open', freshness: 'fresh', observedAt: new Date(now).toISOString() })
+    expect(read.mock.calls.map(([path]) => path)).toEqual(unresolved.map(number => `/repos/owner/repo/pulls/${number}`))
+    for (const number of unresolved) expect(result.get(url(number))).toMatchObject({ state: 'merged', freshness: 'fresh' })
+  })
+
   it('refreshes changed PRs in one list and leaves unchanged and merged PRs off the point-read loop', async () => {
     let now = Date.now()
     const urls = [url(1), url(2), url(3)]
