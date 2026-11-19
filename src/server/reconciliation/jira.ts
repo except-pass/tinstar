@@ -33,17 +33,20 @@ export interface JiraSection { id: string; type: string; text: string }
 export const jiraText = (text: string) => ({ type: 'doc', version: 1, content: text.split('\n').map(line => ({ type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [] })) })
 /** Read plain ADF without treating ordinary prose as workflow evidence. Unknown
  * structures make the read fail rather than proving a receipt is absent. */
-export function adfText(value: unknown): string {
+export function adfText(value: unknown, allowUnsupported: boolean | 'omit' = false): string {
   if (value == null) return ''
   const node = record(value), type = node.type
   if (type === 'text') return String(node.text ?? '')
   if (type === 'hardBreak') return '\n'
-  if (type === 'mention') return String(record(node.attrs).text ?? record(node.attrs).id ?? '')
-  if (type === 'emoji') return String(record(node.attrs).text ?? record(node.attrs).shortName ?? '')
-  if (type === 'inlineCard') return String(record(node.attrs).url ?? '')
-  if (!['doc', 'paragraph', 'heading', 'codeBlock', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'panel', 'table', 'tableRow', 'tableCell', 'tableHeader', 'rule'].includes(String(type))) throw new Error(`Unsupported Jira document node: ${String(type)}`)
+  if (type === 'mention') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).text ?? record(node.attrs).id ?? '')
+  if (type === 'emoji') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).text ?? record(node.attrs).shortName ?? '')
+  if (type === 'inlineCard') return allowUnsupported === 'omit' ? '' : String(record(node.attrs).url ?? '')
+  if (!['doc', 'paragraph', 'heading', 'codeBlock', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'panel', 'table', 'tableRow', 'tableCell', 'tableHeader', 'rule'].includes(String(type))) {
+    if (allowUnsupported) return allowUnsupported === 'omit' ? '' : '[Rich content in Jira]'
+    throw new Error(`Unsupported Jira document node: ${String(type)}`)
+  }
   if (node.content !== undefined && !Array.isArray(node.content)) throw new Error('Malformed Jira document')
-  return (node.content as unknown[] | undefined ?? []).map(adfText).join(['paragraph', 'heading', 'codeBlock'].includes(String(type)) ? '' : '\n')
+  return (node.content as unknown[] | undefined ?? []).map(item => adfText(item, allowUnsupported)).join(['paragraph', 'heading', 'codeBlock'].includes(String(type)) ? '' : '\n')
 }
 const decodeProperty = (wire: unknown, type: string): unknown => {
   const p = record(wire)
@@ -60,27 +63,23 @@ const jiraFetch = (input: string, init?: RequestInit) => {
   return fetch(input, init)
 }
 
-/** Bounded TSSPIKE reader/writer. It has no configuration mutation endpoints,
- * background jobs, sync, or dispatch capability. */
-export class JiraAdapter {
-  constructor(readonly config: JiraConfig, private fetcher: typeof jiraFetch = jiraFetch,
-    private backgroundFetcher = fetcher, private parallelFetcher = fetcher) {
-    if (config.url !== 'https://fortresspower-jira.atlassian.net' || config.projectId !== '10638') throw new Error('Jira pilot is restricted to TSSPIKE 10638')
-  }
-  private async response(path: string, init: RequestInit = {}, fetcher = this.fetcher) {
+/** Jira's bounded REST transport is shared by the pilot and the native work project. */
+export class JiraClient {
+  constructor(private baseUrl: string, private authorization: string, protected fetcher: typeof jiraFetch = jiraFetch) {}
+  protected async response(path: string, init: RequestInit = {}, fetcher = this.fetcher) {
     const deadline = AbortSignal.timeout(20_000)
-    const response = await fetcher(`${this.config.url}/rest/api/3/${path}`, { ...init,
+    const response = await fetcher(`${this.baseUrl}/rest/api/3/${path}`, { ...init,
       redirect: 'error', signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline, headers: { Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64')}`,
+        Authorization: this.authorization,
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
     if (!response.ok) { await response.body?.cancel(); throw new JiraWriteError(response.status, init.method ?? 'GET') }
     return response
   }
-  private async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, fetcher = this.fetcher): Promise<Record<string, any>> {
+  protected async request(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, fetcher = this.fetcher): Promise<Record<string, any>> {
     const response = await this.response(path, { method, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetcher)
     return response.status === 204 ? {} : this.json(response)
   }
-  private async json(response: Response): Promise<Record<string, any>> {
+  protected async json(response: Response): Promise<Record<string, any>> {
     const reader = response.body?.getReader()
     if (!reader) throw new Error('Jira response missing')
     const chunks: Uint8Array[] = []; let bytes = 0
@@ -94,6 +93,16 @@ export class JiraAdapter {
       }
     } finally { await reader.cancel().catch(() => {}) }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  }
+}
+
+/** Bounded TSSPIKE reader/writer. It has no configuration mutation endpoints. */
+export class JiraAdapter extends JiraClient {
+  constructor(readonly config: JiraConfig, fetcher: typeof jiraFetch = jiraFetch,
+    private backgroundFetcher = fetcher, private parallelFetcher = fetcher) {
+    const [, pilotSite, pilotProjectId] = jiraCardPrefix.split(':')
+    if (config.url !== `https://${pilotSite}` || config.projectId !== pilotProjectId) throw new Error('Jira pilot is restricted to TSSPIKE 10638')
+    super(config.url, `Basic ${Buffer.from(`${config.email}:${config.token}`).toString('base64')}`, fetcher)
   }
   private issueId(id: string) {
     if (!isJiraCard(id)) throw new Error('Jira source identity mismatch')

@@ -1,9 +1,7 @@
 # Jira adapter pilot
 
 This is the bounded implementation for [the approved minimum adapter](https://app.notion.com/p/41550ce6d42281c791f8ca0f471c52b5).
-Notion remains authoritative for existing work. Jira is an explicitly configured,
-independent source of **synthetic issues in TSSPIKE (10638)**. There is no sync,
-dual write, migration, production deployment, automatic pickup or default switch.
+The pilot is an independent source of **synthetic issues in TSSPIKE (10638)**. There is no sync, dual write, migration, production deployment, automatic pickup or default switch. See [native Jira work mode](jira-work.md) for a private work project.
 The spike (`681f796a:data/tinstar-jira-spike/report.md`) is evidence, not the base.
 
 Configure an isolated preview's `TINSTAR_CONFIG_HOME/config.json`:

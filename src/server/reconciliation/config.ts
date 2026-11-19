@@ -24,7 +24,22 @@ const jiraSchema = z.object({
   email: z.string().min(1), token: z.string().min(1),
 })
 export type JiraConfig = z.infer<typeof jiraSchema>
-export interface ReconciliationConfig { fleet: FleetSource[]; notion?: z.infer<typeof notionSchema>; jira?: JiraConfig; warnings: string[] }
+const jiraId = z.string().regex(/^[1-9]\d*$/)
+const jiraFieldId = z.string().regex(/^customfield_[1-9]\d*$/)
+const jiraWorkSchema = z.object({
+  mode: z.literal('work'),
+  url: z.string().regex(/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/),
+  cloudId: z.string().uuid(),
+  projectId: jiraId,
+  issueTypes: z.object({ Task: jiraId, Epic: jiraId.optional() })
+    .refine(({ Task, Epic }) => Task !== Epic, 'Jira issue type IDs must be distinct'),
+  fields: z.object({ owner: jiraFieldId, decisions: jiraFieldId, blockerType: jiraFieldId, blockerTarget: jiraFieldId, blockerCondition: jiraFieldId })
+    .refine(fields => new Set(Object.values(fields)).size === Object.keys(fields).length, 'Jira field IDs must be distinct'),
+  blocksLinkTypeId: jiraId,
+  token: z.string().min(1),
+})
+export type JiraWorkConfig = z.infer<typeof jiraWorkSchema>
+export interface ReconciliationConfig { fleet: FleetSource[]; notion?: z.infer<typeof notionSchema>; jira?: JiraConfig; jiraWork?: JiraWorkConfig; warnings: string[] }
 
 export function loadReconciliationConfig(root = getConfigRoot()): ReconciliationConfig {
   try {
@@ -43,10 +58,14 @@ export function loadReconciliationConfig(root = getConfigRoot()): Reconciliation
     const parsedNotion = notionSchema.optional().safeParse(raw.reconciliation?.notion)
     if (!parsedNotion.success) warnings.push('Invalid reconciliation Notion settings; configure dataSourceId and token')
     const jira = raw.reconciliation?.jira
-    const parsedJira = jiraSchema.optional().safeParse(jira ? { ...jira,
-      email: process.env.TINSTAR_JIRA_EMAIL ?? jira.email, token: process.env.TINSTAR_JIRA_TOKEN ?? jira.token } : undefined)
+    const workMode = jira?.mode === 'work'
+    const credentials = jira ? { ...jira, email: process.env.TINSTAR_JIRA_EMAIL ?? jira.email, token: process.env.TINSTAR_JIRA_TOKEN ?? jira.token } : undefined
+    const parsedJira = jiraSchema.optional().safeParse(workMode ? undefined : credentials)
+    const parsedWork = jiraWorkSchema.optional().safeParse(workMode ? credentials : undefined)
     if (!parsedJira.success) warnings.push('Invalid Jira pilot settings; configure the authorized TSSPIKE site/project and credentials')
-    return { fleet, notion: parsedNotion.success ? parsedNotion.data : undefined, jira: parsedJira.success ? parsedJira.data : undefined, warnings }
+    if (!parsedWork.success) warnings.push('Invalid Jira work settings; check cloud/project, native field and issue type IDs, and the service token')
+    return { fleet, notion: parsedNotion.success ? parsedNotion.data : undefined, jira: parsedJira.success ? parsedJira.data : undefined,
+      jiraWork: parsedWork.success ? parsedWork.data : undefined, warnings }
   } catch (error) {
     return { fleet: [], warnings: [(error as NodeJS.ErrnoException).code === 'ENOENT'
       ? 'Tin Star config.json is absent; sources are not configured' : 'Tin Star config.json could not be read'] }

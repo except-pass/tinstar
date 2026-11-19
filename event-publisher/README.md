@@ -1,8 +1,8 @@
 # Event Publisher
 
-A standalone, read-only observer for First Mate tasks and worker incarnations.
-It uses its own SQLite journal and runs on the farm host that can read the
-configured First Mate homes and their local worker endpoints.
+A standalone, read-only observer for First Mate tasks, worker incarnations and
+signed Jira ticket changes. All sources share one SQLite journal and terminal
+reader.
 
 ## Start on the farm host
 
@@ -67,7 +67,7 @@ events watch --type worker
 events watch --entity 'firstmate:task:example-west:sample-a'
 ```
 
-First attach captures a baseline. The tail shows changes as later polls commit
+First Mate captures a baseline on first attach. The tail shows changes as later polls commit
 them, with one line per changed field. It also reports health changes to
 stderr. Use the sequence number as a replay cursor. Pass the `event:…` ID
 shown on the same line to `events inspect`.
@@ -82,15 +82,76 @@ events sources
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
 Watch and replay both accept the same filters. The text view marks replayed and
-fixture events. In JSON mode the event's `source.mode` identifies live and fixture
+First Mate fixture events. In JSON mode the First Mate event's `source.mode` identifies live and fixture
 data. Replay notices go to stderr so the JSON payloads stay identical.
+
+## Receive Jira ticket changes
+
+Add one `jira` source to the publisher configuration. It can run alone or beside
+`homes`. The IDs below are examples. Get the cloud, project and field IDs from
+the real Jira project. The five required field mappings identify Owner, Decision Questions and
+the three Waiting For fields.
+
+```json
+{
+  "jira": {
+    "site": "https://example.atlassian.net",
+    "cloudId": "11111111-2222-4333-8444-555555555555",
+    "projectId": "12345",
+    "fields": {
+      "owner": "customfield_12001",
+      "decisions": "customfield_12002",
+      "blockerType": "customfield_12003",
+      "blockerTarget": "customfield_12004",
+      "blockerCondition": "customfield_12005"
+    }
+  }
+}
+```
+
+Inject the admin webhook secret into `EVENTS_JIRA_WEBHOOK_SECRET` at process
+start from Clavis. Run `events serve` to open the fixed loopback listener at
+`http://127.0.0.1:18573/webhooks/jira`. Give Jira the approved public HTTPS URL
+that proxies only this path, with the request bytes and Jira headers preserved.
+Keep the registration restricted to one immutable project ID using Jira JQL and
+include the JSON body. Select issue creation, issue updates and comment creation.
+Use a distinct secret for this registration. To retire or rotate it, disable or
+update the registration before removing or replacing the Clavis value.
+[Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)
+
+The receiver verifies SHA-256 HMAC over the raw body before JSON decoding. A
+delivery must identify a ticket in the configured project. An issue self URL,
+when supplied, must use the configured site. Jira retries use the same delivery
+ID. The journal commits the delivery receipt and its event group together, with
+additional deduplication for native creation, changelog and comment identities
+when available. A native creation notice is the sole source for `ticket.created`.
+
+Ticket change previews are redacted and bounded. The journal preserves the
+immutable Jira issue ID, display key, source delivery ID, source timestamp when
+supplied, and the available before and after values. Link changes are recorded
+when present in the issue update changelog. A missing changelog is reported as
+partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
+MCP and UI proof must be correlated with the actual ticket changes.
+
+```sh
+events watch --source jira --type ticket
+events replay --source jira --last 20 --json
+events replay --source jira --after 42
+events inspect '<event-id-from-watch>'
+events sources
+```
+
+Run `npm test -- --test-concurrency=2` from this directory. The Jira tests use synthetic deliveries and a temporary journal. They cover the loopback boundary, HMAC, redaction, transaction rollback,
+restart and replay. Validate native issue, comment and link delivery coverage
+against the actual project before accepting the integration.
 
 ## Re-observe and troubleshoot
 
 Stop the publisher, run `events observe`, and check `events sources` before
-restarting it. This performs one fresh read of each configured source and updates
-the journal. A source with incomplete coverage or an unsuccessful read makes
-the one-pass command exit with status 1. The continuous collector retries on
+restarting it. This performs one fresh read of each configured First Mate home and updates
+the journal. Use `events serve` for Jira webhooks. The one-pass command requires
+at least one First Mate home and exits with status 1 if a source read fails or
+has incomplete coverage. The continuous collector retries on
 the next scheduled pass.
 
 - For an unavailable task source, check that the service account can execute

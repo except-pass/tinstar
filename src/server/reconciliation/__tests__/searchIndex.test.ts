@@ -4,6 +4,15 @@ import { SearchDocumentCollector } from '../searchIndex'
 import { CardContextReader } from '../cardContext'
 
 describe('authorized bounded search prose enrichment', () => {
+  it('preserves short ordinary words in Notion search titles and properties', () => {
+    const scene = fixtureScene()
+    const card = scene.cards[0]!
+    const title = 'Token: TTL tuning'
+    card.source.properties.Name = { ...card.source.properties.Name!, value: title }
+    const collector = new SearchDocumentCollector(vi.fn().mockResolvedValue({ outcome: 'unavailable' }))
+    const document = collector.get(scene).documents.find(document => document.key === 'card:' + card.id)
+    expect(document).toMatchObject({ title, fields: expect.arrayContaining([{ name: 'Name', source: 'Notion property', text: title }]) })
+  })
   it('invalidates the prose-reader TTL when the observed Notion revision changes', async () => {
     const fetcher = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ results: [{ id: 'block', type: 'paragraph', paragraph: { rich_text: [{ plain_text: `Revision ${fetcher.mock.calls.length}` }] } }], has_more: false })))
     const reader = new CardContextReader({ dataSourceId: '00000000000000000000000000000001', token: 'fixture-only' }, fetcher)
