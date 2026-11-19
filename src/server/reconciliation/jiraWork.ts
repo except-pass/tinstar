@@ -236,6 +236,12 @@ export class JiraWork extends JiraClient {
     return note ? { update: { comment: [{ add: { body: jiraText(note) } }] } } : {}
   }
 
+  private async serviceAccountId(): Promise<string> {
+    const { accountId } = await this.request('myself')
+    if (typeof accountId !== 'string' || !accountId) throw new Error('Missing Jira service account identity')
+    return accountId
+  }
+
   private async checkComment(id: string, note: string | undefined, attempt: Attempt, evidence?: { accountId: string; from: number; before: number }) {
     if (!note) return
     const { dispatchedAt, priorCommentIds, commentHash } = attempt.state
@@ -247,10 +253,11 @@ export class JiraWork extends JiraClient {
         other.dispatchedAt <= dispatchedAt && !other.confirmed && !other.rejected && other.commentHash === commentHash
     })
     if (ambiguous) throw new JiraWorkUnconfirmed('Jira comment may belong to another unresolved operation')
+    const accountId = evidence?.accountId ?? await this.serviceAccountId()
     const page = await this.notes(id)
     if (!page.comments.some(comment => !priorCommentIds.includes(comment.id) && comment.body === note &&
       Date.parse(comment.created_at) === Date.parse(comment.updated_at) &&
-      (!evidence || (comment.author_id === evidence.accountId &&
+      comment.author_id === accountId && (!evidence || (
         Date.parse(comment.created_at) >= evidence.from && Date.parse(comment.created_at) < evidence.before)))) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
@@ -476,8 +483,7 @@ export class JiraWork extends JiraClient {
     const { dispatchedAt, fields, link } = attempt.state
     if (!dispatchedAt || (!fields?.length && !link)) throw new JiraWorkUnconfirmed('Jira history cannot verify this operation')
     const card = await this.read(id)
-    const { accountId } = await this.request('myself')
-    if (typeof accountId !== 'string' || !accountId) throw new Error('Missing Jira service account identity')
+    const accountId = await this.serviceAccountId()
     const types = link && !link.id ? (await this.request('issueLinkType')).issueLinkTypes : undefined
     const directions = ['inward', 'outward'] as const
     const labels = types?.flatMap((type: Record<string, unknown>) => directions
@@ -492,7 +498,12 @@ export class JiraWork extends JiraClient {
       if (nativeId(item.to)) return item.to === link.targetId
       const historicalKey = item.toString.slice(prefix.length)
       if (!/^[A-Z][A-Z0-9_]*-[1-9]\d*$/.test(historicalKey)) return false
-      return (await this.resolveLinkTarget(historicalKey)).id === link.targetId
+      try {
+        return (await this.resolveLinkTarget(historicalKey)).id === link.targetId
+      } catch (error) {
+        if (error instanceof JiraWriteError && error.status === 404) return false
+        throw error
+      }
     }
     const prefix = JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId]).slice(0, -1) + ','
     const candidates = (await this.receipts.entries(prefix)).filter(([key, receipt]) => {

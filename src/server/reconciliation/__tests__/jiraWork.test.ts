@@ -47,7 +47,7 @@ async function fixture() {
   const historicalKeys = new Map<string, string>()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -141,7 +141,7 @@ async function fixture() {
         if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created, updated: created, author: { accountId: 'fixture-service' } })
       }
       if (controls.delayedComment) {
-        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created, updated: created, author: { accountId: 'fixture-service' } })
+        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created, updated: created, author: { accountId: controls.delayedCommentAuthor } })
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -573,7 +573,10 @@ it('uses immutable link target identity for historical keys, blockers, and recov
   const pending = { ...add, operation_id: 'lost' }
   expect(await call('link_work', pending)).toMatchObject({ code: 'unconfirmed' })
   f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
-    items: [{ field: 'Link', from: null, to: 'OLD-2', toString: 'This issue blocks OLD-2' }] }]
+    items: [
+      { field: 'Link', from: null, to: 'DELETED-1', toString: 'This issue blocks DELETED-1' },
+      { field: 'Link', from: null, to: 'OLD-2', toString: 'This issue blocks OLD-2' },
+    ] }]
   const saved = await call('link_work', pending)
   expect(saved).toMatchObject({ code: 'already-saved', card: { links: [{ target_key: 'WORK-2' }] } })
   expect(saved.card.links[0]).not.toHaveProperty('target_id')
@@ -598,4 +601,24 @@ it('does not use a natively edited comment to confirm an earlier missing note', 
   f.history['60001'] = [{ created: comment.created, author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'summary', fromString: 'Ticket', toString: earlier.name }] }]
   expect(await call('update_work', earlier)).toMatchObject({ code: 'unconfirmed' })
+}, 30_000)
+
+
+it.each(['update_work', 'transition_work'])('rejects an identical comment by another author during %s readback', async tool => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Ticket', owner: 'Avery', description: 'Ready for work',
+  })
+  f.controls.omitComment = true
+  f.controls.delayedCommentAuthor = 'human-account'
+  const edit = tool === 'update_work'
+  f.controls.delayedComment = edit
+    ? 'Matching note\n\nRecorded via Tin Star (Fixture agent)'
+    : 'Fast-track via Tin Star (Fixture agent)\nEvidence: Matching note'
+  const args = edit ? { kind: 'jira_edit', name: 'New title', note: 'Matching note' }
+    : { verb: 'Fast-track', evidence: 'Matching note' }
+  expect(await call(tool, { card_id, operation_id: 'change', ...args })).toMatchObject({
+    code: 'unconfirmed', message: expect.stringContaining('did not confirm the requested comment'),
+  })
 }, 30_000)
