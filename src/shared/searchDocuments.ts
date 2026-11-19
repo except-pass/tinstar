@@ -21,8 +21,9 @@ export interface SearchIndexRead {
 export const searchTextLimit = 8192
 export const searchTotalLimit = 2 * 1024 * 1024
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredentialLine = (quote: string) => String.raw`(?:\r\n?|\n)[ \t{,]*(?:${quote}${credentialKey}${quote}[ \t]*[:=]|["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote})`
-const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine('"')})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine("'")})[^'\\])*'|["'][^\r\n]*`
+const nextCredential = (quote: string) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote})`
+const quotedValue = (quote: string) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
+const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
 const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
 
 /** Redact likely credential literals before either snippets or the browser index.

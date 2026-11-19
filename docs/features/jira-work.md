@@ -45,7 +45,7 @@ Owner is one Jira single select with approved names and no default. Decision Que
 | Tool | Arguments and result |
 | --- | --- |
 | `create_work` | Set `provider: "jira"`, `name`, and `operation_id`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira creates the issue in Backlog. |
-| `get_work` | Use the returned immutable `card_id`. The result includes the display key, native fields, links and recent comments. |
+| `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The result includes the display key, native fields, links and recent comments. |
 | `update_work` | Use `kind: "jira_edit"` and the ticket ID. Edit `name`, `description`, or `owner`. Send `add_questions` with `id`, `question` and optional `options`, or `answers` with `id` and `answer`. Set `blocker` with `type`, `target` and `unblocks_when`, clear it with `null`, or add a Jira comment with `note`. |
 | `transition_work` | Supply `verb` and give `to` for verbs with several destinations. Supply `evidence`, `reason` or `disposition` where relevant. Deployed requires identical `required_revision` and `live_revision`. |
 | `link_work` | Set `action: "add"` with `target_key`, native link type `type`, and `direction` as displayed on this ticket. Set `action: "remove"` with the native `link_id`. |

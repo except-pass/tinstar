@@ -188,10 +188,8 @@ function jiraEventLabel(event) {
     const values = [change.after.status, change.after.summary].filter(Boolean).map(printable)
     return ['created', ...values].join(' · ')
   }
-  if (type.startsWith('ticket.comment.')) {
-    const action = type.split('.').at(-1)
-    const content = action === 'deleted' ? change.before : change.after
-    return [`comment ${evidence.source_reference.comment_id} ${action}`, content == null ? '' : printable(content)].filter(Boolean).join(' · ')
+  if (type === 'ticket.comment.created') {
+    return [`comment ${evidence.source_reference.comment_id} created`, change.after == null ? '' : printable(change.after)].filter(Boolean).join(' · ')
   }
   return `${change.field} ${printable(change.before)} → ${printable(change.after)}`
 }

@@ -50,8 +50,9 @@ export function jiraConfig(raw) {
 }
 
 const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredentialLine = (quote) => String.raw`(?:\r\n?|\n)[ \t{,]*(?:${quote}${credentialKey}${quote}[ \t]*[:=]|["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote})`
-const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine('"')})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine("'")})[^'\\])*'|["'][^\r\n]*`
+const nextCredential = (quote) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote})`
+const quotedValue = (quote) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
+const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
 const credentialAssignment = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})|\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|(?!\[credential omitted\])[^\s"',;]{6,})`, 'gi')
 
 function preview(text, secret) {
