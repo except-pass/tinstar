@@ -33,7 +33,7 @@ type Attempt = {
   prior?: Awaited<ReturnType<CreationReceipts['get']>>
   state: JiraWorkReceiptState
   dispatched: boolean
-  dispatch: (evidence?: Pick<JiraWorkReceiptState, 'fields' | 'link' | 'priorCommentIds' | 'sourceKey'>) => Promise<void>
+  dispatch: (evidence?: Pick<JiraWorkReceiptState, 'fields' | 'link' | 'priorCommentIds' | 'commentHash' | 'sourceKey'>) => Promise<void>
   contradict: () => Promise<void>
   identify: (cardId: string) => Promise<void>
   confirm: (card: Issue) => Promise<unknown>
@@ -225,7 +225,7 @@ export class JiraWork extends JiraClient {
   private transitionAudit(input: JiraTransition, actor: string) {
     const details = [
       input.reason && `Reason: ${input.reason}`, input.evidence && `Evidence: ${input.evidence}`,
-      input.disposition && `Disposition: ${input.disposition}`, input.live_revision && `Live revision: ${input.live_revision}`,
+      input.disposition && `Disposition: ${input.disposition}`, input.verb === 'Deployed' && input.live_revision && `Live revision: ${input.live_revision}`,
     ].filter(Boolean)
     return details.length ? [`${input.verb} via Tin Star (${actor})`, ...details].join('\n') : undefined
   }
@@ -234,10 +234,19 @@ export class JiraWork extends JiraClient {
     return note ? { update: { comment: [{ add: { body: jiraText(note) } }] } } : {}
   }
 
-  private async checkComment(id: string, note: string | undefined, previous: unknown[], evidence?: { accountId: string; from: number; before: number }) {
+  private async checkComment(id: string, note: string | undefined, attempt: Attempt, evidence?: { accountId: string; from: number; before: number }) {
     if (!note) return
+    const { dispatchedAt, priorCommentIds, commentHash } = attempt.state
+    if (!dispatchedAt || !priorCommentIds || !commentHash) throw new JiraWorkUnconfirmed('Jira receipt lacks a comment baseline')
+    const prefix = JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId]).slice(0, -1) + ','
+    const ambiguous = (await this.receipts.entries(prefix)).some(([key, receipt]) => {
+      const other = receipt.jiraWork
+      return key !== attempt.key && receipt.cardId === this.qualified(id) && other?.dispatchedAt &&
+        other.dispatchedAt <= dispatchedAt && !other.confirmed && !other.rejected && other.commentHash === commentHash
+    })
+    if (ambiguous) throw new JiraWorkUnconfirmed('Jira comment may belong to another unresolved operation')
     const page = await this.notes(id)
-    if (!page.comments.some(comment => !previous.includes(comment.id) && comment.body === note &&
+    if (!page.comments.some(comment => !priorCommentIds.includes(comment.id) && comment.body === note &&
       (!evidence || (comment.author_id === evidence.accountId &&
         Date.parse(comment.created_at) >= evidence.from && Date.parse(comment.created_at) < evidence.before)))) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
@@ -412,10 +421,10 @@ export class JiraWork extends JiraClient {
         field, before: previous[field] ?? '',
         after: text(value && typeof value === 'object' && 'value' in value ? value.value : value),
       })).filter(change => change.before !== change.after)
-      await attempt.dispatch({ fields: changes, priorCommentIds: comments })
+      await attempt.dispatch({ fields: changes, priorCommentIds: comments, commentHash: note ? digest(note) : undefined })
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
-      await this.checkComment(id, note, comments ?? [])
+      await this.checkComment(id, note, attempt)
       this.checkEdit(saved, input)
       if (fields[mapping.decisions] && saved.decisions !== text(fields[mapping.decisions])) {
         throw new JiraWorkUnconfirmed('Jira did not confirm the full Decision Questions field')
@@ -436,10 +445,10 @@ export class JiraWork extends JiraClient {
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
       const comments = note ? (await this.notes(id)).comments.map(comment => comment.id) : undefined
-      await attempt.dispatch({ fields: [{ field: 'status', before: current.status, after: to }], priorCommentIds: comments })
+      await attempt.dispatch({ fields: [{ field: 'status', before: current.status, after: to }], priorCommentIds: comments, commentHash: note ? digest(note) : undefined })
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id }, ...this.commentUpdate(note) })
       const saved = await this.read(id)
-      await this.checkComment(id, note, comments ?? [])
+      await this.checkComment(id, note, attempt)
       if (saved.status !== to) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
       return attempt.confirm(saved)
     })
@@ -498,10 +507,9 @@ export class JiraWork extends JiraClient {
         if (!Array.isArray(change.items)) throw new Error('Incomplete Jira changelog items')
         const items = change.items as Record<string, unknown>[]
         if (link ? items.some(linkMatches) : fields!.every(field => items.some(item => this.fieldMatches(item, field)))) {
-          if (note && !attempt.state.priorCommentIds) throw new JiraWorkUnconfirmed('Jira receipt lacks a comment baseline')
           const nextCommentWrite = Math.min(...candidates.filter(([, receipt]) =>
             receipt.cardId === card.id && receipt.jiraWork?.priorCommentIds && receipt.jiraWork.dispatchedAt! > dispatchedAt).map(([, receipt]) => receipt.jiraWork!.dispatchedAt!))
-          await this.checkComment(id, note, attempt.state.priorCommentIds ?? [], { accountId, from: dispatchedAt, before: nextCommentWrite })
+          await this.checkComment(id, note, attempt, { accountId, from: dispatchedAt, before: nextCommentWrite })
           return attempt.confirm(card)
         }
       }

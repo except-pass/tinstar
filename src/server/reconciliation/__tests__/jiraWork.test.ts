@@ -46,7 +46,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -137,6 +137,9 @@ async function fixture() {
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       for (const comment of body.update?.comment ?? []) {
         if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created: new Date().toISOString(), author: { accountId: 'fixture-service' } })
+      }
+      if (controls.delayedComment) {
+        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: new Date().toISOString(), author: { accountId: 'fixture-service' } })
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -485,4 +488,42 @@ it('recovers a later comment and field change despite an unrelated earlier dispa
     items: [{ fieldId: 'description', fromString: null, toString: 'New description' }] }]
   expect(await call('update_work', later)).toMatchObject({ code: 'already-saved', card: { description: 'New description' } })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)
+
+
+it('does not confirm a later edit using an earlier dispatch’s identical note', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
+  const edit = { kind: 'jira_edit', card_id, note: 'Same note' }
+  f.controls.beforeWrite = 'PUT issue/60001'
+  expect(await call('update_work', { ...edit, operation_id: 'earlier', name: 'Earlier title' })).toMatchObject({ code: 'unconfirmed' })
+  const later = { ...edit, operation_id: 'later', description: 'New description' }
+  f.controls.omitComment = true
+  f.controls.delayedComment = 'Same note\n\nRecorded via Tin Star (Fixture agent)'
+  expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'description', fromString: null, toString: 'New description' }] }]
+  expect(await call('update_work', later)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)
+
+it('accepts transition revision arguments only for Deployed', async () => {
+  const f = await fixture()
+  const { client, call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
+  const schema = (await client.listTools()).tools.find(tool => tool.name === 'transition_work')!.inputSchema
+  const validate = new Ajv({ strict: false }).compile(schema)
+  const revisions = { required_revision: 'rev-a', live_revision: 'rev-a' }
+  for (const verb of jiraVerbs) {
+    expect(validate({ card_id, operation_id: 'check', verb, ...revisions })).toBe(verb === 'Deployed')
+  }
+  const before = f.requests.length
+  for (const field of ['required_revision', 'live_revision']) {
+    const result = await client.callTool({ name: 'transition_work',
+      arguments: { card_id, operation_id: field, verb: 'Queue', [field]: 'rev-a' } })
+    expect(result.isError).toBe(true)
+    expect(JSON.stringify(result.content)).toContain('Only Deployed')
+  }
+  expect(f.requests).toHaveLength(before)
 }, 30_000)

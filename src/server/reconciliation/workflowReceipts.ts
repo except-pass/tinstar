@@ -31,6 +31,7 @@ export interface JiraWorkReceiptState {
   rejected?: number
   fields?: JiraFieldChange[]
   priorCommentIds?: unknown[]
+  commentHash?: string
   sourceKey?: string
   link?: { id?: string; typeId: string; direction: 'inward' | 'outward'; targetKey: string; label: string }
 }

@@ -73,11 +73,14 @@ export const jiraEditSchema = z.object({
   answers: z.array(z.object({ id: decisionId, answer: multiline }).strict()).min(1).optional(),
   blocker: externalBlocker.nullable().optional(), note: multiline.optional(),
 }).strict()
-export const jiraTransitionSchema = z.object({
+const transitionArguments = z.object({
   card_id: jiraWorkIdSchema, operation_id: operation, verb: z.enum(jiraVerbs), to: status.optional(),
   reason: multiline.optional(), evidence: multiline.optional(), disposition: multiline.optional(),
-  required_revision: singleLine.optional(), live_revision: singleLine.optional(),
-}).strict()
+})
+export const jiraTransitionSchema = z.union([
+  transitionArguments.extend({ verb: z.literal('Deployed'), required_revision: singleLine.optional(), live_revision: singleLine.optional() }).strict(),
+  transitionArguments.extend({ verb: z.enum(jiraVerbs).exclude(['Deployed']) }).strict('Only Deployed accepts required_revision and live_revision'),
+])
 export const jiraLinkSchema = z.object({
   card_id: jiraWorkIdSchema, operation_id: operation, action: z.enum(['add', 'remove']),
   target_key: jiraKey.optional(), type: singleLine.optional(),
