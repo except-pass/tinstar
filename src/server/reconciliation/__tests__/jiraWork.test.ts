@@ -88,7 +88,11 @@ async function fixture() {
     if (path === 'issueLinkType') return response({ issueLinkTypes: types })
     if (path === 'issueLink' && method === 'POST') {
       const type = types.find(type => type.id === body.type.id)!
-      links.set(String(nextLink++), { type, inwardIssue: body.inwardIssue.id, outwardIssue: body.outwardIssue.id })
+      const endpoint = (issue: { id?: string; key?: string }) => issue.id ?? [...issues.values()].find(candidate => candidate.key === issue.key)?.id
+      const inwardIssue = endpoint(body.inwardIssue)
+      const outwardIssue = endpoint(body.outwardIssue)
+      if (!inwardIssue || !outwardIssue) return response({}, 404)
+      links.set(String(nextLink++), { type, inwardIssue, outwardIssue })
       if (controls.loseLink) { controls.loseLink = false; throw new Error('Dropped link response') }
       return response(undefined, 201)
     }
@@ -127,7 +131,7 @@ async function fixture() {
       Object.assign(issue.fields, body.fields)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       for (const comment of body.update?.comment ?? []) {
-        if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created: issue.fields.updated, author: { accountId: 'fixture-service' } })
+        if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created: new Date().toISOString(), author: { accountId: 'fixture-service' } })
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -207,7 +211,9 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   expect(await link('two-blockers', { action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'inward' })).toMatchObject({ outcome: 'not-saved' })
   expect(await edit('clear-external', { blocker: null })).toMatchObject({ outcome: 'saved', card: { blocker: null } })
   const linked = await link('jira-blocker', { action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'inward' })
-  expect(linked, JSON.stringify(linked)).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Jira', link: { id: '8001', target_id: '70001', label: 'is blocked by' } } } })
+  expect(linked, JSON.stringify(linked)).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Jira', link: { id: '8001', target_key: 'OTHER-1', label: 'is blocked by' } } } })
+  expect(linked.card.blocker.link).not.toHaveProperty('target_id')
+  expect(f.requests.some(request => request.method === 'GET' && /issue\/(OTHER-1|70001)$/.test(request.path))).toBe(false)
   expect(await move('wait-too-early', 'Resolve Wait', { to: 'In Progress', evidence: 'Claimed clear' })).toMatchObject({ outcome: 'not-saved' })
   expect(await link('remove', { action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'saved', card: { blocker: null } })
   expect(await move('cleared', 'Resolve Wait', { to: 'In Progress', evidence: 'The dependency was accepted.' })).toMatchObject({ outcome: 'saved' })
@@ -244,8 +250,9 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.staleSearch = true
   expect(await second.call('create_work', args)).toMatchObject({ code: 'unconfirmed' })
   f.controls.staleSearch = false
+  f.issues.get('60001')!.fields.summary = 'Title changed natively'
   const confirmed = await second.call('create_work', args)
-  expect(confirmed).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { issue_type: 'Epic', issue_id: '60001' } })
+  expect(confirmed).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { issue_type: 'Epic', issue_id: '60001', name: 'Title changed natively' } })
   expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue')).toHaveLength(1)
   expect(await second.call('create_work', { ...args, name: 'Changed input' })).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   const card_id = confirmed.card.id
@@ -253,7 +260,6 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   const edit = { kind: 'jira_edit', card_id, operation_id: 'edit-proof', owner: 'Taylor', description: 'Inspect the test output.', note: 'One comment only.' }
   expect(await second.call('update_work', edit)).toMatchObject({ outcome: 'partially-saved' })
   f.issues.get('60001')!.fields[config.fields.owner] = { value: 'Avery' }
-  f.issues.get('60001')!.comments[0].body = 'Changed in Jira'
   f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items: [
     { fieldId: config.fields.owner, fromString: null, toString: 'Taylor' },
     { fieldId: 'description', fromString: null, toString: 'Inspect the test output.' },
@@ -275,12 +281,18 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
     items: [{ fieldId: 'status', fromString: 'Backlog', toString: 'Queued' }] })
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'already-saved', card: { status: 'Queued' } })
   f.controls.omitComment = true
-  expect(await third.call('update_work', { kind: 'jira_edit', card_id, operation_id: 'omit', note: 'Jira omitted this' })).toMatchObject({ outcome: 'partially-saved' })
+  const omit = { kind: 'jira_edit', card_id, operation_id: 'omit', description: 'New instructions', note: 'Jira omitted this' }
+  expect(await third.call('update_work', omit)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001']!.push({ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items: [
+    { fieldId: 'description', fromString: 'Inspect the test output.', toString: 'New instructions' },
+  ] })
+  expect(await third.call('update_work', omit)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'PUT' && request.path === 'issue/60001')).toHaveLength(2)
   expect(await third.call('transition_work', { card_id, operation_id: 'dequeue', verb: 'Dequeue' })).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
   f.controls.omitComment = false
   const moveAgain = (operation_id: string, verb: string, fields: Record<string, unknown> = {}) =>
     third.call('transition_work', { card_id, operation_id, verb, ...fields })
-  expect(await moveAgain('queue-again', 'Queue', { evidence: 'The fixture checks native readback.' })).toMatchObject({ outcome: 'saved' })
+  expect(await moveAgain('queue-again', 'Queue')).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('start-work', 'Start', { evidence: 'The test is running.' })).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('stop-without-reconciling', 'Stop and Requeue', { evidence: 'Named test checks are ready.' })).toMatchObject({ outcome: 'not-saved' })
   expect(await moveAgain('stop', 'Stop and Requeue', { disposition: 'The previous test process exited.', evidence: 'The reproduction and assertions are ready.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
@@ -343,7 +355,7 @@ it.each([false, true])('answers a Jira decision with native soft breaks=%s and p
   const created = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Decision layouts' })
   const issue = f.issues.get('60001')!
   const line = (text: string) => ({ type: 'text', text })
-  const option = { ...line('  Option: East'), marks: [{ type: 'link', attrs: { href: 'https://example.test/east' } }] }
+  const option = { ...line('  Option: East '), marks: [{ type: 'link', attrs: { href: 'https://example.test/east' } }] }
   const d2 = line('D2 [Open]: Choose a label?')
   const br = { type: 'hardBreak' }
   const para = (...content: Record<string, unknown>[]) => ({ type: 'paragraph', content })
@@ -357,4 +369,35 @@ it.each([false, true])('answers a Jira decision with native soft breaks=%s and p
   ] } })
   expect(issue.fields[config.fields.decisions].content.flatMap((node: { content: unknown[] }) => node.content))
     .toEqual(expect.arrayContaining([option, d2]))
+  const savedOption = issue.fields[config.fields.decisions].content.flatMap((node: { content: unknown[] }) => node.content)
+    .find((node: { text?: string }) => node.text?.startsWith('  Option:'))
+  expect(JSON.stringify(savedOption)).toBe(JSON.stringify(option))
+}, 30_000)
+
+
+it('leaves overlapping edit and reversed link history unconfirmed', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const first = await call('create_work', { provider: 'jira', operation_id: 'first', name: 'Original' })
+  const second = await call('create_work', { provider: 'jira', operation_id: 'second', name: 'Neighbor' })
+  const card_id = first.card.id
+  const edit = { kind: 'jira_edit', card_id, operation_id: 'lost-subset', name: 'Changed' }
+  f.controls.beforeWrite = 'PUT issue/60001'
+  expect(await call('update_work', edit)).toMatchObject({ code: 'unconfirmed' })
+  expect(await call('update_work', { ...edit, operation_id: 'saved-superset', owner: 'Avery' })).toMatchObject({ outcome: 'saved' })
+  const history = (items: Record<string, unknown>[]) => ({ created: new Date().toISOString(), author: { accountId: 'fixture-service' }, items })
+  f.history['60001'] = [history([
+    { fieldId: 'summary', fromString: 'Original', toString: 'Changed' },
+    { fieldId: config.fields.owner, fromString: null, toString: 'Avery' },
+  ])]
+  expect(await call('update_work', edit)).toMatchObject({ code: 'unconfirmed' })
+
+  const add = { card_id, action: 'add', operation_id: 'lost-link', target_key: 'WORK-2', direction: 'outward', type: 'Blocks' }
+  f.controls.beforeWrite = 'POST issueLink'
+  expect(await call('link_work', add)).toMatchObject({ code: 'unconfirmed' })
+  expect(await call('link_work', { ...add, card_id: second.card.id, operation_id: 'opposite-link', target_key: 'WORK-1', direction: 'inward' }))
+    .toMatchObject({ outcome: 'saved' })
+  f.history['60001']!.push(history([{ field: 'Link', from: null, to: 'WORK-2', toString: 'This issue blocks WORK-2' }]))
+  expect(await call('link_work', add)).toMatchObject({ code: 'unconfirmed' })
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issueLink')).toHaveLength(2)
 }, 30_000)

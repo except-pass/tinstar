@@ -21,7 +21,7 @@ function text(value: unknown) {
   return adfText(value, true)
 }
 class JiraWorkUnconfirmed extends Error {}
-type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_id: string; target_key: string }
+type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string }
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
   description: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
@@ -33,7 +33,7 @@ type Attempt = {
   prior?: Awaited<ReturnType<CreationReceipts['get']>>
   state: JiraWorkReceiptState
   dispatched: boolean
-  dispatch: (evidence?: Pick<JiraWorkReceiptState, 'fields' | 'link'>) => Promise<void>
+  dispatch: (evidence?: Pick<JiraWorkReceiptState, 'fields' | 'link' | 'priorCommentIds' | 'sourceKey'>) => Promise<void>
   contradict: () => Promise<void>
   identify: (cardId: string) => Promise<void>
   confirm: (card: Issue) => Promise<unknown>
@@ -59,27 +59,28 @@ export class JiraWork extends JiraClient {
     return id.issueId
   }
 
-  private async read(id: string): Promise<Issue> {
+  private async read(id: string, allowOtherTypes = false): Promise<Issue> {
     const fields = ['summary', 'project', 'issuetype', 'status', 'description', 'updated', 'issuelinks', ...Object.values(this.config.fields)]
     const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
     const f = raw.fields
     if (!nativeId(raw.id) || raw.id !== id || f?.project?.id !== this.config.projectId || typeof raw.key !== 'string') {
       throw new JiraWorkInputError('Jira readback did not confirm the configured issue identity and project')
     }
-    if (!Object.values(this.config.issueTypes).includes(f.issuetype?.id) || typeof f.status?.name !== 'string' || typeof f.summary !== 'string' ||
+    const issueType = Object.entries(this.config.issueTypes).find(([, typeId]) => typeId === f.issuetype?.id)?.[0]
+    if ((!issueType && (!allowOtherTypes || !nativeId(f.issuetype?.id))) || typeof f.status?.name !== 'string' || typeof f.summary !== 'string' ||
       typeof f.updated !== 'string' || !Array.isArray(f.issuelinks) || Object.values(this.config.fields).some(field => !Object.hasOwn(f, field))) {
       throw new Error('Incomplete Jira work readback')
     }
     const links = f.issuelinks.map((link: Record<string, any>): Link => {
       const direction = link.inwardIssue ? 'inward' : 'outward'
       const target = link[direction + 'Issue']
-      if (!nativeId(link.id) || !nativeId(link.type?.id) || !nativeId(target?.id) || typeof target.key !== 'string') throw new Error('Incomplete Jira issue link readback')
-      return { id: link.id, type_id: link.type.id, type: link.type.name, label: link.type[direction], direction, target_id: target.id, target_key: target.key }
+      if (!nativeId(link.id) || !nativeId(link.type?.id) || typeof target?.key !== 'string') throw new Error('Incomplete Jira issue link readback')
+      return { id: link.id, type_id: link.type.id, type: link.type.name, label: link.type[direction], direction, target_key: target.key }
     })
     const { owner, decisions, blockerType, blockerTarget, blockerCondition } = this.config.fields
     return {
       id: this.qualified(id), issue_id: id, key: raw.key, url: `${this.config.url}/browse/${encodeURIComponent(raw.key)}`,
-      project_id: this.config.projectId, issue_type: f.issuetype.id === this.config.issueTypes.Task ? 'Task' : 'Epic',
+      project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
       name: f.summary, status: f.status.name, updated_at: f.updated, owner: f[owner]?.value ?? null,
       description: text(f.description), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
       externalBlocker: { type: f[blockerType]?.value ?? null, target: text(f[blockerTarget]), unblocks_when: text(f[blockerCondition]) },
@@ -167,7 +168,7 @@ export class JiraWork extends JiraClient {
       pending = Boolean(state.dispatchedAt ?? state.startedAt ?? (verb === 'create' && prior?.cardId))
       if (state.confirmed && cardId) {
         pending = true
-        return this.saved(await this.read(this.id(cardId)), true)
+        return this.saved(await this.read(this.id(cardId), verb === 'create'), true)
       }
       const dispatched = pending
       const persist = () => this.receipts.putJiraWork(key, hash, cardId, state)
@@ -217,10 +218,12 @@ export class JiraWork extends JiraClient {
     return note ? { update: { comment: [{ add: { body: jiraText(note) } }] } } : {}
   }
 
-  private async checkComment(id: string, note: string | undefined, previous: Set<unknown>) {
+  private async checkComment(id: string, note: string | undefined, previous: unknown[], evidence?: { accountId: string; from: number; before: number }) {
     if (!note) return
     const page = await this.notes(id)
-    if (!page.comments.some(comment => !previous.has(comment.id) && comment.body === note)) {
+    if (!page.comments.some(comment => !previous.includes(comment.id) && comment.body === note &&
+      (!evidence || (comment.author_id === evidence.accountId &&
+        Date.parse(comment.created_at) >= evidence.from && Date.parse(comment.created_at) < evidence.before)))) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
   }
@@ -274,9 +277,9 @@ export class JiraWork extends JiraClient {
         id = result.id
         await attempt.identify(this.qualified(id))
       }
-      const issue = await this.read(id)
-      if (issue.issue_type !== issueType || issue.status !== 'Backlog' || issue.name !== input.name ||
-        issue.description !== (input.description ?? '') || issue.owner !== (input.owner ?? null)) {
+      const issue = await this.read(id, true)
+      if (!attempt.dispatched && (issue.issue_type !== issueType || issue.status !== 'Backlog' || issue.name !== input.name ||
+        issue.description !== (input.description ?? '') || issue.owner !== (input.owner ?? null))) {
         await attempt.contradict()
         throw new JiraWorkUnconfirmed('Jira creation readback differs from the requested ticket or Backlog default')
       }
@@ -312,7 +315,7 @@ export class JiraWork extends JiraClient {
       const answer = answers.get(heading[1]!)
       if (answer === undefined) return []
       const status = heading.index + heading[1]!.length + 2
-      const end = heading.index + issue.decisions.slice(heading.index, headings[index + 1]?.index).trimEnd().length
+      const end = heading.index + issue.decisions.slice(heading.index, headings[index + 1]?.index).replace(/(?:\n[ \t]*)+$/, '').length
       const lines = answer.replace(/\r\n/g, '\n').split('\n')
       return [{ start: status, end: status + 4, answer: undefined },
         { start: end, end, answer: lines.map((line, i) => ({ type: 'text', text: i ? `    ${line}` : `  Answer: ${line}` })) }]
@@ -365,8 +368,8 @@ export class JiraWork extends JiraClient {
     return this.mutate('edit', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = input.note ? `${input.note}\n\nRecorded via Tin Star (${actor})` : undefined
-      if (attempt.dispatched) return this.recover(id, attempt)
-      const comments = new Set(note ? (await this.notes(id)).comments.map(comment => comment.id) : [])
+      if (attempt.dispatched) return this.recover(id, attempt, note)
+      const comments = note ? (await this.notes(id)).comments.map(comment => comment.id) : undefined
       const current = await this.read(id)
       if (input.description !== undefined && !input.description?.trim() && current.status === 'Queued') {
         throw new JiraWorkInputError('Return this ticket to To Do before clearing its instructions and success condition')
@@ -394,10 +397,10 @@ export class JiraWork extends JiraClient {
         field, before: previous[field] ?? '',
         after: text(value && typeof value === 'object' && 'value' in value ? value.value : value),
       })).filter(change => change.before !== change.after)
-      await attempt.dispatch({ fields: changes })
+      await attempt.dispatch({ fields: changes, priorCommentIds: comments })
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
-      await this.checkComment(id, note, comments)
+      await this.checkComment(id, note, comments ?? [])
       this.checkEdit(saved, input)
       if (fields[mapping.decisions] && saved.decisions !== text(fields[mapping.decisions])) {
         throw new JiraWorkUnconfirmed('Jira did not confirm the full Decision Questions field')
@@ -410,18 +413,18 @@ export class JiraWork extends JiraClient {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
-      if (attempt.dispatched) return this.recover(id, attempt)
+      if (attempt.dispatched) return this.recover(id, attempt, note)
       const current = await this.read(id)
       const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
       const to = checkJiraTransition({ ...current, blocker }, input)
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
-      const comments = new Set(note ? (await this.notes(id)).comments.map(comment => comment.id) : [])
-      await attempt.dispatch({ fields: [{ field: 'status', before: current.status, after: to }] })
+      const comments = note ? (await this.notes(id)).comments.map(comment => comment.id) : undefined
+      await attempt.dispatch({ fields: [{ field: 'status', before: current.status, after: to }], priorCommentIds: comments })
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id }, ...this.commentUpdate(note) })
       const saved = await this.read(id)
-      await this.checkComment(id, note, comments)
+      await this.checkComment(id, note, comments ?? [])
       if (saved.status !== to) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
       return attempt.confirm(saved)
     })
@@ -434,7 +437,7 @@ export class JiraWork extends JiraClient {
     return field === change.field && valueMatches('from', change.before) && valueMatches('to', change.after)
   }
 
-  private async recover(id: string, attempt: Attempt) {
+  private async recover(id: string, attempt: Attempt, note?: string) {
     const { dispatchedAt, fields, link } = attempt.state
     if (!dispatchedAt || (!fields?.length && !link)) throw new JiraWorkUnconfirmed('Jira history cannot verify this operation')
     const card = await this.read(id)
@@ -449,14 +452,24 @@ export class JiraWork extends JiraClient {
       if (link.id) return item.fromLinkId === link.id && item.to == null && item.toString == null
       return item.from == null && item.fromString == null &&
         labels?.length === 1 && labels[0].typeId === link.typeId && labels[0].direction === link.direction &&
-        (item.to === link.targetId || item.to === link.targetKey) &&
+        (item.to == null || item.to === link.targetKey || nativeId(item.to)) &&
         item.toString === `This issue ${link.label} ${link.targetKey}`
     }
-    const competing = (await this.receipts.entries('["jira-work",')).filter(([key, receipt]) =>
-      key !== attempt.key && receipt.cardId === card.id && (receipt.jiraWork?.dispatchedAt ?? 0) >= dispatchedAt &&
-      (link ? receipt.jiraWork?.link?.id === link.id && receipt.jiraWork?.link?.typeId === link.typeId &&
-        receipt.jiraWork?.link?.direction === link.direction && receipt.jiraWork?.link?.targetId === link.targetId :
-        isDeepStrictEqual(receipt.jiraWork?.fields, fields)))
+    const prefix = JSON.stringify(['jira-work', this.config.cloudId, this.config.projectId]).slice(0, -1) + ','
+    const later = (await this.receipts.entries(prefix)).filter(([key, receipt]) =>
+      key !== attempt.key && (receipt.jiraWork?.dispatchedAt ?? 0) >= dispatchedAt)
+    const competing = later.filter(([, receipt]) => {
+      const other = receipt.jiraWork?.link
+      if (link) {
+        if (!other) return false
+        if (link.id || other.id) return Boolean(link.id && link.id === other.id)
+        if (link.typeId !== other.typeId) return false
+        return (receipt.cardId === card.id && other.targetKey === link.targetKey && other.direction === link.direction) ||
+          (receipt.jiraWork?.sourceKey === link.targetKey && other.targetKey === card.key && other.direction !== link.direction)
+      }
+      return receipt.cardId === card.id && receipt.jiraWork?.fields?.some(other =>
+        fields?.some(field => isDeepStrictEqual(field, other)))
+    })
     for (let startAt = 0; ; ) {
       const page = await this.request(`issue/${id}/changelog?startAt=${startAt}&maxResults=100`)
       if (page.startAt !== startAt || !Array.isArray(page.values)) throw new Error('Incomplete Jira changelog')
@@ -467,6 +480,10 @@ export class JiraWork extends JiraClient {
         if (!Array.isArray(change.items)) throw new Error('Incomplete Jira changelog items')
         const items = change.items as Record<string, unknown>[]
         if (link ? items.some(linkMatches) : fields!.every(field => items.some(item => this.fieldMatches(item, field)))) {
+          if (note && !attempt.state.priorCommentIds) throw new JiraWorkUnconfirmed('Jira receipt lacks a comment baseline')
+          const nextCommentWrite = Math.min(...later.filter(([, receipt]) =>
+            receipt.cardId === card.id && receipt.jiraWork?.priorCommentIds).map(([, receipt]) => receipt.jiraWork!.dispatchedAt!))
+          await this.checkComment(id, note, attempt.state.priorCommentIds ?? [], { accountId, from: dispatchedAt, before: nextCommentWrite })
           return attempt.confirm(card)
         }
       }
@@ -490,7 +507,7 @@ export class JiraWork extends JiraClient {
         if (!input.link_id || input.target_key || input.type || input.direction) throw new JiraWorkInputError('Remove requires only the link ID from this ticket')
         const link = card.links.find(link => link.id === input.link_id)
         if (!link) throw new JiraWorkInputError('This ticket does not have that link ID')
-        await attempt.dispatch({ link: { id: link.id, typeId: link.type_id, direction: link.direction, targetId: link.target_id, targetKey: link.target_key, label: link.label } })
+        await attempt.dispatch({ link: { id: link.id, typeId: link.type_id, direction: link.direction, targetKey: link.target_key, label: link.label } })
         await this.writeLink(`issueLink/${input.link_id}`, 'DELETE')
         card = await this.read(id)
         if (card.links.some(link => link.id === input.link_id)) throw new JiraWorkUnconfirmed('Jira has not confirmed removal of the link')
@@ -499,21 +516,31 @@ export class JiraWork extends JiraClient {
       if (!input.target_key || !input.type || !input.direction || input.link_id) {
         throw new JiraWorkInputError('Add requires target_key, native link type and direction as shown from this ticket')
       }
-      const target = await this.request(`issue/${input.target_key}?fields=project`)
-      if (!nativeId(target.id) || target.id === id || typeof target.key !== 'string') throw new JiraWorkInputError('Choose another visible Jira issue')
-      const matches = (issue: Issue) => issue.links.some(link => link.target_id === target.id && link.type === input.type && link.direction === input.direction)
+      const targetKey = input.target_key
+      if (targetKey === card.key) throw new JiraWorkInputError('Choose another Jira issue')
+      const matches = (issue: Issue) => issue.links.some(link => link.target_key === targetKey && link.type === input.type && link.direction === input.direction)
       if (!matches(card)) {
         const types = await this.request('issueLinkType')
         const type = types.issueLinkTypes?.find((candidate: Record<string, any>) => candidate.name === input.type)
         if (!nativeId(type?.id) || typeof type[input.direction] !== 'string') throw new JiraWorkInputError('Choose an available native Jira link type')
         if (type.id === this.config.blocksLinkTypeId) {
-          const blocked = input.direction === 'inward' ? card : target.fields?.project?.id === this.config.projectId ? await this.read(target.id) : null
-          if (blocked && this.blocker(blocked)) throw new JiraWorkInputError('Clear the current primary blocker before adding another')
+          if (input.direction === 'inward' && this.blocker(card)) {
+            throw new JiraWorkInputError('Clear the current primary blocker before adding another')
+          }
+          if (input.direction === 'outward' && targetKey.startsWith(card.key.slice(0, card.key.lastIndexOf('-') + 1))) {
+            const result = await this.request('search/jql', 'POST', {
+              jql: `project = ${this.config.projectId} AND key = "${targetKey}"`, fields: ['project'], maxResults: 2,
+            })
+            const target = result.issues?.find((issue: Record<string, any>) => issue.key === targetKey &&
+              issue.fields?.project?.id === this.config.projectId && nativeId(issue.id))
+            if (!target || target.id === id) throw new JiraWorkInputError('Choose another issue in the configured Jira project')
+            if (this.blocker(await this.read(target.id))) throw new JiraWorkInputError('Clear the current primary blocker before adding another')
+          }
         }
-        await attempt.dispatch({ link: { typeId: type.id, direction: input.direction, targetId: target.id, targetKey: target.key, label: type[input.direction] } })
+        await attempt.dispatch({ sourceKey: card.key, link: { typeId: type.id, direction: input.direction, targetKey, label: type[input.direction] } })
         const pair = input.direction === 'inward'
-          ? { inwardIssue: { id: target.id }, outwardIssue: { id } }
-          : { inwardIssue: { id }, outwardIssue: { id: target.id } }
+          ? { inwardIssue: { key: targetKey }, outwardIssue: { id } }
+          : { inwardIssue: { id }, outwardIssue: { key: targetKey } }
         await this.writeLink('issueLink', 'POST', { ...pair, type: { id: type.id } })
         card = await this.read(id)
       }

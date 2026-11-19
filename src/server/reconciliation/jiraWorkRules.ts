@@ -166,8 +166,8 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
     throw new JiraWorkInputError(`${input.verb} is unavailable from ${current.status}; choose an allowed destination: ${destinations.join(', ')}`)
   }
   if (active.includes(to) && !current.owner) throw new JiraWorkInputError('Choose an Owner before entering a work status')
-  if ((to === 'Queued' || input.verb === 'Start') && (!current.description.trim() || current.blocker || !input.evidence)) {
-    throw new JiraWorkInputError('Queue and Start require instructions, a clear success condition, evidence and no primary blocker')
+  if ((to === 'Queued' || input.verb === 'Start') && (!current.description.trim() || current.blocker)) {
+    throw new JiraWorkInputError('Queue and Start require instructions, a clear success condition and no primary blocker')
   }
   if (['Start', 'Submit for Review', 'Accept Review', 'Accept Final', 'Release Ready', 'Deployed', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb) && !input.evidence) {
     throw new JiraWorkInputError(`${input.verb} requires evidence of the stated outcome`)
