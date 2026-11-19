@@ -29,11 +29,11 @@ const tokenLike = /\b(?:ATATT|ATCTT|ntn_|secret_|sk-|github_pat_|gh[pousr]_)[a-z
 export class JiraWebhookConfigurationError extends Error {}
 
 export function jiraConfig(raw) {
-  const { site, cloudId, projectId, mode = 'live', fields } = raw ?? {}
+  const { site, cloudId, projectId, fields } = raw ?? {}
   if (typeof site !== 'string' || !/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/.test(site) ||
       typeof cloudId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(cloudId) ||
-      !nativeId(projectId) || !['live', 'fixture'].includes(mode)) {
-    throw new JiraWebhookConfigurationError('Jira configuration needs a Cloud site URL, cloud ID, immutable project ID and optional live or fixture mode')
+      !nativeId(projectId)) {
+    throw new JiraWebhookConfigurationError('Jira configuration needs a Cloud site URL, cloud ID, immutable project ID')
   }
   if (!fields || typeof fields !== 'object' || Array.isArray(fields) ||
       Object.keys(fields).length !== projectFields.size ||
@@ -46,17 +46,23 @@ export function jiraConfig(raw) {
     fields,
     source: {
       source_id: `jira:cloud:${normalizedCloud}:project:${projectId}`, provider: 'jira', cloud_id: normalizedCloud,
-      site, project_id: String(projectId), home_path: null, type: 'ticket', mode, coverage: 'signed-project-webhooks',
+      site, project_id: String(projectId), home_path: null, type: 'ticket', coverage: 'signed-project-webhooks',
     },
   }
 }
+
+const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
+const nextCredentialLine = String.raw`(?:\r\n?|\n)[ \t{,]*["\x27]?${credentialKey}["\x27]?[ \t]*[:=]`
+const quotedCredential = String.raw`"(?:\\[\s\S]|(?!${nextCredentialLine})[^"\\])*"|'(?:\\[\s\S]|(?!${nextCredentialLine})[^'\\])*'|["'][^\r\n]*`
+const bareKeyCredential = new RegExp(String.raw`\b(${credentialKey})\s*[:=]\s*(?:${quotedCredential}|[^\s"',;]{6,})`, 'gi')
+const quotedKeyCredential = new RegExp(String.raw`((["'])${credentialKey}\2\s*[:=]\s*)(?:${quotedCredential})`, 'gi')
 
 function preview(text, secret) {
   return text.replaceAll(secret, '[credential omitted]')
     .replace(tokenLike, '[credential omitted]')
     .replace(/\b(?:basic|bearer)\s+[a-zA-Z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization))\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*|[^\s"',;]{6,})/gi, '$1=[credential omitted]')
-    .replace(/((["'])(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)\2\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*)/gi, '$1"[credential omitted]"')
+    .replace(bareKeyCredential, '$1=[credential omitted]')
+    .replace(quotedKeyCredential, '$1"[credential omitted]"')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
     .replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '')
@@ -144,7 +150,7 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
     schema: 'event-publisher.event.v1',
     source: {
       provider: 'jira', source_id: source.source_id, cloud_id: source.cloud_id, site: source.site,
-      project_id: source.project_id, mode: source.mode, delivery_id: delivery,
+      project_id: source.project_id, delivery_id: delivery,
     },
     subject: { type: 'ticket', id: `jira:ticket:${source.cloud_id}:${issue.id}` },
     observed_at: observedAt, occurred_at: eventTime(timestamp),

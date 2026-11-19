@@ -31,7 +31,8 @@ const jiraWorkSchema = z.object({
   url: z.string().regex(/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/),
   cloudId: z.string().uuid(),
   projectId: jiraId,
-  issueTypes: z.object({ Task: jiraId, Epic: jiraId.optional() }),
+  issueTypes: z.object({ Task: jiraId, Epic: jiraId.optional() })
+    .refine(({ Task, Epic }) => Task !== Epic, 'Jira issue type IDs must be distinct'),
   fields: z.object({ owner: jiraFieldId, decisions: jiraFieldId, blockerType: jiraFieldId, blockerTarget: jiraFieldId, blockerCondition: jiraFieldId })
     .refine(fields => new Set(Object.values(fields)).size === Object.keys(fields).length, 'Jira field IDs must be distinct'),
   blocksLinkTypeId: jiraId,

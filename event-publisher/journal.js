@@ -197,7 +197,8 @@ export class Journal {
     const result = this.db.prepare(`
       INSERT INTO sources (source_id, description) VALUES (?, ?)
       ON CONFLICT(source_id) DO UPDATE SET description = excluded.description
-      WHERE json_extract(sources.description, '$.mode') = json_extract(excluded.description, '$.mode')
+      WHERE json_extract(excluded.description, '$.provider') = 'jira'
+        OR json_extract(sources.description, '$.mode') = json_extract(excluded.description, '$.mode')
     `).run(source.source_id, JSON.stringify(source))
     // Otherwise fixture state could generate a fabricated live transition.
     if (!result.changes) throw new JournalConfigurationError('use a separate journal for live and fixture baselines')

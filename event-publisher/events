@@ -123,7 +123,7 @@ async function collect(journal, { homes, jira }, interval, secret) {
     journal.registerSources(sources, { reconcile: true })
     if (jira && interval) {
       listener = await startJiraWebhook(journal, jira, secret)
-      console.error(`Jira webhook listening on ${listener.url} [${jira.source.mode}]`)
+      console.error(`Jira webhook listening on ${listener.url}`)
     }
     if (interval && homes.length) console.error(`Observing ${homes.length} configured home(s) every ${interval} seconds`)
     let complete
@@ -172,7 +172,7 @@ function healthText(source) {
     .map(([name, count]) => `${name}=${count}`)
   const reason = source.reason ? ` · ${source.reason}` : ''
   const coverage = counts.length ? ` · ${counts.join(', ')}` : ''
-  return `${source.source_id} [${source.mode}] ${source.health} · ${source.coverage}${reason}${coverage}`
+  return `${source.source_id}${source.mode ? ` [${source.mode}]` : ''} ${source.health} · ${source.coverage}${reason}${coverage}`
 }
 
 function valueText(value) {
@@ -203,7 +203,7 @@ function eventText(event, replay, health) {
   if (source.provider === 'jira') {
     const omissions = event.observation?.projection_omissions
     const projection = omissions?.length ? ` · partial projection (${omissions.join(', ')})` : ''
-    return `${time} [${replay ? 'replay/' : ''}${source.mode}] jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
+    return `${time} ${replay ? '[replay] ' : ''}jira/ticket ${reference.issue_key} · ${jiraEventLabel(event)}${projection} · ${age(event.observed_at)} ago · ${health ?? 'unknown'} · #${event.sequence} ${event.event_id}`
   }
   const compact = [reference.task_id, reference.spawn_gen].filter(Boolean).join('@')
   let meaning = change.field

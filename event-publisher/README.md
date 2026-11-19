@@ -82,7 +82,7 @@ events sources
 
 `--after` is exclusive. A watch without it starts at the current journal tip.
 Watch and replay both accept the same filters. The text view marks replayed and
-fixture events. In JSON mode the event's `source.mode` identifies live and fixture
+First Mate fixture events. In JSON mode the First Mate event's `source.mode` identifies live and fixture
 data. Replay notices go to stderr so the JSON payloads stay identical.
 
 ## Receive Jira ticket changes
@@ -141,9 +141,7 @@ events inspect '<event-id-from-watch>'
 events sources
 ```
 
-For a local fixture, set `"mode": "fixture"`, use a separate private journal,
-and run `npm test -- --test-concurrency=2` from this directory. The fixture
-tests cover the loopback boundary, HMAC, redaction, transaction rollback,
+Run `npm test -- --test-concurrency=2` from this directory. The Jira tests use synthetic deliveries and a temporary journal. They cover the loopback boundary, HMAC, redaction, transaction rollback,
 restart and replay. Validate native issue, comment and link delivery coverage
 against the actual project before accepting the integration.
 

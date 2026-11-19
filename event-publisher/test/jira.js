@@ -20,7 +20,7 @@ const webhook = localUrl + '/webhooks/jira'
 const secret = 'synthetic-jira-webhook-secret-for-the-fixture'
 const jira = {
   site: 'https://example.atlassian.net', cloudId: '11111111-2222-4333-8444-555555555555',
-  projectId: '12345', mode: 'fixture',
+  projectId: '12345',
   fields: { owner: 'customfield_12001', decisions: 'customfield_12002', blockerType: 'customfield_12003',
     blockerTarget: 'customfield_12004', blockerCondition: 'customfield_12005' },
 }
@@ -90,7 +90,7 @@ exit 1
     error => error.code === 2 && error.stderr.includes('EVENTS_JIRA_WEBHOOK_SECRET'))
   const serve = () => start(t, args, { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret })
   let publisher = serve()
-  await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook} [fixture]`), () => publisher.logs.stderr)
+  await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook}`), () => publisher.logs.stderr)
   await until(() => existsSync(envCheck) && readFileSync(envCheck, 'utf8').endsWith('\n'))
   equal(readFileSync(envCheck, 'utf8'), 'clear\n')
 
@@ -160,7 +160,7 @@ exit 1
   equal(updates[2].subject.id, `jira:ticket:${jira.cloudId}:${issue.id}`)
   equal(updates[2].occurred_at, new Date(occurred).toISOString())
   equal(updates[2].source.delivery_id, 'delivery-update')
-  equal(updates[2].source.mode, 'fixture')
+  equal(updates[2].source.mode, undefined)
   equal(updates[2].evidence.source_reference.changelog_id, '65001')
   equal(updates[2].observation.method, 'webhook')
   ok(Date.parse(updates[2].observed_at) >= occurred)
@@ -183,6 +183,7 @@ exit 1
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe} and ${pat}\u001b[31m` }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
+      { type: 'paragraph', content: [{ type: 'text', text: '{"AUTHORIZATION":"second fixture value"}' }] },
       { type: 'paragraph', content: [{ type: 'text', text: 'D2 [Open]: What follows?' }] },
     ] } },
   })
@@ -192,7 +193,7 @@ exit 1
   equal(comment.evidence.source_reference.comment_id, '84001')
   equal(comment.evidence.source_reference.comment_author_id, '123:comment-author')
   equal(comment.evidence.source_reference.account_id, undefined)
-  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\nD2 [Open]: What follows?')
+  equal(comment.change.after, 'Signed review evidence: [credential omitted] and [credential omitted] and [credential omitted][31m\nSecond line password=[credential omitted] and token=[credential omitted] and {"password":"[credential omitted]"} and {"token":"[credential omitted]"\n{"AUTHORIZATION":"[credential omitted]"}\nD2 [Open]: What follows?')
   ok(!JSON.stringify(comment).includes(secret))
   ok(!JSON.stringify(comment).includes(unsafe))
   equal((await run('replay', '--source', 'firstmate', '--after', '0', '--json')).stdout, '')
@@ -207,13 +208,13 @@ exit 1
   const [stopCode] = await publisher.stop()
   equal(stopCode, 0)
   publisher = serve()
-  await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook} [fixture]`), () => publisher.logs.stderr)
+  await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook}`), () => publisher.logs.stderr)
   equal((await post('comment', evidence, { headers: { 'X-Atlassian-Webhook-Retry': '2' } })).status, 204)
   equal((await post('delivery-update', update)).status, 204)
   deepEqual(lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout), allAtStop)
   deepEqual(JSON.parse((await run('inspect', comment.event_id)).stdout), comment)
   const terminal = (await run('replay', '--source', 'jira', '--last', '1')).stdout
-  match(terminal, /\[replay\/fixture\] jira\/ticket WORK-1 · comment 84001 created/)
+  match(terminal, /\[replay\] jira\/ticket WORK-1 · comment 84001 created/)
   match(terminal, /↵ Second line/)
   ok(!terminal.includes(secret))
   const partialEventIds = []
