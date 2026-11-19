@@ -82,7 +82,7 @@ describe('progressive Releases display', () => {
     expect(initial.status).toBe('fresh')
     expect(initial.releases[0]).toMatchObject({ state, provenance: { historical: false }, github: { runsStatus: 'fresh' } })
     const retainedRuns = initial.releases[0]!.github!.runs
-    clock += 60_000; blocked = true
+    clock += 120_000; blocked = true
     try {
       const expired = reader.display(data())
       expect(expired).toMatchObject({ refreshing: true, status: 'partial' })
@@ -181,7 +181,7 @@ describe('progressive Releases display', () => {
     expect(initial.membership.status).toBe('complete')
     expect(initial.pulls.map(pull => pull.number)).toEqual([3401])
     tags = [{ name: 'v1.25.0', commit: { sha: baselineSha } }, ...tags]
-    changed = true; clock += 61_000
+    changed = true; clock += 120_000
     const refreshing = reader.get(data())
     try {
       await vi.waitFor(() => expect(comparing).toBe(true))

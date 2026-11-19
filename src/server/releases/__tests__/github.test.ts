@@ -66,7 +66,7 @@ describe('GitHub-native releases', () => {
       if (failed) throw new Error('unreadable')
       return fixture(path)
     }, () => clock)
-    await reader.get(data()); clock += 61_000; failed = true
+    await reader.get(data()); clock += 120_000; failed = true
     const retained = await reader.get(data())
     expect(retained).toMatchObject({ status: 'unknown' })
     expect(retained.releases[0]).toMatchObject({ version: 'v1.24.0', provenance: { historical: true } })
@@ -80,7 +80,10 @@ describe('GitHub-native releases', () => {
     let clock = now, tags = nativeTags
     const reader = new GithubReleaseReader(path => nativeFixtureRead({ tags })(path), () => clock)
     await reader.get(data())
-    tags = [{ name: 'v1.25.0', commit: { sha: 'd'.repeat(40) } }, ...nativeTags]; clock += 61_000
+    tags = [{ name: 'v1.25.0', commit: { sha: 'd'.repeat(40) } }, ...nativeTags]
+    clock += 119_999
+    expect((await reader.get(data())).releases[0]!.version).toBe('v1.24.0')
+    clock += 1
     const release = (await reader.get(data())).releases[0]!
     expect(release).toMatchObject({ version: 'v1.25.0', kind: 'production', state: 'Deployment unknown', targets: [] })
   })

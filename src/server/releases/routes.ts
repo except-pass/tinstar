@@ -8,7 +8,8 @@ import { currentOriginAllowlist } from '../api/originAllowlist'
 import { resolveCorsHeaders } from '../api/cors'
 import { fail, ok } from '../api/envelope'
 import { releaseChanges } from '../../shared/releaseChanges'
-import { releaseAssociations, type ReleasesRead } from '../../shared/releases'
+import { activeReleaseLinks, releaseAssociations, type ReleasesRead } from '../../shared/releases'
+import { operationalStatuses } from '../../shared/floorOrganization'
 import { AssociationConflict, AssociationStore, associationInput } from './associations'
 import { ReleasePullReader } from './pulls'
 import type { EvidenceRead } from './evidence'
@@ -61,7 +62,10 @@ export class ReleasesApi {
     const data = releaseAssociations(scene, events)
     data.associationsWritable = writable && !warning
     if (warning) { data.associationsComplete = false; data.warnings.push(warning); for (const pull of data.pulls) pull.exceptions.push(warning) }
-    const observations = await this.pulls.get(data.pulls.map(pull => pull.url))
+    const openCards = new Set(scene.cards.filter(card => !card.source.archived && !card.source.in_trash &&
+      operationalStatuses.includes(String(card.source.properties.Status?.value))).map(card => card.id))
+    const priority = new Set(data.pulls.filter(pull => activeReleaseLinks(pull).some(link => openCards.has(link.cardId))).map(pull => pull.url))
+    const observations = await this.pulls.get(data.pulls.map(pull => pull.url), priority)
     for (const pull of data.pulls) {
       Object.assign(pull, observations.get(pull.url))
       if (pull.readError) pull.exceptions.push(pull.readError)

@@ -76,6 +76,7 @@ export function readerScope(path: string): { repository: string; permissions: Pe
   for (const [key, value] of parsed.searchParams) {
     if (key === 'page' && /^[1-9]\d{0,2}$/.test(value) || key === 'per_page' && /^(?:[1-9]\d?|100)$/.test(value) ||
       key === 'state' && ['open', 'closed', 'all'].includes(value) || key === 'filter' && value === 'latest' ||
+      suffix === '/pulls' && (key === 'sort' && value === 'updated' || key === 'direction' && value === 'desc') ||
       key === 'event' && value === 'push' && suffix === '/actions/runs' ||
       key === 'head_sha' && /^[a-f0-9]{40,64}$/.test(value) || key === 'ref' && /^[a-f0-9]{40,64}$/.test(value)) continue
     throw new Error('Reader query outside PR evidence scope')

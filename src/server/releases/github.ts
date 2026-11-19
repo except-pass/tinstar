@@ -5,6 +5,7 @@ import { githubJson } from '../pulls/github'
 import { ReleaseMembershipReader } from './membership'
 
 const repository = 'fortresspower/cmsandbox'
+const catalogTtl = 120_000
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
 const tagSchema = z.object({ name: z.string(), commit: z.object({ sha }) })
 const recordSchema = z.object({ tag_name: z.string(), html_url: z.string(), body: z.string().nullable(), published_at: z.string().nullable(), draft: z.boolean(), prerelease: z.boolean().default(false) })
@@ -55,7 +56,7 @@ export class GithubReleaseReader {
       this.pending ??= this.refresh(tag).then(result => {
         this.cached = result
         this.selectedTag = tag
-        this.until = this.now() + 60_000
+        this.until = this.now() + catalogTtl
         return result
       }).finally(() => { this.pending = null })
       await this.pending
@@ -102,7 +103,7 @@ export class GithubReleaseReader {
       const pulls = release.pulls.map(pull => ({ ...pull, links: data.pulls.find(existing => existing.id === pull.id)?.links ?? [] }))
       const ids = new Set(pulls.map(pull => pull.id)), cards = new Set(pulls.flatMap(pull => activeReleaseLinks(pull).map(link => link.cardId)))
       const detail = this.details.get(`${release.version}:${release.sourceSha}`)
-      const readable = value.status !== 'unknown' && !!detail?.known && detail.at > this.now() - 60_000
+      const readable = value.status !== 'unknown' && !!detail?.known && detail.at > this.now() - catalogTtl
       const runs = release.github?.runs ?? []
       const latest = [...new Map([...runs].sort((a, b) => a.id - b.id).map(run => [run.workflow, run] as const)).values()]
       const actions = release.kind === 'production' && release.github ? {
@@ -205,7 +206,7 @@ export class GithubReleaseReader {
       await Promise.all(recent.slice(offset, offset + 3).map(async tag => {
         const key = `${tag.name}:${tag.commit.sha}`
         const known = this.details.get(key)
-        if (known?.known && known.at > this.now() - 60_000) return
+        if (known?.known && known.at > this.now() - catalogTtl) return
         try {
           const runs: z.infer<typeof runSchema>[] = []
           let complete = false
