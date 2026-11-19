@@ -58,6 +58,14 @@ const contents: PacketContents = {
   links: [{ label: 'Fixture evidence', url: 'https://example.com/fixture' }],
 }
 
+function deferredSignal() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function listen(handler: RequestListener) {
   const server = createServer(handler)
   return new Promise<{ url: string; close: () => Promise<void> }>(resolve => server.listen(0, '127.0.0.1', () => {
@@ -884,8 +892,8 @@ describe('prepared-card loop', () => {
     const { sources, jobs, pauseNextBodyRead } = await setup([card], false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
-    const bodyStarted = Promise.withResolvers<void>()
-    const releaseBody = Promise.withResolvers<void>()
+    const bodyStarted = deferredSignal()
+    const releaseBody = deferredSignal()
     pauseNextBodyRead(() => {
       bodyStarted.resolve()
       return releaseBody.promise
@@ -910,8 +918,8 @@ describe('prepared-card loop', () => {
     const { sources, jobs, tool, web, pauseNextBodyRead, rejectNextComment } = await setup([card], false)
     await sources.preparation.replenish()
     expect(jobs).toHaveLength(1)
-    const bodyStarted = Promise.withResolvers<void>()
-    const releaseBody = Promise.withResolvers<void>()
+    const bodyStarted = deferredSignal()
+    const releaseBody = deferredSignal()
     pauseNextBodyRead(() => {
       bodyStarted.resolve()
       return releaseBody.promise
@@ -949,8 +957,8 @@ describe('prepared-card loop', () => {
     const { sources } = await setup([card], false)
     const work = await sources.currentCard(card.id)
     const open = decisionCardSource(work, [{ id: 'ask', type: 'comment', text: card.comments[0]! }])
-    const monitorStarted = Promise.withResolvers<void>()
-    const releaseMonitor = Promise.withResolvers<void>()
+    const monitorStarted = deferredSignal()
+    const releaseMonitor = deferredSignal()
     let backgroundReads = 0
     const push = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }))
     const prep = new DecisionPreparation(sources.decisionPackets, {
@@ -1150,8 +1158,8 @@ describe('prepared-card loop', () => {
     const sibling = withOpenRequest(page(2, { tag: 'Decision' }))
     const { sources } = await setup([withdrawing, sibling], false)
     const cards = await Promise.all([withdrawing, sibling].map(card => sources.currentCard(card.id)))
-    const release = Promise.withResolvers<void>()
-    const otherRead = Promise.withResolvers<void>()
+    const release = deferredSignal()
+    const otherRead = deferredSignal()
     let withdrawn = false
     const withdrawal = sources.workflow.exclusive(withdrawing.id, async () => {
       await release.promise
