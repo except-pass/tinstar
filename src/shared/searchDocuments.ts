@@ -20,42 +20,13 @@ export interface SearchIndexRead {
 }
 export const searchTextLimit = 8192
 export const searchTotalLimit = 2 * 1024 * 1024
-const credentialKey = String.raw`(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)`
-const nextCredential = (quote: string) => String.raw`(?:\{?${quote}${credentialKey}${quote}[ \t]*[:=]|\b["']?${credentialKey}["']?[ \t]*[:=][ \t]*${quote}(?![ \t]*(?:[\r\n]|$))(?:(?:\\[^\r\n]|[^${quote}\\\r\n])*${quote}|(?:\\[\s\S]|[^${quote}\\])*${quote}(?=[ \t]*(?:[\r\n,;})>\]]|$))))`
-const quotedValue = (quote: string) => String.raw`${quote}(?:(?:\\[\s\S]|(?!${nextCredential(quote)})[^${quote}\\])*${quote}|(?:(?!${nextCredential(quote)})[^\r\n])*)`
-const quotedCredential = String.raw`${quotedValue('"')}|${quotedValue("'")}`
-const credentialAssignment = new RegExp(String.raw`((?:(["'])${credentialKey}\2|\b${credentialKey})\s*[:=]\s*)(?:${quotedCredential}|(?!\[credential omitted\])((?:(?![,;][ \t]*(?:[a-z_][\w-]*[ \t]*=|(?:"${credentialKey}"|'${credentialKey}'|${credentialKey})[ \t]*[:=]))[^\s"'])+))`, 'gi')
-
 /** Redact likely credential literals before either snippets or the browser index.
  * This only handles published prose/allowlisted fields, never raw source objects. */
 export function redactSourceText(input: unknown): string {
   return (typeof input === 'string' ? input : '')
-    .replace(/\b(?:ATATT|ATCTT|secret_|ntn_|sk-|github_pat_|gh[pousr]_)[A-Za-z0-9_.~-]{16,}\b/g, '[credential omitted]')
-    .replace(/((?:\bauthorization|"authorization"|'authorization')[ \t]*[:=][ \t]*(?:\r?\n[ \t]+)?)(?:basic|bearer)(?:[ \t]*\r?\n[ \t]+|[ \t]+)[a-z0-9._~+\/=-]+/gi, '$1[credential omitted]')
-    .replace(/\bbearer\s+[A-Za-z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
-    .replace(/\bbasic\s+([a-z0-9+\/=]+)/gi, (match, token) => {
-      try {
-        const decoded = atob(token)
-        const encoded = btoa(decoded)
-        if ((token === encoded || token === encoded.replace(/=+$/, '')) &&
-          decoded.includes(':') && !/[\x00-\x1f\x7f]/.test(decoded)) return '[credential omitted]'
-      } catch {
-        return match
-      }
-      return match
-    })
-    .replace(credentialAssignment, (_match, prefix, keyQuote, bareValue, offset, source) => {
-      let suffix = ''
-      if (bareValue) {
-        const closer = { '(': ')', '[': ']', '{': '}', '<': '>' }[source[offset - 1] as '(' | '[' | '{' | '<']
-        const jsonObject = keyQuote === '"' && source.lastIndexOf('{', offset - 1) >
-          Math.max(source.lastIndexOf('}', offset - 1), source.lastIndexOf('\n', offset - 1))
-        const delimiter = closer ?? (jsonObject ? '}' : '')
-        if (delimiter && bareValue.endsWith(delimiter)) suffix = delimiter
-        else if (jsonObject && bareValue.endsWith(',')) suffix = ','
-      }
-      return keyQuote ? `${prefix}"[credential omitted]"${suffix}` : `${prefix}[credential omitted]${suffix}`
-    })
+    .replace(/\b(?:secret_|ntn_|sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}\b/g, '[credential omitted]')
+    .replace(/\b(?:bearer\s+)[A-Za-z0-9._~+\/-]{12,}/gi, '[credential omitted]')
+    .replace(/\b(password|passwd|token|api[_-]?key|secret)\s*[:=]\s*["']?[^\s"',;]{6,}/gi, '$1=[credential omitted]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
 
 }
