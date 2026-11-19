@@ -44,6 +44,7 @@ async function fixture() {
   const parsed = loadReconciliationConfig(root)
   expect(parsed.jiraWork).toMatchObject(settings)
   expect(parsed.jira).toBeUndefined()
+  const historicalKeys = new Map<string, string>()
   const history: Record<string, any[]> = {}
   const requests: { method: string; path: string; fields: string | null }[] = []
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '' }
@@ -100,11 +101,11 @@ async function fixture() {
     if (linkPath && method === 'DELETE') return links.delete(linkPath[1]!) ? response(undefined, 200) : response({}, 404)
     const match = /^issue\/([^/]+)(?:\/(.*))?$/.exec(path)
     if (!match) throw new Error(`Unexpected fixture request ${method} ${path}`)
-    const issue = issues.get(match[1]!) ?? [...issues.values()].find(issue => issue.key === match[1])
+    const issue = issues.get(historicalKeys.get(match[1]!) ?? match[1]!) ?? [...issues.values()].find(issue => issue.key === match[1])
     if (!issue) return response({}, 404)
     const part = match[2]
     if (!part && method === 'GET') {
-      if (url.searchParams.get('fields') === 'project') return response({ id: issue.id, fields: { project: issue.fields.project } })
+      if (url.searchParams.get('fields') === 'project') return response({ id: issue.id, key: issue.key, fields: { project: issue.fields.project } })
       const issuelinks = [...links].filter(([, link]) => [link.inwardIssue, link.outwardIssue].includes(issue.id)).map(([id, link]) => {
         const inward = issue.id === link.outwardIssue
         const target = issues.get(inward ? link.inwardIssue : link.outwardIssue)!
@@ -135,11 +136,12 @@ async function fixture() {
       if (part) issue.fields.status = transitions.find(transition => transition.id === body.transition.id)!.to
       Object.assign(issue.fields, body.fields)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
+      const created = new Date().toISOString()
       for (const comment of body.update?.comment ?? []) {
-        if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created: new Date().toISOString(), author: { accountId: 'fixture-service' } })
+        if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created, updated: created, author: { accountId: 'fixture-service' } })
       }
       if (controls.delayedComment) {
-        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: new Date().toISOString(), author: { accountId: 'fixture-service' } })
+        issue.comments.push({ id: 'delayed', body: controls.delayedComment, created, updated: created, author: { accountId: 'fixture-service' } })
       }
       if (controls.loseEdit) { controls.loseEdit = false; throw new Error('Dropped issue write response') }
       return response(undefined, 204)
@@ -163,7 +165,7 @@ async function fixture() {
     }
     return { client, call }
   }
-  return { connect, requests, controls, issues, links, history }
+  return { connect, requests, controls, issues, links, history, historicalKeys }
 }
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
@@ -221,7 +223,8 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   const linked = await link('jira-blocker', { action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'inward' })
   expect(linked, JSON.stringify(linked)).toMatchObject({ outcome: 'saved', card: { blocker: { type: 'Jira', link: { id: '8001', target_key: 'OTHER-1', label: 'is blocked by' } } } })
   expect(linked.card.blocker.link).not.toHaveProperty('target_id')
-  expect(f.requests.some(request => request.method === 'GET' && /issue\/(OTHER-1|70001)$/.test(request.path))).toBe(false)
+  expect(f.requests.filter(request => request.method === 'GET' && /issue\/(OTHER-1|70001)$/.test(request.path))
+    .every(request => request.fields === 'project')).toBe(true)
   expect(await move('wait-too-early', 'Resolve Wait', { to: 'In Progress', evidence: 'Claimed clear' })).toMatchObject({ outcome: 'not-saved' })
   expect(await link('remove', { action: 'remove', link_id: '8001' })).toMatchObject({ outcome: 'saved', card: { blocker: null } })
   expect(await move('cleared', 'Resolve Wait', { to: 'In Progress', evidence: 'The dependency was accepted.' })).toMatchObject({ outcome: 'saved' })
@@ -542,9 +545,57 @@ it('recovers a delayed comment after an independent dispatch with a different no
   const issue = f.issues.get('60001')!
   const created = new Date().toISOString()
   issue.fields.summary = earlier.name
-  issue.comments.push({ id: 'delayed', body: 'Earlier note\n\nRecorded via Tin Star (Fixture agent)', created, author: { accountId: 'fixture-service' } })
+  issue.comments.push({ id: 'delayed', body: 'Earlier note\n\nRecorded via Tin Star (Fixture agent)', created, updated: created, author: { accountId: 'fixture-service' } })
   f.history['60001'] = [{ created, author: { accountId: 'fixture-service' },
     items: [{ fieldId: 'summary', fromString: 'Ticket', toString: earlier.name }] }]
   expect(await call('update_work', earlier)).toMatchObject({ code: 'already-saved', card: { name: earlier.name } })
   expect(f.requests.filter(request => request.method === 'PUT')).toHaveLength(2)
+}, 30_000)
+
+
+it('uses immutable link target identity for historical keys, blockers, and recovery', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const create = (name: string) => call('create_work', { provider: 'jira', operation_id: name, name })
+  const { card: { id: card_id } } = await create('Source')
+  const { card: { id: target_id } } = await create('Target')
+  f.historicalKeys.set('OLD-1', '60001')
+  f.historicalKeys.set('OLD-2', '60002')
+  const add = { card_id, action: 'add', direction: 'outward', type: 'Blocks', target_key: 'OLD-2' }
+  expect(await call('link_work', { ...add, operation_id: 'self', target_key: 'OLD-1' })).toMatchObject({ outcome: 'not-saved' })
+  const blocker = { type: 'Event', target: 'deploy', unblocks_when: 'Release completes' }
+  expect(await call('update_work', { card_id: target_id, operation_id: 'block', kind: 'jira_edit', blocker })).toMatchObject({ outcome: 'saved' })
+  expect(await call('link_work', { ...add, operation_id: 'blocked' })).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('primary blocker'),
+  })
+  expect(await call('update_work', { card_id: target_id, operation_id: 'clear', kind: 'jira_edit', blocker: null })).toMatchObject({ outcome: 'saved' })
+  f.controls.loseLink = true
+  const pending = { ...add, operation_id: 'lost' }
+  expect(await call('link_work', pending)).toMatchObject({ code: 'unconfirmed' })
+  f.history['60001'] = [{ created: new Date().toISOString(), author: { accountId: 'fixture-service' },
+    items: [{ field: 'Link', from: null, to: 'OLD-2', toString: 'This issue blocks OLD-2' }] }]
+  const saved = await call('link_work', pending)
+  expect(saved).toMatchObject({ code: 'already-saved', card: { links: [{ target_key: 'WORK-2' }] } })
+  expect(saved.card.links[0]).not.toHaveProperty('target_id')
+  expect(await call('link_work', { ...add, operation_id: 'duplicate', target_key: 'WORK-2' })).toMatchObject({ outcome: 'saved' })
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issueLink')).toHaveLength(1)
+}, 30_000)
+
+it('does not use a natively edited comment to confirm an earlier missing note', async () => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket' })
+  const edit = { kind: 'jira_edit', card_id }
+  const earlier = { ...edit, operation_id: 'earlier', name: 'Updated title', note: 'Missing note' }
+  f.controls.omitComment = true
+  expect(await call('update_work', earlier)).toMatchObject({ code: 'unconfirmed' })
+  f.controls.omitComment = false
+  expect(await call('update_work', { ...edit, operation_id: 'later', description: 'New description', note: 'Later note' }))
+    .toMatchObject({ outcome: 'saved' })
+  const comment = f.issues.get('60001')!.comments[0]!
+  comment.body = 'Missing note\n\nRecorded via Tin Star (Fixture agent)'
+  comment.updated = new Date(Date.parse(comment.created) + 1000).toISOString()
+  f.history['60001'] = [{ created: comment.created, author: { accountId: 'fixture-service' },
+    items: [{ fieldId: 'summary', fromString: 'Ticket', toString: earlier.name }] }]
+  expect(await call('update_work', earlier)).toMatchObject({ code: 'unconfirmed' })
 }, 30_000)

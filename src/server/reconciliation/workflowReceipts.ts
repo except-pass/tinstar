@@ -32,8 +32,7 @@ export interface JiraWorkReceiptState {
   fields?: JiraFieldChange[]
   priorCommentIds?: unknown[]
   commentHash?: string
-  sourceKey?: string
-  link?: { id?: string; typeId: string; direction: 'inward' | 'outward'; targetKey: string; label: string }
+  link?: { id?: string; typeId: string; direction: 'inward' | 'outward'; targetId: string; label: string }
 }
 interface Receipt { input: string; cardId?: string; handoff?: HandoffReceiptState; review?: ReviewReceiptState; jiraWork?: JiraWorkReceiptState }
 const writers = new Map<string, Promise<unknown>>()
