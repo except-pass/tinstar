@@ -456,6 +456,27 @@ it('withholds a comment fetched while the issue moves projects', async () => {
 }, 30_000)
 
 
+it.each([
+  ['Answer Decision', 'Decision'],
+  ['Resolve Wait', 'Waiting For'],
+])('requires submission evidence when %s enters Ready for Review', async (verb, status) => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Review entry', owner: 'Avery',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: status }
+  issue.fields[config.fields.decisions] = 'D1 [Answered]: Ship the change?\n  Answer: Yes.'
+  const input = { card_id, operation_id: 'submit', verb, to: 'Ready for Review' }
+  expect(await call('transition_work', input)).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('requires evidence'),
+  })
+  expect(issue.fields.status.name).toBe(status)
+  expect(await call('transition_work', { ...input, operation_id: 'submit-with-evidence', evidence: 'The completed work and test results are attached for review.' }))
+    .toMatchObject({ outcome: 'saved', card: { status: 'Ready for Review' } })
+})
+
 it('requires actual description text for Queue and Start', async () => {
   const f = await fixture()
   const { call } = await f.connect()
@@ -561,9 +582,9 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nD2 [Open]: What follows?'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\n{"password":123456789,"count":123456789,"token":-1.2e+3}\nD2 [Open]: What follows?'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nD2 [Open]: What follows?'
+  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\n{"password":"[credential omitted]","count":123456789,"token":"[credential omitted]"}\nD2 [Open]: What follows?'
   expect(card.description).toBe(projectedDescription)
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ card: { description: projectedDescription } })
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)

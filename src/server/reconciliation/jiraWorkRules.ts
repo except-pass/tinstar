@@ -176,7 +176,7 @@ export function checkJiraTransition(current: State, input: JiraTransition) {
   if ((to === 'Queued' || to === 'In Progress') && (!current.instructionText.trim() || current.blocker)) {
     throw new JiraWorkInputError('Queue and Start require instructions, a clear success condition and no primary blocker')
   }
-  if ((to === 'In Progress' || ['Submit for Review', 'Accept Review', 'Accept Final', 'Release Ready', 'Deployed', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb)) && !input.evidence) {
+  if ((to === 'In Progress' || to === 'Ready for Review' || ['Accept Review', 'Accept Final', 'Release Ready', 'Deployed', 'Verify Passed', 'Complete Directly', 'Resolve Wait'].includes(input.verb)) && !input.evidence) {
     throw new JiraWorkInputError(`${input.verb} requires evidence of the stated outcome`)
   }
   if (['Reject Review', 'Verification Failed', 'Release Rejected', 'Cancel', 'Reopen'].includes(input.verb) && !input.reason) {
