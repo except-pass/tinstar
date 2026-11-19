@@ -24,6 +24,7 @@ type Link = { id: string; type_id: string; type: string; label: string; directio
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
   description: string; instructionText: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
+  blockerConditionText: string;
   externalBlocker: { type: string | null; target: string; unblocks_when: string };
 }
 type Attempt = {
@@ -85,6 +86,7 @@ export class JiraWork extends JiraClient {
       project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
       name: f.summary, status: f.status.name, updated_at: f.updated, owner: f[owner]?.value ?? null,
       description: text(f.description), instructionText: text(f.description, 'omit'), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
+      blockerConditionText: text(f[blockerCondition], 'omit'),
       externalBlocker: { type: f[blockerType]?.value ?? null, target: text(f[blockerTarget]), unblocks_when: text(f[blockerCondition]) },
     }
   }
@@ -106,14 +108,14 @@ export class JiraWork extends JiraClient {
     if (count > 1) throw new JiraWorkInputError('Jira has multiple primary blockers; choose one before transitioning')
     if (native.length) return { type: 'Jira' as const, link: this.linkView(native[0]!) }
     if (!count) return null
-    if ((external.type !== 'Actor' && external.type !== 'Event') || !/^\S+$/.test(external.target) || !external.unblocks_when.trim()) {
+    if ((external.type !== 'Actor' && external.type !== 'Event') || !/^\S+$/.test(external.target) || !issue.blockerConditionText.trim()) {
       throw new JiraWorkInputError('Correct the external blocker type, identifier and unblock condition')
     }
     return external as JiraExternalBlocker
   }
 
   private view(issue: Issue) {
-    const { decisions, decisionDocument: _document, instructionText: _instructions, externalBlocker, ...card } = issue
+    const { decisions, decisionDocument: _document, instructionText: _instructions, blockerConditionText: _condition, externalBlocker, ...card } = issue
     let decision_questions, blocker
     const warnings: string[] = []
     try { decision_questions = readJiraDecisions(decisions) } catch (error) { warnings.push((error as Error).message) }
