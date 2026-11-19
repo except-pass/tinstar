@@ -1,3 +1,4 @@
+import { loadJq } from 'jq-wasm'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const exec = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ execFile: exec }))
@@ -24,7 +25,7 @@ function answer(status: number, body: unknown = null, headers = '') {
 
 it('projects titles only for linked rows in the CLI release list', async () => {
   vi.stubEnv('TINSTAR_ACTIONS_LIVE', '')
-  const { spawnSync } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  const jq = await loadJq()
   const { readReleasePullPage } = await import('../releasePullPage')
   const updatedAt = '2026-06-01T00:00:00Z'
   const linked = { number: 1, title: 'A linked title', state: 'open', merged: null, merged_at: null,
@@ -33,8 +34,8 @@ it('projects titles only for linked rows in the CLI release list', async () => {
     { ...linked, number: 2, title: 'An unlinked title' }]
   exec.mockImplementationOnce((_binary, args: string[], _options, done) => {
     const projection = args[args.indexOf('--jq') + 1]!
-    const result = spawnSync('jq', [projection], { input: JSON.stringify(input), encoding: 'utf8' })
-    if (result.status !== 0) done(result.error ?? new Error(result.stderr))
+    const result = jq.raw(JSON.stringify(input), projection)
+    if (result.exitCode !== 0) done(new Error(result.stderr))
     else done(null, { stdout: `HTTP/2.0 200 OK\r\n\r\n${result.stdout}` })
   })
   await expect(readReleasePullPage(`${pulls}?state=all&sort=updated&direction=desc&per_page=100&page=1`, [1]))
