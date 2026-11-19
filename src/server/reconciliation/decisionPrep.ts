@@ -76,6 +76,7 @@ export class DecisionPreparation {
   constructor(readonly packets: DecisionPackets, private source: {
     refreshQueue(): Promise<WorkCard[]>
     read(card: string, background: boolean): Promise<DecisionCardSource>
+    revisionFor?(card: WorkCard): string | undefined
     exclusive<T>(card: string, perform: () => Promise<T>): Promise<T>
   }, private readSecret = readClavisValue, private fetcher: typeof fetch = fetch, private now = Date.now) {}
 
@@ -157,9 +158,8 @@ export class DecisionPreparation {
     }
     const queue = await this.source.refreshQueue()
     const cutoff = this.now() - retryAfter
-    const { candidates, prepared, liveCards } = await this.packets.leases.writeStorage(db => {
+    const { candidates, refreshable, liveCards } = await this.packets.leases.writeStorage(db => {
       this.expireJobs(db, cutoff)
-      const prepared = queue.filter(card => this.packets.currentInStorage(db, card.id))
       const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
       const liveCards = (db.prepare(`SELECT DISTINCT card FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
         .all(this.scope, cutoff) as unknown as Array<{ card: string }>).map(row => row.card)
@@ -167,14 +167,17 @@ export class DecisionPreparation {
       const fresh = capacity ? queue.filter(card => !liveIds.has(card.id) && !this.held(db, card.id)) : []
       const first = fresh.length ? this.candidateCursor % fresh.length : 0
       const selected = [...fresh.slice(first), ...fresh.slice(0, first)].slice(0, capacity)
-      return { candidates: selected, prepared, liveCards }
+      for (const card of selected) liveIds.add(card.id)
+      const historical = db.prepare('SELECT 1 FROM decision_card_prep WHERE scope = ? AND card = ? LIMIT 1')
+      const refreshable = queue.filter(card => !liveIds.has(card.id) &&
+        (this.packets.currentInStorage(db, card.id) ||
+          (this.source.revisionFor && !this.source.revisionFor(card) && historical.get(this.scope, card.id))))
+      return { candidates: selected, refreshable, liveCards }
     })
-    if (prepared.length) {
-      const index = this.refreshCursor % prepared.length
-      this.refreshCursor += Math.min(4, prepared.length)
-      // Read a rotating subset of published cards so discussion changes are
-      // discovered even in the absence of a claim. Failed reads keep the packet.
-      const refresh = [...prepared.slice(index), ...prepared.slice(0, index)].slice(0, 4)
+    if (refreshable.length) {
+      const index = this.refreshCursor % refreshable.length
+      this.refreshCursor += Math.min(4, refreshable.length)
+      const refresh = [...refreshable.slice(index), ...refreshable.slice(0, index)].slice(0, 4)
       await Promise.allSettled(refresh.map(card => this.source.read(card.id, true)))
     }
     const secret = this.secret

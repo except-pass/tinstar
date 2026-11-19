@@ -62,8 +62,9 @@ retry or refill completes the handoff.
 Configure the `url` and `key` fields of Clavis secret
 `grok/tinstar-decision-prep`. Tin Star sends a POST per card with Bearer
 authentication. Its body contains `card_url`, a credential-scrubbed
-`source_question` taken from the card’s Next action, Waiting For text, or title,
-in that order, and an opaque `source_revision` token for the card revision.
+`source_question` from the oldest open decision request and an opaque
+`source_revision` token for the card revision. Workflow-generated questions can
+span multiple lines. Legacy requests contribute only the labeled Question line.
 The `publish` object names the callback tool in `publish.tool` and provides its
 job ID in `publish.job_id`. Call `publish_prepared_packet` with that job ID and the
 four packet content fields.

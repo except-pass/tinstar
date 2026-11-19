@@ -26,17 +26,23 @@ export const decisionPropertyRevision = (card: WorkCard) => createHash('sha256')
 
 function decisionCardRevision(card: WorkCard, blocks: CardContextRead['blocks']) {
   const prose = (text: string) => text.replace(/\r\n?/g, '\n').trim()
-  const body = blocks.filter(block => block.type !== 'comment').map(block => [block.type, prose(block.text)])
   const history = requestHistory(blocks)
-  const comments = blocks.filter((block, index) => {
-    if (block.type !== 'comment') return false
-    const receipt = workflowReceipt(block)
-    if (isDecisionRetraction(block.text) && receipt || decisionRecordRows([history[index]!], 'Tin Star request: ').length) return true
-    return !checkInReport(block.text) &&
+  const requests = history.map(note => decisionRecordRows([note], 'Tin Star request: ').some(row =>
+    typeof row?.id === 'string' && typeof row.action === 'string'))
+  const content = (block: CardContextRead['blocks'][number], index: number) => {
+    const text = prose(block.text)
+    return requests[index] ? [text, block.id, block.createdAt ?? block.created_time ?? null] : text
+  }
+  const body = blocks.flatMap((block, index) => block.type === 'comment' ? [] : [[block.type, content(block, index)]])
+  const comments = blocks.flatMap((block, index) => {
+    if (block.type !== 'comment') return []
+    const included = requests[index] || isDecisionRetraction(block.text) && workflowReceipt(block) ||
+      !checkInReport(block.text) &&
       !block.text.split('\n').at(-1)?.startsWith(deskAnswerMarker) &&
       !block.text.includes('Tin Star prepared packet:') && !block.text.includes('Tin Star operation: ["waiting-on-main",')
-  })
-    .map(block => prose(block.text)).filter(Boolean).sort()
+    const text = included && content(block, index)
+    return text ? [text] : []
+  }).sort()
   return createHash('sha256').update(canonical([decisionProperties(card), body, comments])).digest('hex')
 }
 

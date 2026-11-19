@@ -131,8 +131,9 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     return Response.json(card)
   }
   let sendingEnabled = true
-  const sources = new ReconciliationSources({ warnings: [], fleet: [], notion: { token: 'integration-writer', dataSourceId: board } },
+  const restartSources = () => new ReconciliationSources({ warnings: [], fleet: [], notion: { token: 'integration-writer', dataSourceId: board } },
     provider, new NotionApi(provider, 0), root, async () => sendingEnabled ? JSON.stringify({ url: webhook.url, key: 'fixture-webhook-key' }) : null)
+  const sources = restartSources()
   const mcp = new ReconciliationMcp(sources, root)
   const connect = async (actor = 'owner-chatgpt') => {
     const server = mcp.createServer(actor)
@@ -160,7 +161,7 @@ async function setup(cards: ReturnType<typeof page>[], autoPublish = true, first
     })
     return res.json()
   }
-  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, disableSending: () => { sendingEnabled = false } }
+  return { sources, jobs, tool, connect, published, writes, web, createdTimes, cardReads, restartSources, disableSending: () => { sendingEnabled = false } }
 }
 
 describe('prepared-card loop', () => {
@@ -778,6 +779,54 @@ describe('prepared-card loop', () => {
     card.properties.Status = originalStatus
     expect(await tool('publish_prepared_packet', { job_id: jobs[0]!.publish.job_id, packet: contents }))
       .toMatchObject({ outcome: 'operation-conflict', message: 'The preparation job stopped' })
+  })
+
+  it('checks the board before reading moved-card history during refill or publication', async () => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, cardReads } = await setup([card], false)
+    await sources.preparation.replenish()
+    expect(jobs).toHaveLength(1)
+
+    card.parent.data_source_id = id(999)
+    cardReads.length = 0
+    await sources.preparation.replenish()
+    await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
+      .rejects.toThrow('Notion card identity or source changed')
+    expect(cardReads).toEqual([`/v1/pages/${card.id}`, `/v1/pages/${card.id}`])
+    expect(jobs).toHaveLength(1)
+  })
+
+  it.each(['comment', 'paragraph'])('binds identical %s requests to their source identity', async type => {
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources } = await setup([card], false)
+    const work = await sources.currentCard(card.id)
+    const request = { id: 'original', type, text: card.comments[0]! }
+    const original = decisionCardSource(work, [request])
+    const reposted = decisionCardSource(work, [{ ...request, id: 'reposted' }])
+    expect(original.prepEligible).toBe(true)
+    expect(reposted.prepEligible).toBe(true)
+    expect(reposted.revision).not.toBe(original.revision)
+  })
+
+  it('recovers capped Desk status from the background pass after restart with sending disabled', async () => {
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const card = withOpenRequest(page(1, { tag: 'Decision' }))
+    const { sources, jobs, cardReads, disableSending, restartSources } = await setup([card], false)
+    await sources.preparation.replenish()
+    now += 15 * 60_000
+    await sources.preparation.replenish()
+    now += 15 * 60_000
+    await sources.preparation.replenish()
+    disableSending()
+    const restarted = restartSources()
+    await restarted.preparation.replenish()
+    const readsAfterRefresh = cardReads.length
+    expect((await restarted.preparedReviews.snapshot()).pending).toEqual([
+      expect.objectContaining({ card_id: card.id, state: 'Preparation stopped after two sends without a packet' }),
+    ])
+    expect(cardReads).toHaveLength(readsAfterRefresh)
+    expect(jobs).toHaveLength(2)
   })
 
   it.each(['live', 'expired', 'stopped'] as const)('shows %s jobs older than the runner history limit', async state => {

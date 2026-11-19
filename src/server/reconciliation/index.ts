@@ -101,6 +101,7 @@ export class ReconciliationSources {
         return this.decisionQueue().cards
       },
       read: (card, background) => this.readDecisionCard(card, background),
+      revisionFor: card => this.observedDecisionRevision(card),
       exclusive: (card, perform) => this.workflow.exclusive(card, perform),
     }, preparationSecret, fetcher)
     this.preparedReviews = new PreparedReviews(this.decisionPackets, () => this.decisionQueue(), id => this.readDecisionCard(id, false), this.preparation)
@@ -158,20 +159,20 @@ export class ReconciliationSources {
     const observation = this.workReader.declarations()
     return { cards: (observation.data?.cards ?? []).filter(actionableDecisionCard).sort((a, b) => a.id.localeCompare(b.id)),
       coverage: observation.status === 'fresh' && observation.coverage === 'complete' ? 'complete' as const : 'unknown' as const,
-      revisionFor: (card: WorkCard) => {
-        const observed = this.decisionRevisions.get(card.id)
-        return observed?.edited === card.last_edited_time && observed.properties === decisionPropertyRevision(card)
-          ? observed.revision : undefined
-      },
+      revisionFor: (card: WorkCard) => this.observedDecisionRevision(card),
     }
+  }
+
+  private observedDecisionRevision(card: WorkCard) {
+    const observed = this.decisionRevisions.get(card.id)
+    return observed?.edited === card.last_edited_time && observed.properties === decisionPropertyRevision(card)
+      ? observed.revision : undefined
   }
 
   private async loadDecisionCard(id: string, background: boolean) {
     const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
-    const [card, context] = await Promise.all([
-      this.workReader.card(id, true, background, signal),
-      this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch),
-    ])
+    const card = await this.workReader.card(id, true, background, signal)
+    const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch)
     this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
     await this.context.verifyRetractions(context)
