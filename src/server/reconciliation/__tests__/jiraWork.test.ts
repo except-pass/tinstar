@@ -305,7 +305,7 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   expect(invalid).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   const beforeRefusedRetry = f.requests.length
   expect(await restarted.call('transition_work', refused)).toEqual(invalid)
-  expect(f.requests).toHaveLength(beforeRefusedRetry)
+  expect(f.requests.slice(beforeRefusedRetry).map(request => request.method)).toEqual(['GET', 'GET'])
   expect(await moveAgain('stop', 'Stop and Requeue', { disposition: 'The previous test process exited.', evidence: 'The reproduction and assertions are ready.' })).toMatchObject({ outcome: 'saved', card: { status: 'Queued' } })
   expect(await moveAgain('start-again', 'Start', { evidence: 'The reproduction started.' })).toMatchObject({ outcome: 'saved' })
   expect(await moveAgain('direct', 'Complete Directly', { evidence: 'The reproduction passed. No review or production change remains.' })).toMatchObject({ outcome: 'saved', card: { status: 'Done' } })
@@ -321,6 +321,16 @@ it('sends undispatched receipts, isolates callers, and keeps ambiguous dispatche
   const other = await f.connect('Other agent')
   expect(await other.call('create_work', create)).toMatchObject({ outcome: 'saved', card: { issue_id: '60002' } })
   const card_id = created.card.id
+  const issue = f.issues.get('60001')!
+  issue.fields[config.fields.owner] = null
+  const prioritize = { card_id, operation_id: 'prioritize', verb: 'Prioritize' }
+  expect(await call('transition_work', prioritize)).toMatchObject({
+    outcome: 'not-saved', message: expect.stringContaining('Choose an Owner'),
+  })
+  issue.fields[config.fields.owner] = { value: 'Avery' }
+  const resumed = await f.connect()
+  expect(await resumed.call('transition_work', prioritize)).toMatchObject({ outcome: 'saved', card: { status: 'To Do' } })
+
   const edit = { card_id, operation_id: 'edit', kind: 'jira_edit', name: 'Retried edit' }
   f.controls.beforeWrite = 'GET issue/60001'
   expect(await call('update_work', edit)).toMatchObject({ outcome: 'not-saved' })

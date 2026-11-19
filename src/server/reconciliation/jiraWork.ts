@@ -158,7 +158,6 @@ export class JiraWork extends JiraClient {
     const marker = `tinstar.work.${digest(key)}`
     let pending = false
     let sent = false
-    let receiptReady = false
     const cardId = 'card_id' in input ? input.card_id : undefined
     let unlock: Awaited<ReturnType<typeof acquireLock>> | undefined
     try {
@@ -172,7 +171,6 @@ export class JiraWork extends JiraClient {
       const dispatched = prior?.jiraWork?.dispatched === true
       pending = dispatched
       if (!prior) await this.receipts.putJiraWork(key, verb, false)
-      receiptReady = true
       return await run({
         marker, dispatched,
         dispatch: async () => {
@@ -191,8 +189,8 @@ export class JiraWork extends JiraClient {
         operation_id: input.operation_id, ...(!rejected && cardId ? { card_id: cardId } : {}),
         message: unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
       }
-      if (receiptReady && (rejected || (!pending && error instanceof JiraWorkInputError) || error instanceof JiraCreateContradiction)) {
-        await this.receipts.putJiraWork(key, verb, pending, result)
+      if (rejected || error instanceof JiraCreateContradiction) {
+        await this.receipts.putJiraWork(key, verb, true, result)
       }
       return result
     } finally { await unlock?.() }
