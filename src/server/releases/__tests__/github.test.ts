@@ -1,6 +1,22 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import { describe, expect, it, vi } from 'vitest'
 import { GithubReleaseReader, nativeReleaseSummary } from '../github'
 import { ReleaseMembershipReader } from '../membership'
+import { ReleasesApi } from '../routes'
+import * as bind from '../../bind'
+import { CockpitFleet } from '../../fleet/cockpit'
+import { ObservabilityStack } from '../../observability'
+import { CodexOtelReceiver } from '../../observability/codex-otel'
+import { QuotaAxiPoller } from '../../quota/poller'
+import { ReachCoordinator, resetReachCoordinatorForTests } from '../../reach'
+import { ReconciliationSources } from '../../reconciliation'
+import { DecisionPreparation } from '../../reconciliation/decisionPrep'
+import { WaitingOnMain } from '../../reconciliation/waitingOnMain'
+import { startServer } from '../../standalone'
+import { OtlpExporter } from '../../stores/otlp-exporter'
 import { releaseAssociations } from '../../../shared/releases'
 import { releaseChanges } from '../../../shared/releaseChanges'
 import { fixtureScene } from '../../../../test-fixtures/reconciliation/scenes'
@@ -334,46 +350,78 @@ function cumulativeFixture(prerelease = false) {
     const native = await reader.get(data)
     return { ...data, releases: native.releases, releaseSource: { status: native.status, observedAt: native.observedAt, warnings: native.warnings } }
   } }
-  return { scene, card, data, a, b, urls, read, reader, releases, failContainment: () => { failContainment = true } }
+  return { scene, card, a, b, urls, releases, failContainment: () => { failContainment = true } }
 }
 
 it.each([false, true])('resolves cumulative production containment after a cold start (earlier tag prerelease: %s)', async prerelease => {
   const f = cumulativeFixture(prerelease)
   const { DomainReadTools } = await import('../../reconciliation/domainReads')
-  const { ProductionWaitWriter, productionWaits } = await import('../productionWaits')
   const domain = new DomainReadTools({ read: async () => { throw new Error('unused') }, inspect: async () => { throw new Error('unused') } }, f.releases)
   const status = await domain.releaseStatus({ offset: 0, limit: 25 })
   if (status.outcome !== 'available' || !status.releases) throw new Error('Expected release read')
   const latest = status.releases[0]!
   expect(latest.pulls.map(pull => pull.url)).toEqual([f.urls[1]])
   expect(latest.containedPulls).toEqual(f.urls.map((pull, index) => expect.objectContaining({ pull, mergeSha: index ? f.b : f.a, state: 'included' })))
+  expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
+})
+
+it('leaves release waits untouched on server startup and after a minute even when all changes are published', async () => {
+  const f = cumulativeFixture()
   const data = await f.releases.read()
-  expect(productionWaits(data, f.scene)).toEqual([expect.objectContaining({ requiredPulls: f.urls })])
-  const notes: string[] = []
-  const transport = { card: async () => f.card, hasNote: async () => false, note: async (_id: string, text: string) => { notes.push(text) }, transition: async (_card: unknown, proposal: { to: string }) => { f.card.properties.Status!.value = proposal.to } }
-  expect(await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()).toMatchObject({ completed: [f.card.id], unconfirmed: [] })
-  expect(f.card.properties.Status!.value).toBe('Done')
-  expect(notes[0]).toContain(f.urls[0]); expect(notes[0]).toContain(f.urls[1])
+  const release = data.releases[0]!
+  expect(release.github).toMatchObject({ record: 'available', publishedAt: nativeTime })
+  expect(release.containedPulls).toEqual(f.urls.map(pull => expect.objectContaining({ pull, state: 'included' })))
+
+  const root = await mkdtemp(join(tmpdir(), 'release-wait-server-'))
+  const events = ['uncaughtException', 'unhandledRejection', 'exit', 'SIGINT', 'SIGTERM'] as const
+  const listeners = events.map(event => process.listeners(event))
+  const note = vi.fn(async () => {})
+  const transition = vi.fn(async () => { f.card.properties.Status!.value = 'Done' })
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+  vi.stubEnv('TINSTAR_CONFIG_HOME', root)
+  vi.spyOn(ReleasesApi.prototype, 'read').mockResolvedValue(data)
+  vi.spyOn(ReconciliationSources.prototype, 'scene').mockResolvedValue({ ...f.scene, searchIndex: { documents: [], notes: [] } })
+  vi.spyOn(ReconciliationSources.prototype, 'releaseTransport').mockReturnValue({
+    card: async () => f.card, hasNote: async () => false, note, transition,
+  })
+  vi.spyOn(ReconciliationSources.prototype, 'recoverSourceWrites').mockResolvedValue(undefined)
+  vi.spyOn(WaitingOnMain.prototype, 'sweep').mockImplementation(async function (this: WaitingOnMain) { return this.view() })
+  vi.spyOn(DecisionPreparation.prototype, 'replenish').mockResolvedValue(undefined)
+  vi.spyOn(CockpitFleet.prototype, 'start').mockImplementation(() => {})
+  vi.spyOn(OtlpExporter.prototype, 'start').mockImplementation(() => {})
+  vi.spyOn(QuotaAxiPoller.prototype, 'start').mockImplementation(() => {})
+  vi.spyOn(ObservabilityStack.prototype, 'start').mockResolvedValue(undefined)
+  vi.spyOn(CodexOtelReceiver.prototype, 'start').mockResolvedValue(undefined)
+  vi.spyOn(ReachCoordinator.prototype, 'onListening').mockResolvedValue({ state: 'off' })
+  vi.spyOn(bind, 'openListeners').mockResolvedValue([])
+
+  try {
+    startServer({ port: 0, host: '127.0.0.1', clientDir: root })
+    await setImmediate()
+    vi.advanceTimersByTime(60_000)
+    await setImmediate()
+    expect(transition).not.toHaveBeenCalled()
+    expect(note).not.toHaveBeenCalled()
+    expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
+  } finally {
+    events.forEach((event, index) => {
+      for (const listener of process.listeners(event)) {
+        if (!listeners[index]!.includes(listener)) process.removeListener(event, listener)
+      }
+    })
+    vi.useRealTimers()
+    resetReachCoordinatorForTests()
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 it('keeps failed containment unknown instead of using the latest Changes range as cumulative proof', async () => {
   const f = cumulativeFixture(); f.failContainment()
-  const { productionWaits } = await import('../productionWaits')
   const data = await f.releases.read()
   expect(data.releases![0]!.containedPulls).toEqual(f.urls.map(pull => expect.objectContaining({ pull, state: 'unknown' })))
   expect(JSON.stringify(data)).not.toContain('private failed ancestry read')
-  expect(productionWaits(data, f.scene)).toEqual([])
-})
-
-it('revalidates containment for a changed effective merge immediately before a scheduled write', async () => {
-  const f = cumulativeFixture()
-  const { ProductionWaitWriter } = await import('../productionWaits')
-  const transition = vi.fn(async () => {})
-  const transport = { card: async () => f.card, hasNote: async () => false,
-    note: async () => { f.data.pulls[0]!.mergeSha = 'e'.repeat(40) }, transition }
-  await new ProductionWaitWriter(transport, async () => ({ scene: f.scene, data: await f.releases.read() })).run()
-  expect(transition).not.toHaveBeenCalled()
-  expect(f.card.properties.Status!.value).toBe('Waiting for Prod Release')
 })
 
 it('reuses completed commit observations across overlapping ranges for 24 hours', async () => {

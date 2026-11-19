@@ -89,8 +89,8 @@ The live API does not read `releases/reconciliation.json` or coordinator exports
 The old export reader remains for historical CLI fixtures/tests. The legacy
 Notion writer's scheduled pass is disabled and the API reports review-only.
 The source reads perform no GitHub/Notion writes, workflow dispatch, publication
-or production changes. A separate scheduled writer handles
-[native production release waits](worker-closeout-release-waits.md).
+or production changes. Published release membership is available for review.
+[Production release waits](worker-closeout-release-waits.md) are advanced manually.
 
 Native upstream contracts:
 [release workflow](https://github.com/fortresspower/cmsandbox/blob/main/.github/workflows/release-production.yml),
