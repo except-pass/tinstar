@@ -178,7 +178,6 @@ export class ReconciliationSources {
     const signal = AbortSignal.timeout(background ? 60_000 : 20_000)
     const card = await this.workReader.card(id, true, background, signal)
     const context = await this.context.decisionDetails(id, signal, background ? this.notionApi.backgroundFetch : this.notionApi.fetch, freshHistory)
-    this.workReader.confirm(card)
     if (context.outcome !== 'available') throw new Error(context.omissions || 'Card content is unavailable')
     await this.context.verifyRetractions(context)
     return { card, blocks: context.blocks }
@@ -192,6 +191,7 @@ export class ReconciliationSources {
     const source = await this.loadDecisionCard(id, background, freshHistory).then(({ card, blocks }) => {
       const source = decisionCardSource(card, blocks)
       if (this.decisionRevisionReads.get(id) === observation) {
+        this.workReader.confirm(card)
         this.decisionRevisions.set(id, { edited: card.last_edited_time, properties: source.propertyRevision, revision: source.revision })
       }
       return source

@@ -325,12 +325,18 @@ describe('prepared-card loop', () => {
     let now = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => now)
     const cards = Array.from({ length: 50 }, (_, n) => withOpenRequest(page(n + 1, { owner: 'Will' })))
-    const { sources, jobs, web } = await setup(cards, false)
+    const { sources, jobs, web, cardReads } = await setup(cards, false)
     await sources.preparation.replenish()
-    for (let tick = 0; tick < 3; tick++) {
+    const monitored = new Set<string>()
+    for (let tick = 0; tick < 5; tick++) {
+      cardReads.length = 0
       now += 5_000
       await sources.preparation.replenish()
+      const pages = cardReads.filter(path => path.startsWith('/v1/pages/'))
+      expect(pages).toHaveLength(2)
+      pages.forEach(path => monitored.add(path))
     }
+    expect(monitored.size).toBe(10)
     expect(jobs).toHaveLength(10)
     expect((await web('snapshot')).data.counts).toMatchObject({ ready: 0, preparing: 10 })
   })
@@ -764,7 +770,10 @@ describe('prepared-card loop', () => {
 
     const originalStatus = card.properties.Status!
     card.properties.Status = { type: 'status', status: { name: 'Waiting for Prod Release' } }
-    await sources.preparation.replenish()
+    for (let tick = 0; tick < 5; tick++) {
+      await sources.preparation.replenish()
+      if ((await sources.preparation.status()).jobs.some(job => job.id === unacknowledged.publish.job_id && job.state === 'stopped')) break
+    }
     expect((await sources.preparation.status()).jobs).toContainEqual(expect.objectContaining({
       id: unacknowledged.publish.job_id, state: 'stopped',
     }))
@@ -856,8 +865,8 @@ describe('prepared-card loop', () => {
         await expect(sources.preparation.publish({ job_id: jobs[0]!.publish.job_id, packet: contents }))
           .rejects.toThrow('The card changed while preparing it')
       } else {
-        expect(await tool('update_work', { card_id: card.id, operation_id: 'new-request-during-monitor', kind: 'request_decision',
-          request_id: 'new-request', requested_from: 'Will', question: 'Reconsider with the new evidence?' }))
+        expect(await tool('update_work', { card_id: card.id, operation_id: 'complete-during-monitor', kind: 'complete',
+          disposition: 'Decision no longer needed', evidence: 'Fixture closed' }))
           .toMatchObject({ outcome: 'saved' })
       }
     } finally {
@@ -865,7 +874,9 @@ describe('prepared-card loop', () => {
       await monitoring
     }
 
-    expect((await web('snapshot')).data.pending).toEqual([expect.objectContaining({ card_id: card.id, state: 'Queued' })])
+    expect((await web('snapshot')).data.pending).toEqual(action === 'publication'
+      ? [expect.objectContaining({ card_id: card.id, state: 'Queued' })]
+      : [])
   })
 
   it('publishes while a retirement-only history read is pending', async () => {

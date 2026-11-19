@@ -13,6 +13,7 @@ import { NotionCardBoardMismatch } from './notion'
 import type { WorkCard } from './workReader'
 
 const exec = promisify(execFile)
+const retirementChecksPerRefill = 2
 const retryAfter = 15 * 60_000
 const callbackStates = ['sending', 'sent', 'failed']
 const callbackStateSql = `state IN (${callbackStates.map(state => `'${state}'`).join(',')})`
@@ -72,6 +73,7 @@ export class DecisionPreparation {
   private pending?: Promise<void>
   private explanation = webhookMissing
   private refreshCursor = 0
+  private retirementCursor = 0
   private candidateCursor = 0
 
   constructor(readonly packets: DecisionPackets, private source: {
@@ -161,7 +163,7 @@ export class DecisionPreparation {
     const { candidates, refreshable, liveJobs } = await this.packets.leases.writeStorage(db => {
       this.expireJobs(db, cutoff)
       const capacity = this.secret ? this.refillCapacity(db, queue, cutoff) : 0
-      const liveJobs = db.prepare(`SELECT id,card,revision FROM decision_card_prep WHERE scope = ? AND ${liveJobSql}`)
+      const liveJobs = db.prepare(`SELECT id,card,revision FROM decision_card_prep WHERE scope = ? AND ${liveJobSql} ORDER BY card, id`)
         .all(this.scope, cutoff) as unknown as Pick<Job, 'id' | 'card' | 'revision'>[]
       const liveCards = new Set(liveJobs.map(job => job.card))
       const fresh = capacity ? queue.filter(card => !liveCards.has(card.id) && !this.held(db, card.id)) : []
@@ -176,7 +178,10 @@ export class DecisionPreparation {
       const refresh = [...refreshable.slice(index), ...refreshable.slice(0, index)].slice(0, 4)
       await Promise.allSettled(refresh.map(card => this.source.read(card.id, true)))
     }
-    const monitoring = Promise.allSettled(liveJobs.map(async job => {
+    const start = liveJobs.length ? this.retirementCursor % liveJobs.length : 0
+    const retirementChecks = [...liveJobs.slice(start), ...liveJobs.slice(0, start)].slice(0, retirementChecksPerRefill)
+    this.retirementCursor += retirementChecks.length
+    const monitoring = Promise.allSettled(retirementChecks.map(async job => {
       const source = await this.readSource(job.card, true)
       if (source?.prepEligible && source.revision === job.revision) return
       await this.packets.leases.writeStorage(db => this.retireJobInStorage(db, job.id, this.now() - retryAfter, null))
