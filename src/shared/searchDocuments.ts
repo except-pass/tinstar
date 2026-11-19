@@ -28,7 +28,7 @@ export function redactSourceText(input: unknown): string {
     .replace(/\b(?:basic|bearer)\s+[A-Za-z0-9._~+\/=-]{12,}/gi, '[credential omitted]')
     .replace(/((["'])(?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_ -]?key|secret|authorization)\2\s*[:=]\s*)(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*)/gi, '$1"[credential omitted]"')
     .replace(/\b(password|passwd|token|api[_-]?key|secret|authorization)\s*[:=]\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|["'][^\r\n]*)/gi, '$1=[credential omitted]')
-    .replace(/\b(password|passwd|token|api[_-]?key|secret)\s*[:=]\s*(?!\[credential omitted\])[^\s"',;]{6,}/gi, '$1=[credential omitted]')
+    .replace(/\b((?:[a-z][a-z0-9_-]{0,48}[_-])?(?:password|passwd|token|api[_-]?key|secret|authorization))\s*[:=]\s*(?!\[credential omitted\])[^\s"',;]{6,}/gi, '$1=[credential omitted]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[credential omitted]@')
 
 }

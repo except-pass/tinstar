@@ -516,9 +516,11 @@ it.each([
 it.each([false, true])('recovers note-only writes without reposting (unchanged fields: %s)', async unchanged => {
   const f = await fixture()
   const { call } = await f.connect()
-  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\npassword="clipped\nD2 [Open]: What follows?'
+  const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\npassword="clipped\nD2 [Open]: What follows?'
   const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
-  expect(card.description).toBe('{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\npassword=[credential omitted]\nD2 [Open]: What follows?')
+  const projectedDescription = '{"password":"[credential omitted]"} and password=[credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\npassword=[credential omitted]\nD2 [Open]: What follows?'
+  expect(card.description).toBe(projectedDescription)
+  expect(await call('get_work', { card_id: card.id })).toMatchObject({ card: { description: projectedDescription } })
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
   const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Ticket' } : {}) }
   f.controls.loseEdit = true
