@@ -7,8 +7,6 @@ import { ReleaseMembershipReader } from './membership'
 const repository = 'fortresspower/cmsandbox'
 const catalogTtl = 120_000
 const actionsTtl = 60_000
-const openRunStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending'])
-/** One minute while a fetched run is still open or the page set is incomplete; settled commits follow the catalog interval. */
 const actionsInterval = (open: boolean | undefined) => open ? actionsTtl : catalogTtl
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/)
 const tagSchema = z.object({ name: z.string(), commit: z.object({ sha }) })
@@ -277,11 +275,12 @@ export class GithubReleaseReader {
             if (runs.length >= raw.total_count) { complete = true; break }
             if (!raw.workflow_runs.length) break
           }
-          const open = !complete || runs.some(run => openRunStatuses.has(run.status))
-          this.details.set(key, { at: this.now(), observedAt, known: complete, open, runs: runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null })) })
+          const visibleRuns = runs.filter(run => ['push', 'workflow_run'].includes(run.event) && run.head_sha === tag.commit.sha && run.head_branch === tag.name && run.path.split('@')[0] !== '.github/workflows/release-production.yml').map(run => ({ id: run.id, name: run.name, workflow: run.path, url: run.html_url, sha: run.head_sha, status: run.status, conclusion: run.conclusion, attempt: run.run_attempt, createdAt: run.created_at, updatedAt: run.updated_at, startedAt: run.run_started_at ?? null }))
+          const open = visibleRuns.some(run => run.status !== 'completed')
+          this.details.set(key, { at: this.now(), observedAt, known: complete, open, runs: visibleRuns })
         } catch {
           const previous = this.details.get(key)
-          this.details.set(key, { at: this.now(), observedAt: previous?.observedAt ?? null, known: false, open: previous?.open ?? false, runs: previous?.runs ?? [] })
+          this.details.set(key, { at: this.now(), observedAt: previous?.observedAt ?? null, known: false, open: false, runs: previous?.runs ?? [] })
         }
       }))
     }

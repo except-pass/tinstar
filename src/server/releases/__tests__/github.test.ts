@@ -132,17 +132,72 @@ it('re-reads an open selected tag on the fast cadence and leaves settled tags un
   expect(settledPaths.some(path => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
 })
 
-it('keeps the fast cadence when the only open run is excluded from the release card', async () => {
+it.each([
+  { path: '.github/workflows/release-production.yml@refs/tags/v1.24.0' },
+  { event: 'workflow_dispatch' },
+  { head_sha: nativeBase },
+  { head_branch: 'main' },
+])('keeps Actions fresh on the slow cadence with excluded run %j', async exclusion => {
   let clock = now
-  const hidden = { ...nativeRun, id: 9, path: '.github/workflows/release-production.yml', status: 'in_progress', conclusion: null }
+  const hidden = { ...nativeRun, ...exclusion, id: 9, status: 'in_progress', conclusion: null }
   const read = vi.fn(nativeFixtureRead({ runs: [nativeRun, hidden] }))
   const reader = new GithubReleaseReader(read, () => clock)
   const first = await reader.get(data())
   expect(first.releases[0]!.github!.runs.map(run => run.id)).not.toContain(9)
   read.mockClear()
   clock += 60_000
+  const display = reader.display(data())
+  expect(display.refreshing).toBe(false)
+  expect(display.releases[0]).toMatchObject({ provenance: { historical: false }, github: { runsStatus: 'fresh' } })
   await reader.get(data())
-  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(true)
+  expect(read.mock.calls.some(([path]) => path.includes(`/actions/runs?head_sha=${nativeHead}`))).toBe(false)
+})
+
+it.each([
+  { status: 'completed', conclusion: 'success', pagesAfterMinute: 0 },
+  { status: 'in_progress', conclusion: null, pagesAfterMinute: 10 },
+])('keeps incomplete Actions evidence unknown with a $status component', async ({ status, conclusion, pagesAfterMinute }) => {
+  let clock = now
+  const fixture = nativeFixtureRead()
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (path: string) => {
+    if (!path.includes(candidatePath)) return fixture(path)
+    return { total_count: 11, workflow_runs: [{ ...nativeRun, status, conclusion }] }
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const initial = await reader.get(data())
+  expect(initial.releases[0]).toMatchObject({ provenance: { historical: true }, github: { runsStatus: 'unknown' } })
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(read.mock.calls.filter(([path]) => path.includes(candidatePath))).toHaveLength(pagesAfterMinute)
+})
+
+it('falls back to the slow cadence after failing to refresh an active component', async () => {
+  let clock = now, failed = false
+  const fixture = nativeFixtureRead({ runs: [{ ...nativeRun, status: 'in_progress', conclusion: null }] })
+  const candidatePath = `/actions/runs?head_sha=${nativeHead}`
+  const read = vi.fn(async (path: string) => {
+    if (failed && path.includes(candidatePath)) throw new Error('unreadable')
+    return fixture(path)
+  })
+  const reader = new GithubReleaseReader(read, () => clock)
+  const initial = await reader.get(data())
+  clock += 60_000
+  failed = true
+  const unavailable = await reader.get(data())
+  expect(unavailable.releases[0]).toMatchObject({
+    provenance: { historical: true },
+    github: { runsStatus: 'unknown', runs: initial.releases[0]!.github!.runs },
+  })
+  read.mockClear()
+  clock += 60_000
+  await reader.get(data())
+  expect(read.mock.calls.some(([path]) => path.includes(candidatePath))).toBe(false)
+  clock += 60_000
+  failed = false
+  const recovered = await reader.get(data())
+  expect(recovered.releases[0]).toMatchObject({ state: 'Running', github: { runsStatus: 'fresh' } })
 })
 
 it('does not re-read a candidate on the fast cadence once every workflow run has completed', async () => {
