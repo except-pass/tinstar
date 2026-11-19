@@ -182,6 +182,7 @@ exit 1
     comment: { id: '84001', author: { accountId: '123:comment-author' }, body: { type: 'doc', content: [
       { type: 'paragraph', content: [{ type: 'text', text: `Signed review evidence: ${secret} and ${unsafe}\u001b[31m` }] },
       { type: 'paragraph', content: [{ type: 'text', text: String.raw`Second line password: "short two-word-passphrase" and token='tiny escaped \' value' and {"password":"two word passphrase"} and {"token":"clipped passphrase` }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'continuation of passphrase' }] },
     ] } },
   })
   equal((await post('comment', evidence)).status, 204)
