@@ -171,7 +171,7 @@ exit 1
   match((await run('sources')).stdout, /partial · signed-project-webhooks · Jira update omitted changelog items/)
   deepEqual(lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout), updates)
 
-  equal((await post('new-ticket', webhookEvent('jira:issue_created', { issue: { ...issue, id: '98766', key: 'WORK-2', fields: { ...issue.fields, summary: pat } } }))).status, 204)
+  equal((await post('new-ticket', webhookEvent('jira:issue_created', { issue: { ...issue, id: '98766', key: 'WORK-2', fields: { ...issue.fields, summary: "Token: TTL tuning " + pat } } }))).status, 204)
   const links = (id, fromString, toString) => webhookEvent('jira:issue_updated', {
     changelog: { id, items: [{ field: 'Link', fieldtype: 'jira', fromString, toString }] },
   })
@@ -206,7 +206,7 @@ exit 1
   const allAtStop = lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout)
   equal(allAtStop.length, 11)
   equal(allAtStop.filter(event => event.event_type === 'ticket.created').length, 1)
-  equal(allAtStop.find(event => event.event_type === 'ticket.created').change.after.summary, '[credential omitted]')
+  equal(allAtStop.find(event => event.event_type === 'ticket.created').change.after.summary, 'Token: TTL tuning [credential omitted]')
   deepEqual(allAtStop.filter(event => event.change.field === 'links').map(event => event.change), [
     { field: 'links', before: null, after: 'This issue is blocked by OTHER-99' },
     { field: 'links', before: 'This issue is blocked by OTHER-99', after: null },

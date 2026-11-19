@@ -81,6 +81,8 @@ function preview(text, secret) {
     .replace(credentialAssignment, (_match, prefix, keyQuote, bareValue, offset, source) => {
       let suffix = ''
       if (bareValue) {
+        if (/^(?:password|passwd|token|secret|api key)[ \t]*:[ \t]+$/i.test(prefix) &&
+          /^[a-z]{1,5}$/i.test(bareValue) && /^[ \t]+[a-z]/i.test(source.slice(offset + _match.length))) return _match
         const closer = { '(': ')', '[': ']', '{': '}', '<': '>' }[source[offset - 1]]
         const jsonObject = keyQuote === '"' && source.lastIndexOf('{', offset - 1) >
           Math.max(source.lastIndexOf('}', offset - 1), source.lastIndexOf('\n', offset - 1))

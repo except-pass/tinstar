@@ -285,7 +285,7 @@ export class JiraWork extends JiraClient {
         if (!nativeId(result.id)) throw new JiraWorkUnconfirmed('Jira creation returned no immutable issue ID')
         id = result.id
       }
-      const issue = await this.read(id, true)
+      const issue = await this.read(id, !attempt.dispatched)
       if (!attempt.dispatched && (issue.issue_type !== issueType || issue.status !== 'Backlog' || issue.name !== input.name ||
         issue.description !== (input.description ?? '') || issue.owner !== (input.owner ?? null))) {
         throw new JiraCreateContradiction('Jira creation readback differs from the requested ticket or Backlog default')

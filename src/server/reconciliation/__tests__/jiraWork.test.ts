@@ -277,6 +277,11 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.staleSearch = true
   expect(await second.call('create_work', args)).toMatchObject({ code: 'unconfirmed' })
   f.controls.staleSearch = false
+  const issue = f.issues.get('60001')!
+  const originalType = issue.fields.issuetype
+  issue.fields.issuetype = { id: '99999', name: 'Story' }
+  expect(await second.call('create_work', args)).toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed' })
+  issue.fields.issuetype = originalType
   f.issues.get('60001')!.fields.summary = 'Title changed natively'
   const confirmed = await second.call('create_work', args)
   expect(confirmed).toMatchObject({ outcome: 'saved', code: 'already-saved', card: { issue_type: 'Epic', issue_id: '60001', name: 'Title changed natively' } })
@@ -697,12 +702,12 @@ it.each([false, true])('recovers note-only writes without reposting (unchanged f
   const f = await fixture()
   const { call } = await f.connect()
   const description = '{"password":"two word passphrase"} and password: "longfirstword secondword"\nATATTabcdefghijklmnop0123456789 ATCTTabcdefghijklmnop0123456789 github_pat_1234567890abcdef1234567890abcdef Basic Zml4dHVyZTpwYXNzd29yZA==\nEVENTS_JIRA_WEBHOOK_SECRET=fixtureWebhookValue Authorization=fixtureAuthValue\nEVENTS_JIRA_WEBHOOK_SECRET=\'quoted fixture value\'\nPASSWORD="first\nTOKEN=123\n\'TOKEN\'=\'inner\'\nprivate-tail"\nPASSWORD="first\nprivate-tail TOKEN=" trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET="clipped\nAUTHORIZATION="second fixture value"\nPASSWORD="clipped\nTOKEN="first\nprivate-tail")\nPASSWORD="clipped {"TOKEN":"opaque phrase"}\nTOKEN=4821 PASSWORD=a!b count=4821 "TOKEN": opaqueValue (PASSWORD=prefix]suffix) ["TOKEN": prefix)suffix]\nPASSWORD=]]}> TOKEN=opaque]] (PASSWORD=]]>) end\n{"password":123456789,"count":123456789,"token":-1.2e+3}\nPASSWORD=firstValue,TOKEN: secondValue, "API KEY" = thirdValue,"SECRET": fourthValue end\nAuthorization: Basic dTpw and Authorization=Basic YTpiYw== done\nAuthorization:\n  Basic dTpw\nBasic YTpiYw==\nAuthorization: Basic\n  dTpw\nBasic dTpw.\nBasic YTpiYw==, next\nBasic information\nBasic configuration is required\nAuthorization: Bearer a7X9\nAuthorization:\n  Bearer\n  b8Y0\nBearer witness\nD2 [Open]: What follows?'
-  const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Ticket', description })
+  const { card } = await call('create_work', { provider: 'jira', operation_id: 'create', name: 'Token: TTL tuning', description })
   const projectedDescription = '{"password":"[credential omitted]"} and password: [credential omitted]\n[credential omitted] [credential omitted] [credential omitted] [credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted] Authorization=[credential omitted]\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nPASSWORD=[credential omitted]\nPASSWORD=[credential omitted] trailing prose\n"ordinary quotation"\nEVENTS_JIRA_WEBHOOK_SECRET=[credential omitted]\nAUTHORIZATION=[credential omitted]\nPASSWORD=[credential omitted]\nTOKEN=[credential omitted])\nPASSWORD=[credential omitted]{"TOKEN":"[credential omitted]"}\nTOKEN=[credential omitted] PASSWORD=[credential omitted] count=4821 "TOKEN": "[credential omitted]" (PASSWORD=[credential omitted]) ["TOKEN": "[credential omitted]"]\nPASSWORD=[credential omitted] TOKEN=[credential omitted] (PASSWORD=[credential omitted]) end\n{"password":"[credential omitted]","count":123456789,"token":"[credential omitted]"}\nPASSWORD=[credential omitted],TOKEN: [credential omitted], "API KEY" = "[credential omitted]","SECRET": "[credential omitted]" end\nAuthorization: [credential omitted] and Authorization=[credential omitted] done\nAuthorization:\n  [credential omitted]\n[credential omitted]\nAuthorization: [credential omitted]\n[credential omitted].\n[credential omitted], next\nBasic information\nBasic configuration is required\nAuthorization: [credential omitted]\nAuthorization:\n  [credential omitted]\nBearer witness\nD2 [Open]: What follows?'
-  expect(card.description).toBe(projectedDescription)
+  expect(card).toMatchObject({ name: 'Token: TTL tuning', description: projectedDescription })
   expect(await call('get_work', { card_id: card.id })).toMatchObject({ card: { description: projectedDescription } })
   expect(f.requests.some(request => request.path === 'serverInfo')).toBe(false)
-  const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Ticket' } : {}) }
+  const edit = { kind: 'jira_edit', card_id: card.id, note: 'Confirm this comment', ...(unchanged ? { name: 'Token: TTL tuning' } : {}) }
   f.controls.loseEdit = true
   expect(await call('update_work', { ...edit, operation_id: 'saved-note' })).toMatchObject({ code: 'unconfirmed' })
   expect(await call('update_work', { ...edit, operation_id: 'saved-note' })).toMatchObject({ code: 'already-saved' })
