@@ -141,7 +141,8 @@ export async function loadApprovedTools(approvedFile) {
   try {
     const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
     const jiraTools = approvedFile === undefined ? await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)) : []
-    if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) throw new Error()
+    if (approvedFile === undefined && (jiraTools.length !== 2 || !jiraTools.includes('link_work') ||
+        !jiraTools.includes('transition_work') || jiraTools.some(name => base.includes(name)))) throw new Error()
     return { base, jiraTools }
   } catch {
     throw new ApprovalPolicyError('Approved tools policy unreadable or invalid')

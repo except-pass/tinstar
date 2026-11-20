@@ -533,11 +533,14 @@ it.each([false, true])('checks the real facade catalog with Jira work enabled=%s
     installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'deploy-preview', token: caller.slice(7), allowView: true } })
   servers.push(facade.server); await facade.listen(0)
   const facadeUrl = `http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`
-  const { root: configHome, base, setCatalog } = await fixture()
-  setCatalog(await toolsList(facadeUrl, caller))
-  await writeFile(join(configHome, 'config.json'), JSON.stringify({ reconciliation: { jira: { mode: jiraEnabled ? 'read' : 'work' } } }))
+  const { root: fixtureRoot, base, setCatalog } = await fixture()
+  const policy = await loadApprovedTools(undefined)
+  const catalog = await toolsList(facadeUrl, caller)
+  const expected = jiraEnabled ? [...policy.base, 'link_work', 'transition_work'] : policy.base
+  expect(catalog.map(tool => tool.name).sort()).toEqual([...expected].sort())
+  setCatalog(catalog)
   await expect(mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
-    callerFile: join(configHome, 'caller'), policy: await loadApprovedTools(undefined), facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
+    callerFile: join(fixtureRoot, 'caller'), policy, facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
 })
 
 it.each(['link_work', 'transition_work', 'unexpected_tool'])('rejects a facade catalog with only %s added', async name => {
