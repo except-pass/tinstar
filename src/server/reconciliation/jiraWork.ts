@@ -20,6 +20,9 @@ function text(value: unknown, unsupported: true | 'omit' = true) {
 }
 class JiraWorkUnconfirmed extends Error {}
 class JiraCreateContradiction extends JiraWorkUnconfirmed {}
+class JiraAuditRejected extends JiraWorkUnconfirmed {}
+const isWriteRejection = (error: unknown): error is JiraWriteError =>
+  error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
 type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
@@ -31,7 +34,7 @@ type Attempt = {
   marker: string
   dispatched: boolean
   dispatch: () => Promise<void>
-  confirm: (card: Issue) => unknown
+  confirm: (card: Issue) => ReturnType<JiraWork['saved']>
 }
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 
@@ -183,7 +186,7 @@ export class JiraWork extends JiraClient {
         confirm: card => this.saved(card, dispatched),
       })
     } catch (error) {
-      const rejected = sent && error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408
+      const rejected = sent && isWriteRejection(error)
       const unconfirmed = pending && !rejected
       const result = {
         outcome: unconfirmed ? 'partially-saved' as const : 'not-saved' as const,
@@ -191,7 +194,7 @@ export class JiraWork extends JiraClient {
         operation_id: input.operation_id, ...(!rejected && cardId ? { card_id: cardId } : {}),
         message: unconfirmed ? `Unconfirmed. Check Jira. ${this.message(error)}` : this.message(error),
       }
-      if (rejected || error instanceof JiraCreateContradiction) {
+      if (rejected || error instanceof JiraCreateContradiction || error instanceof JiraAuditRejected) {
         await this.receipts.putJiraWork(key, verb, true, result)
       }
       return result
@@ -216,8 +219,7 @@ export class JiraWork extends JiraClient {
     return accountId
   }
 
-  private async commentBaseline(id: string, note?: string) {
-    if (!note) return undefined
+  private async commentBaseline(id: string) {
     const ids = (await this.notes(id)).comments.map(comment => comment.id)
     const { serverTime } = await this.request('serverInfo')
     const time = typeof serverTime === 'string' ? Date.parse(serverTime) : NaN
@@ -225,16 +227,30 @@ export class JiraWork extends JiraClient {
     return { ids, time }
   }
 
-  private async checkComment(id: string, note: string | undefined, baseline?: { ids: unknown[]; time: number }) {
+  private async checkComment(id: string, note: string | undefined, expected?: string | { ids: unknown[]; time: number }) {
     if (!note) return
     const accountId = await this.serviceAccountId()
+    if (typeof expected === 'string') {
+      await this.checkProject(id)
+      const comment = await this.request(`issue/${id}/comment/${expected}`).catch(error => {
+        if (error instanceof JiraWriteError && error.status === 404) {
+          throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+        }
+        throw error
+      })
+      await this.checkProject(id)
+      if (comment.id !== expected || comment.visibility != null || text(comment.body) !== note || comment.author?.accountId !== accountId) {
+        throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+      }
+      return
+    }
     const page = await this.notes(id)
     const matching = page.comments.filter(comment => {
       const createdAt = Date.parse(comment.created_at)
-      return comment.body === note && comment.author_id === accountId &&
-        (!baseline || (!baseline.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= baseline.time))
+      if (comment.body !== note || comment.author_id !== accountId) return false
+      return !expected || (!expected.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= expected.time)
     })
-    if (baseline ? matching.length !== 1 : matching.length === 0) {
+    if (expected ? matching.length !== 1 : matching.length === 0) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
   }
@@ -393,7 +409,7 @@ export class JiraWork extends JiraClient {
       if (!note && [input.name, input.owner, input.description, input.blocker, input.add_questions, input.answers].every(value => value === undefined)) {
         throw new JiraWorkInputError('Supply a ticket edit or comment')
       }
-      const baseline = attempt.dispatched ? undefined : await this.commentBaseline(id, note)
+      const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
       if (attempt.dispatched) {
         this.checkEdit(current, input)
@@ -432,27 +448,48 @@ export class JiraWork extends JiraClient {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
-      const current = await this.read(id)
+      const readDestination = async (destination: string) => {
+        const issue = await this.read(id)
+        if (issue.status !== destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
+        return issue
+      }
       if (attempt.dispatched) {
         const destination = jiraTransitionDestination(input)
-        if (!destination || current.status !== destination) {
-          throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
+        if (!destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
+        let auditMissing = false
+        try {
+          await this.checkComment(id, note)
+        } catch (error) {
+          if (!(error instanceof JiraWorkUnconfirmed)) throw error
+          auditMissing = true
         }
-        await this.checkComment(id, note)
-        return attempt.confirm(current)
+        const confirmed = attempt.confirm(await readDestination(destination))
+        return auditMissing ? { ...confirmed, message: 'The audit note may be missing from Jira.' } : confirmed
       }
+      const current = await this.read(id)
       const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
       const to = checkJiraTransition({ ...current, blocker }, input)
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
-      const baseline = await this.commentBaseline(id, note)
       await attempt.dispatch()
-      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id }, ...this.commentUpdate(note) })
-      const saved = await this.read(id)
-      await this.checkComment(id, note, baseline)
-      if (saved.status !== to) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
-      return attempt.confirm(saved)
+      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
+        if (!note || isWriteRejection(error)) throw error
+      })
+      const saved = await readDestination(to)
+      if (!note) return attempt.confirm(saved)
+      const baseline = await this.commentBaseline(id).catch(() => undefined)
+      await this.checkProject(id)
+      const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
+        if (isWriteRejection(error)) {
+          throw new JiraAuditRejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
+        }
+        return undefined
+      })
+      const expected = nativeId(posted?.id) ? posted.id : baseline
+      if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+      await this.checkComment(id, note, expected)
+      return attempt.confirm(await readDestination(to))
     })
   }
 
