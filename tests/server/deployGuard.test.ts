@@ -62,7 +62,7 @@ fs.appendFileSync(process.env.COMMAND_LOG, 'voice-cli ' + command + ' config=' +
 if (process.env.FAIL_VOICE === '1') process.exit(43);
 `)
 
-  let ready = true, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
+  let ready = true, facadeCatalog = tools, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
   let deployedSha: string | null = null
   const api = new AskApi({ scene: async () => { throw new Error('Smoke must not query First Mate') } }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   let base = ''
@@ -80,7 +80,7 @@ if (process.env.FAIL_VOICE === '1') process.exit(43);
       if (req.headers.authorization !== caller) { res.writeHead(401); res.end('{}'); return }
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk)
       const message = JSON.parse(Buffer.concat(chunks).toString())
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: req.url === '/mcp' ? tools : catalog } })); return
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: req.url === '/mcp' ? facadeCatalog : catalog } })); return
     }
     res.writeHead(404); res.end('{}')
   })
@@ -136,14 +136,27 @@ exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
-  const run = async (checkOnly = false, override: Record<string, string> = {}, args: string[] = []) => {
+  const run = async (checkOnly = false, override: Record<string, string | undefined> = {}, args: string[] = []) => {
     try { const result = await exec('bash', [executable, ...(checkOnly ? ['--check-only'] : []), ...args], { env: { ...env, ...override } }); return { ...result, code: 0 } }
     catch (error) { const result = error as { stdout: string; stderr: string; code: number }; return result }
   }
-  return { root, base, run, setDeployedSha: (value: string) => { deployedSha = value }, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
+  return { root, base, run, setFacadeCatalog: (value: typeof tools) => { facadeCatalog = value }, setDeployedSha: (value: string) => { deployedSha = value }, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
 }
 
 describe('floor deploy executable', () => {
+  it.each([false, true])('accepts the default Jira catalog with check-only=%s', async checkOnly => {
+    const { run, setFacadeCatalog, setCatalog, setDeployedSha } = await fixture()
+    const { base } = await loadApprovedTools(undefined)
+    const catalog = [...base, 'link_work', 'transition_work'].map(name => ({ ...tools[0], name }))
+    setFacadeCatalog(catalog)
+    setCatalog(catalog)
+    setDeployedSha(head)
+
+    const result = await run(checkOnly, { TINSTAR_APPROVED_TOOLS_FILE: undefined })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stdout).toContain('MCP smoke passed')
+  })
+
   it.each(['known', 'unavailable', 'process failure'])('deploys without node_modules when the old-SHA probe reports %s', async failure => {
     const { root, run, setDeployedSha } = await fixture(true)
     const previous = failure === 'known' ? 'b'.repeat(40) : null
