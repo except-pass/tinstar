@@ -10,7 +10,7 @@ import { ReviewDeploymentAudit, ReviewDeploymentReconciler } from '../../src/ser
 import { AssociationStore } from '../../src/server/releases/associations'
 import { fixtureScene } from '../../test-fixtures/reconciliation/scenes'
 import type { JiraWork } from '../../src/server/reconciliation/jiraWork'
-import { compareCatalogs, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
+import { compareCatalogs, mcpSmoke, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
 
 const exec = promisify(execFile)
 const roots: string[] = [], servers: Server[] = []
@@ -517,7 +517,7 @@ it('reads tools/list from the executable MCP interface', async () => {
   await expect(toolsList(base + '/mcp', 'Bearer invalid')).rejects.toThrow()
 })
 
-it('lists the real facade catalog using the same wire request as the smoke', async () => {
+it.each([undefined, 'read', 'work'])('checks the real facade catalog with Jira mode %s', async mode => {
   const { ReconciliationMcp } = await import('../../src/server/reconciliation/mcp')
   const { createTunnelFacade } = await import('../../src/server/reconciliation/tunnel')
   const { fixtureScene, fixtureSources } = await import('../../test-fixtures/reconciliation/scenes')
@@ -525,15 +525,25 @@ it('lists the real facade catalog using the same wire request as the smoke', asy
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-mcp-')); roots.push(root)
   const mcp = new ReconciliationMcp({ scene: async () => fixtureScene(), card: async () => ({ outcome: 'unavailable' }),
     queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Unavailable' }), workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
-    // Production smoke compares this catalog to approved-tools.json, which includes the Jira work tools.
-    jiraWork: {} as JiraWork,
+    ...(mode === 'work' ? { jiraWork: {} as JiraWork } : {}),
   }, root)
   const backend = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(backend)
   await new Promise<void>(done => backend.listen(0, '127.0.0.1', done))
   const facade = createTunnelFacade({ upstreamPort: (backend.address() as { port: number }).port,
     installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'deploy-preview', token: caller.slice(7), allowView: true } })
   servers.push(facade.server); await facade.listen(0)
-  const catalog = await toolsList(`http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`, caller)
-  const approved = JSON.parse(await readFile(resolve('scripts/deploy/approved-tools.json'), 'utf8'))
-  expect(() => compareCatalogs(catalog, catalog, approved)).not.toThrow()
+  const facadeUrl = `http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`
+  const { root: configHome, base, setCatalog } = await fixture()
+  setCatalog(await toolsList(facadeUrl, caller))
+  const setJiraMode = (jiraMode: string | undefined) => writeFile(join(configHome, 'config.json'),
+    JSON.stringify(jiraMode === undefined ? {} : { reconciliation: { jira: { mode: jiraMode } } }))
+  const smoke = () => mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
+    callerFile: join(configHome, 'caller'), configHome, approvedFile: undefined, facadeStartedAt: '2026-11-09T18:00:01Z' })
+
+  await setJiraMode(mode)
+  await expect(smoke()).resolves.toBeUndefined()
+  await setJiraMode(mode === 'work' ? undefined : 'work')
+  await expect(smoke()).rejects.toThrow(mode === 'work'
+    ? 'added=["link_work","transition_work"]'
+    : 'missing=["link_work","transition_work"]')
 })

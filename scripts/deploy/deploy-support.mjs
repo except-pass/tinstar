@@ -5,7 +5,7 @@ import { connect } from 'node:net'
 import { userInfo, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { http } from './post-deploy-smoke.mjs'
+import { http, loadApprovedTools } from './post-deploy-smoke.mjs'
 
 export async function runningSha(e = process.env) {
   try {
@@ -43,10 +43,7 @@ export async function preflight() {
   await check('caller header unreadable or invalid', async () => {
     if (!/^Bearer [^\s]{32,}(?:\r?\n)?$/.test(await readFile(e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header', 'utf8'))) throw Error()
   })
-  await check('approved tools unreadable or invalid', async () => {
-    const names = JSON.parse(await readFile(e.TINSTAR_APPROVED_TOOLS_FILE ?? fileURLToPath(new URL('./approved-tools.json', import.meta.url)), 'utf8'))
-    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) throw Error()
-  })
+  await check('approved tools unreadable or invalid', () => loadApprovedTools(e.TINSTAR_CONFIG_HOME, e.TINSTAR_APPROVED_TOOLS_FILE))
   if (!process.argv.includes('--check-only')) {
     for (const file of ['package.json', 'package-lock.json']) await check(`source ${file} unreadable`, () => readFile(join(e.TINSTAR_DEPLOY_SOURCE, file)))
   }

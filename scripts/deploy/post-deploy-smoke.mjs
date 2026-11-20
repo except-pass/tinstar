@@ -130,14 +130,30 @@ export function publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
   if (!Number.isFinite(facadeStart) || !Number.isFinite(tunnelStart) || tunnelStart < facadeStart ||
       !pollTimes.some(at => Number.isFinite(at) && at >= tunnelStart) || main?.probe_status !== 'ok' || !configuredUrl) throw new Error('Fresh startup catalog publication evidence unavailable')
 }
-export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, approvedFile, facadeStartedAt }) {
+export async function loadApprovedTools(configHome, approvedFile) {
+  const readCatalog = async file => {
+    const names = JSON.parse(await readFile(file, 'utf8'))
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) throw new Error('Invalid approved tools')
+    return names
+  }
+  if (approvedFile !== undefined) return readCatalog(approvedFile)
+  const { reconciliation } = JSON.parse(await readFile(resolve(configHome, 'config.json'), 'utf8'))
+  const names = await readCatalog(new URL('./approved-tools.json', import.meta.url))
+  if (reconciliation?.jira?.mode === 'work') {
+    names.push(...await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)))
+    if (new Set(names).size !== names.length) throw new Error('Invalid approved tools')
+  }
+  return names
+}
+
+export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, configHome, approvedFile, facadeStartedAt }) {
   const header = await readFile(callerFile, 'utf8')
   if (!/^Bearer [^\s]{32,}(?:\r?\n)?$/.test(header)) throw new Error('Caller header unavailable')
   const authorization = header.trim()
   await http(`${healthBase}/readyz`)
   const facade = await toolsList(facadeUrl, authorization)
   const target = await toolsList(targetUrl, authorization)
-  compareCatalogs(facade, target, JSON.parse(await readFile(approvedFile, 'utf8')))
+  compareCatalogs(facade, target, await loadApprovedTools(configHome, approvedFile))
   const status = await (await http(`${healthBase}/api/status`)).json()
   const metrics = await (await http(`${healthBase}/metrics`)).text()
   publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
@@ -164,7 +180,7 @@ async function main() {
       try {
         await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5297/mcp',
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
-      approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE ?? fileURLToPath(new URL('./approved-tools.json', import.meta.url)), facadeStartedAt })
+      configHome: e.TINSTAR_CONFIG_HOME, approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE, facadeStartedAt })
         break
       } catch (error) {
         if (error instanceof CatalogMismatch) throw error
