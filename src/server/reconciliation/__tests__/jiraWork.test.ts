@@ -72,7 +72,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -161,7 +161,7 @@ async function fixture() {
       }
       if (commentId) {
         const comment = issue.comments.find(comment => comment.id === commentId)
-        return comment ? response(comment) : response({}, 404)
+        return comment ? response({ ...comment, ...controls.directCommentOverrides }) : response({}, 404)
       }
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
@@ -961,3 +961,23 @@ it.each(['evicted', 'baseline unavailable', 'baseline and response unavailable',
       .toHaveLength(mode === 'project changed during baseline' ? 0 : 1)
   },
 )
+
+it.each([
+  ['ID', { id: '999' }],
+  ['visibility', { visibility: { type: 'role', value: 'Administrators' } }],
+  ['body', { body: 'Different note' }],
+  ['author', { author: { accountId: 'another-account' } }],
+] as const)('leaves the audit unconfirmed when a successful comment GET returns the wrong %s', async (_field, overrides) => {
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Audit comment', owner: 'Avery', description: 'Ready for work',
+  })
+  f.controls.directCommentOverrides = overrides
+
+  expect(await call('transition_work', { card_id, operation_id: 'fast-track', verb: 'Fast-track', evidence: 'Ready for work' }))
+    .toMatchObject({ outcome: 'partially-saved', code: 'unconfirmed', message: expect.stringContaining('did not confirm the requested comment') })
+  expect(f.issues.get('60001')!.comments.map(comment => comment.id)).toEqual(['1'])
+  expect(f.requests).toContainEqual({ method: 'GET', path: 'issue/60001/comment/1', fields: null })
+  expect((await call('get_work', { card_id })).card.status).toBe('Queued')
+})
