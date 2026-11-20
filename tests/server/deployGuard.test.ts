@@ -553,7 +553,7 @@ it.each([false, true])('checks the real facade catalog with Jira work enabled=%s
   expect(catalog.map(tool => tool.name).sort()).toEqual([...expected].sort())
   setCatalog(catalog)
   await expect(mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
-    callerFile: join(fixtureRoot, 'caller'), policy, facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
+    callerFile: join(fixtureRoot, 'caller'), approvedFile: undefined, facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
 })
 
 it.each(['link_work', 'transition_work', 'unexpected_tool'])('rejects a facade catalog with only %s added', async name => {

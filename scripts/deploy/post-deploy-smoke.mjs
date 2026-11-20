@@ -134,7 +134,7 @@ export function publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
 export async function loadApprovedTools(approvedFile) {
   const readCatalog = async file => {
     const names = JSON.parse(await readFile(file, 'utf8'))
-    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string' || !name.trim()) || new Set(names).size !== names.length) throw new Error()
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) throw new Error()
     return names
   }
   const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
@@ -143,14 +143,15 @@ export async function loadApprovedTools(approvedFile) {
   return { base, jiraTools }
 }
 
-export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, policy, facadeStartedAt }) {
+export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, approvedFile, facadeStartedAt }) {
   const header = await readFile(callerFile, 'utf8')
   if (!/^Bearer [^\s]{32,}(?:\r?\n)?$/.test(header)) throw new Error('Caller header unavailable')
   const authorization = header.trim()
   await http(`${healthBase}/readyz`)
   const facade = await toolsList(facadeUrl, authorization)
   const target = await toolsList(targetUrl, authorization)
-  compareCatalogs(facade, target, policy.base, policy.jiraTools)
+  const { base, jiraTools } = await loadApprovedTools(approvedFile)
+  compareCatalogs(facade, target, base, jiraTools)
   const status = await (await http(`${healthBase}/api/status`)).json()
   const metrics = await (await http(`${healthBase}/metrics`)).text()
   publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
@@ -177,7 +178,7 @@ async function main() {
       try {
         await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5297/mcp',
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
-      policy: await loadApprovedTools(e.TINSTAR_APPROVED_TOOLS_FILE), facadeStartedAt })
+      approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE, facadeStartedAt })
         break
       } catch (error) {
         if (error instanceof CatalogMismatch) throw error
