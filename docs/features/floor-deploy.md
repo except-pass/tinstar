@@ -77,7 +77,7 @@ arguments or printed, even on errors. HTTP requests reject redirects.
 | `TINSTAR_TUNNEL_TARGET_URL` | `http://127.0.0.1:5297/mcp` | Actual configured tunnel target (facade directly) |
 | `TINSTAR_TUNNEL_HEALTH_URL` | `http://127.0.0.1:5298` | `/readyz`, `/api/status`, `/metrics` |
 | `TINSTAR_CALLER_HEADER_FILE` | `/home/farm/.config/tinstar-tunnel/facade-caller-header` | Private file containing `Bearer <caller-token>`; never the backend install token |
-| `TINSTAR_APPROVED_TOOLS_FILE` | `scripts/deploy/approved-tools.json` beside helper | Explicit catalog override. The default includes the Jira work tools when `reconciliation.jira.mode` is `work`. |
+| `TINSTAR_APPROVED_TOOLS_FILE` | `scripts/deploy/approved-tools.json` beside helper | Explicit catalog override. The default accepts the base catalog with or without the complete Jira work tool pair. |
 | `TINSTAR_SMOKE_WAIT_MS` | `60000` | Startup grace for owner/MCP read checks |
 | `TINSTAR_FACADE_STARTED_AT` | Read from systemctl `ActiveEnterTimestamp` | Preview/test override only, ISO timestamp |
 

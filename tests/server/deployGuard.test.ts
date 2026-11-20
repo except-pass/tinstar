@@ -10,7 +10,7 @@ import { ReviewDeploymentAudit, ReviewDeploymentReconciler } from '../../src/ser
 import { AssociationStore } from '../../src/server/releases/associations'
 import { fixtureScene } from '../../test-fixtures/reconciliation/scenes'
 import type { JiraWork } from '../../src/server/reconciliation/jiraWork'
-import { compareCatalogs, mcpSmoke, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
+import { compareCatalogs, loadApprovedTools, mcpSmoke, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
 
 const exec = promisify(execFile)
 const roots: string[] = [], servers: Server[] = []
@@ -517,7 +517,7 @@ it('reads tools/list from the executable MCP interface', async () => {
   await expect(toolsList(base + '/mcp', 'Bearer invalid')).rejects.toThrow()
 })
 
-it.each([undefined, 'read', 'work'])('checks the real facade catalog with Jira mode %s', async mode => {
+it.each([false, true])('checks the real facade catalog with Jira work enabled=%s', async jiraEnabled => {
   const { ReconciliationMcp } = await import('../../src/server/reconciliation/mcp')
   const { createTunnelFacade } = await import('../../src/server/reconciliation/tunnel')
   const { fixtureScene, fixtureSources } = await import('../../test-fixtures/reconciliation/scenes')
@@ -525,7 +525,7 @@ it.each([undefined, 'read', 'work'])('checks the real facade catalog with Jira m
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-mcp-')); roots.push(root)
   const mcp = new ReconciliationMcp({ scene: async () => fixtureScene(), card: async () => ({ outcome: 'unavailable' }),
     queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Unavailable' }), workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
-    ...(mode === 'work' ? { jiraWork: {} as JiraWork } : {}),
+    ...(jiraEnabled ? { jiraWork: {} as JiraWork } : {}),
   }, root)
   const backend = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(backend)
   await new Promise<void>(done => backend.listen(0, '127.0.0.1', done))
@@ -535,15 +535,24 @@ it.each([undefined, 'read', 'work'])('checks the real facade catalog with Jira m
   const facadeUrl = `http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`
   const { root: configHome, base, setCatalog } = await fixture()
   setCatalog(await toolsList(facadeUrl, caller))
-  const setJiraMode = (jiraMode: string | undefined) => writeFile(join(configHome, 'config.json'),
-    JSON.stringify(jiraMode === undefined ? {} : { reconciliation: { jira: { mode: jiraMode } } }))
-  const smoke = () => mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
-    callerFile: join(configHome, 'caller'), configHome, approvedFile: undefined, facadeStartedAt: '2026-11-09T18:00:01Z' })
+  await writeFile(join(configHome, 'config.json'), JSON.stringify({ reconciliation: { jira: { mode: jiraEnabled ? 'read' : 'work' } } }))
+  await expect(mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
+    callerFile: join(configHome, 'caller'), policy: await loadApprovedTools(undefined), facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
+})
 
-  await setJiraMode(mode)
-  await expect(smoke()).resolves.toBeUndefined()
-  await setJiraMode(mode === 'work' ? undefined : 'work')
-  await expect(smoke()).rejects.toThrow(mode === 'work'
-    ? 'added=["link_work","transition_work"]'
-    : 'missing=["link_work","transition_work"]')
+it.each(['link_work', 'transition_work', 'unexpected_tool'])('rejects a facade catalog with only %s added', async name => {
+  const policy = await loadApprovedTools(undefined)
+  const catalog = [...policy.base, name].map(name => ({ name }))
+  expect(() => compareCatalogs(catalog, catalog, policy.base, policy.jiraTools)).toThrow(`added=["${name}"]`)
+})
+
+it('reports invalid approval policy as a hard smoke failure before startup probes', async () => {
+  const { root } = await fixture()
+  const file = join(root, 'invalid-policy.json')
+  await writeFile(file, token)
+  const result = exec(process.execPath, [resolve('scripts/deploy/post-deploy-smoke.mjs')], {
+    env: { ...process.env, TINSTAR_APPROVED_TOOLS_FILE: file, TINSTAR_OWNER_URL: 'http://127.0.0.1:1', TINSTAR_SMOKE_WAIT_MS: '0' },
+  })
+  await expect(result).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('Approved tools policy unreadable or invalid') })
+  await expect(result).rejects.toMatchObject({ stderr: expect.not.stringContaining(token) })
 })
