@@ -9,6 +9,7 @@ import { afterEach, expect, it } from 'vitest'
 import { loadReconciliationConfig, type JiraWorkConfig } from '../config'
 import { ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
+import { adfText } from '../jira'
 import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
@@ -48,6 +49,16 @@ const localizedStatuses = new Map([
   ['Waiting for Prod Release', '等待发布'], ['Verify in Prod', '生产验证'], ['Done', '完成'], ['Canceled', '已取消'],
 ])
 const jiraNow = () => new Date(Date.now() - 5000).toISOString()
+/** Blank paragraphs come back without a content array. TSW-1 comments 56761 and 56765. */
+function jiraStoredBody(body: any) {
+  if (!body || body.type !== 'doc' || !Array.isArray(body.content)) return body
+  return {
+    ...body,
+    content: body.content.map((node: any) => node?.type === 'paragraph' && Array.isArray(node.content) && node.content.length === 0
+      ? { type: 'paragraph' }
+      : node),
+  }
+}
 const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
@@ -62,7 +73,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, dropTransitionComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -145,6 +156,13 @@ async function fixture() {
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
     }
+    if (part === 'comment' && method === 'POST') {
+      const created = jiraNow()
+      if (!controls.omitComment) {
+        issue.comments.push({ id: String(issue.comments.length + 1), body: jiraStoredBody(body.body), created, updated: created, author: { accountId: 'fixture-service' } })
+      }
+      return response({ id: String(issue.comments.length), created }, 201)
+    }
     if (part === 'transitions' && method === 'GET') {
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
       const offered = available.map(transition => ({
@@ -163,7 +181,9 @@ async function fixture() {
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       const created = jiraNow()
       for (const comment of body.update?.comment ?? []) {
-        if (!controls.omitComment) issue.comments.push({ id: String(issue.comments.length + 1), body: comment.add.body, created, updated: created, author: { accountId: 'fixture-service' } })
+        if (!controls.omitComment && !(part === 'transitions' && controls.dropTransitionComment)) {
+          issue.comments.push({ id: String(issue.comments.length + 1), body: jiraStoredBody(comment.add.body), created, updated: created, author: { accountId: 'fixture-service' } })
+        }
       }
       if (controls.delayedComment) {
         issue.comments.push({ id: 'delayed', body: controls.delayedComment, created: controls.delayedCommentTime || created, updated: controls.delayedCommentTime || created, author: { accountId: controls.delayedCommentAuthor } })
@@ -799,5 +819,47 @@ it('resolves a named TSW transition when Jira translates the destination status'
   f.controls.transitionList = backlog.filter(transition => transition.id !== '2')
   expect(await call('transition_work', { card_id, operation_id: 'missing', verb: 'Prioritize' })).toMatchObject({
     outcome: 'not-saved', message: expect.stringContaining('does not offer the requested named transition'),
+  })
+})
+
+it('confirms the audit comment shape Jira stored, including when the transition drops it', async () => {
+  const live = {
+    type: 'doc', version: 1, content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Live proof comment after the transition fix.' }] },
+      { type: 'paragraph' },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Recorded via Tin Star (Tin Star MCP)' }] },
+    ],
+  }
+  expect(adfText(live, true)).toBe('Live proof comment after the transition fix.\n\nRecorded via Tin Star (Tin Star MCP)')
+
+  const f = await fixture()
+  const { call } = await f.connect()
+  const { card: { id: card_id } } = await call('create_work', {
+    provider: 'jira', operation_id: 'create', name: 'Audit comment', owner: 'Avery',
+    description: 'Run the transition.\nSuccess: status and the audit comment are stored.',
+  })
+  const issue = f.issues.get('60001')!
+  issue.fields.status = { name: 'Queued' }
+  const evidence = 'The run finished.\n\nKept on TSW-1.'
+  const note = `Start via Tin Star (Fixture agent)\nEvidence: ${evidence}`
+  const input = { card_id, operation_id: 'start', verb: 'Start', evidence }
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
+  const stored = issue.comments.at(-1).body
+  expect(stored.content).toContainEqual({ type: 'paragraph' })
+  expect(adfText(stored, true)).toBe(note)
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment')).toHaveLength(0)
+
+  issue.fields.status = { name: 'Queued' }
+  f.controls.dropTransitionComment = true
+  expect(await call('transition_work', { ...input, operation_id: 'start-dropped' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment')).toHaveLength(1)
+  const posted = issue.comments.at(-1).body
+  expect(posted.content).toContainEqual({ type: 'paragraph' })
+  expect(adfText(posted, true)).toBe(note)
+
+  issue.fields.status = { name: 'Queued' }
+  f.controls.omitComment = true
+  expect(await call('transition_work', { ...input, operation_id: 'start-missing' })).toMatchObject({
+    code: 'unconfirmed', message: expect.stringContaining('did not confirm the requested comment'),
   })
 })
