@@ -103,8 +103,9 @@ const toolMeaning = tool => canonical({ ...tool,
   ...(tool.inputSchema === undefined ? {} : { inputSchema: schemaMeaning(tool.inputSchema) }),
   ...(tool.outputSchema === undefined ? {} : { outputSchema: schemaMeaning(tool.outputSchema) }),
 })
-export function compareCatalogs(facade, target, approved) {
+export function compareCatalogs(facade, target, base, jiraTools = []) {
   const names = facade.map(tool => tool.name).sort()
+  const approved = jiraTools.every(name => names.includes(name)) ? [...base, ...jiraTools] : base
   const missing = approved.filter(name => !names.includes(name)).sort()
   const added = names.filter(name => !approved.includes(name))
   const duplicates = names.filter((name, index) => names.indexOf(name) !== index)
@@ -130,6 +131,22 @@ export function publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
   if (!Number.isFinite(facadeStart) || !Number.isFinite(tunnelStart) || tunnelStart < facadeStart ||
       !pollTimes.some(at => Number.isFinite(at) && at >= tunnelStart) || main?.probe_status !== 'ok' || !configuredUrl) throw new Error('Fresh startup catalog publication evidence unavailable')
 }
+export async function loadApprovedTools(approvedFile) {
+  const readCatalog = async file => {
+    const names = JSON.parse(await readFile(file, 'utf8'))
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) {
+      throw new CatalogMismatch('Approved tools must be a nonempty list of distinct strings')
+    }
+    return names
+  }
+  const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
+  const jiraTools = approvedFile === undefined ? await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)) : []
+  if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) {
+    throw new CatalogMismatch('Approved Jira tools must contain two distinct names outside the base catalog')
+  }
+  return { base, jiraTools }
+}
+
 export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, approvedFile, facadeStartedAt }) {
   const header = await readFile(callerFile, 'utf8')
   if (!/^Bearer [^\s]{32,}(?:\r?\n)?$/.test(header)) throw new Error('Caller header unavailable')
@@ -137,7 +154,8 @@ export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, a
   await http(`${healthBase}/readyz`)
   const facade = await toolsList(facadeUrl, authorization)
   const target = await toolsList(targetUrl, authorization)
-  compareCatalogs(facade, target, JSON.parse(await readFile(approvedFile, 'utf8')))
+  const { base, jiraTools } = await loadApprovedTools(approvedFile)
+  compareCatalogs(facade, target, base, jiraTools)
   const status = await (await http(`${healthBase}/api/status`)).json()
   const metrics = await (await http(`${healthBase}/metrics`)).text()
   publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
@@ -164,7 +182,7 @@ async function main() {
       try {
         await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5297/mcp',
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
-      approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE ?? fileURLToPath(new URL('./approved-tools.json', import.meta.url)), facadeStartedAt })
+      approvedFile: e.TINSTAR_APPROVED_TOOLS_FILE, facadeStartedAt })
         break
       } catch (error) {
         if (error instanceof CatalogMismatch) throw error

@@ -9,12 +9,14 @@ import { AskApi } from '../../src/server/ask/routes'
 import { ReviewDeploymentAudit, ReviewDeploymentReconciler } from '../../src/server/reconciliation/reviewDeployment'
 import { AssociationStore } from '../../src/server/releases/associations'
 import { fixtureScene } from '../../test-fixtures/reconciliation/scenes'
-import { compareCatalogs, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
+import type { JiraWork } from '../../src/server/reconciliation/jiraWork'
+import { compareCatalogs, loadApprovedTools, mcpSmoke, publicationEvidence, toolsList } from '../../scripts/deploy/post-deploy-smoke.mjs'
 
 const exec = promisify(execFile)
 const roots: string[] = [], servers: Server[] = []
 const token = 'preview-only-bridge-credential-1234567890', caller = 'Bearer preview-only-caller-credential-1234567890'
-const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }]
+const sceneTool = { name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }
+const tools = [sceneTool]
 const script = resolve('scripts/deploy/floor-deploy.sh')
 const head = 'a'.repeat(40), newer = 'b'.repeat(40)
 const greenCheck = { id: 123, name: 'typecheck-and-test', app: 'github-actions', head_sha: head, status: 'completed', conclusion: 'success' }
@@ -61,7 +63,7 @@ fs.appendFileSync(process.env.COMMAND_LOG, 'voice-cli ' + command + ' config=' +
 if (process.env.FAIL_VOICE === '1') process.exit(43);
 `)
 
-  let ready = true, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
+  let ready = true, facadeCatalog = tools, catalog = tools, started = '2026-11-09T18:00:02Z', failBridgeRead = false
   let deployedSha: string | null = null
   const api = new AskApi({ scene: async () => { throw new Error('Smoke must not query First Mate') } }, root, async () => ({ ownerLogins: ['owner@example.test'], bridgeToken: token }))
   let base = ''
@@ -79,7 +81,7 @@ if (process.env.FAIL_VOICE === '1') process.exit(43);
       if (req.headers.authorization !== caller) { res.writeHead(401); res.end('{}'); return }
       const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(chunk)
       const message = JSON.parse(Buffer.concat(chunks).toString())
-      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: req.url === '/mcp' ? tools : catalog } })); return
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: req.url === '/mcp' ? facadeCatalog : catalog } })); return
     }
     res.writeHead(404); res.end('{}')
   })
@@ -135,14 +137,27 @@ exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     TINSTAR_CONFIG_HOME: root, TINSTAR_DEPLOY_BLOCK: join(root, 'deploy.blocked'), TINSTAR_OWNER_URL: base, TINSTAR_BRIDGE_URL: base,
     TINSTAR_FACADE_URL: base + '/mcp', TINSTAR_TUNNEL_TARGET_URL: base + '/target', TINSTAR_TUNNEL_HEALTH_URL: base,
     TINSTAR_FACADE_STARTED_AT: '2026-11-09T18:00:01Z', TINSTAR_CALLER_HEADER_FILE: join(root, 'caller'), TINSTAR_APPROVED_TOOLS_FILE: join(root, 'approved.json'), TINSTAR_SMOKE_WAIT_MS: '0' }
-  const run = async (checkOnly = false, override: Record<string, string> = {}, args: string[] = []) => {
+  const run = async (checkOnly = false, override: Record<string, string | undefined> = {}, args: string[] = []) => {
     try { const result = await exec('bash', [executable, ...(checkOnly ? ['--check-only'] : []), ...args], { env: { ...env, ...override } }); return { ...result, code: 0 } }
     catch (error) { const result = error as { stdout: string; stderr: string; code: number }; return result }
   }
-  return { root, base, run, setDeployedSha: (value: string) => { deployedSha = value }, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
+  return { root, base, run, setFacadeCatalog: (value: typeof tools) => { facadeCatalog = value }, setDeployedSha: (value: string) => { deployedSha = value }, setFailBridgeRead: () => { failBridgeRead = true }, setReady: (value: boolean) => { ready = value }, setCatalog: (value: typeof tools) => { catalog = value }, setStarted: (value: string) => { started = value } }
 }
 
 describe('floor deploy executable', () => {
+  it.each([false, true])('accepts the default Jira catalog with check-only=%s', async checkOnly => {
+    const { run, setFacadeCatalog, setCatalog, setDeployedSha } = await fixture()
+    const { base } = await loadApprovedTools(undefined)
+    const catalog = [...base, 'link_work', 'transition_work'].map(name => ({ ...sceneTool, name }))
+    setFacadeCatalog(catalog)
+    setCatalog(catalog)
+    setDeployedSha(head)
+
+    const result = await run(checkOnly, { TINSTAR_APPROVED_TOOLS_FILE: undefined })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stdout).toContain('MCP smoke passed')
+  })
+
   it.each(['known', 'unavailable', 'process failure'])('deploys without node_modules when the old-SHA probe reports %s', async failure => {
     const { root, run, setDeployedSha } = await fixture(true)
     const previous = failure === 'known' ? 'b'.repeat(40) : null
@@ -472,7 +487,7 @@ describe('floor deploy executable', () => {
 
 it('compares full catalog semantics, tolerates object order and rejects duplicate/extra/mutated tools', () => {
   expect(() => compareCatalogs(tools, [{ inputSchema: { properties: {}, type: 'object' }, description: 'Scene', name: 'get_scene' }], ['get_scene'])).not.toThrow()
-  for (const target of [[], [...tools, ...tools], [{ ...tools[0], inputSchema: { type: 'object' } }]]) expect(() => compareCatalogs(tools, target, ['get_scene'])).toThrow()
+  for (const target of [[], [...tools, ...tools], [{ ...sceneTool, inputSchema: { type: 'object' } }]]) expect(() => compareCatalogs(tools, target, ['get_scene'])).toThrow()
   expect(() => compareCatalogs(tools, tools, ['get_scene', 'unexpected'])).toThrow()
   expect(() => compareCatalogs(tools, tools, ['get_scene', 'get_scene'])).toThrow()
   const schema = { name: 'schema', inputSchema: { type: 'object', required: ['a', 'b'], properties: { a: { enum: ['x', 'y'] } } } }
@@ -516,7 +531,7 @@ it('reads tools/list from the executable MCP interface', async () => {
   await expect(toolsList(base + '/mcp', 'Bearer invalid')).rejects.toThrow()
 })
 
-it('lists the real facade catalog using the same wire request as the smoke', async () => {
+it.each([false, true])('checks the real facade catalog with Jira work enabled=%s', async jiraEnabled => {
   const { ReconciliationMcp } = await import('../../src/server/reconciliation/mcp')
   const { createTunnelFacade } = await import('../../src/server/reconciliation/tunnel')
   const { fixtureScene, fixtureSources } = await import('../../test-fixtures/reconciliation/scenes')
@@ -524,13 +539,26 @@ it('lists the real facade catalog using the same wire request as the smoke', asy
   const root = await mkdtemp(join(tmpdir(), 'tinstar-deploy-mcp-')); roots.push(root)
   const mcp = new ReconciliationMcp({ scene: async () => fixtureScene(), card: async () => ({ outcome: 'unavailable' }),
     queue: async () => ({ outcome: 'queue-source-unavailable', message: 'Unavailable' }), workerLinkReport: async () => buildWorkerLinkReport(fixtureSources()),
+    ...(jiraEnabled ? { jiraWork: {} as JiraWork } : {}),
   }, root)
   const backend = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(backend)
   await new Promise<void>(done => backend.listen(0, '127.0.0.1', done))
   const facade = createTunnelFacade({ upstreamPort: (backend.address() as { port: number }).port,
     installToken: (await readFile(join(root, 'mcp-token'), 'utf8')).trim(), caller: { id: 'deploy-preview', token: caller.slice(7), allowView: true } })
   servers.push(facade.server); await facade.listen(0)
-  const catalog = await toolsList(`http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`, caller)
-  const approved = JSON.parse(await readFile(resolve('scripts/deploy/approved-tools.json'), 'utf8'))
-  expect(() => compareCatalogs(catalog, catalog, approved)).not.toThrow()
+  const facadeUrl = `http://127.0.0.1:${(facade.server.address() as { port: number }).port}/mcp`
+  const { root: fixtureRoot, base, setCatalog } = await fixture()
+  const policy = await loadApprovedTools(undefined)
+  const catalog = await toolsList(facadeUrl, caller)
+  const expected = jiraEnabled ? [...policy.base, 'link_work', 'transition_work'] : policy.base
+  expect(catalog.map(tool => tool.name).sort()).toEqual([...expected].sort())
+  setCatalog(catalog)
+  await expect(mcpSmoke({ facadeUrl, targetUrl: base + '/target', healthBase: base,
+    callerFile: join(fixtureRoot, 'caller'), approvedFile: undefined, facadeStartedAt: '2026-11-09T18:00:01Z' })).resolves.toBeUndefined()
+})
+
+it.each(['link_work', 'transition_work', 'unexpected_tool'])('rejects a facade catalog with only %s added', async name => {
+  const policy = await loadApprovedTools(undefined)
+  const catalog = [...policy.base, name].map(name => ({ name }))
+  expect(() => compareCatalogs(catalog, catalog, policy.base, policy.jiraTools)).toThrow(`added=["${name}"]`)
 })

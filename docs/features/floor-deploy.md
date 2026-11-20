@@ -77,7 +77,7 @@ arguments or printed, even on errors. HTTP requests reject redirects.
 | `TINSTAR_TUNNEL_TARGET_URL` | `http://127.0.0.1:5297/mcp` | Actual configured tunnel target (facade directly) |
 | `TINSTAR_TUNNEL_HEALTH_URL` | `http://127.0.0.1:5298` | `/readyz`, `/api/status`, `/metrics` |
 | `TINSTAR_CALLER_HEADER_FILE` | `/home/farm/.config/tinstar-tunnel/facade-caller-header` | Private file containing `Bearer <caller-token>`; never the backend install token |
-| `TINSTAR_APPROVED_TOOLS_FILE` | `scripts/deploy/approved-tools.json` beside helper | Explicit approved names; default matches Hulk's read + view facade |
+| `TINSTAR_APPROVED_TOOLS_FILE` | Unset | Selects a custom catalog under the [approved tool policy](#approved-tool-policy). |
 | `TINSTAR_SMOKE_WAIT_MS` | `60000` | Startup grace for owner/MCP read checks |
 | `TINSTAR_FACADE_STARTED_AT` | Read from systemctl `ActiveEnterTimestamp` | Preview/test override only, ISO timestamp |
 
@@ -86,9 +86,16 @@ selected deployment configuration. Changing a facade to read-only requires a
 corresponding approved names file; do not silently accept a missing tool. Hulk's
 shim is retired: the facade handles the tunnel protocol directly, and the defaults
 neither restart nor target a shim. Legacy installations can explicitly set
-`TINSTAR_SHIM_UNIT` and `TINSTAR_TUNNEL_TARGET_URL` together. Approved names are
-an intentional caller scope contract: an added, removed or duplicated tool fails the smoke by default because it
-can either break ChatGPT's expected tools or expose a tool outside approved scope.
+`TINSTAR_SHIM_UNIT` and `TINSTAR_TUNNEL_TARGET_URL` together.
+
+### Approved tool policy
+
+Normal deploys and `--check-only` use the same caller scope contract. By default,
+the facade must expose exactly the [base catalog](../../scripts/deploy/approved-tools.json)
+or the base catalog plus both tools in the [Jira supplement](../../scripts/deploy/approved-jira-tools.json).
+Setting `TINSTAR_APPROVED_TOOLS_FILE` requires an exact match to that file alone.
+Missing, unexpected or duplicate tools fail the smoke because they can break
+ChatGPT's expected tools or expose tools outside the approved scope.
 Descriptions, annotations, schemas and other tool fields must also match between
 the facade and target. Differences name missing, added, duplicate or changed tools;
 a deliberate scope change can use `--override "reason"`. JSON object key order,
@@ -143,7 +150,7 @@ behind a running server. Treat that file as private owner data.
 The smoke requires all of these:
 
 1. Tunnel `/readyz` returns exactly HTTP 200, before and after catalog checks.
-2. The facade's authenticated `tools/list` exactly matches approved tool names.
+2. The facade's authenticated `tools/list` matches the [approved tool policy](#approved-tool-policy).
 3. The actual tunnel target's authenticated `tools/list` matches the **complete**
    facade catalog, including schemas. All pages are read. This catches a stale or
    incorrectly configured shim as well as a wrong facade scope.
