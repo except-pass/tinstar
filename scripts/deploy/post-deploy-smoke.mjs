@@ -134,12 +134,16 @@ export function publicationEvidence(status, metrics, facadeStartedAt, targetUrl)
 export async function loadApprovedTools(approvedFile) {
   const readCatalog = async file => {
     const names = JSON.parse(await readFile(file, 'utf8'))
-    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) throw new Error()
+    if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string') || new Set(names).size !== names.length) {
+      throw new CatalogMismatch('Approved tools must be a nonempty list of distinct strings')
+    }
     return names
   }
   const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
   const jiraTools = approvedFile === undefined ? await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)) : []
-  if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) throw new Error()
+  if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) {
+    throw new CatalogMismatch('Approved Jira tools must contain two distinct names outside the base catalog')
+  }
   return { base, jiraTools }
 }
 
