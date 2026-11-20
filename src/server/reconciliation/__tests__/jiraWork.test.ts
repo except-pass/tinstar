@@ -72,7 +72,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, statusDuringCommentRead: '', rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -98,7 +98,10 @@ async function fixture() {
       controls.beforeWrite = ''
       throw new Error('Process stopped before Jira received the write')
     }
-    if (path === 'serverInfo') return response({ serverTime: jiraNow() })
+    if (path === 'serverInfo') {
+      if (controls.loseBaselineTime) throw new Error('Dropped server time response')
+      return response({ serverTime: jiraNow() })
+    }
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
@@ -147,13 +150,18 @@ async function fixture() {
       const key = part.slice('properties/'.length)
       return Object.hasOwn(issue.properties, key) ? response({ key, value: issue.properties[key] }) : response({}, 404)
     }
-    if (part === 'comment' && method === 'GET') {
+    if (method === 'GET' && (part === 'comment' || part?.startsWith('comment/'))) {
+      const commentId = part === 'comment' ? undefined : part.slice('comment/'.length)
       if (controls.moveDuringComments) {
         issue.fields.project = { id: '10002' }
         issue.comments.push({ id: 'foreign', body: 'Destination project comment' })
       }
-      if (controls.statusDuringCommentRead && requests.some(request => request.method === 'POST' && request.path === path)) {
+      if (controls.statusDuringCommentRead && requests.some(request => request.method === 'POST' && request.path === `issue/${issue.id}/comment`)) {
         issue.fields.status = { name: controls.statusDuringCommentRead }
+      }
+      if (commentId) {
+        const comment = issue.comments.find(comment => comment.id === commentId)
+        return comment ? response(comment) : response({}, 404)
       }
       const startAt = Number(url.searchParams.get('startAt'))
       return response({ startAt, total: issue.comments.length, comments: issue.comments.slice(startAt, startAt + 50) })
@@ -166,7 +174,11 @@ async function fixture() {
       }
       if (controls.commentResponse === 'lost') throw new Error('Dropped comment write response')
       if (controls.commentResponse === 'unreadable') return new Response('{', { status: 201 })
-      return response({ id: String(issue.comments.length + Number(controls.omitComment || controls.commentResponse === 'wrong-id')), created }, 201)
+      const id = String(issue.comments.length + Number(controls.omitComment || controls.commentResponse === 'wrong-id'))
+      if (controls.newerCommentsAfterPost) {
+        issue.comments.unshift(...Array.from({ length: 50 }, (_, i) => ({ id: `new-${i}`, body: 'Newer comment' })))
+      }
+      return response({ id, created }, 201)
     }
     if (part === 'transitions' && method === 'GET') {
       const available = controls.transitionList ?? transitions.filter(transition => jiraTransitions[transition.name][0].some(status => status === issue.fields.status.name))
@@ -928,3 +940,24 @@ it('reconciles an unaudited transition with a lost response only on retry', asyn
   expect(f.requests.filter(request => request.method === 'POST' && request.path.startsWith('issue/60001/'))
     .map(request => request.path)).toEqual(['issue/60001/transitions'])
 })
+
+it.each(['evicted', 'baseline unavailable', 'baseline and response unavailable', 'project changed during baseline'] as const)(
+  'checks initial audit confirmation when the comment readback is %s', async mode => {
+    const f = await fixture()
+    const { call } = await f.connect()
+    const { card: { id: card_id } } = await call('create_work', {
+      provider: 'jira', operation_id: 'create', name: 'Audit comment', owner: 'Avery', description: 'Ready for work',
+    })
+    f.controls.newerCommentsAfterPost = mode === 'evicted'
+    f.controls.loseBaselineTime = mode.startsWith('baseline')
+    f.controls.moveDuringComments = mode === 'project changed during baseline'
+    if (mode === 'baseline and response unavailable') f.controls.commentResponse = 'lost'
+
+    const result = await call('transition_work', { card_id, operation_id: 'fast-track', verb: 'Fast-track', evidence: 'Ready for work' })
+    expect(result).toMatchObject(mode === 'evicted' || mode === 'baseline unavailable'
+      ? { outcome: 'saved', code: 'confirmed', card: { status: 'Queued' } }
+      : { outcome: 'partially-saved', code: 'unconfirmed' })
+    expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment'))
+      .toHaveLength(mode === 'project changed during baseline' ? 0 : 1)
+  },
+)

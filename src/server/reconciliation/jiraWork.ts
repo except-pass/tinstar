@@ -230,11 +230,24 @@ export class JiraWork extends JiraClient {
   private async checkComment(id: string, note: string | undefined, expected?: string | { ids: unknown[]; time: number }) {
     if (!note) return
     const accountId = await this.serviceAccountId()
+    if (typeof expected === 'string') {
+      await this.checkProject(id)
+      const comment = await this.request(`issue/${id}/comment/${expected}`).catch(error => {
+        if (error instanceof JiraWriteError && error.status === 404) {
+          throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+        }
+        throw error
+      })
+      await this.checkProject(id)
+      if (comment.id !== expected || comment.visibility != null || text(comment.body) !== note || comment.author?.accountId !== accountId) {
+        throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+      }
+      return
+    }
     const page = await this.notes(id)
     const matching = page.comments.filter(comment => {
       const createdAt = Date.parse(comment.created_at)
       if (comment.body !== note || comment.author_id !== accountId) return false
-      if (typeof expected === 'string') return comment.id === expected
       return !expected || (!expected.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= expected.time)
     })
     if (expected ? matching.length !== 1 : matching.length === 0) {
@@ -465,14 +478,17 @@ export class JiraWork extends JiraClient {
       })
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
-      const baseline = await this.commentBaseline(id)
+      const baseline = await this.commentBaseline(id).catch(() => undefined)
+      await this.checkProject(id)
       const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
         if (isWriteRejection(error)) {
           throw new JiraAuditRejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
         }
         return undefined
       })
-      await this.checkComment(id, note, nativeId(posted?.id) ? posted.id : baseline)
+      const expected = nativeId(posted?.id) ? posted.id : baseline
+      if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+      await this.checkComment(id, note, expected)
       return attempt.confirm(await readDestination(to))
     })
   }
