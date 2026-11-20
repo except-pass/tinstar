@@ -31,7 +31,7 @@ type Attempt = {
   marker: string
   dispatched: boolean
   dispatch: () => Promise<void>
-  confirm: (card: Issue) => unknown
+  confirm: (card: Issue) => ReturnType<JiraWork['saved']>
 }
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 
@@ -225,29 +225,15 @@ export class JiraWork extends JiraClient {
     return { ids, time }
   }
 
-  private async checkComment(id: string, note: string | undefined, baseline?: { ids: unknown[]; time: number }, postIfAbsent = false) {
+  private async checkComment(id: string, note: string | undefined, baseline?: { ids: unknown[]; time: number }) {
     if (!note) return
     const accountId = await this.serviceAccountId()
-    const matches = async () => {
-      const page = await this.notes(id)
-      return page.comments.filter(comment => {
-        const createdAt = Date.parse(comment.created_at)
-        return comment.body === note && comment.author_id === accountId &&
-          (!baseline || (!baseline.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= baseline.time))
-      })
-    }
-    let matching = await matches()
-    // Team-managed transitions have no screen. Jira moves the status and drops
-    // update.comment, so a missing audit comment is posted on the comment API.
-    if (matching.length === 0 && postIfAbsent) {
-      try {
-        await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) })
-      } catch (error) {
-        if (error instanceof JiraWriteError) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
-        throw error
-      }
-      matching = await matches()
-    }
+    const page = await this.notes(id)
+    const matching = page.comments.filter(comment => {
+      const createdAt = Date.parse(comment.created_at)
+      return comment.body === note && comment.author_id === accountId &&
+        (!baseline || (!baseline.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= baseline.time))
+    })
     if (baseline ? matching.length !== 1 : matching.length === 0) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
@@ -452,7 +438,12 @@ export class JiraWork extends JiraClient {
         if (!destination || current.status !== destination) {
           throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         }
-        await this.checkComment(id, note, undefined, true)
+        try {
+          await this.checkComment(id, note)
+        } catch (error) {
+          if (!(error instanceof JiraWorkUnconfirmed)) throw error
+          return { ...attempt.confirm(current), message: 'The audit note may be missing from Jira.' }
+        }
         return attempt.confirm(current)
       }
       const blocker = input.verb === 'Block' ? Boolean(this.blocker(current)) : this.externalPresent(current) || this.nativeBlockers(current).length > 0
@@ -462,10 +453,13 @@ export class JiraWork extends JiraClient {
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
       const baseline = await this.commentBaseline(id, note)
       await attempt.dispatch()
-      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id }, ...this.commentUpdate(note) })
+      await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } })
       const saved = await this.read(id)
-      await this.checkComment(id, note, baseline, saved.status === to)
       if (saved.status !== to) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
+      if (note) {
+        await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(() => {})
+        await this.checkComment(id, note, baseline)
+      }
       return attempt.confirm(saved)
     })
   }

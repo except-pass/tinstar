@@ -73,7 +73,7 @@ async function fixture() {
   expect(parsed.jira).toBeUndefined()
   const historicalKeys = new Map<string, string>()
   const requests: { method: string; path: string; fields: string | null }[] = []
-  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, dropTransitionComment: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
+  const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | undefined, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
   let nextIssue = 60001, nextLink = 8001
@@ -161,6 +161,8 @@ async function fixture() {
       if (!controls.omitComment) {
         issue.comments.push({ id: String(issue.comments.length + 1), body: jiraStoredBody(body.body), created, updated: created, author: { accountId: 'fixture-service' } })
       }
+      if (controls.commentResponse === 'lost') throw new Error('Dropped comment write response')
+      if (controls.commentResponse === 'unreadable') return new Response('{', { status: 201 })
       return response({ id: String(issue.comments.length), created }, 201)
     }
     if (part === 'transitions' && method === 'GET') {
@@ -181,7 +183,7 @@ async function fixture() {
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
       const created = jiraNow()
       for (const comment of body.update?.comment ?? []) {
-        if (!controls.omitComment && !(part === 'transitions' && controls.dropTransitionComment)) {
+        if (!controls.omitComment) {
           issue.comments.push({ id: String(issue.comments.length + 1), body: jiraStoredBody(comment.add.body), created, updated: created, author: { accountId: 'fixture-service' } })
         }
       }
@@ -340,7 +342,10 @@ it('reconciles lost writes after a new server instance and never repeats a pendi
   f.controls.loseEdit = true
   const nextMove = { ...move, operation_id: 'accepted-fast-track' }
   expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'unconfirmed' })
-  expect(await third.call('transition_work', nextMove)).toMatchObject({ code: 'already-saved', card: { status: 'Queued' } })
+  expect(await third.call('transition_work', nextMove)).toMatchObject({
+    outcome: 'saved', code: 'already-saved', card: { status: 'Queued' }, message: expect.stringContaining('audit note may be missing'),
+  })
+  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment')).toHaveLength(0)
   const restarted = await f.connect()
   const beforeRetry = f.requests.length
   expect(await restarted.call('transition_work', move)).toEqual(rejected)
@@ -822,7 +827,7 @@ it('resolves a named TSW transition when Jira translates the destination status'
   })
 })
 
-it('confirms the audit comment shape Jira stored, including when the transition drops it', async () => {
+it.each([undefined, 'lost', 'unreadable'] as const)('confirms the dedicated audit comment from Jira readback with response %s', async commentResponse => {
   const live = {
     type: 'doc', version: 1, content: [
       { type: 'paragraph', content: [{ type: 'text', text: 'Live proof comment after the transition fix.' }] },
@@ -843,23 +848,26 @@ it('confirms the audit comment shape Jira stored, including when the transition 
   const evidence = 'The run finished.\n\nKept on TSW-1.'
   const note = `Start via Tin Star (Fixture agent)\nEvidence: ${evidence}`
   const input = { card_id, operation_id: 'start', verb: 'Start', evidence }
-  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
-  const stored = issue.comments.at(-1).body
+  f.controls.commentResponse = commentResponse
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', code: 'confirmed', card: { status: 'In Progress' } })
+  expect(issue.comments).toHaveLength(1)
+  const stored = issue.comments[0].body
   expect(stored.content).toContainEqual({ type: 'paragraph' })
   expect(adfText(stored, true)).toBe(note)
-  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment')).toHaveLength(0)
+  const writes = () => f.requests.filter(request => request.method === 'POST' && request.path.startsWith('issue/60001/'))
+  expect(writes().map(request => request.path)).toEqual(['issue/60001/transitions', 'issue/60001/comment'])
 
-  issue.fields.status = { name: 'Queued' }
-  f.controls.dropTransitionComment = true
-  expect(await call('transition_work', { ...input, operation_id: 'start-dropped' })).toMatchObject({ outcome: 'saved', card: { status: 'In Progress' } })
-  expect(f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment')).toHaveLength(1)
-  const posted = issue.comments.at(-1).body
-  expect(posted.content).toContainEqual({ type: 'paragraph' })
-  expect(adfText(posted, true)).toBe(note)
+  expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  issue.comments.unshift(...Array.from({ length: 50 }, (_, i) => ({ id: `new-${i}`, body: 'Newer comment' })))
+  expect(await call('transition_work', input)).toMatchObject({
+    outcome: 'saved', code: 'already-saved', card: { status: 'In Progress' }, message: expect.stringContaining('audit note may be missing'),
+  })
+  expect(writes()).toHaveLength(2)
 
   issue.fields.status = { name: 'Queued' }
   f.controls.omitComment = true
   expect(await call('transition_work', { ...input, operation_id: 'start-missing' })).toMatchObject({
     code: 'unconfirmed', message: expect.stringContaining('did not confirm the requested comment'),
   })
+  expect(writes()).toHaveLength(4)
 })
