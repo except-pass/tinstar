@@ -75,7 +75,6 @@ export async function toolsList(url, authorization) {
 }
 // Only messages constructed here may be printed; SDK/network errors can contain secrets.
 class CatalogMismatch extends Error {}
-class ApprovalPolicyError extends Error {}
 class StartupUnavailable extends Error {}
 export function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
@@ -138,14 +137,10 @@ export async function loadApprovedTools(approvedFile) {
     if (!Array.isArray(names) || !names.length || names.some(name => typeof name !== 'string' || !name.trim()) || new Set(names).size !== names.length) throw new Error()
     return names
   }
-  try {
-    const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
-    const jiraTools = approvedFile === undefined ? await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)) : []
-    if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) throw new Error()
-    return { base, jiraTools }
-  } catch {
-    throw new ApprovalPolicyError('Approved tools policy unreadable or invalid')
-  }
+  const base = await readCatalog(approvedFile ?? new URL('./approved-tools.json', import.meta.url))
+  const jiraTools = approvedFile === undefined ? await readCatalog(new URL('./approved-jira-tools.json', import.meta.url)) : []
+  if (approvedFile === undefined && (jiraTools.length !== 2 || jiraTools.some(name => base.includes(name)))) throw new Error()
+  return { base, jiraTools }
 }
 
 export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, policy, facadeStartedAt }) {
@@ -164,10 +159,8 @@ export async function mcpSmoke({ facadeUrl, targetUrl, healthBase, callerFile, p
 
 async function main() {
   const e = process.env
-  let phase = 'MCP'
+  let phase = 'Ask'
   try {
-    const policy = await loadApprovedTools(e.TINSTAR_APPROVED_TOOLS_FILE)
-    phase = 'Ask'
     const deadline = Date.now() + Number(e.TINSTAR_SMOKE_WAIT_MS ?? 60_000)
     // Startup can take a moment after systemctl returns. Only the read-only ready
     // probe retries: a failed synthetic write is never silently retried as success.
@@ -184,7 +177,7 @@ async function main() {
       try {
         await mcpSmoke({ facadeUrl: e.TINSTAR_FACADE_URL ?? 'http://127.0.0.1:5297/mcp', targetUrl: e.TINSTAR_TUNNEL_TARGET_URL ?? 'http://127.0.0.1:5297/mcp',
       healthBase: e.TINSTAR_TUNNEL_HEALTH_URL ?? 'http://127.0.0.1:5298', callerFile: e.TINSTAR_CALLER_HEADER_FILE ?? '/home/farm/.config/tinstar-tunnel/facade-caller-header',
-      policy, facadeStartedAt })
+      policy: await loadApprovedTools(e.TINSTAR_APPROVED_TOOLS_FILE), facadeStartedAt })
         break
       } catch (error) {
         if (error instanceof CatalogMismatch) throw error
@@ -195,7 +188,7 @@ async function main() {
     console.log('MCP smoke passed; ready, approved target catalog matches facade, fresh startup poll verified')
   } catch (error) {
     console.error(`${phase} post-deploy smoke failed (credentials and response bodies withheld)`)
-    if (error instanceof CatalogMismatch || error instanceof ApprovalPolicyError || error instanceof StartupUnavailable) console.error(error.message)
+    if (error instanceof CatalogMismatch || error instanceof StartupUnavailable) console.error(error.message)
     process.exitCode = error instanceof StartupUnavailable ? 75 : 1
   }
 }

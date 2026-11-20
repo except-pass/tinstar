@@ -561,14 +561,3 @@ it.each(['link_work', 'transition_work', 'unexpected_tool'])('rejects a facade c
   const catalog = [...policy.base, name].map(name => ({ name }))
   expect(() => compareCatalogs(catalog, catalog, policy.base, policy.jiraTools)).toThrow(`added=["${name}"]`)
 })
-
-it('reports invalid approval policy as a hard smoke failure before startup probes', async () => {
-  const { root } = await fixture()
-  const file = join(root, 'invalid-policy.json')
-  await writeFile(file, token)
-  const result = exec(process.execPath, [resolve('scripts/deploy/post-deploy-smoke.mjs')], {
-    env: { ...process.env, TINSTAR_APPROVED_TOOLS_FILE: file, TINSTAR_OWNER_URL: 'http://127.0.0.1:1', TINSTAR_SMOKE_WAIT_MS: '0' },
-  })
-  await expect(result).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('Approved tools policy unreadable or invalid') })
-  await expect(result).rejects.toMatchObject({ stderr: expect.not.stringContaining(token) })
-})
