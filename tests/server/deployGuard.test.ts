@@ -15,7 +15,8 @@ import { compareCatalogs, loadApprovedTools, mcpSmoke, publicationEvidence, tool
 const exec = promisify(execFile)
 const roots: string[] = [], servers: Server[] = []
 const token = 'preview-only-bridge-credential-1234567890', caller = 'Bearer preview-only-caller-credential-1234567890'
-const tools = [{ name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }]
+const sceneTool = { name: 'get_scene', description: 'Scene', inputSchema: { type: 'object', properties: {} } }
+const tools = [sceneTool]
 const script = resolve('scripts/deploy/floor-deploy.sh')
 const head = 'a'.repeat(40), newer = 'b'.repeat(40)
 const greenCheck = { id: 123, name: 'typecheck-and-test', app: 'github-actions', head_sha: head, status: 'completed', conclusion: 'success' }
@@ -147,7 +148,7 @@ describe('floor deploy executable', () => {
   it.each([false, true])('accepts the default Jira catalog with check-only=%s', async checkOnly => {
     const { run, setFacadeCatalog, setCatalog, setDeployedSha } = await fixture()
     const { base } = await loadApprovedTools(undefined)
-    const catalog = [...base, 'link_work', 'transition_work'].map(name => ({ ...tools[0], name }))
+    const catalog = [...base, 'link_work', 'transition_work'].map(name => ({ ...sceneTool, name }))
     setFacadeCatalog(catalog)
     setCatalog(catalog)
     setDeployedSha(head)
@@ -486,7 +487,7 @@ describe('floor deploy executable', () => {
 
 it('compares full catalog semantics, tolerates object order and rejects duplicate/extra/mutated tools', () => {
   expect(() => compareCatalogs(tools, [{ inputSchema: { properties: {}, type: 'object' }, description: 'Scene', name: 'get_scene' }], ['get_scene'])).not.toThrow()
-  for (const target of [[], [...tools, ...tools], [{ ...tools[0], inputSchema: { type: 'object' } }]]) expect(() => compareCatalogs(tools, target, ['get_scene'])).toThrow()
+  for (const target of [[], [...tools, ...tools], [{ ...sceneTool, inputSchema: { type: 'object' } }]]) expect(() => compareCatalogs(tools, target, ['get_scene'])).toThrow()
   expect(() => compareCatalogs(tools, tools, ['get_scene', 'unexpected'])).toThrow()
   expect(() => compareCatalogs(tools, tools, ['get_scene', 'get_scene'])).toThrow()
   const schema = { name: 'schema', inputSchema: { type: 'object', required: ['a', 'b'], properties: { a: { enum: ['x', 'y'] } } } }
