@@ -41,7 +41,7 @@ type Attempt = {
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export type JiraWorkCard = ReturnType<JiraWork['view']>
 export type JiraHistoryCursor = { total: number; last: string | null }
-export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null }
+export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null; entryId: string }
 type BeforeWrite = (current: JiraWorkCard) => void
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
@@ -199,7 +199,7 @@ export class JiraWork extends JiraClient {
           service ??= await this.serviceAccountId()
           const timestamp = Date.parse(entry.created ?? '')
           changes.push({ field, from: from ?? null, to: to ?? null, byService: entry.author?.accountId === service,
-            occurredAt: Number.isFinite(timestamp) ? timestamp : null })
+            occurredAt: Number.isFinite(timestamp) ? timestamp : null, entryId: entry.id })
         }
       }
       offset += result.values.length
@@ -374,7 +374,7 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | null | undefined) {
+  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | undefined) {
     const equal = (actual: unknown, expected: unknown) => expected === undefined || isDeepStrictEqual(actual, expected)
     const questions = input.add_questions || input.answers ? readJiraDecisions(issue.decisions) : []
     const blocker = input.blocker === undefined ? undefined : input.blocker ?? { type: null, target: '', unblocks_when: '' }
@@ -481,8 +481,8 @@ export class JiraWork extends JiraClient {
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
-      const assigneeId = typeof input.assignee === 'string' ? await this.findAssignableAccount(input.card_id, input.assignee) : input.assignee
-      if (typeof input.assignee === 'string' && assigneeId === null) {
+      const assigneeId = input.assignee === undefined ? undefined : await this.findAssignableAccount(input.card_id, input.assignee)
+      if (assigneeId === null) {
         throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
       }
       if (attempt.dispatched) {
@@ -499,7 +499,7 @@ export class JiraWork extends JiraClient {
       const fields: Record<string, unknown> = {}
       if (input.name !== undefined) fields.summary = input.name
       if (input.owner !== undefined) fields[mapping.owner] = input.owner === null ? null : { value: input.owner }
-      if (assigneeId !== undefined) fields.assignee = assigneeId === null ? null : { accountId: assigneeId }
+      if (assigneeId !== undefined) fields.assignee = { accountId: assigneeId }
       if (input.description !== undefined) fields.description = input.description === null ? null : jiraText(input.description)
       if (input.blocker !== undefined) {
         fields[mapping.blockerType] = input.blocker ? { value: input.blocker.type } : null
