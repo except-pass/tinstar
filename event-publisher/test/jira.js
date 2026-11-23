@@ -423,6 +423,15 @@ globalThis.fetch = async (url, options = {}) => {
   ])
   equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
   deepEqual(await since(deleteCursor), deleted)
+  for (const action of ['created', 'deleted']) {
+    const labelCursor = await afterSequence()
+    const delivery = linkDelivery(`issuelink_${action}`, 77040, 98765, 98766)
+    delivery.issueLink.issueLinkType = { inwardName: '  ' }
+    equal((await post(`link-without-label-${action}`, delivery)).status, 204)
+    deepEqual((await since(labelCursor)).map(event => event.change), ['WORK-2', 'WORK-1'].map(target => ({
+      field: 'links', before: action === 'deleted' ? target : null, after: action === 'created' ? target : null,
+    })))
+  }
   const jiraJournalState = () => {
     const db = new DatabaseSync(dbPath, { readOnly: true })
     try {

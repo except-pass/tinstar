@@ -368,9 +368,9 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     if (!participants.length) return { status: 204 }
     const observedAt = new Date().toISOString()
     const phrase = (name, other) => {
-      const label = typeof name === 'string' && name.trim() ? name.trim().replace(/\s+/g, ' ') : 'linked'
+      const label = name?.trim().replace(/\s+/g, ' ')
       const target = other.kind === 'tsw' ? other.key : '[redacted]'
-      return redact(`${label} ${target}`)
+      return redact(label ? `${label} ${target}` : target)
     }
     const events = participants.map(({ subject, other, name }) => {
       const text = phrase(name, other)
