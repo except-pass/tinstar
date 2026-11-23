@@ -1,5 +1,6 @@
 import { CardLeaseError } from './cardLeases'
-import { submitHandoffSchema, type SubmitHandoffInput, type CreateWorkInput, type UpdateWorkInput, type StartWorkResult } from '../../shared/workflow'
+import { pilotSubmitHandoffSchema } from './pilotWorkflowSchemas'
+import { type SubmitHandoffInput, type CreateWorkInput, type UpdateWorkInput, type StartWorkResult } from '../../shared/workflow'
 import { ContractError, ImplementationContracts, implementationContract, digest, canonical } from './implementationContract'
 import type { WorkflowChange } from './workflow'
 import type { WorkReader, WorkCard } from './workReader'
@@ -23,7 +24,7 @@ export interface HandoffDependencies {
 export class HandoffOperations {
   constructor(private deps: HandoffDependencies) {}
   async submit(raw: SubmitHandoffInput, actor: string) {
-    const parsed = submitHandoffSchema.safeParse(raw)
+    const parsed = pilotSubmitHandoffSchema.safeParse(raw)
     if (!parsed.success || !actor.trim()) return { outcome: 'not-saved', record: { state: 'not-saved' }, assignment: { state: 'unknown' }, delivery: { state: 'unknown' }, execution: { state: 'unknown' },
       recovery: { code: 'invalid-input', message: parsed.success ? 'Authenticated caller required' : parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ') } }
     const input = parsed.data

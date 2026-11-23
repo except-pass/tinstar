@@ -70,9 +70,10 @@ all operation kinds and their required fields as discriminated `oneOf` branches.
 The object root also exposes the [wait inputs](workflow.md#waiting-for-writes)
 or the native Jira edit inputs for clients that inspect only root properties.
 The branches define which inputs are required for each kind. Use a 32-character
-hex ID for shared Notion card operations. Native Jira edits, transitions and
-links require a Jira card ID. Shared card ID fields, including relation targets
-and external worker references, recognize TSW project `10639`.
+hex ID for Notion writes and for Parent item, Epic and Initiative relation
+targets. Native Jira edits, transitions and links require a TSW project
+`10639` card ID. Use `update_work` for Notion status changes. Decision proposal
+and external worker references accept Notion and TSW card IDs.
 No-argument tools publish a closed empty object. The SDK validates calls with
 the registered Zod schemas. Tools omit optional task-execution metadata: these tools do not
 support task execution, and `execution` is absent from the `2026-07-28` Tool

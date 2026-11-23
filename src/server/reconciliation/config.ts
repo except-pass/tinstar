@@ -1,3 +1,4 @@
+import { jiraSite, jiraWorkProject } from '../../shared/workIdentity'
 import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
@@ -28,9 +29,9 @@ const jiraId = z.string().regex(/^[1-9]\d*$/)
 const jiraFieldId = z.string().regex(/^customfield_[1-9]\d*$/)
 const jiraWorkSchema = z.object({
   mode: z.literal('work'),
-  url: z.string().regex(/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$/),
+  url: z.literal(`https://${jiraSite}`),
   cloudId: z.string().uuid(),
-  projectId: jiraId,
+  projectId: z.literal(jiraWorkProject),
   issueTypes: z.object({ Task: jiraId, Epic: jiraId.optional() })
     .refine(({ Task, Epic }) => Task !== Epic, 'Jira issue type IDs must be distinct'),
   fields: z.object({ owner: jiraFieldId, decisions: jiraFieldId, blockerType: jiraFieldId, blockerTarget: jiraFieldId, blockerCondition: jiraFieldId })

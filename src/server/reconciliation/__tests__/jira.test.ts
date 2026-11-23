@@ -148,7 +148,7 @@ const create: CreateWorkInput = { provider: 'jira', name: 'Synthetic Jira adapte
 
 it('routes canonical identity to exactly one source, rejects other sites/projects and requires synthetic scope before writes', async () => {
   const f = await fixture()
-  expect(cardIdSchema.safeParse(id).success).toBe(true)
+  expect(cardIdSchema.safeParse(id).success).toBe(false)
   for (const bad of ['60001', 'TSSPIKE-1', id.replace('10638', '10640'), id.replace('fortresspower', 'other')]) expect(cardIdSchema.safeParse(bad).success).toBe(false)
   const tswId = 'jira:fortresspower-jira.atlassian.net:10639:60001'
   expect(cardIdSchema.safeParse(tswId).success).toBe(true)

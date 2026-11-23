@@ -1,11 +1,13 @@
 import { z } from 'zod'
+import { jiraCardIdPattern } from '../../shared/workIdentity'
 const jiraIdentity = /^jira:([a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net):([1-9]\d*):([1-9]\d*)$/
 export const jiraWorkIdentity = (id: string) => {
   const match = jiraIdentity.exec(id)
   return match ? { site: match[1]!, projectId: match[2]!, issueId: match[3]! } : undefined
 }
+export const jiraReadIdSchema = z.string().regex(jiraIdentity, 'Use an exact Jira card ID')
 const jiraCardIdHelp = 'Use an exact Jira card ID. For a Notion card, use a shared update_work operation.'
-export const jiraWorkIdSchema = z.string().regex(jiraIdentity, jiraCardIdHelp).describe(jiraCardIdHelp)
+export const jiraWorkIdSchema = z.string().regex(jiraCardIdPattern, jiraCardIdHelp).describe(jiraCardIdHelp)
 
 export const jiraStatuses = ['Backlog', 'To Do', 'Queued', 'In Progress', 'Decision', 'Waiting For', 'Ready for Review', 'Waiting for Prod Release', 'Verify in Prod', 'Done', 'Canceled'] as const
 const status = z.enum(jiraStatuses)

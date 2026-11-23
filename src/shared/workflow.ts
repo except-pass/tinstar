@@ -3,7 +3,7 @@ import { reviewEvidenceSchema, reviewResponseSchema } from './reviews'
 import { z } from 'zod'
 import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
-import { cardIdSchema } from './workIdentity'
+import { cardIdSchema, notionCardIdSchema } from './workIdentity'
 import { waitingForTypes } from './waitingForPolicy'
 export { cardIdSchema } from './workIdentity'
 export const leaseTokenSchema = z.string().min(1).max(256).optional()
@@ -14,7 +14,7 @@ export const workerSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('external'), system: identity, run_id: identity, reference: z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use an HTTP run reference'),
     card_id: cardIdSchema, observed_at: z.string().datetime({ offset: true }), state: z.literal('running'), evidence: z.string().min(12).max(2000) }).strict(),
 ])
-export const startWorkSchema = z.object({ lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128), worker: workerSchema,
+export const startWorkSchema = z.object({ lease_token: leaseTokenSchema, card_id: notionCardIdSchema, operation_id: z.string().min(1).max(128), worker: workerSchema,
   expected: z.object({ owner: z.string().nullable(), status: z.string().nullable(), worker_links: z.string().nullable() }).strict().optional(),
 }).strict()
 export type StartWorkInput = z.infer<typeof startWorkSchema>
@@ -34,15 +34,15 @@ const label = z.string().trim().min(1).max(200)
 export const ordinaryPropertiesSchema = z.object({
   Name: label.optional(), Area: label.optional(), Priority: label.nullable().optional(),
   'Sub-area': label.nullable().optional(), Attention: label.nullable().optional(),
-  Initiative: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
-  Epic: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
-  'Parent item': z.array(cardIdSchema).max(100).optional(),
+  Initiative: z.union([label, z.array(notionCardIdSchema).max(100)]).nullable().optional(),
+  Epic: z.union([label, z.array(notionCardIdSchema).max(100)]).nullable().optional(),
+  'Parent item': z.array(notionCardIdSchema).max(100).optional(),
   Link: z.string().url().max(2048).nullable().optional(),
   'Due Date': z.string().max(100).nullable().optional(), 'Start Date': z.string().max(100).nullable().optional(),
   'Next action': prose.optional(),
 }).strict()
 const contentSchema = z.object({ brief: prose.optional(), acceptance_criteria: prose.optional() }).strict()
-const base = { lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128),
+const base = { lease_token: leaseTokenSchema, card_id: notionCardIdSchema, operation_id: z.string().min(1).max(128),
   expected: z.record(z.unknown()).optional() }
 const resolvedWait = z.string().min(1)
 const waitId = z.string().trim().min(1).max(2048)
@@ -68,25 +68,29 @@ const cardDecisionSchema = z.object({
 const reviewRecovery = z.object({ reason: prose, confirmed_absent: z.literal(true) }).strict().optional()
 export const answerDecisionSchema = z.object({ ...base, kind: z.literal('answer_decision'), request_id: z.string().min(1).max(128), answer: z.string().min(1).max(12000).refine(value => value.trim().length > 0, 'An answer is required'), option_id: identity.refine(value => value.length <= 128, 'Use an identity of at most 128 characters').optional(),
     next: z.object(next).strict(), source_request: firstMateRequestSchema.optional(), resolve_wait: resolvedWait.optional(), legacy_action: label.optional() }).strict()
-export const updateWorkSchema = z.discriminatedUnion('kind', [
-  z.object({ ...base, kind: z.literal('not_for_me'), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }).strict(),
-  z.object({ ...base, kind: z.literal('submit_for_review'), retry_missing_note: reviewRecovery, review: reviewEvidenceSchema }).strict(),
-  z.object({ ...base, kind: z.literal('accept_review'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
-  z.object({ ...base, kind: z.literal('request_review_changes'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
-  z.object({ ...base, kind: z.literal('close_worker'), worker: firstmateWorkerSchema, disposition: z.enum(['done', 'failed', 'absent', 'cancelled']), evidence: prose }).strict(),
-  z.object({ ...base, kind: z.literal('release_wait'), pulls: z.array(z.string().max(2048).refine(value => releasePull(value) !== null, 'Use a GitHub PR URL')).min(1).max(100), evidence: prose }).strict(),
-  z.object({ ...base, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: resolvedWait.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
-  z.object({ ...base, kind: z.literal('wait'), ...waitSchema.shape, replace_wait: resolvedWait.describe('Exact current entry to replace. Include every line of a multiline wait.').optional(), note: prose.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('request_decision'), ...cardDecisionSchema.shape, proposal: decisionProposalSchema.optional(),
-    action: label.default('Decision'), source_request: firstMateRequestSchema.optional() }).strict(),
-  z.object({ ...base, kind: z.literal('withdraw_decision'), request_id: cardDecisionSchema.shape.request_id, reason: prose }).strict(),
-  z.object({ ...base, kind: z.literal('supersede_decision'), request_id: cardDecisionSchema.shape.request_id, reason: prose, replacement: cardDecisionSchema }).strict(),
-  answerDecisionSchema,
-  z.object({ ...base, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
-  z.object({ ...base, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
-])
+export function workflowUpdateSchema(cardId: z.ZodType<string>) {
+  const target = { ...base, card_id: cardId }
+  return z.discriminatedUnion('kind', [
+    z.object({ ...target, kind: z.literal('not_for_me'), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }).strict(),
+    z.object({ ...target, kind: z.literal('submit_for_review'), retry_missing_note: reviewRecovery, review: reviewEvidenceSchema }).strict(),
+    z.object({ ...target, kind: z.literal('accept_review'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
+    z.object({ ...target, kind: z.literal('request_review_changes'), retry_missing_note: reviewRecovery, ...reviewResponseSchema.shape }).strict(),
+    z.object({ ...target, kind: z.literal('close_worker'), worker: firstmateWorkerSchema, disposition: z.enum(['done', 'failed', 'absent', 'cancelled']), evidence: prose }).strict(),
+    z.object({ ...target, kind: z.literal('release_wait'), pulls: z.array(z.string().max(2048).refine(value => releasePull(value) !== null, 'Use a GitHub PR URL')).min(1).max(100), evidence: prose }).strict(),
+    z.object({ ...target, kind: z.literal('edit'), properties: ordinaryPropertiesSchema.optional(), content: contentSchema.optional(), note: prose.optional() }).strict(),
+    z.object({ ...target, kind: z.literal('assign'), owner: label, status: z.enum(['Queued', 'Todo', 'Backlog']).default('Queued'), note: prose.optional(), resolve_wait: resolvedWait.optional() }).strict(),
+    z.object({ ...target, kind: z.literal('checkpoint'), checkpoint: checkpointSchema }).strict(),
+    z.object({ ...target, kind: z.literal('wait'), ...waitSchema.shape, replace_wait: resolvedWait.describe('Exact current entry to replace. Include every line of a multiline wait.').optional(), note: prose.optional() }).strict(),
+    z.object({ ...target, kind: z.literal('request_decision'), ...cardDecisionSchema.shape, proposal: decisionProposalSchema.optional(),
+      action: label.default('Decision'), source_request: firstMateRequestSchema.optional() }).strict(),
+    z.object({ ...target, kind: z.literal('withdraw_decision'), request_id: cardDecisionSchema.shape.request_id, reason: prose }).strict(),
+    z.object({ ...target, kind: z.literal('supersede_decision'), request_id: cardDecisionSchema.shape.request_id, reason: prose, replacement: cardDecisionSchema }).strict(),
+    answerDecisionSchema.extend({ card_id: cardId }),
+    z.object({ ...target, kind: z.literal('complete'), disposition: prose, evidence: prose }).strict(),
+    z.object({ ...target, kind: z.literal('park'), disposition: prose, status: z.enum(['Backlog', 'Archived']).default('Backlog') }).strict(),
+  ])
+}
+export const updateWorkSchema = workflowUpdateSchema(notionCardIdSchema)
 export type UpdateWorkInput = z.infer<typeof updateWorkSchema>
 export const createWorkSchema = z.object({ operation_id: z.string().min(1).max(128), name: label, owner: label, area: label,
   provider: z.enum(['notion', 'jira']).optional(),
@@ -99,12 +103,12 @@ export const submitHandoffSchema = z.object({
   lease_token: leaseTokenSchema,
   submission_id: identity.refine(value => value.length <= 128, 'Maximum 128 characters'),
   target: z.union([
-    z.object({ card_id: cardIdSchema }).strict(),
-    z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(cardIdSchema).max(20).default([]) }).strict(),
+    z.object({ card_id: notionCardIdSchema }).strict(),
+    z.object({ external_ref: identity.refine(value => value.length <= 512, 'Maximum 512 characters'), candidate_ids: z.array(notionCardIdSchema).max(20).default([]) }).strict(),
   ]),
   title: label, area: label, owner: label,
   initiative: ordinaryPropertiesSchema.shape.Initiative, epic: ordinaryPropertiesSchema.shape.Epic,
-  priority: label.optional(), parent_card_id: cardIdSchema.optional(),
+  priority: label.optional(), parent_card_id: notionCardIdSchema.optional(),
   objective: z.string().min(1).max(12000), spec_markdown: z.string().min(1).max(1000000),
   acceptance_criteria: z.array(z.string().min(1).max(100000)).min(1).max(200),
   decisions: z.array(z.string().min(1).max(100000)).max(200),

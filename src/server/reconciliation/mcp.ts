@@ -1,5 +1,5 @@
 import type { JiraWork } from './jiraWork'
-import { jiraCreateSchema, jiraEditSchema, jiraLinkSchema, jiraTransitionSchema, jiraWorkIdSchema, type JiraCreate, type JiraEdit } from './jiraWorkRules'
+import { jiraCreateSchema, jiraEditSchema, jiraLinkSchema, jiraTransitionSchema, jiraReadIdSchema, type JiraCreate, type JiraEdit } from './jiraWorkRules'
 import { jiraWorkReadback } from './workReadback'
 import { preparedRecoveryInput, preparedSubmitInput, type PreparedSubmissions } from './preparedSubmissions'
 import { preparedClaimInput, preparedReleaseInput, reviewSessionInput, type PreparedReviews } from './preparedReviews'
@@ -23,7 +23,8 @@ import { actionSchema, stateSchema, targetSchema, type CommandResult } from '../
 import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
-import { cardIdSchema, waitSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, submitHandoffSchema, leaseTokenSchema, workflowRules, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { waitSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, submitHandoffSchema, leaseTokenSchema, workflowRules, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { pilotGetWorkSchema, pilotStartWorkSchema, pilotUpdateWorkSchema, pilotWorkflowCardIdSchema } from './pilotWorkflowSchemas'
 import { notionCardIdSchema } from '../../shared/workIdentity'
 import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
@@ -103,9 +104,9 @@ export class ReconciliationMcp {
     const server = new McpServer({ name: 'tinstar-overview', version: '6.0.0' })
     const catalog = createToolCatalog(server)
     const jira = this.readers.jiraWork
-    const jiraGetSchema = getWorkSchema.pick({ details: true }).extend({ card_id: jiraWorkIdSchema })
+    const jiraGetSchema = getWorkSchema.pick({ details: true }).extend({ card_id: jiraReadIdSchema })
     const notionGetSchema = getWorkSchema.extend({ card_id: notionCardIdSchema })
-    const getSchema = jira ? z.union([jiraGetSchema, notionGetSchema]) : getWorkSchema
+    const getSchema = jira ? z.union([jiraGetSchema, notionGetSchema]) : pilotGetWorkSchema
     const notionCreateSchema = createWorkSchema.extend({ provider: z.literal('notion').optional() })
     const createSchema = jira ? z.union([jiraCreateSchema, notionCreateSchema]) : createWorkSchema
     const updateSchema = jira ? z.discriminatedUnion('kind', [...updateWorkSchema.options, jiraEditSchema]) : updateWorkSchema
@@ -148,7 +149,7 @@ export class ReconciliationMcp {
       }
       catch (error) { if (error instanceof CardLeaseError) return result(leaseFailure(error)); throw error }
     })
-    catalog.registerTool('not_for_me', { description: 'Return this leased card to its responsible mate with a one-line owner reason. Records the reason, clears Will action badges, replaces the Will wait with the mate blocker, notifies Firstmate through the existing workflow bridge and releases the lease after confirmed save. Keep lease_token in arguments only.', inputSchema: { card_id: cardIdSchema, operation_id: z.string().min(1).max(128), lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } }, async input => {
+    catalog.registerTool('not_for_me', { description: 'Return this leased card to its responsible mate with a one-line owner reason. Records the reason, clears Will action badges, replaces the Will wait with the mate blocker, notifies Firstmate through the existing workflow bridge and releases the lease after confirmed save. Keep lease_token in arguments only.', inputSchema: { card_id: notionCardIdSchema, operation_id: z.string().min(1).max(128), lease_token: z.string().min(1).max(256), reason: z.string().trim().min(1).max(1000).refine(value => !/[\r\n]/.test(value), 'Use a one-line reason') }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } }, async input => {
       try {
         const held = await this.leases.claim([input.card_id], caller, actor, `not-for-me:${input.operation_id}`, input.lease_token, true)
         if (held.outcome !== 'held') return result(held)
@@ -251,7 +252,7 @@ export class ReconciliationMcp {
       const claims = evidence ? [...scene.claims, ...scene.claimHistory].filter(c => target.kind === 'card' ? c.cardId === target.id : target.kind === 'execution' ? c.executionId === target.id : c.id === target.id) : undefined
       return result({ outcome: record ? 'available' : 'unknown-id', record, ...(target.kind === 'card' ? { lease: this.leases.status(target.id) } : {}), evidence: claims, freshness: scene.coverage })
     })
-    catalog.registerTool('get_card_context', { description: 'Read a card from the authorized configured board, including bounded prose, properties, coverage and omissions. No code/transcripts or credentials. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: { scene_id: z.string().uuid(), card_id: cardIdSchema, lease_token: leaseTokenSchema }, annotations: readAnnotations }, async ({ scene_id, card_id }) => {
+    catalog.registerTool('get_card_context', { description: 'Read a card from the authorized configured board, including bounded prose, properties, coverage and omissions. No code/transcripts or credentials. For next card use claim_next_card. Keep lease_token from the previous claim result in tool arguments across turns; never print it in visible chat, card text or URLs. Present it on every later call for that card. Only holder changes renew the 60-minute lease; release_claim returns it to the queue.', inputSchema: { scene_id: z.string().uuid(), card_id: jira ? notionCardIdSchema : pilotWorkflowCardIdSchema, lease_token: leaseTokenSchema }, annotations: readAnnotations }, async ({ scene_id, card_id }) => {
       if (this.sessions.read(scene_id).outcome === 'unknown-id') return result({ outcome: 'unknown-id' })
       const scene = await this.sceneForWindow(scene_id), card = scene.cards.find(c => c.id === card_id)
       return result(card ? { card, lease: this.leases.status(card_id), context: await this.readers.card(card_id), freshness: scene.coverage.intentions } : { outcome: 'unknown-id' })
@@ -324,7 +325,7 @@ export class ReconciliationMcp {
       try {
         const request = z.object({ operation: z.enum(['search', 'get', 'start', 'update', 'rules', 'lease', 'release-lease']), input: z.unknown().optional() }).strict().parse(await body(req))
         if (request.operation === 'lease' || request.operation === 'release-lease') {
-          const input = z.object({ card_id: cardIdSchema, generation: z.number().int().nonnegative().optional(), reason: z.string().trim().min(1).max(1000).optional() }).strict().parse(request.input)
+          const input = z.object({ card_id: pilotWorkflowCardIdSchema, generation: z.number().int().nonnegative().optional(), reason: z.string().trim().min(1).max(1000).optional() }).strict().parse(request.input)
           const canRelease = !!await this.readers.authorizePulls?.(req)
           if (request.operation === 'lease') return ok(res, { lease: this.leases.status(input.card_id), can_release: canRelease }, { headers })
           if (!canRelease) return fail(res, 'FORBIDDEN', 'Authorized owner required to release a card lease', { headers })
@@ -333,9 +334,9 @@ export class ReconciliationMcp {
         }
         if (request.operation === 'rules') return ok(res, workflowRules, { headers })
         if (request.operation === 'search') return ok(res, await this.readers.searchWork?.(searchWorkSchema.parse(request.input)), { headers })
-        if (request.operation === 'get') return ok(res, await this.readers.getWork?.(getWorkSchema.parse(request.input)), { headers })
-        if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(updateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
-        return ok(res, await this.readers.startWork?.(startWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+        if (request.operation === 'get') return ok(res, await this.readers.getWork?.(pilotGetWorkSchema.parse(request.input)), { headers })
+        if (request.operation === 'update') return ok(res, await this.readers.updateWork?.(pilotUpdateWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
+        return ok(res, await this.readers.startWork?.(pilotStartWorkSchema.parse(request.input), 'Tin Star UI'), { headers })
       } catch { return fail(res, 'BAD_REQUEST', 'Invalid workflow request; use the shared workflow operation schema', { headers }) }
     }
     try {

@@ -13,7 +13,7 @@ import { jiraTransitions, jiraVerbs } from '../jiraWorkRules'
 
 const cloudId = '5bac40b8-c168-4931-90d1-2c8dfe15c6ea'
 const config = {
-  mode: 'work', url: 'https://sample.atlassian.net', cloudId, projectId: '10001', token: 'fixture-scoped-service-token',
+  mode: 'work', url: 'https://fortresspower-jira.atlassian.net', cloudId, projectId: '10639', token: 'fixture-scoped-service-token',
   issueTypes: { Task: '10100', Epic: '10101' },
   fields: { owner: 'customfield_11001', decisions: 'customfield_11002', blockerType: 'customfield_11003', blockerTarget: 'customfield_11004', blockerCondition: 'customfield_11005' },
   blocksLinkTypeId: '10000',
@@ -62,8 +62,8 @@ const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
-async function fixture(settingsOverride?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
-  const { token, ...settings } = { ...config, ...settingsOverride }
+async function fixture() {
+  const { token, ...settings } = config
   const root = await mkdtemp(join(tmpdir(), 'jira-work-mcp-'))
   roots.push(root)
   await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token } } }), { mode: 0o600 })
@@ -231,11 +231,12 @@ async function fixture(settingsOverride?: Pick<JiraWorkConfig, 'url' | 'projectI
 }
 
 it('publishes write schemas that accept the supported Notion and TSW card IDs', async () => {
-  const f = await fixture({ url: 'https://fortresspower-jira.atlassian.net', projectId: '10639' })
+  const f = await fixture()
   const { client, call } = await f.connect()
   const { tools } = await client.listTools()
   const ajv = addFormats(new Ajv({ strict: false }))
   const notionId = 'a'.repeat(32), tswId = 'jira:fortresspower-jira.atlassian.net:10639:60001'
+  const pilotId = 'jira:fortresspower-jira.atlassian.net:10638:60001'
   const invalidId = 'jira:fortresspower-jira.atlassian.net:106390:60001'
   const publishedAt = '2026-11-23T20:00:00Z'
   const operation_id = 'schema-proof'
@@ -244,19 +245,7 @@ it('publishes write schemas that accept the supported Notion and TSW card IDs', 
     ['update_work', card_id => ({ card_id, operation_id, kind: 'park', disposition: 'Parked fixture' })],
     ['update_work', card_id => ({ card_id, operation_id, kind: 'wait', type: 'Event', id: 'fixture', dependency: 'Fixture deployment',
       unblocks_when: 'Deployment verified', follow_up_by: 'Hulk', next_check_in: publishedAt })],
-    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'edit',
-      properties: { 'Parent item': [card_id], Epic: [card_id], Initiative: [card_id] } })],
-    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'request_decision', request_id: 'request',
-      question: 'Proceed?', requested_from: 'Will', proposal: {
-        schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
-        question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
-        actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
-        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: publishedAt, supersedes: null,
-      } })],
-    ['create_work', card_id => ({ provider: 'notion', operation_id, name: 'Fixture card', owner: 'Hulk', area: 'Engineering',
-      properties: { 'Parent item': [card_id], Epic: [card_id], Initiative: [card_id] } })],
-    ['start_work', card_id => ({ card_id: notionId, operation_id, worker: { kind: 'external', system: 'fixture',
-      run_id: '1', reference: 'https://example.test/run/1', card_id, observed_at: publishedAt, state: 'running', evidence: 'Fixture test running' } })],
+    ['update_work', card_id => ({ card_id, operation_id, kind: 'edit', note: 'Fixture note' })],
     ['start_work', card_id => ({ card_id, operation_id, worker: {
       kind: 'firstmate', fm_home: '/fixture', task_id: 'test', first_observed_spawn_gen: '1',
     } })],
@@ -266,13 +255,39 @@ it('publishes write schemas that accept the supported Notion and TSW card IDs', 
     ...(['claim_card', 'claim_prepared_decision', 'not_for_me'] as const).map(name =>
       [name, (card_id: string) => ({ card_id, operation_id, ...(name === 'not_for_me' ? { lease_token: 'fixture', reason: 'Reassign' } : {}) })] as const),
   ]
-  for (const [name, args] of sharedWrites) {
-    const schema = tools.find(tool => tool.name === name)!.inputSchema
-    const validate = ajv.compile(schema)
-    for (const cardId of [notionId, tswId]) {
-      expect(validate(args(cardId)), `${name} ${JSON.stringify(args(cardId))} ${ajv.errorsText(validate.errors)}`).toBe(true)
+  const handoff = sharedWrites.find(([name]) => name === 'submit_handoff')![1]
+  sharedWrites.push(
+    ['submit_handoff', card_id => ({ ...handoff(notionId), target: { external_ref: 'fixture', candidate_ids: [card_id] } })],
+    ['submit_handoff', card_id => ({ ...handoff(notionId), parent_card_id: card_id })],
+  )
+  for (const relation of ['Parent item', 'Epic', 'Initiative']) {
+    sharedWrites.push(
+      ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'edit', properties: { [relation]: [card_id] } })],
+      ['create_work', card_id => ({ provider: 'notion', operation_id, name: 'Fixture card', owner: 'Hulk', area: 'Engineering',
+        properties: { [relation]: [card_id] } })],
+    )
+  }
+  for (const field of ['epic', 'initiative']) {
+    sharedWrites.push(['submit_handoff', card_id => ({ ...handoff(notionId), [field]: [card_id] })])
+  }
+  const sharedReferences: typeof sharedWrites = [
+    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'request_decision', request_id: 'request',
+      question: 'Proceed?', requested_from: 'Will', proposal: {
+        schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
+        question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
+        actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
+        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: publishedAt, supersedes: null,
+      } })],
+    ['start_work', card_id => ({ card_id: notionId, operation_id, worker: { kind: 'external', system: 'fixture',
+      run_id: '1', reference: 'https://example.test/run/1', card_id, observed_at: publishedAt, state: 'running', evidence: 'Fixture test running' } })],
+  ]
+  for (const [cases, tswAccepted] of [[sharedWrites, false], [sharedReferences, true]] as const) {
+    for (const [name, args] of cases) {
+      const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
+      expect(validate(args(notionId)), `${name} ${ajv.errorsText(validate.errors)}`).toBe(true)
+      expect(validate(args(tswId)), JSON.stringify(args(tswId))).toBe(tswAccepted)
+      for (const bad of [pilotId, invalidId]) expect(validate(args(bad)), JSON.stringify(args(bad))).toBe(false)
     }
-    expect(validate(args(invalidId)), name).toBe(false)
   }
   for (const name of ['claim_next_card', 'claim_next_prepared_decision', 'release_claim', 'release_prepared_decision']) {
     const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
@@ -290,6 +305,7 @@ it('publishes write schemas that accept the supported Notion and TSW card IDs', 
   for (const [name, fields] of nativeWrites) {
     const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
     expect(validate({ ...fields, card_id: tswId, operation_id }), name).toBe(true)
+    for (const bad of [pilotId, invalidId]) expect(validate({ ...fields, card_id: bad, operation_id }), name).toBe(false)
     const arguments_ = { ...fields, card_id: notionId, operation_id }
     expect(validate(arguments_), name).toBe(false)
     const before = f.requests.length
@@ -387,7 +403,7 @@ it('uses the existing MCP tools for native ticket edits, decision history, block
   expect(read.comments.find((comment: { id: string }) => comment.id === 'restricted')).toEqual({ id: 'restricted' })
   expect(JSON.stringify(read)).not.toContain('Private note')
   const before = f.requests.length
-  const denied = await call('get_work', { card_id: card_id.replace('10001', '10002') })
+  const denied = await call('get_work', { card_id: card_id.replace('10639', '10638') })
   expect(denied).toMatchObject({ outcome: 'unavailable' })
   expect(f.requests).toHaveLength(before)
 }, 30_000)
