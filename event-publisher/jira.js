@@ -4,6 +4,17 @@ import { createServer } from 'node:http'
 
 const host = '127.0.0.1'
 const port = 18573
+
+function listenPort(value) {
+  if (value == null || value === '') return port
+  // A second listener, such as this package's tests, cannot take the port the
+  // running publisher already owns. An invalid value fails here instead of
+  // binding an unexpected port.
+  if (!/^[1-9]\d{0,4}$/.test(String(value)) || Number(value) > 65535) {
+    throw new JiraWebhookConfigurationError('EVENTS_JIRA_WEBHOOK_PORT must be a TCP port from 1 to 65535')
+  }
+  return Number(value)
+}
 const webhookPath = '/webhooks/jira'
 const bodyLimit = 1024 * 1024
 const previewLimit = 4096
@@ -238,12 +249,187 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
 }
 
 const acceptedEvents = new Set(['jira:issue_created', 'jira:issue_updated', 'comment_created'])
+const linkEvents = new Set(['issuelink_created', 'issuelink_deleted'])
 
-export async function startJiraWebhook(journal, config, secret) {
+// Issue-link payloads name both issue ids and no project. Journal a link only
+// when a GET shows that at least one side is in the configured project. The
+// other side is its key when that read matches, and the literal "[redacted]"
+// when it is another project or cannot be read. A foreign issue's key and id
+// are never journaled or logged.
+function parseLink(body) {
+  const link = body?.issueLink
+  const id = nativeId(link?.id)
+  const sourceId = nativeId(link?.sourceIssueId)
+  const destinationId = nativeId(link?.destinationIssueId)
+  if (!id || !sourceId || !destinationId) return undefined
+  const type = link.issueLinkType
+  return {
+    id, sourceId, destinationId,
+    outward: typeof type?.outwardName === 'string' ? type.outwardName : undefined,
+    inward: typeof type?.inwardName === 'string' ? type.inwardName : undefined,
+  }
+}
+
+export async function startJiraWebhook(journal, config, secret, readToken, requestedPort) {
   if (typeof secret !== 'string' || !secret.trim()) {
     throw new JiraWebhookConfigurationError('set EVENTS_JIRA_WEBHOOK_SECRET from the Jira admin webhook secret')
   }
+  const token = typeof readToken === 'string' ? readToken.trim() : ''
+  if (!token) {
+    console.error('Jira issue-link events need EVENTS_JIRA_READ_TOKEN; issuelink_created and issuelink_deleted deliveries will be dropped')
+  }
   const key = Buffer.from(secret, 'utf8')
+  const boundPort = listenPort(requestedPort)
+  let readRejected = false
+  const redact = value => {
+    const hidden = projector(secret)(value)
+    return token.length >= 12 && typeof hidden === 'string' ? projector(token)(hidden) : hidden
+  }
+  const classify = (payload, requestedId) => {
+    const id = nativeId(payload?.id)
+    const keyText = typeof payload?.key === 'string' && issueKey.test(payload.key) ? payload.key : undefined
+    const project = nativeId(payload?.fields?.project?.id)
+    if (payload?.self !== undefined) {
+      try {
+        const self = new URL(payload.self)
+        const onSite = self.origin === config.source.site
+        const onCloud = self.origin === 'https://api.atlassian.com' &&
+          self.pathname.toLowerCase().startsWith(`/ex/jira/${config.source.cloud_id}/`)
+        if ((!onSite && !onCloud) || self.username || self.password) return { kind: 'unreadable' }
+      } catch {
+        return { kind: 'unreadable' }
+      }
+    }
+    if (id !== requestedId || !keyText || !project) return { kind: 'unreadable' }
+    if (project !== config.source.project_id) return { kind: 'foreign' }
+    return { kind: 'tsw', id, key: keyText }
+  }
+  const readBounded = async response => {
+    const reader = response.body?.getReader()
+    if (!reader) return undefined
+    const chunks = []
+    let bytes = 0
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)))
+        bytes += value.byteLength
+        // Same ceiling as a webhook body, so one issue read cannot pin more
+        // memory than a delivery the listener already accepts.
+        if (bytes > bodyLimit) {
+          await reader.cancel()
+          return undefined
+        }
+        chunks.push(value)
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => {})
+      throw error
+    }
+  }
+  const readIssue = async issueId => {
+    const url = `https://api.atlassian.com/ex/jira/${config.source.cloud_id}/rest/api/3/issue/${issueId}?fields=project,key`
+    let response
+    try {
+      // Stop a stalled read before the webhook socket is destroyed, and refuse
+      // redirects so the bearer token stays on the configured Jira cloud.
+      response = await fetch(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        redirect: 'error',
+        signal: AbortSignal.timeout(5000),
+      })
+    } catch {
+      return { kind: 'transient' }
+    }
+    if (response.status === 401) {
+      await response.body?.cancel()
+      return { kind: 'unauthorized' }
+    }
+    if (response.status === 429 || response.status >= 500) {
+      await response.body?.cancel()
+      return { kind: 'transient' }
+    }
+    if (response.status !== 200) {
+      await response.body?.cancel()
+      return { kind: 'unreadable' }
+    }
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > bodyLimit) {
+      await response.body?.cancel()
+      return { kind: 'unreadable' }
+    }
+    let bytes
+    try {
+      bytes = await readBounded(response)
+    } catch {
+      return { kind: 'transient' }
+    }
+    if (!bytes) return { kind: 'unreadable' }
+    try {
+      return classify(JSON.parse(decoder.decode(bytes)), issueId)
+    } catch {
+      return { kind: 'unreadable' }
+    }
+  }
+  const acceptLink = async (delivery, body) => {
+    const link = parseLink(body)
+    if (!link) return { status: 400 }
+    if (!token) return { status: 204 }
+    const action = body.webhookEvent === 'issuelink_deleted' ? 'deleted' : 'created'
+    const [sourceSide, destinationSide] = await Promise.all([readIssue(link.sourceId), readIssue(link.destinationId)])
+    if (sourceSide.kind === 'transient' || destinationSide.kind === 'transient') return { status: 503 }
+    const participants = []
+    if (sourceSide.kind === 'tsw') participants.push({ subject: sourceSide, other: destinationSide, name: link.outward })
+    if (destinationSide.kind === 'tsw' && destinationSide.id !== sourceSide.id) {
+      participants.push({ subject: destinationSide, other: sourceSide, name: link.inward })
+    }
+    const observedAt = new Date().toISOString()
+    const notice = events => ({ native: `issuelink:${action}:${link.id}`, observedAt, events })
+    if (!participants.length) {
+      if (sourceSide.kind === 'unauthorized' || destinationSide.kind === 'unauthorized') {
+        if (!readRejected) {
+          readRejected = true
+          console.error('Jira issue reads were rejected; issue-link deliveries will be dropped until EVENTS_JIRA_READ_TOKEN is accepted')
+        }
+        return { status: 204 }
+      }
+      return { status: 204, notice: notice([]) }
+    }
+    const phrase = (name, other) => {
+      const label = typeof name === 'string' && name.trim() ? name.trim().replace(/\s+/g, ' ') : 'linked'
+      const target = other.kind === 'tsw' ? other.key : '[redacted]'
+      const rendered = redact(`${label} ${target}`)
+      return typeof rendered === 'string' ? rendered : `${label} ${target}`
+    }
+    const account = redact(typeof body.user?.accountId === 'string' && nativeIdentifier.test(body.user.accountId) ? body.user.accountId : undefined)
+    const events = participants.map(({ subject, other, name }) => {
+      const text = phrase(name, other)
+      const created = action === 'created'
+      return {
+        schema: 'event-publisher.event.v1',
+        event_type: 'ticket.links.changed',
+        source: {
+          provider: 'jira', source_id: config.source.source_id, cloud_id: config.source.cloud_id, site: config.source.site,
+          project_id: config.source.project_id, delivery_id: delivery,
+        },
+        subject: { type: 'ticket', id: `jira:ticket:${config.source.cloud_id}:${subject.id}` },
+        observed_at: observedAt, occurred_at: eventTime(body.timestamp),
+        observation: { method: 'webhook', read_method: 'jira-admin-webhook', coverage: config.source.coverage },
+        related: [],
+        change: { field: 'links', before: created ? null : text, after: created ? text : null },
+        evidence: {
+          source_reference: {
+            interface: 'Jira Cloud admin webhook', issue_id: subject.id, issue_key: subject.key,
+            webhook_event: body.webhookEvent, link_id: link.id,
+            ...(typeof account === 'string' ? { account_id: account } : {}),
+          },
+          confidence_basis: 'signed Jira delivery',
+        },
+      }
+    })
+    return { status: 204, notice: notice(events) }
+  }
   const respond = (res, status) => {
     res.writeHead(status, status >= 400 ? { Connection: 'close' } : {})
     res.end()
@@ -273,10 +459,17 @@ export async function startJiraWebhook(journal, config, secret) {
     } catch {
       return respond(res, 400)
     }
+    const deliveryId = req.headers['x-atlassian-webhook-identifier']
+    if (linkEvents.has(body?.webhookEvent)) {
+      if (typeof deliveryId !== 'string' || !/^[!-~]{1,256}$/.test(deliveryId) || preview(deliveryId, secret) !== deliveryId) return respond(res, 400)
+      const outcome = await acceptLink(deliveryId, body)
+      if (outcome.notice) journal.recordJiraDelivery(config.source.source_id, deliveryId, outcome.notice)
+      return respond(res, outcome.status)
+    }
     if (!acceptedEvents.has(body?.webhookEvent)) return respond(res, 204)
     const issue = scopedIssue(config, body.issue)
     if (!issue) return respond(res, 403)
-    const id = req.headers['x-atlassian-webhook-identifier']
+    const id = deliveryId
     // Jira uses this tenant-scoped identifier unchanged on retry.
     if (typeof id !== 'string' || !/^[!-~]{1,256}$/.test(id) || preview(id, secret) !== id) return respond(res, 400)
     const notice = normalize(config, body, issue, id, new Date().toISOString(), secret)
@@ -291,15 +484,15 @@ export async function startJiraWebhook(journal, config, secret) {
   // Bound concurrent input buffers when the loopback endpoint is proxied.
   server.maxConnections = 32
   server.setTimeout(10000, socket => socket.destroy())
-  server.listen(port, host)
+  server.listen(boundPort, host)
   try {
     await once(server, 'listening')
   } catch (error) {
-    if (error.code === 'EADDRINUSE') throw new JiraWebhookConfigurationError(`Jira webhook port ${port} is already in use`)
+    if (error.code === 'EADDRINUSE') throw new JiraWebhookConfigurationError(`Jira webhook port ${boundPort} is already in use`)
     throw error
   }
   return {
-    url: `http://${host}:${port}${webhookPath}`,
+    url: `http://${host}:${boundPort}${webhookPath}`,
     close: () => new Promise(resolve => {
       server.close(resolve)
       server.closeAllConnections()

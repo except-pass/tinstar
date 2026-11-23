@@ -111,27 +111,49 @@ the three Waiting For fields.
 
 Inject the admin webhook secret into `EVENTS_JIRA_WEBHOOK_SECRET` at process
 start from Clavis. Run `events serve` to open the fixed loopback listener at
-`http://127.0.0.1:18573/webhooks/jira`. Give Jira the approved public HTTPS URL
+`http://127.0.0.1:18573/webhooks/jira`. Set `EVENTS_JIRA_WEBHOOK_PORT` only
+when another process must listen beside the publisher that already owns 18573.
+Give Jira the approved public HTTPS URL
 that proxies only this pathname, with the request bytes and Jira headers preserved.
 The listener ignores query parameters such as Jira's `triggeredByUser`.
 Keep the registration restricted to one immutable project ID using Jira JQL and
-include the JSON body. Select issue creation, issue updates and comment creation.
+include the JSON body. Select issue creation, issue updates, comment creation,
+and the issue-link events `issuelink_created` and `issuelink_deleted`.
 Use a distinct secret for this registration. To retire or rotate it, disable or
 update the registration before removing or replacing the Clavis value.
+Inject the Tin Star Jira service account into `EVENTS_JIRA_READ_TOKEN` the same
+way. The publisher sends that token only as a Bearer credential on GET requests
+for an issue's project and key. It is not written to the configuration, the
+journal, or logs. Without it, issue-link deliveries are dropped after a startup
+warning, and issue and comment deliveries still work. The token is not required
+for those deliveries. The publisher does not write to Jira.
 [Atlassian admin webhook registration and signing](https://developer.atlassian.com/cloud/jira/platform/webhooks/#secure-admin-webhooks)
 
 The receiver verifies SHA-256 HMAC over the raw body before JSON decoding. A
 delivery must identify a ticket in the configured project. An issue self URL,
 when supplied, must use the configured site. Jira retries use the same delivery
 ID. The journal commits the delivery receipt and its event group together, with
-additional deduplication for native creation, changelog and comment identities
-when available. A native creation notice is the sole source for `ticket.created`.
+additional deduplication for native creation, changelog, comment and issue-link
+identities when available. A native creation notice is the sole source for
+`ticket.created`. An issue-link identity is `issuelink:created:<link id>` or
+`issuelink:deleted:<link id>`.
 
 Ticket change previews are redacted and bounded. The journal preserves the
 immutable Jira issue ID, display key, source delivery ID, source timestamp when
 supplied, and the available before and after values. Link changes are recorded
-when present in the issue update changelog. A missing changelog is reported as
-partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
+when present in the issue update changelog. Issue-link webhooks are recorded
+separately, because an issue update often carries no Link changelog item. For
+each signed `issuelink_created` or `issuelink_deleted` delivery the publisher
+GETs both issues with `fields=project,key`. It journals `ticket.links.changed`
+on each side whose project id is the configured project. The other side is
+`blocks WORK-2` style text when that side is in the same project, using the
+link type's outward name on the source issue and inward name on the destination
+issue. When the other side is in a different project, or the read is missing,
+forbidden, or otherwise unusable, the text uses the literal `[redacted]` and
+the journal and logs omit that issue's key, summary, and id. A link whose
+sides are both outside the project, or both unreadable, is acknowledged and
+stores no issue identity. A deleted or forbidden issue does not fail the
+delivery. A missing changelog is reported as partial coverage. Custom field changes are identified by their configured Jira field IDs. Hulk journal readers inherit the owner's TSW visibility and may receive restricted comment IDs, times, actions and author account IDs. Restricted comment bodies are omitted. If an unrestricted comment contains unsupported rich content, its available prose is preserved and the delivery reports partial coverage. The source shows signed Jira observations. Runtime-specific
 MCP and UI proof must be correlated with the actual ticket changes.
 
 ```sh

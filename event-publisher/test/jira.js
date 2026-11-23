@@ -1,10 +1,10 @@
 import { deepEqual, equal, match, ok, rejects } from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { request } from 'node:http'
+import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -15,8 +15,8 @@ import { fileURLToPath } from 'node:url'
 
 const cli = fileURLToPath(new URL('../events', import.meta.url))
 const exec = promisify(execFile)
-const localUrl = 'http://127.0.0.1:18573'
-const webhook = localUrl + '/webhooks/jira'
+let localUrl = 'http://127.0.0.1:18573'
+let webhook = localUrl + '/webhooks/jira'
 const secret = 'synthetic-jira-webhook-secret-for-the-fixture'
 const jira = {
   site: 'https://example.atlassian.net', cloudId: '11111111-2222-4333-8444-555555555555',
@@ -66,7 +66,7 @@ async function post(delivery, payload, { url = webhook, signed = true, headers =
   } })
 }
 
-test('serve verifies signed Jira deliveries and replays one durable project-scoped stream across restart', { timeout: 25_000 }, async t => {
+test('serve verifies signed Jira deliveries and replays one durable project-scoped stream across restart', { timeout: 45_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'event-publisher-jira-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const configPath = join(directory, 'config.json')
@@ -74,7 +74,7 @@ test('serve verifies signed Jira deliveries and replays one durable project-scop
   const envCheck = join(directory, 'firstmate-env-check')
   await mkdir(join(directory, 'bin'))
   await writeFile(join(directory, 'bin', 'fm-fleet-snapshot.sh'), `#!/bin/sh
-if [ "${'${EVENTS_JIRA_WEBHOOK_SECRET+x}'}" ]; then result=inherited; else result=clear; fi
+if [ "${'${EVENTS_JIRA_WEBHOOK_SECRET+x}'}" ] || [ "${'${EVENTS_JIRA_READ_TOKEN+x}'}" ]; then result=inherited; else result=clear; fi
 printf '%s\\n' "$result" > "$FM_HOME/firstmate-env-check"
 exit 1
 `, { mode: 0o700 })
@@ -86,11 +86,19 @@ exit 1
   await writeFile(configPath, JSON.stringify({ jira, homes: [{ id: 'example', path: directory, mode: 'fixture' }] }))
   const args = ['serve', '--config', configPath, '--db', dbPath]
   const run = (...flags) => exec(process.execPath, [cli, ...flags, '--db', dbPath])
+  const probe = createServer()
+  probe.listen(0, '127.0.0.1')
+  await once(probe, 'listening')
+  const webhookPort = String(probe.address().port)
+  await new Promise(resolve => probe.close(resolve))
+  localUrl = `http://127.0.0.1:${webhookPort}`
+  webhook = localUrl + '/webhooks/jira'
   await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: '' } }),
     error => error.code === 2 && error.stderr.includes('EVENTS_JIRA_WEBHOOK_SECRET'))
-  const serve = () => start(t, args, { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret })
+  const serve = () => start(t, args, { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret, EVENTS_JIRA_WEBHOOK_PORT: webhookPort })
   let publisher = serve()
   await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook}`), () => publisher.logs.stderr)
+  match(publisher.logs.stderr, /Jira issue-link events need EVENTS_JIRA_READ_TOKEN/)
   await until(() => existsSync(envCheck) && readFileSync(envCheck, 'utf8').endsWith('\n'))
   equal(readFileSync(envCheck, 'utf8'), 'clear\n')
 
@@ -115,6 +123,19 @@ exit 1
     req.end()
   })
   equal(oversized, 413)
+  equal((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout, '')
+  const linkDelivery = (name, id, sourceId, destinationId) => ({
+    timestamp: occurred, webhookEvent: name,
+    issueLink: {
+      id, sourceIssueId: sourceId, destinationIssueId: destinationId,
+      issueLinkType: { id: 10000, name: 'Blocks', outwardName: 'blocks', inwardName: 'is blocked by' },
+    },
+  })
+  const tswLink = linkDelivery('issuelink_created', 77001, 98765, 98766)
+  equal((await post('unsigned-link', tswLink, { signed: false })).status, 401)
+  equal((await post(null, tswLink)).status, 400)
+  equal((await post('link-malformed', { timestamp: occurred, webhookEvent: 'issuelink_created' })).status, 400)
+  equal((await post('link-before-token', tswLink)).status, 204)
   equal((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout, '')
 
   const watcher = start(t, ['watch', '--source', 'jira', '--type', 'ticket', '--db', dbPath, '--json'])
@@ -273,6 +294,171 @@ exit 1
   const partialReplay = (await run('replay', '--source', 'jira', '--after', '0')).stdout
   match(partialReplay, /partial projection \(before\)/)
   match(partialReplay, /partial projection \(comment body\)/)
+
+  const readToken = randomBytes(24).toString('hex')
+  const fetchLog = join(directory, 'jira-reads.log')
+  const preloadPath = join(directory, 'jira-read-preload.mjs')
+  const issues = new Map(Object.entries({
+    98765: { project: jira.projectId, key: 'WORK-1' },
+    98766: { project: jira.projectId, key: 'WORK-2' },
+    98768: { project: jira.projectId, key: 'WORK-3', self: `https://api.atlassian.com/ex/jira/${jira.cloudId}/rest/api/3/issue/98768` },
+    88888001: { project: '99999', key: 'ZZFOREIGN-1' },
+    88888002: { project: '99999', key: 'ZZFOREIGN-2' },
+    88888003: { status: 404 },
+    88888004: { status: 404 },
+    88888005: { status: 403 },
+    88888006: { status: 401 },
+    88888007: { status: 401 },
+    98767: { project: jira.projectId, key: 'WORK-9', self: 'https://other.atlassian.net/rest/api/3/issue/98767' },
+  }))
+  const fixture = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    const found = /^\/ex\/jira\/([^/]+)\/rest\/api\/3\/issue\/([^/]+)$/.exec(url.pathname)
+    if (req.method !== 'GET' || !found || found[1] !== jira.cloudId || url.search !== '?fields=project,key') {
+      res.writeHead(400)
+      res.end()
+      return
+    }
+    const issue = issues.get(found[2])
+    if (!issue || issue.status) {
+      res.writeHead(issue?.status ?? 404)
+      res.end()
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({
+      id: found[2], key: issue.key, self: issue.self ?? `${jira.site}/rest/api/3/issue/${found[2]}`,
+      fields: { project: { id: issue.project }, summary: 'must not be stored' },
+    }))
+  })
+  fixture.listen(0, '127.0.0.1')
+  await once(fixture, 'listening')
+  t.after(() => new Promise(resolve => fixture.close(resolve)))
+  const origin = `http://127.0.0.1:${fixture.address().port}`
+  await writeFile(preloadPath, `import { appendFileSync } from 'node:fs'
+const expected = process.env.EVENTS_JIRA_READ_TOKEN ?? ''
+const origin = ${JSON.stringify(origin)}
+const log = ${JSON.stringify(fetchLog)}
+const realFetch = globalThis.fetch
+const authorization = options => {
+  const headers = options?.headers
+  const auth = headers instanceof Headers ? (headers.get('authorization') ?? '') : (headers?.Authorization ?? headers?.authorization ?? '')
+  return expected && auth === 'Bearer ' + expected ? 'match' : 'other'
+}
+globalThis.fetch = async (url, options = {}) => {
+  const target = new URL(String(url))
+  const method = options.method ?? 'GET'
+  if (target.hostname !== 'api.atlassian.com') {
+    appendFileSync(log, 'OTHER-HOST ' + method + '\\n')
+    return realFetch(url, options)
+  }
+  appendFileSync(log, method + ' ' + (target.search === '?fields=project,key' ? 'fields=project,key' : 'query') + ' auth=' + authorization(options) + '\\n')
+  if (method !== 'GET') return new Response(null, { status: 405 })
+  return realFetch(origin + target.pathname + target.search)
+}
+`)
+  await publisher.stop()
+  await rm(envCheck, { force: true })
+  publisher = start(t, args, {
+    ...process.env,
+    EVENTS_JIRA_WEBHOOK_SECRET: secret,
+    EVENTS_JIRA_READ_TOKEN: readToken,
+    EVENTS_JIRA_WEBHOOK_PORT: webhookPort,
+    NODE_OPTIONS: `--import ${preloadPath}`,
+  })
+  await until(() => publisher.logs.stderr.includes(`Jira webhook listening on ${webhook}`), () => publisher.logs.stderr)
+  ok(!publisher.logs.stderr.includes('issue-link events need EVENTS_JIRA_READ_TOKEN'))
+  await until(() => existsSync(envCheck) && readFileSync(envCheck, 'utf8').endsWith('\n'))
+  equal(readFileSync(envCheck, 'utf8'), 'clear\n')
+
+  const linkShape = event => ({
+    key: event.evidence.source_reference.issue_key,
+    id: event.evidence.source_reference.issue_id,
+    link: event.evidence.source_reference.link_id,
+    webhook: event.evidence.source_reference.webhook_event,
+    type: event.event_type,
+    subject: event.subject.id,
+    change: event.change,
+  })
+  const afterSequence = async () => lines((await run('replay', '--source', 'jira', '--after', '0', '--json')).stdout).at(-1).sequence
+  const since = async sequence => lines((await run('replay', '--source', 'jira', '--after', String(sequence), '--json')).stdout)
+  const cursor = await afterSequence()
+  equal((await post('link-before-token', tswLink)).status, 204)
+  const created = await since(cursor)
+  deepEqual(created.map(linkShape), [
+    { key: 'WORK-1', id: '98765', link: '77001', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'blocks WORK-2' } },
+    { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
+  ])
+  equal(created[0].occurred_at, new Date(occurred).toISOString())
+  equal((await post('link-before-token', tswLink)).status, 204)
+  equal((await post('link-same-native', tswLink)).status, 204)
+  deepEqual(await since(cursor), created)
+  const cloudCursor = await afterSequence()
+  equal((await post('link-cloud-self', linkDelivery('issuelink_created', 77002, 98765, 98768))).status, 204)
+  deepEqual((await since(cloudCursor)).map(linkShape), [
+    { key: 'WORK-1', id: '98765', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'blocks WORK-3' } },
+    { key: 'WORK-3', id: '98768', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98768`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
+  ])
+  const deleteCursor = await afterSequence()
+  equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
+  const deleted = await since(deleteCursor)
+  deepEqual(deleted.map(linkShape), [
+    { key: 'WORK-1', id: '98765', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: 'blocks WORK-2', after: null } },
+    { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: 'is blocked by WORK-1', after: null } },
+  ])
+  equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
+  deepEqual(await since(deleteCursor), deleted)
+  const foreignCursor = await afterSequence()
+  equal((await post('link-foreign', linkDelivery('issuelink_created', 77021, 88888001, 88888002))).status, 204)
+  equal((await post('link-foreign', linkDelivery('issuelink_created', 77021, 88888001, 88888002))).status, 204)
+  equal((await post('link-foreign-again', linkDelivery('issuelink_created', 77021, 88888001, 88888002))).status, 204)
+  deepEqual(await since(foreignCursor), [])
+  const mixedCursor = await afterSequence()
+  equal((await post('link-mixed', linkDelivery('issuelink_created', 77022, 98765, 88888001))).status, 204)
+  deepEqual((await since(mixedCursor)).map(linkShape), [
+    { key: 'WORK-1', id: '98765', link: '77022', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'blocks [redacted]' } },
+  ])
+  const wrongSiteCursor = await afterSequence()
+  equal((await post('link-wrong-site', linkDelivery('issuelink_created', 77025, 98765, 98767))).status, 204)
+  deepEqual((await since(wrongSiteCursor)).map(event => event.change), [
+    { field: 'links', before: null, after: 'blocks [redacted]' },
+  ])
+  const missingCursor = await afterSequence()
+  equal((await post('link-missing', linkDelivery('issuelink_deleted', 77023, 98765, 88888003))).status, 204)
+  deepEqual((await since(missingCursor)).map(linkShape), [
+    { key: 'WORK-1', id: '98765', link: '77023', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: 'blocks [redacted]', after: null } },
+  ])
+  const goneCursor = await afterSequence()
+  equal((await post('link-both-missing', linkDelivery('issuelink_deleted', 77024, 88888003, 88888004))).status, 204)
+  deepEqual(await since(goneCursor), [])
+  const forbiddenCursor = await afterSequence()
+  equal((await post('link-forbidden', linkDelivery('issuelink_created', 77026, 88888005, 98766))).status, 204)
+  deepEqual((await since(forbiddenCursor)).map(linkShape), [
+    { key: 'WORK-2', id: '98766', link: '77026', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: null, after: 'is blocked by [redacted]' } },
+  ])
+  const rejectedCursor = await afterSequence()
+  equal((await post('link-unauthorized', linkDelivery('issuelink_created', 77027, 88888006, 88888007))).status, 204)
+  equal((await post('link-unauthorized-again', linkDelivery('issuelink_created', 77028, 88888006, 88888007))).status, 204)
+  equal(publisher.logs.stderr.split('Jira issue reads were rejected').length - 1, 1)
+  deepEqual(await since(rejectedCursor), [])
+  equal((await post('unsigned-link-later', tswLink, { signed: false })).status, 401)
+  const linkText = (await run('replay', '--source', 'jira', '--after', String(cursor))).stdout
+  match(linkText, /links — → blocks WORK-2/)
+  match(linkText, /links blocks WORK-2 → —/)
+  match(linkText, /links — → blocks \[redacted\]/)
+  const hidden = ['ZZFOREIGN-1', 'ZZFOREIGN-2', '88888001', '88888002', '88888003', '88888004', '88888005', '88888006', '88888007', 'WORK-9', '98767', 'must not be stored', readToken]
+  const dump = readFileSync(dbPath)
+  const fetchText = readFileSync(fetchLog, 'utf8')
+  for (const needle of hidden) {
+    ok(!dump.includes(Buffer.from(needle)), needle)
+    ok(!publisher.logs.stderr.includes(needle), needle)
+    ok(!publisher.logs.stdout.includes(needle), needle)
+    ok(!fetchText.includes(needle), needle)
+    ok(!linkText.includes(needle), needle)
+  }
+  const fetches = fetchText.trim().split('\n')
+  ok(fetches.length >= 2)
+  ok(fetches.every(line => line === 'GET fields=project,key auth=match'))
   await watcher.stop()
   await publisher.stop()
 })
