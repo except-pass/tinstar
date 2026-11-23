@@ -2895,6 +2895,26 @@ describe('Waiting For status semantics', () => {
     expect(card.properties['Waiting For']?.value).toBe(waitLine(event))
   })
 
+  it('rejects TSW Work blockers in new, replacement and decision waits', async () => {
+    const f = readyFixture()
+    const sources = f.sources()
+    const current = actor()
+    expect(await sources.updateWork(op('wait', current), 'Tin Star MCP')).toMatchObject({ outcome: 'saved' })
+    expect(await sources.updateWork(op('request_decision', {
+      request_id: 'tsw-wait', question: 'Proceed?', requested_from: 'Will',
+    }), 'Tin Star MCP')).toMatchObject({ outcome: 'saved' })
+    const work = { ...current, type: 'Work', id: 'jira:fortresspower-jira.atlassian.net:10639:60001' }
+    const before = patches(f)
+    for (const input of [
+      op('wait', work),
+      op('wait', { ...work, replace_wait: waitLine(current) }),
+      op('answer_decision', { request_id: 'tsw-wait', answer: 'Proceed', next: { owner: 'Will', status: 'Waiting For', wait: work } }),
+    ]) {
+      expect(await sources.updateWork(input, 'Tin Star MCP')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work-id' })
+    }
+    expect(patches(f)).toBe(before)
+  })
+
   it.each([
     { kind: 'wait', middle: 'Follow-up by: Firstmate\n' },
     { kind: 'assign', middle: 'Follow-up by: Firstmate\n' },

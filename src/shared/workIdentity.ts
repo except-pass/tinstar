@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
-export const jiraSite = 'fortresspower-jira.atlassian.net'
-export const jiraWorkProject = '10639'
+const jiraSite = 'fortresspower-jira.atlassian.net'
+const jiraWorkProject = '10639'
 const jiraPilotProject = '10638'
 export const jiraCardPrefix = `jira:${jiraSite}:${jiraWorkProject}:`
 export const jiraPilotCardPrefix = `jira:${jiraSite}:${jiraPilotProject}:`
@@ -14,8 +14,8 @@ const notionCardId = '[a-f0-9]{32}'
 export const notionCardIdSchema = z.string().regex(new RegExp(`^${notionCardId}$`))
 export const cardIdSchema = z.string().regex(new RegExp(`^(?:${notionCardId}|${jiraCardId})$`))
 export const jiraCardIdPattern = new RegExp(`^${jiraCardId}$`)
-export const jiraPilotCardIdPattern = new RegExp(`^${jiraPilotCardPrefix.replaceAll('.', '\\.')}${jiraIssueId}$`)
-export const isJiraPilotCard = (id: string) => jiraPilotCardIdPattern.test(id)
+export const isJiraPilotCard = (id: string) => id.startsWith(jiraPilotCardPrefix)
+  && /^[1-9][0-9]*$/.test(id.slice(jiraPilotCardPrefix.length))
 export const isJiraCard = (id: string) => jiraCardIdPattern.test(id) || isJiraPilotCard(id)
 
 /** Exact source navigation without guessing a mutable Jira display key. */

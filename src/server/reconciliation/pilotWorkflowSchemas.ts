@@ -1,8 +1,8 @@
 import { z } from 'zod'
-import { jiraPilotCardIdPattern, notionCardIdSchema } from '../../shared/workIdentity'
+import { jiraPilotCardPrefix, notionCardIdSchema } from '../../shared/workIdentity'
 import { getWorkSchema, startWorkSchema, submitHandoffSchema, workflowUpdateSchema } from '../../shared/workflow'
 
-const pilotCardIdSchema = z.string().regex(jiraPilotCardIdPattern)
+const pilotCardIdSchema = z.string().regex(new RegExp(`^${jiraPilotCardPrefix.replaceAll('.', '\\.')}[1-9][0-9]*$`))
 export const pilotWorkflowCardIdSchema = z.union([notionCardIdSchema, pilotCardIdSchema])
 export const pilotGetWorkSchema = getWorkSchema.extend({ card_id: pilotWorkflowCardIdSchema })
 export const pilotStartWorkSchema = startWorkSchema.extend({ card_id: pilotWorkflowCardIdSchema })

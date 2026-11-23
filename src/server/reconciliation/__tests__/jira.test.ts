@@ -142,7 +142,7 @@ async function fixture() {
   const sources = new ReconciliationSources({ fleet: [], jira, warnings: [] }, fetcher, api, root)
   const worker = { kind: 'firstmate' as const, fm_home: home.source.home, task_id: task.identity.task_id!, first_observed_spawn_gen: task.identity.spawn_gen! }
   const { kind: _kind, ...link } = worker
-  return { root, fetcher, reader, workflow, sources, seed, controls, notes, attachments, requests, worker, link, home, task, statuses }
+  return { root, fetcher, reader, workflow, sources, seed, controls, notes, attachments, requests, worker, link, home, task, statuses, fleet }
 }
 const create: CreateWorkInput = { provider: 'jira', name: 'Synthetic Jira adapter workflow proof', owner: 'Firstmate', area: 'Engineering', operation_id: 'synthetic-create', status: 'Queued', content: { brief: 'Synthetic implementation brief', acceptance_criteria: 'All reads agree' } }
 
@@ -320,6 +320,20 @@ it('shares UI and authenticated MCP operations/readback for the same Jira state'
   expect(uiRead.data.card.source.properties).toEqual(mcpRead.card.source.properties)
   expect(mcpRead.card.source.properties.Area.value).toBe('Product')
   expect((await new WorkflowContent(f.reader).notes(cardId)).some(note => note.text.includes(receiptMarker('Tin Star UI', 'ui-edit')))).toBe(true)
+  vi.spyOn(f.sources, 'fleetSnapshot').mockResolvedValue(f.fleet)
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await client.callTool({ name, arguments: args })
+    expect(result).not.toMatchObject({ isError: true })
+    return JSON.parse((result.content as Array<{ text: string }>)[0]!.text)
+  }
+  expect(await call('update_work', { card_id: cardId, operation_id: 'pilot-assign', kind: 'assign', owner: 'Firstmate', status: 'Todo' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect(await call('start_work', { card_id: cardId, operation_id: 'pilot-start', worker: f.worker }))
+    .toMatchObject({ outcome: 'saved', card: { properties: { Status: { value: 'In Progress' } } } })
+  expect(await call('submit_handoff', { submission_id: 'pilot-contract', target: { card_id: cardId },
+    title: create.name, area: create.area, owner: create.owner, objective: 'Prove the synthetic workflow',
+    spec_markdown: 'Synthetic fixture only', acceptance_criteria: ['Readback verified'], decisions: [], forbidden_approaches: [], references: [] }))
+    .toMatchObject({ outcome: 'saved', record: { full_spec_readback: 'verified' } })
   expect(sectionText('brief', 'Synthetic implementation brief')).toBeTruthy()
 })
 

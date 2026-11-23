@@ -62,8 +62,8 @@ const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
-async function fixture() {
-  const { token, ...settings } = config
+async function fixture(scope?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
+  const { token, ...settings } = { ...config, ...scope }
   const root = await mkdtemp(join(tmpdir(), 'jira-work-mcp-'))
   roots.push(root)
   await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token } } }), { mode: 0o600 })
@@ -322,6 +322,26 @@ it('publishes write schemas that accept the supported Notion and TSW card IDs', 
     card: { id: tswId },
     comments: expect.arrayContaining([expect.objectContaining({ body: expect.stringContaining('TSW fixture note') })]),
   })
+})
+
+it('keeps native Jira create and read available for another configured project', async () => {
+  const f = await fixture({ url: 'https://sample.atlassian.net', projectId: '10001' })
+  const { client, call } = await f.connect()
+  const card_id = 'jira:sample.atlassian.net:10001:60001'
+  const operation_id = 'private-project'
+  expect(await call('create_work', { provider: 'jira', operation_id, name: 'Private fixture' }))
+    .toMatchObject({ outcome: 'saved', card: { id: card_id } })
+  expect(await call('get_work', { card_id })).toMatchObject({ outcome: 'available', card: { id: card_id } })
+  const before = f.requests.length
+  for (const [name, fields] of [
+    ['update_work', { kind: 'jira_edit', note: 'Fixture' }],
+    ['transition_work', { verb: 'Prioritize' }],
+    ['link_work', { action: 'remove', link_id: '123' }],
+  ] as const) {
+    expect(await client.callTool({ name, arguments: { ...fields, card_id, operation_id } }))
+      .toMatchObject({ isError: true })
+  }
+  expect(f.requests).toHaveLength(before)
 })
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {

@@ -75,6 +75,7 @@ export class ReconciliationSources {
   readonly proposalSource
   readonly workflow
   readonly jiraWork?: JiraWork
+  get hasJiraPilot() { return this.workReader.jira !== undefined }
   readonly notionApi
   private context
   private sourceWriteRecoveryPass?: Promise<void>
