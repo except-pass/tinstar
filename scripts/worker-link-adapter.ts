@@ -37,6 +37,7 @@ async function main() {
   if (values.apply && runNotion && (!config.notion || !values['write-token-file'])) throw new Error('Notion write-token file and board required')
   const file = await open(auditFile, 'a', 0o600)
   try {
+    await file.chmod(0o600)
     const audit = async (entry: unknown) => { await file.writeFile(`${JSON.stringify(entry)}\n`); await file.sync() }
     const input = runNotion ? await sources.snapshot() : null
     const transport = runNotion && values.apply && config.notion
@@ -47,7 +48,7 @@ async function main() {
       apply: values.apply, maxCards, cards: tswCards, audit, stateFile: `${auditFile}.tsw-state.json`,
     }) : undefined
     console.log(JSON.stringify({ ...result, ...(!result ? { mode: values.apply ? 'apply' : 'report-only' } : {}),
-      stopped: !!(result?.stopped || tsw?.stopped), ...(tsw && { tsw }) }, null, 2))
+      stopped: !!(result?.stopped || tsw?.stopped), ...(tsw && { tsw: tsw.audits.map(({ cardId, result }) => ({ cardId, result })) }) }, null, 2))
     if (result?.stopped || tsw?.stopped) process.exitCode = 1
   } finally { await file.close() }
 }

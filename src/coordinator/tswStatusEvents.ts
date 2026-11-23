@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { basename } from 'node:path'
 import { retainedExecutionLiveness } from '../shared/executionLiveness'
 import { parsePullUrl } from '../server/fleet/attention'
 import type { SourceSnapshot } from '../server/reconciliation'
@@ -25,6 +24,7 @@ export type StatusEvent = EventDetails & {
   task: string
   actor: string
   owner: string
+  occurredAt: number | null
   expiresAt: string | null
   id: string
   evidence: string
@@ -35,21 +35,24 @@ const eventId = (parts: unknown[]) => createHash('sha256').update(JSON.stringify
 const pullUrl = (value: unknown) => typeof value === 'string' && parsePullUrl(value) ? value : null
 const eventVerb = (value: string | null) => value?.trim().match(/^([a-z-]+)(?=\s|:|$)/i)?.[1]?.toLowerCase()
 
-function authority(home: string) {
-  const mate = basename(home).replace(/^fm-/, '')
-  if (mate === 'firstmate' || mate === 'main') return { actor: 'Firstmate', owner: 'Firstmate' }
-  if (mate === 'home' || mate === 'hulk') return { actor: 'Firstmate hulk', owner: 'Hulk' }
-  return { actor: `Firstmate ${mate}`, owner: `Firstmate ${mate}` }
+function authority(label: string) {
+  const actor = label === 'main' ? 'Firstmate' : label === 'hulk' ? 'Firstmate Hulk' : `Firstmate ${label}`
+  return { actor, owner: label === 'hulk' ? 'Hulk' : actor }
 }
 
-function classify(home: string, id: string, task: Task | undefined, row: Backlog | undefined, now: number) {
-  function event(details: EventDetails, witness: unknown, evidence: string) {
-    return { details, witness, evidence }
+function classify(label: string, id: string, task: Task | undefined, row: Backlog | undefined, now: number, observedAt: string | null) {
+  function event(details: EventDetails, witness: unknown, evidence: string, timestamp = NaN) {
+    return { details, witness, evidence, occurredAt: Number.isFinite(timestamp) ? timestamp : null }
   }
   const state = task?.current_state.freshness === 'fresh' ? task.current_state : null
   const detail = typeof state?.detail === 'string' ? state.detail : ''
   const last = task?.lastEventText ?? (typeof task?.last_event.raw === 'string' ? task.last_event.raw : null)
   const verb = eventVerb(last)
+  const seconds = task?.last_event.age_seconds
+  const recorded = last?.match(/\[at=(\d+)\]/)?.[1]
+  const lastAt = recorded ? Number(recorded) * 1000
+    : typeof seconds === 'number' && seconds >= 0 ? Date.parse(observedAt ?? '') - seconds * 1000 : NaN
+  const stateAt = Date.parse(typeof state?.observed_at === 'string' ? state.observed_at : '')
   const summary = last?.replace(/^[^:]*:\s*/, '').trim()
   const source = row?.[tswEvidence]
   const attempt = task?.[tswEvidence]
@@ -60,31 +63,33 @@ function classify(home: string, id: string, task: Task | undefined, row: Backlog
     /^(?:merged\b|landed\b|PR https:\/\/github\.com\/\S+\/pull\/\d+ merged\b)/i.test(summary ?? '')
   if (terminal || mergedState || mergedEvent) {
     if (!pull) return 'completion-without-pull-evidence'
-    return event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`)
+    return event({ target: 'Done' }, [pull, terminal?.completedOn ?? null], `First Mate reported delivery for ${id}. ${pull}`, terminal?.completedOn ? Date.parse(terminal.completedOn) : mergedEvent ? lastAt : mergedState ? stateAt : NaN)
   }
 
   const decisions = (task?.queue?.decisions ?? []).filter(item => item.verb === 'needs-decision' && item.summary?.trim())
   const questions = [...new Set(decisions.map(item => item.summary!.trim()))].sort()
   if (!questions.length && verb === 'needs-decision' && summary) questions.push(summary)
   if (questions.length) return event({ target: 'Decision', questions },
-    [decisions.map(item => item.key).sort(), questions], `First Mate requested a decision for ${id}.`)
+    [decisions.map(item => item.key).sort(), questions], `First Mate requested a decision for ${id}.`, verb === 'needs-decision' && questions.length === 1 && questions[0] === summary ? lastAt : NaN)
 
   const hold = source?.holdKind === 'external' ? row : attempt?.holdKind === 'external' ? task?.backlog : undefined
   if (hold) {
     const reason = typeof hold.hold_reason === 'string' ? hold.hold_reason.trim() : ''
-    const target = hold.blocked_by_ids?.[0] ?? `fm:${home}:${id}`
-    if (!reason || !/^\S+$/.test(target)) return 'external-hold-without-blocker-evidence'
+    const target = hold.blocked_by_ids?.[0] ?? `fm:${label}:${id}`
+    if (!reason || !/^[^\s/\\]+$/.test(target)) return 'external-hold-without-blocker-evidence'
     const until = typeof hold.hold_until === 'string' ? hold.hold_until.trim() : ''
     const blocker = { type: 'Event' as const, target, unblocks_when: until ? `${reason}\nHold until ${until}` : reason }
     return event({ target: 'Waiting For', blocker }, blocker, `First Mate declared an external wait for ${id}.`)
   }
 
-  const ready = /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/i.test(detail) ||
-    (verb === 'done' || verb === 'pr-ready') && (/^PR https:\/\/github\.com\/\S+\/pull\/\d+ checks green\b/i.test(summary ?? '') || verb === 'pr-ready')
-  if (ready) {
+  const readyEvent = verb === 'pr-ready' || verb === 'done' &&
+    /^PR https:\/\/github\.com\/\S+\/pull\/\d+ checks green\b/i.test(summary ?? '')
+  const readyState = /^(?:run passed: PR open|checks green: PR (?:held for merge|ready for review))\b/i.test(detail)
+  if (readyState || readyEvent) {
     if (!pull) return 'review-without-pull-evidence'
-    if (attempt?.yolo === 'off') return event({ target: 'Ready for Review', pull }, pull, `First Mate reported checks green. ${pull}`)
-    if (attempt?.yolo === 'on') return event({ target: 'In Progress' }, ['mate-merges', pull], `First Mate is responsible for merging ${pull}`)
+    const readyAt = readyEvent ? lastAt : stateAt
+    if (attempt?.yolo === 'off') return event({ target: 'Ready for Review', pull }, pull, `First Mate reported checks green. ${pull}`, readyAt)
+    if (attempt?.yolo === 'on') return event({ target: 'In Progress' }, ['mate-merges', pull], `First Mate is responsible for merging ${pull}`, readyAt)
     return 'merge-authority-unavailable'
   }
   // A completion checkpoint can precede the merge and a paused local pipeline
@@ -94,7 +99,7 @@ function classify(home: string, id: string, task: Task | undefined, row: Backlog
     state?.state === 'working' ||
     task.endpoint.exists === true && task.backlog.state === 'in_flight' &&
       !['done', 'failed', 'landed'].includes(verb ?? '') && !['done', 'failed', 'landed'].includes(String(state?.state))
-  )) return event({ target: 'In Progress' }, 'spawned', `First Mate worker ${id} is active (attempt ${task.identity.spawn_gen}).`)
+  )) return event({ target: 'In Progress' }, 'spawned', `First Mate worker ${id} is active (attempt ${task.identity.spawn_gen}).`, verb === 'working' || verb === 'started' ? lastAt : NaN)
   return 'no-actionable-event'
 }
 
@@ -108,6 +113,7 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
       findings.push({ home, reason: `snapshot-${observation.status}-${observation.coverage}` })
       continue
     }
+    const label = source.label?.trim()
     const rows = new Map(observation.data.backlog?.map(row => [row.id, row]))
     const joined = new Set<Backlog>()
     const subjects = observation.data.tasks.filter(task => task.kind !== 'secondmate').map(task => {
@@ -126,14 +132,18 @@ export function collectTswEvents(fleet: SourceSnapshot['fleet'], now: number) {
         continue
       }
       const key = dispatch.cardId
-      const signal = classify(home, id, task, row, now)
+      if (!label) {
+        findings.push({ home, key, task: id, reason: 'snapshot-label-missing' })
+        continue
+      }
+      const signal = classify(label, id, task, row, now, observation.observedAt)
       if (typeof signal === 'string') {
         findings.push({ home, key, task: id, reason: signal })
         continue
       }
       const events = byKey.get(key) ?? []
       events.push({
-        ...signal.details, ...authority(home), key, home, task: id, expiresAt: observation.expiresAt,
+        ...signal.details, ...authority(label), occurredAt: signal.occurredAt, key, home, task: id, expiresAt: observation.expiresAt,
         id: eventId([home, id, task?.identity.spawn_gen ?? null, signal.details.target, signal.witness]),
         evidence: signal.evidence,
       })

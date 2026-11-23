@@ -78,14 +78,14 @@ async function fixture(projectId = config.projectId) {
   const controls = { loseCreate: false, loseEdit: false, refuseTransition: false, omitComment: false, commentResponse: undefined as 'lost' | 'unreadable' | 'rejected' | 'wrong-id' | undefined, directCommentOverrides: {} as Record<string, unknown>, statusDuringCommentRead: '', loseBaselineTime: false, newerCommentsAfterPost: false, rejectSearch: false, staleSearch: false, wrongCreate: false, beforeWrite: '', loseLink: false, moveDuringComments: false, delayedComment: '', delayedCommentAuthor: 'fixture-service', delayedCommentTime: '', transitionList: undefined as Array<{ id: string; name: string; to: { id?: string; name: string }; isAvailable?: boolean }> | undefined, lastTransitionId: '' }
   const issues = new Map<string, { id: string; key: string; fields: Record<string, any>; properties: Record<string, unknown>; comments: any[] }>()
   const links = new Map<string, { type: typeof types[number]; inwardIssue: string; outwardIssue: string }>()
-  const history = new Map<string, Array<{ id: string; author: { accountId: string }; items: unknown[] }>>()
+  const history = new Map<string, Array<{ id: string; created: string; author: { accountId: string }; items: unknown[] }>>()
   const appendHistory = (id: string, items: unknown[], accountId = 'fixture-service') => {
     const entries = history.get(id) ?? []
-    entries.push({ id: String(entries.length + 1), author: { accountId }, items })
+    entries.push({ id: String(entries.length + 1), created: jiraNow(), author: { accountId }, items })
     history.set(id, entries)
   }
   const assignees = [
-    { displayName: 'William Queue', accountId: 'will-account', active: true },
+    { displayName: 'William Gathright', accountId: 'will-account', active: true },
     { displayName: 'Robyn A', accountId: 'rob-a', active: true },
     { displayName: 'Robyn B', accountId: 'rob-b', active: true },
   ]
@@ -261,7 +261,7 @@ async function fixture(projectId = config.projectId) {
     return { client, call }
   }
   const jira = () => new JiraWork(parsed.jiraWork!, root, fetcher)
-  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, jira }
+  return { root, connect, requests, controls, issues, links, historicalKeys, appendHistory, assignees, jira }
 }
 
 it('publishes update_work schemas that accept Notion IDs for shared updates', async () => {
@@ -303,19 +303,20 @@ it('resolves an assignable Jira user by name and confirms or clears the native A
   const writes = () => f.requests.filter(request => request.method === 'PUT')
   expect(await edit('ambiguous', 'Robyn')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   expect(await edit('missing', 'Nobody')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
+  expect(await edit('prefix', 'Will')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   expect(writes()).toHaveLength(0)
-  expect(await edit('assign', 'Will')).toMatchObject({ outcome: 'saved', card: { assignee: 'William Queue', owner: 'Avery' } })
-  expect(await edit('assign', 'Will')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  expect(await edit('assign', 'William Gathright')).toMatchObject({ outcome: 'saved', card: { assignee: 'William Gathright', owner: 'Avery' } })
+  expect(await edit('assign', 'William Gathright')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
   expect(await edit('clear', null)).toMatchObject({ outcome: 'saved', card: { assignee: null, owner: 'Avery' } })
   expect(writes()).toHaveLength(2)
 })
 
 async function tswFixture() {
   const f = await fixture('10639')
-  const home = '/fixture/fm-fleet'
+  const home = '/fixture/fm-unrelated-basename'
   const file = join(f.root, 'snapshot.json')
   const sources = new ReconciliationSources({ warnings: [], fleet: [
-    { home, snapshotFile: file }, { home: '/fixture/fm-offline', snapshotFile: join(f.root, 'missing.json') },
+    { home, label: 'fleet', snapshotFile: file }, { home: '/fixture/fm-offline', snapshotFile: join(f.root, 'missing.json') },
   ] })
   const { call } = await f.connect()
   const create = (type: string) => call('create_work', {
@@ -328,7 +329,7 @@ async function tswFixture() {
   const run = async (apply: boolean, maxCards = 5) => runTswStatusSync(await sources.fleetSnapshot(true), {
     jira: f.jira(), stateFile: join(f.root, 'status-checkpoints.json'), apply, maxCards, audit: async () => {},
   })
-  return { ...f, create, publish, run }
+  return { ...f, call, create, publish, run }
 }
 
 const fixturePull = 'https://github.com/fixture/project/pull/123'
@@ -364,7 +365,7 @@ it('walks TSW from Backlog through review and merge, preserves idempotence and s
   expect(await f.run(true)).toMatchObject({ stopped: true })
   expect(await f.run(true)).toMatchObject({ stopped: false })
   expect(issue.fields.status.name).toBe('Ready for Review')
-  expect(issue.fields.assignee.displayName).toBe('William Queue')
+  expect(issue.fields.assignee.displayName).toBe('William Gathright')
   expect(issue.comments.map(comment => adfText(comment.body)).filter(note => note.startsWith('Will: merge'))).toEqual([
     `Will: merge ${fixturePull}\n\nRecorded via Tin Star (Firstmate fleet)`,
   ])
@@ -402,6 +403,86 @@ it.each(['status', 'assignee'] as const)('preserves an owner %s change even when
   expect(issue.fields.assignee).toBeNull()
 })
 
+it.each(['Answer Decision', 'Resolve Wait', 'Reject Review'] as const)('resumes on newer source evidence after %s', async verb => {
+  const f = await tswFixture()
+  await f.create(verb)
+  await f.publish([tswTask('TSW-1')])
+  await f.run(true)
+  const card_id = (await f.jira().readTswCard('TSW-1')).id
+  const edit = (operation_id: string, fields: Record<string, unknown>) => f.call('update_work', { kind: 'jira_edit', card_id, operation_id, ...fields })
+  const move = (operation_id: string, transition: string, fields: Record<string, unknown> = {}) =>
+    f.call('transition_work', { card_id, operation_id, verb: transition, ...fields })
+  if (verb === 'Answer Decision') {
+    await f.publish([tswTask('TSW-1', '', 'off', {
+      hints: { open_decisions: [{ verb: 'needs-decision', key: 'direction', summary: 'Which direction?' }] },
+    })])
+    await f.run(true)
+    expect(await edit('answer', { answers: [{ id: 'D1', answer: 'Proceed' }] })).toMatchObject({ outcome: 'saved' })
+  } else if (verb === 'Resolve Wait') {
+    await f.publish([], [{ id: 'external', body_lines: ['card: TSW-1'], hold_kind: 'external', hold_reason: 'Wait for delivery' }])
+    await f.run(true)
+    expect(await f.jira().readTswCard('TSW-1')).toMatchObject({ blocker: { target: 'fm:fleet:external' } })
+    expect(await edit('clear', { blocker: null })).toMatchObject({ outcome: 'saved' })
+  } else {
+    await f.publish([tswTask('TSW-1', 'checks green: PR ready for review')])
+    await f.run(true)
+  }
+  const to = verb === 'Reject Review' ? 'Queued' : 'In Progress'
+  expect(await move('owner-action', verb, verb === 'Reject Review' ? { to, reason: 'Try again' } : { to, evidence: 'Work can resume' }))
+    .toMatchObject({ outcome: 'saved', card: { status: to } })
+  const publish = (at: number) => {
+    const rejected = verb === 'Reject Review'
+    const pull = rejected ? 'https://github.com/fixture/project/pull/124' : fixturePull
+    const status = rejected ? 'pr-ready' : 'done'
+    return f.publish([tswTask('TSW-1', '', 'off', {
+      spawn_gen: 'attempt-2', pr: { url: pull },
+      hints: { last_event_text: `${status} [at=${Math.floor(at / 1000)}]: PR ${pull} ${rejected ? 'checks green' : 'merged'}` },
+    })])
+  }
+  await publish(Date.now() - 30_000)
+  expect(await f.run(true)).toMatchObject({ plans: [] })
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe(to)
+  await publish(Date.now())
+  expect(await f.run(true)).toMatchObject({ stopped: false })
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe(verb === 'Reject Review' ? 'Ready for Review' : 'Done')
+})
+
+it.each(['edit', 'transition'] as const)('retries an unapplied dispatched TSW %s once with a derived ID', async kind => {
+  const f = await tswFixture()
+  await f.create('dispatch gap')
+  await f.publish([tswTask('TSW-1')])
+  const [method, path] = kind === 'edit' ? ['PUT', 'issue/60001'] : ['POST', 'issue/60001/transitions']
+  f.controls.beforeWrite = `${method} ${path}`
+  const first = await f.run(true)
+  expect(first.stopped).toBe(true)
+  const original = first.audits.find(entry => entry.result === 'partially-saved')!.operationId
+  const retry = await f.run(true)
+  expect(retry.stopped).toBe(false)
+  expect(retry.audits).toContainEqual(expect.objectContaining({ result: 'dispatch-retry', operationId: `${original}-retry-1` }))
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe('In Progress')
+  const writes = () => f.requests.filter(request => request.method === method && request.path === path).length
+  expect(writes()).toBe(kind === 'edit' ? 2 : 3)
+  await f.run(true)
+  expect(writes()).toBe(kind === 'edit' ? 2 : 3)
+})
+
+it.each(['review', 'decision'] as const)('advances a TSW %s without assigning a similarly named user', async kind => {
+  const f = await tswFixture()
+  f.assignees[0]!.displayName = 'William Gathright Jr'
+  await f.create(kind)
+  await f.publish([kind === 'review'
+    ? tswTask('TSW-1', 'checks green: PR ready for review')
+    : tswTask('TSW-1', '', 'off', {
+      hints: { open_decisions: [{ verb: 'needs-decision', key: 'direction', summary: 'Which direction?' }] },
+    })])
+  expect(await f.run(true)).toMatchObject({ stopped: false, audits: expect.arrayContaining([
+    expect.objectContaining({ result: 'reviewer-not-assignable', cardId: 'TSW-1' }),
+  ]) })
+  expect(await f.jira().readTswCard('TSW-1')).toMatchObject({
+    status: kind === 'review' ? 'Ready for Review' : 'Decision', assignee: null,
+  })
+})
+
 it('stages a decision question or typed external blocker before transitioning and bounds the card batch', async () => {
   const f = await tswFixture()
   await f.create('decision')
@@ -417,7 +498,7 @@ it('stages a decision question or typed external blocker before transitioning an
   expect(first.stopped).toBe(false)
   expect(first.audits).toContainEqual(expect.objectContaining({ cardId: 'TSW-2', result: 'batch-limit' }))
   const asked = await f.jira().readTswCard('TSW-1')
-  expect(asked).toMatchObject({ status: 'Decision', assignee: 'William Queue',
+  expect(asked).toMatchObject({ status: 'Decision', assignee: 'William Gathright',
     decision_questions: [{ id: 'D1', question: 'Which direction should we take?' }] })
   expect(await f.run(true, 1)).toMatchObject({ stopped: false })
   const blocked = await f.jira().readTswCard('TSW-2')

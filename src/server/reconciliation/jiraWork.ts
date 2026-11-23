@@ -41,7 +41,7 @@ type Attempt = {
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
 export type JiraWorkCard = ReturnType<JiraWork['view']>
 export type JiraHistoryCursor = { total: number; last: string | null }
-export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean }
+export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean; occurredAt: number | null }
 type BeforeWrite = (current: JiraWorkCard) => void
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
@@ -164,24 +164,16 @@ export class JiraWork extends JiraClient {
     return this.view(issue)
   }
 
-  async statusHistory(cardId: string, after?: JiraHistoryCursor) {
+  async statusHistory(cardId: string, after: JiraHistoryCursor = { total: 0, last: null }) {
     const id = this.id(cardId)
     await this.checkProject(id)
     const page = async (offset: number, count: number) => {
       const result = await this.request(`issue/${id}/changelog?startAt=${offset}&maxResults=${count}`)
       if (!Number.isSafeInteger(result.total) || result.total < 0 || result.startAt !== offset || !Array.isArray(result.values) ||
         result.values.some(entry => !nativeId(entry.id) || !Array.isArray(entry.items))) throw new Error('Incomplete Jira change history')
-      return { total: result.total as number, values: result.values as Array<{ id: string; author?: { accountId?: string }; items: Array<Record<string, any>> }> }
+      return { total: result.total as number, values: result.values as Array<{ id: string; created?: string; author?: { accountId?: string }; items: Array<Record<string, any>> }> }
     }
     const changes: JiraTrackedChange[] = []
-    if (!after) {
-      const first = await page(0, 1)
-      if (first.total === 0) return { cursor: { total: 0, last: null }, changes }
-      const tail = first.total === 1 ? first : await page(first.total - 1, 1)
-      const last = tail.values[0]
-      if (!last) throw new Error('Missing Jira history baseline')
-      return { cursor: { total: first.total, last: last.id }, changes }
-    }
     let offset = Math.max(0, after.total - 1)
     let last = after.last
     let service: string | undefined
@@ -205,7 +197,9 @@ export class JiraWork extends JiraClient {
           }
           if (from === to) continue
           service ??= await this.serviceAccountId()
-          changes.push({ field, from: from ?? null, to: to ?? null, byService: entry.author?.accountId === service })
+          const timestamp = Date.parse(entry.created ?? '')
+          changes.push({ field, from: from ?? null, to: to ?? null, byService: entry.author?.accountId === service,
+            occurredAt: Number.isFinite(timestamp) ? timestamp : null })
         }
       }
       offset += result.values.length
@@ -394,16 +388,15 @@ export class JiraWork extends JiraClient {
     }
   }
 
-  private async resolveAssignee(id: string, name: string) {
+  async findAssignableAccount(cardId: string, name: string) {
+    const id = this.id(cardId)
+    await this.checkProject(id)
     const users = await this.request(`user/assignable/search?${new URLSearchParams({ issueId: id, query: name, maxResults: '1000' })}`)
     if (!Array.isArray(users)) throw new Error('Incomplete Jira assignee search')
     const eligible = users.filter(user => user.active === true && typeof user.accountId === 'string' && user.accountId &&
       typeof user.displayName === 'string')
-    const exact = eligible.filter(user => user.displayName.toLowerCase() === name.toLowerCase())
-    const abbreviated = eligible.filter(user => user.displayName.toLowerCase().startsWith(name.toLowerCase()))
-    const matches = new Set((exact.length ? exact : abbreviated).map(user => user.accountId as string))
-    if (matches.size !== 1) throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
-    return [...matches][0]!
+    const matches = new Set(eligible.filter(user => user.displayName === name).map(user => user.accountId as string))
+    return matches.size === 1 ? [...matches][0]! : null
   }
 
   private editDecisionDocument(issue: Issue, input: JiraEdit) {
@@ -488,7 +481,10 @@ export class JiraWork extends JiraClient {
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
-      const assigneeId = typeof input.assignee === 'string' ? await this.resolveAssignee(id, input.assignee) : input.assignee
+      const assigneeId = typeof input.assignee === 'string' ? await this.findAssignableAccount(input.card_id, input.assignee) : input.assignee
+      if (typeof input.assignee === 'string' && assigneeId === null) {
+        throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
+      }
       if (attempt.dispatched) {
         this.checkEdit(current, input, assigneeId)
         await this.checkComment(id, note)
