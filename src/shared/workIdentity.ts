@@ -4,7 +4,6 @@ import { z } from 'zod'
 // site/project in the identity prevents routing an issue ID to another source.
 export const jiraCardPrefix = 'jira:fortresspower-jira.atlassian.net:10638:'
 export const cardIdSchema = z.string().regex(/^(?:[a-f0-9]{32}|jira:fortresspower-jira\.atlassian\.net:10638:[1-9][0-9]*)$/)
-export const workReferenceIdSchema = z.string().regex(/^(?:[a-f0-9]{32}|jira:fortresspower-jira\.atlassian\.net:(?:10638|10639):[1-9][0-9]*)$/)
 export const isJiraCard = (id: string) => id.startsWith(jiraCardPrefix) && cardIdSchema.safeParse(id).success
 
 /** Exact source navigation without guessing a mutable Jira display key. */

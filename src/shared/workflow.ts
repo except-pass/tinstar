@@ -3,7 +3,7 @@ import { reviewEvidenceSchema, reviewResponseSchema } from './reviews'
 import { z } from 'zod'
 import { decisionProposalSchema } from './decisionProposal'
 import { firstMateRequestSchema } from './deskSource'
-import { cardIdSchema, workReferenceIdSchema } from './workIdentity'
+import { cardIdSchema } from './workIdentity'
 import { waitingForTypes } from './waitingForPolicy'
 export { cardIdSchema } from './workIdentity'
 export const leaseTokenSchema = z.string().min(1).max(256).optional()
@@ -12,7 +12,7 @@ export const firstmateWorkerSchema = z.object({ kind: z.literal('firstmate'), fm
 export const workerSchema = z.discriminatedUnion('kind', [
   firstmateWorkerSchema,
   z.object({ kind: z.literal('external'), system: identity, run_id: identity, reference: z.string().url().max(2048).refine(value => /^https?:/.test(value), 'Use an HTTP run reference'),
-    card_id: workReferenceIdSchema, observed_at: z.string().datetime({ offset: true }), state: z.literal('running'), evidence: z.string().min(12).max(2000) }).strict(),
+    card_id: cardIdSchema, observed_at: z.string().datetime({ offset: true }), state: z.literal('running'), evidence: z.string().min(12).max(2000) }).strict(),
 ])
 export const startWorkSchema = z.object({ lease_token: leaseTokenSchema, card_id: cardIdSchema, operation_id: z.string().min(1).max(128), worker: workerSchema,
   expected: z.object({ owner: z.string().nullable(), status: z.string().nullable(), worker_links: z.string().nullable() }).strict().optional(),
@@ -34,9 +34,9 @@ const label = z.string().trim().min(1).max(200)
 export const ordinaryPropertiesSchema = z.object({
   Name: label.optional(), Area: label.optional(), Priority: label.nullable().optional(),
   'Sub-area': label.nullable().optional(), Attention: label.nullable().optional(),
-  Initiative: z.union([label, z.array(workReferenceIdSchema).max(100)]).nullable().optional(),
-  Epic: z.union([label, z.array(workReferenceIdSchema).max(100)]).nullable().optional(),
-  'Parent item': z.array(workReferenceIdSchema).max(100).optional(),
+  Initiative: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
+  Epic: z.union([label, z.array(cardIdSchema).max(100)]).nullable().optional(),
+  'Parent item': z.array(cardIdSchema).max(100).optional(),
   Link: z.string().url().max(2048).nullable().optional(),
   'Due Date': z.string().max(100).nullable().optional(), 'Start Date': z.string().max(100).nullable().optional(),
   'Next action': prose.optional(),
