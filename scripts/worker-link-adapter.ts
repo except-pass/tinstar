@@ -14,7 +14,11 @@ async function main() {
     apply: { type: 'boolean', default: false }, 'max-cards': { type: 'string' }, card: { type: 'string', multiple: true }, help: { type: 'boolean' },
   } })
   if (values.help) {
-    console.log('Usage: npm run --silent worker-links:adapter -- --audit-file FILE [--config-home DIR] [--card ID|TSW-n ...] [--apply --max-cards 1..5] [--write-token-file FILE]\nDefaults to report-only. Apply limits writes per board. Notion apply needs the write-token file, and TSW apply uses the configured Jira work service account. Keep the audit file and its adjacent TSW checkpoint across runs.')
+    console.log([
+      'Usage with Notion: npm run --silent worker-links:adapter -- --audit-file FILE [--config-home DIR] [--card ID ...] [--apply --max-cards 1..5 --write-token-file FILE]',
+      'Usage for TSW only: npm run --silent worker-links:adapter -- --audit-file FILE [--config-home DIR] --card TSW-n [--card TSW-n ...] [--apply --max-cards 1..5]',
+      'Defaults to report-only. Apply limits writes per board. TSW apply uses the configured Jira work service account. Keep the audit file and its adjacent TSW checkpoint across runs.',
+    ].join('\n'))
     return
   }
   const maxCards = values['max-cards'] === undefined ? undefined : Number(values['max-cards'])
