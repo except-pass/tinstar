@@ -62,11 +62,11 @@ const response = (value: unknown, status = 200) => value === undefined
   ? new Response(null, { status })
   : new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 
-async function fixture() {
+async function fixture(settingsOverride?: Pick<JiraWorkConfig, 'url' | 'projectId'>) {
+  const { token, ...settings } = { ...config, ...settingsOverride }
   const root = await mkdtemp(join(tmpdir(), 'jira-work-mcp-'))
   roots.push(root)
-  const { token: _token, ...settings } = config
-  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token: config.token } } }), { mode: 0o600 })
+  await writeFile(join(root, 'config.json'), JSON.stringify({ reconciliation: { jira: { ...settings, token } } }), { mode: 0o600 })
   const parsed = loadReconciliationConfig(root)
   expect(parsed.jiraWork).toMatchObject(settings)
   expect(parsed.jira).toBeUndefined()
@@ -105,13 +105,13 @@ async function fixture() {
     if (path === 'myself') return response({ accountId: 'fixture-service' })
     if (path === 'search/jql') {
       if (controls.rejectSearch) return response({}, 403)
-      expect(body.jql).toContain(`project = ${config.projectId}`)
-      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === config.projectId) })
+      expect(body.jql).toContain(`project = ${settings.projectId}`)
+      return response({ isLast: true, issues: controls.staleSearch ? [] : [...issues.values()].filter(issue => issue.fields.project.id === settings.projectId) })
     }
     if (path === 'issue' && method === 'POST') {
       if (body.fields[config.fields.owner] && !['Avery', 'Taylor'].includes(body.fields[config.fields.owner].value)) return response({}, 400)
       const id = String(nextIssue++)
-      const issue = make(id, `WORK-${Number(id) - 60000}`, config.projectId, body.fields)
+      const issue = make(id, `WORK-${Number(id) - 60000}`, settings.projectId, body.fields)
       if (controls.wrongCreate) issue.fields.summary = 'Unexpected Jira summary'
       issues.set(id, issue)
       for (const property of body.properties ?? []) issue.properties[property.key] = property.value
@@ -229,6 +229,84 @@ async function fixture() {
   }
   return { root, connect, requests, controls, issues, links, historicalKeys }
 }
+
+it('publishes write schemas that accept the supported Notion and TSW card IDs', async () => {
+  const f = await fixture({ url: 'https://fortresspower-jira.atlassian.net', projectId: '10639' })
+  const { client, call } = await f.connect()
+  const { tools } = await client.listTools()
+  const ajv = addFormats(new Ajv({ strict: false }))
+  const notionId = 'a'.repeat(32), tswId = 'jira:fortresspower-jira.atlassian.net:10639:60001'
+  const invalidId = 'jira:fortresspower-jira.atlassian.net:106390:60001'
+  const publishedAt = '2026-11-23T20:00:00Z'
+  const operation_id = 'schema-proof'
+  const sharedWrites: Array<readonly [string, (card_id: string) => Record<string, unknown>]> = [
+    ['update_work', card_id => ({ card_id, operation_id, kind: 'complete', disposition: 'Completed fixture', evidence: 'Read back fixture' })],
+    ['update_work', card_id => ({ card_id, operation_id, kind: 'park', disposition: 'Parked fixture' })],
+    ['update_work', card_id => ({ card_id, operation_id, kind: 'wait', type: 'Event', id: 'fixture', dependency: 'Fixture deployment',
+      unblocks_when: 'Deployment verified', follow_up_by: 'Hulk', next_check_in: publishedAt })],
+    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'edit',
+      properties: { 'Parent item': [card_id], Epic: [card_id], Initiative: [card_id] } })],
+    ['update_work', card_id => ({ card_id: notionId, operation_id, kind: 'request_decision', request_id: 'request',
+      question: 'Proceed?', requested_from: 'Will', proposal: {
+        schema: 'tinstar.decision-proposal.v1', proposal_id: 'fixture', request_key: 'request', card_id,
+        question: 'Proceed?', rationale: 'Fixture advice', recommended_action_id: 'proceed',
+        actions: [{ id: 'proceed', label: 'Proceed', instruction: 'Proceed with the fixture' }], references: [],
+        source: { kind: 'firstmate-request', id: 'request', revision: '1' }, published_at: publishedAt, supersedes: null,
+      } })],
+    ['create_work', card_id => ({ provider: 'notion', operation_id, name: 'Fixture card', owner: 'Hulk', area: 'Engineering',
+      properties: { 'Parent item': [card_id], Epic: [card_id], Initiative: [card_id] } })],
+    ['start_work', card_id => ({ card_id: notionId, operation_id, worker: { kind: 'external', system: 'fixture',
+      run_id: '1', reference: 'https://example.test/run/1', card_id, observed_at: publishedAt, state: 'running', evidence: 'Fixture test running' } })],
+    ['start_work', card_id => ({ card_id, operation_id, worker: {
+      kind: 'firstmate', fm_home: '/fixture', task_id: 'test', first_observed_spawn_gen: '1',
+    } })],
+    ['submit_handoff', card_id => ({ submission_id: operation_id, target: { card_id }, title: 'Fixture handoff',
+      area: 'Engineering', owner: 'Hulk', objective: 'Verify the fixture', spec_markdown: 'Run the fixture.',
+      acceptance_criteria: ['Readback confirmed'], decisions: [], forbidden_approaches: [], references: [] })],
+    ...(['claim_card', 'claim_prepared_decision', 'not_for_me'] as const).map(name =>
+      [name, (card_id: string) => ({ card_id, operation_id, ...(name === 'not_for_me' ? { lease_token: 'fixture', reason: 'Reassign' } : {}) })] as const),
+  ]
+  for (const [name, args] of sharedWrites) {
+    const schema = tools.find(tool => tool.name === name)!.inputSchema
+    const validate = ajv.compile(schema)
+    for (const cardId of [notionId, tswId]) {
+      expect(validate(args(cardId)), `${name} ${JSON.stringify(args(cardId))} ${ajv.errorsText(validate.errors)}`).toBe(true)
+    }
+    expect(validate(args(invalidId)), name).toBe(false)
+  }
+  for (const name of ['claim_next_card', 'claim_next_prepared_decision', 'release_claim', 'release_prepared_decision']) {
+    const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
+    const args = name === 'release_claim' ? { lease_token: 'fixture', reason: 'Release' }
+      : name === 'release_prepared_decision' ? { operation_id, lease_token: 'fixture', reason: 'Release', action: 'release' }
+      : { operation_id }
+    expect(validate(args), `${name} ${ajv.errorsText(validate.errors)}`).toBe(true)
+  }
+
+  const nativeWrites = [
+    ['update_work', { kind: 'jira_edit', note: 'TSW fixture note' }],
+    ['transition_work', { verb: 'Prioritize' }],
+    ['link_work', { action: 'remove', link_id: '123' }],
+  ] as const
+  for (const [name, fields] of nativeWrites) {
+    const validate = ajv.compile(tools.find(tool => tool.name === name)!.inputSchema)
+    expect(validate({ ...fields, card_id: tswId, operation_id }), name).toBe(true)
+    const arguments_ = { ...fields, card_id: notionId, operation_id }
+    expect(validate(arguments_), name).toBe(false)
+    const before = f.requests.length
+    const rejected = await client.callTool({ name, arguments: arguments_ })
+    expect(rejected.isError).toBe(true)
+    expect(rejected.content).toContainEqual(expect.objectContaining({ text: expect.stringContaining('Use an exact Jira card ID') }))
+    expect(f.requests).toHaveLength(before)
+  }
+  expect(await call('create_work', { provider: 'jira', operation_id, name: 'TSW fixture' }))
+    .toMatchObject({ outcome: 'saved', card: { id: tswId } })
+  expect(await call('update_work', { ...nativeWrites[0][1], card_id: tswId, operation_id: 'tsw-note' }))
+    .toMatchObject({ outcome: 'saved' })
+  expect(await call('get_work', { card_id: tswId })).toMatchObject({
+    card: { id: tswId },
+    comments: expect.arrayContaining([expect.objectContaining({ body: expect.stringContaining('TSW fixture note') })]),
+  })
+})
 
 it('uses the existing MCP tools for native ticket edits, decision history, blockers, links and disposition', async () => {
   const f = await fixture()

@@ -23,6 +23,7 @@ import { FirstmateUpdates } from '../firstmateUpdates'
 import { inboxRequestId } from '../../../shared/ask'
 import { handleReconciliationRequest, ReconciliationSources } from '..'
 import { ReconciliationMcp } from '../mcp'
+import type { JiraWorkConfig } from '../config'
 import { createTunnelFacade } from '../tunnel'
 import { initialPresentation } from '../../../shared/reconciliationPresentation'
 import { decisionRecordRows, decisionRequests } from '../../../shared/workflowRequests'
@@ -157,7 +158,9 @@ function fixture(prose = { body: 'Acceptance: retain provenance', comment: 'Evid
   const native: StartWorkInput = { card_id: id, operation_id: 'native-start', worker: { kind: 'firstmate', fm_home: home.source.home, task_id: 'native-task', first_observed_spawn_gen: 'native-gen' } }
   const external: StartWorkInput = { card_id: id, operation_id: 'external-start', worker: { kind: 'external', system: 'Build runner', run_id: 'run-123', reference: 'https://runner.example/runs/123', card_id: id, observed_at: new Date().toISOString(), state: 'running', evidence: 'Runner reports executing step compile for this card' } }
   return { fetcher, requests, api, reader, workflow, native, external, home, task, raw, blocks, comments, pages,
-    sources: (receiptRoot?: string) => new ReconciliationSources({ fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, warnings: [] }, fetcher, api, receiptRoot),
+    sources: (receiptRoot?: string, jiraWork?: JiraWorkConfig) => new ReconciliationSources({
+      fleet: [], notion: { token: 'fixture-token-only', dataSourceId }, jiraWork, warnings: [],
+    }, fetcher, api, receiptRoot),
     controls: { commentPageSize: (size: number) => { commentPageSize = size }, history: (mode: typeof historyMode) => { historyMode = mode }, resumeHistory: () => { historyMode = 'normal'; resumeHistory?.() }, append: (failure: typeof appendFailure) => { appendFailure = failure }, blockPageSize: (size: number) => { blockPageSize = size }, queryPageSize: (size: number) => { queryPageSize = size }, failNote: (value = true) => { failNote = value }, lostNote: () => { lostNote = true }, lostCreate: () => { lostCreate = true }, failPatch: (value = true) => { failedPatch = value }, partial: (value = true) => { partialPatch = value }, lost: () => { lostResponse = true }, failReads: () => { failReads = true }, onRead: (fn: () => void) => { onRead = fn } } }
 }
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
@@ -775,7 +778,13 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
   vi.useFakeTimers({ toFake: ['Date'] })
   const f = fixture({ body: 'Acceptance token=abcdefgh12345678', comment: 'Evidence ghp_abcdefghijklmnopqrstuvwx' })
   const root = await mkdtemp(join(tmpdir(), 'workflow-mcp-')); roots.push(root)
-  const sources = f.sources(root)
+  const sources = f.sources(root, {
+    mode: 'work', url: 'https://fortresspower-jira.atlassian.net', projectId: '10639',
+    cloudId: '5bac40b8-c168-4931-90d1-2c8dfe15c6ea', token: 'fixture-jira-token',
+    issueTypes: { Task: '10100' }, blocksLinkTypeId: '10000',
+    fields: { owner: 'customfield_11001', decisions: 'customfield_11002', blockerType: 'customfield_11003',
+      blockerTarget: 'customfield_11004', blockerCondition: 'customfield_11005' },
+  })
   const mcp = new ReconciliationMcp(sources, root)
   const server = createServer((req, res) => { void mcp.handle(req, res) }); servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -830,10 +839,19 @@ it('uses one policy through authenticated UI, MCP and the existing tunnel, witho
     expect(ui, JSON.stringify(input)).toMatchObject({ outcome: 'saved' })
     expect(parse(await client.callTool({ name: 'update_work', arguments: input }))).toEqual(ui)
   }
-  const create = { operation_id: 'parity-create', name: 'Created across UI/MCP', owner: 'Firstmate', area: 'Engineering', content: { brief: 'Created with a fixture source' } }
+  const create = { provider: 'notion', operation_id: 'parity-create', name: 'Created across UI/MCP', owner: 'Hulk',
+    area: 'Engineering', status: 'Backlog', content: { brief: 'Created with a fixture source' } }
   const created = parse(await client.callTool({ name: 'create_work', arguments: create }))
   expect(created).toMatchObject({ outcome: 'saved' })
   expect(parse(await client.callTool({ name: 'create_work', arguments: create }))).toEqual(created)
+  const card_id = created.card.id
+  const done = parse(await remote.callTool({ name: 'update_work', arguments: {
+    card_id, operation_id: 'complete-created-notion-fixture', kind: 'complete',
+    disposition: 'Completed fixture card', evidence: 'Confirmed fixture workflow through the MCP transport',
+  } }))
+  expect(done).toMatchObject({ outcome: 'saved' })
+  expect(parse(await remote.callTool({ name: 'get_work', arguments: { card_id, details: false } })))
+    .toMatchObject({ outcome: 'available', card: { id: card_id, source: { properties: { Status: { value: 'Done' } } } } })
   expect((await fetch(`${base}/api/reconciliation/workflow`, { method: 'POST', headers: { 'X-Tinstar-UI': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'create', input: create }) })).status).toBe(400)
   expect((await remote.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['create_work', 'update_work']))
   const noAuth = await fetch(`${base}/api/reconciliation/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'tools/call', params: { name: 'update_work', arguments: { card_id: id, operation_id: 'unauthorized', kind: 'complete', disposition: 'x', evidence: 'x' } } }) })

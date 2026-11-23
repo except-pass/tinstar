@@ -14,7 +14,7 @@ import { WorkflowContent, receiptMarker, sectionText } from '../workflowContent'
 import { ImplementationContracts, implementationContract, digest } from '../implementationContract'
 import { ReconciliationMcp } from '../mcp'
 import { JiraAdapter, jiraPropertyKey, JIRA_SYNTHETIC_LABEL, JiraMappingError, jiraText } from '../jira'
-import { jiraCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
+import { jiraPilotCardPrefix, cardIdSchema } from '../../../shared/workIdentity'
 import { workerLinkRecord } from '../workerLinks'
 import { fixtureSources } from '../../../../test-fixtures/reconciliation/scenes'
 import type { CreateWorkInput, SubmitHandoffInput } from '../../../shared/workflow'
@@ -22,7 +22,7 @@ import { seedOriginAllowlist, resetOriginAllowlistForTests } from '../../api/ori
 
 const json = (value: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(value), { status })
 const jira = { url: 'https://fortresspower-jira.atlassian.net', projectId: '10638', email: 'fixture@example.test', token: 'fixture-only' } as const
-const id = jiraCardPrefix + '60001'
+const id = jiraPilotCardPrefix + '60001'
 const roots: string[] = [], servers: Server[] = [], clients: Client[] = []
 afterEach(async () => {
   await Promise.all(clients.splice(0).map(client => client.close()))
@@ -149,7 +149,11 @@ const create: CreateWorkInput = { provider: 'jira', name: 'Synthetic Jira adapte
 it('routes canonical identity to exactly one source, rejects other sites/projects and requires synthetic scope before writes', async () => {
   const f = await fixture()
   expect(cardIdSchema.safeParse(id).success).toBe(true)
-  for (const bad of ['60001', 'TSSPIKE-1', id.replace('10638', '10639'), id.replace('fortresspower', 'other')]) expect(cardIdSchema.safeParse(bad).success).toBe(false)
+  for (const bad of ['60001', 'TSSPIKE-1', id.replace('10638', '10640'), id.replace('fortresspower', 'other')]) expect(cardIdSchema.safeParse(bad).success).toBe(false)
+  const tswId = 'jira:fortresspower-jira.atlassian.net:10639:60001'
+  expect(cardIdSchema.safeParse(tswId).success).toBe(true)
+  await expect(f.reader.card(tswId)).rejects.toThrow('Jira source identity mismatch')
+  expect(f.requests).toHaveLength(0)
   expect((await f.reader.card(id)).source).toMatchObject({ provider: 'jira', itemId: '60001', collectionId: '10638', synthetic: true })
   expect(await f.workflow.create({ ...create, provider: undefined }, 'Fixture')).toMatchObject({ outcome: 'not-saved' })
   for (const flag of ['foreign', 'unlabelled'] as const) {
@@ -454,7 +458,7 @@ it('retains the card fence after an attachment upload loses its response', async
   const f = await fixture()
   const clock = { now: Date.now() }
   const leases = new CardLeases(f.root, () => clock.now)
-  const id = `${jiraCardPrefix}${f.seed.id}`
+  const id = `${jiraPilotCardPrefix}${f.seed.id}`
   f.controls.lostAttachment = true
   await expect(leases.mutate(id, () => f.reader.jira!.appendContract(id, [{ type: 'paragraph', text: 'Bounded contract' }]),
     { kind: 'note', marker: 'attachment-fence' })).rejects.toThrow('lost attachment response')

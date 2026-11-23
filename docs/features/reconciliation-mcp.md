@@ -68,10 +68,13 @@ Tool input schemas are published directly from the registered Zod schemas, with
 shared schemas inlined and an object root for every tool. `update_work` exposes
 all operation kinds and their required fields as discriminated `oneOf` branches.
 The object root also exposes the [wait inputs](workflow.md#waiting-for-writes)
-for clients that inspect only root properties. The branches define which inputs
-are required for each kind.
-no-argument tools publish a closed empty object. SDK/Zod validation of calls is
-unchanged. Tools omit optional task-execution metadata: these tools do not
+or the native Jira edit inputs for clients that inspect only root properties.
+The branches define which inputs are required for each kind. Use a 32-character
+hex ID for shared Notion card operations. Native Jira edits, transitions and
+links require a Jira card ID. Shared card ID fields, including relation targets
+and external worker references, recognize TSW project `10639`.
+No-argument tools publish a closed empty object. The SDK validates calls with
+the registered Zod schemas. Tools omit optional task-execution metadata: these tools do not
 support task execution, and `execution` is absent from the `2026-07-28` Tool
 shape (it was optional in `2025-11-25`).
 
@@ -102,7 +105,7 @@ ExecStart=/usr/bin/env node bin/tinstar-mcp-tunnel.js --port 5297 --upstream-por
 Use that same caller file path in the tunnel's `--mcp.extra-headers 'Authorization: file:/home/farm/.config/tinstar-tunnel/facade-caller-header'`; the mapping remains `url=http://127.0.0.1:5297/mcp,channel=main`. Use the caller-file format and ownership requirements above. The backend's `mcp-token` remains a separate raw install token.
 Restart the facade after rotating either credential; restart tunnel-client after caller-file rotation so both use the same value. The facade never installs a service or changes tunnel configuration automatically. These are operator handoff instructions, not validation commands against the live floor.
 
-Whenever the facade tool catalog changes (tools added, removed or renamed), refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh); ChatGPT caches the tool list from connector discovery and keeps showing stale tools until refreshed.
+Whenever the facade tool catalog changes, including input schema changes, refresh tools in the ChatGPT connector settings (chatgpt.com settings -> Connectors -> Tinstar -> refresh). ChatGPT caches tool discovery until refreshed.
 
 ## Tools and authority
 

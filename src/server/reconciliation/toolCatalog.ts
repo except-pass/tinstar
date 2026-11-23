@@ -16,7 +16,15 @@ function inputSchema(input: Input, root?: { branch: string; fields: readonly str
     const branches = anyOf as Array<{ properties: NonNullable<Tool['inputSchema']['properties']>; required?: string[] }>
     const selectedIndex = schema.options.findIndex((option: z.AnyZodObject) => option.shape[schema.discriminator].value === root?.branch)
     const selected = branches[selectedIndex]
-    const properties = Object.fromEntries(Object.entries(selected?.properties ?? {}).filter(([name]) => root?.fields.includes(name)))
+    const properties = Object.fromEntries(Object.entries(selected?.properties ?? {}).filter(([name]) => root?.fields.includes(name)).map(([name, property]) => {
+      // Root properties are ANDed with oneOf. Advertise every branch's
+      // accepted values here so a narrower branch cannot veto another one.
+      const variants = new Map(branches.flatMap(branch => {
+        const value = branch.properties[name]
+        return value === undefined ? [] : [[JSON.stringify(value), value] as const]
+      }))
+      return [name, variants.size > 1 ? { anyOf: [...variants.values()] } : property]
+    }))
     properties[schema.discriminator] = { type: 'string', enum: schema.options.map((option: z.AnyZodObject) => option.shape[schema.discriminator].value) }
     const required = branches[0]?.required?.filter(name => branches.every(branch => branch.required?.includes(name))) ?? []
     return { ...rest, type: 'object', properties, ...(root ? { required } : {}), oneOf: anyOf }

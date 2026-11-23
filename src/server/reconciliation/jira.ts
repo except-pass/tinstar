@@ -6,7 +6,7 @@ import type { WorkCard, WorkData } from './workReader'
 import type { WorkScope } from './notion'
 import { scopeMatches } from './workReader'
 import { CachedObservation, retainMissing } from './observation'
-import { jiraCardPrefix, isJiraCard } from '../../shared/workIdentity'
+import { jiraPilotCardPrefix, isJiraPilotCard } from '../../shared/workIdentity'
 import { FIRST_MATE_TASKS, readWorkerLinks } from './workerLinks'
 import { record } from './values'
 
@@ -106,13 +106,13 @@ export class JiraClient {
 export class JiraAdapter extends JiraClient {
   constructor(readonly config: JiraConfig, fetcher: typeof jiraFetch = jiraFetch,
     private backgroundFetcher = fetcher, private parallelFetcher = fetcher) {
-    const [, pilotSite, pilotProjectId] = jiraCardPrefix.split(':')
+    const [, pilotSite, pilotProjectId] = jiraPilotCardPrefix.split(':')
     if (config.url !== `https://${pilotSite}` || config.projectId !== pilotProjectId) throw new Error('Jira pilot is restricted to TSSPIKE 10638')
     super(config.url, `Basic ${Buffer.from(`${config.email}:${config.token}`).toString('base64')}`, fetcher)
   }
   private issueId(id: string) {
-    if (!isJiraCard(id)) throw new Error('Jira source identity mismatch')
-    return id.slice(jiraCardPrefix.length)
+    if (!isJiraPilotCard(id)) throw new Error('Jira source identity mismatch')
+    return id.slice(jiraPilotCardPrefix.length)
   }
   private assertIssue(raw: Record<string, any>) {
     if (!/^[1-9][0-9]*$/.test(raw.id) || raw.fields?.project?.id !== '10638' || raw.fields.project.key !== 'TSSPIKE' || !raw.fields.labels?.includes(JIRA_SYNTHETIC_LABEL)) throw new Error('Issue is outside the authorized synthetic TSSPIKE scope')
@@ -153,7 +153,7 @@ export class JiraAdapter extends JiraClient {
       properties[name] = { id: jiraPropertyKey(name), type, value, hasMore: false,
         ...(name === FIRST_MATE_TASKS ? { workerLinks: readWorkerLinks({ type: 'rich_text', rich_text: typeof value === 'string' ? (value.match(/[\s\S]{1,2000}/g) ?? []).map(plain_text => ({ plain_text })) : [] }) } : {}) }
     }
-    return { id: jiraCardPrefix + raw.id, url: `${this.config.url}/browse/${raw.key}`, last_edited_time: raw.fields.updated,
+    return { id: jiraPilotCardPrefix + raw.id, url: `${this.config.url}/browse/${raw.key}`, last_edited_time: raw.fields.updated,
       archived: false, in_trash: false, properties,
       source: { provider: 'jira', instanceId: this.config.url, collectionId: '10638', itemId: raw.id, displayKey: raw.key, synthetic: true } }
   }
@@ -173,7 +173,7 @@ export class JiraAdapter extends JiraClient {
           fields[nativeFields[name]!] = date
         } else fields[nativeFields[name]!] = value
       } else {
-        if (['Parent item', 'Sub-item'].includes(name) && (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !isJiraCard(id)))) throw new Error('Jira relations require exact same-provider card identities')
+        if (['Parent item', 'Sub-item'].includes(name) && (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !isJiraPilotCard(id)))) throw new Error('Jira pilot relations require exact synthetic project card IDs')
         const entry = { key: jiraPropertyKey(name), value: { type, value } }
         if (Buffer.byteLength(JSON.stringify(entry.value), 'utf8') > 32768) throw new JiraMappingError(`${name} exceeds Jira's 32 KiB issue-property limit; nothing was truncated`)
         metadata.push(entry)
@@ -222,7 +222,7 @@ export class JiraAdapter extends JiraClient {
     await beforeWrite?.()
     const created = await this.request('issue', 'POST', { fields: { ...payload.fields, project: { id: '10638' }, issuetype: { id: '10582' },
       labels: [JIRA_SYNTHETIC_LABEL], description: { type: 'doc', version: 1, content: sections.map(section => this.sectionNode(section)) } }, properties: payload.properties })
-    const id = jiraCardPrefix + created.id
+    const id = jiraPilotCardPrefix + created.id
     await this.issue(id)
     if (payload.status) await this.patch(id, { Status: { status: { name: payload.status } } })
     return this.read(id)
@@ -241,7 +241,7 @@ export class JiraAdapter extends JiraClient {
       if (!Array.isArray(body.issues) || typeof body.isLast !== 'boolean') throw new Error('Incomplete Jira search')
       for (const raw of body.issues) {
         this.assertIssue(raw)
-        cards.push(this.card(await this.issue(jiraCardPrefix + raw.id, signal, fetcher)))
+        cards.push(this.card(await this.issue(jiraPilotCardPrefix + raw.id, signal, fetcher)))
       }
       if (body.isLast) return { cards, hasMore: false }
       if (typeof body.nextPageToken !== 'string' || cursors.has(body.nextPageToken)) throw new Error('Invalid Jira search cursor')
@@ -253,7 +253,7 @@ export class JiraAdapter extends JiraClient {
     return new CachedObservation<WorkData>(async background => {
       const { cards, hasMore } = await this.list(background)
       return { observedAt: new Date().toISOString(), coverage: hasMore ? 'partial' as const : 'complete' as const,
-        data: { dataSourceId: jiraCardPrefix.slice(0, -1), schema: {}, cards: cards.filter(card => scopeMatches(card, scope)), hasMore,
+        data: { dataSourceId: jiraPilotCardPrefix.slice(0, -1), schema: {}, cards: cards.filter(card => scopeMatches(card, scope)), hasMore,
           truncatedRelations: [] as Array<{ pageId: string; property: string }>, missingSchemaProperties: [] as string[], scope: 'TSSPIKE synthetic issues only' } }
     }, 60_000, 120_000, 'Jira source unavailable; no absence or successful-write conclusion', Date.now,
     (previous, current) => ({ ...current, cards: retainMissing(previous.cards, current.cards, card => card.id) }))

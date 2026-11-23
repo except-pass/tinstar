@@ -24,6 +24,7 @@ import type { QueueRead } from '../../shared/reconciliationQueue'
 import type { FloorScene } from '../../shared/reconciliationPresentation'
 import { SceneSessions, secretEquals } from './sessions'
 import { cardIdSchema, waitSchema, searchWorkSchema, getWorkSchema, startWorkSchema, updateWorkSchema, createWorkSchema, submitHandoffSchema, leaseTokenSchema, workflowRules, type SubmitHandoffInput, type StartWorkInput, type UpdateWorkInput, type CreateWorkInput } from '../../shared/workflow'
+import { notionCardIdSchema } from '../../shared/workIdentity'
 import type { WorkerLinkReport } from './workerLinkReport'
 import { registerDomainReadTools, type DomainReadTools } from './domainReads'
 import { createToolCatalog } from './toolCatalog'
@@ -103,7 +104,7 @@ export class ReconciliationMcp {
     const catalog = createToolCatalog(server)
     const jira = this.readers.jiraWork
     const jiraGetSchema = getWorkSchema.pick({ details: true }).extend({ card_id: jiraWorkIdSchema })
-    const notionGetSchema = getWorkSchema.extend({ card_id: z.string().regex(/^[a-f0-9]{32}$/) })
+    const notionGetSchema = getWorkSchema.extend({ card_id: notionCardIdSchema })
     const getSchema = jira ? z.union([jiraGetSchema, notionGetSchema]) : getWorkSchema
     const notionCreateSchema = createWorkSchema.extend({ provider: z.literal('notion').optional() })
     const createSchema = jira ? z.union([jiraCreateSchema, notionCreateSchema]) : createWorkSchema
