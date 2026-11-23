@@ -354,6 +354,8 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     }
   }
   const acceptLink = async (delivery, body) => {
+    const style = body.issueLink?.issueLinkType?.style
+    if (style === 'jira_subtask' || style === 'jira_gh_epic_story') return { status: 204 }
     const link = parseLink(body)
     if (!link) return { status: 400 }
     if (!token) return { status: 204 }

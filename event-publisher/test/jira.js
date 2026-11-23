@@ -446,6 +446,16 @@ globalThis.fetch = async (url, options = {}) => {
     }
   }
   const beforeForeign = jiraJournalState()
+  const beforeHierarchyReads = readFileSync(fetchLog, 'utf8')
+  for (const [index, style] of ['jira_subtask', 'jira_gh_epic_story'].entries()) {
+    for (const action of ['created', 'deleted']) {
+      const hierarchy = linkDelivery(`issuelink_${action}`, 77050 + index, 98765, 98766)
+      hierarchy.issueLink.issueLinkType.style = style
+      equal((await post(`link-${style}-${action}`, hierarchy)).status, 204)
+    }
+  }
+  equal(readFileSync(fetchLog, 'utf8'), beforeHierarchyReads)
+  deepEqual(jiraJournalState(), beforeForeign)
   for (const action of ['created', 'deleted']) {
     const foreign = linkDelivery(`issuelink_${action}`, 77021, 88888001, 88888002)
     equal((await post(`link-foreign-${action}`, foreign)).status, 204)
