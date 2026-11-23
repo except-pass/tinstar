@@ -120,7 +120,7 @@ Server.prototype.listen = function (port, host) {
   equal((await post('bad-body', '{ invalid JSON', { url: triggeredByUser, headers: { 'X-Hub-Signature': signature('different bytes') } })).status, 401)
   equal((await post('signed-invalid-json', '{ invalid JSON')).status, 400)
   equal((await post(null, webhookEvent('jira:issue_created'))).status, 400)
-  equal((await post('foreign-project', webhookEvent('jira:issue_created', {
+  equal((await post(null, webhookEvent('jira:issue_created', {
     issue: { ...issue, fields: { ...issue.fields, project: { id: '99999' } } },
   }))).status, 403)
   equal((await post('foreign-site', webhookEvent('jira:issue_created', {

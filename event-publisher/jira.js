@@ -241,6 +241,10 @@ function normalize(config, body, issue, delivery, observedAt, secret) {
 const acceptedEvents = new Set(['jira:issue_created', 'jira:issue_updated', 'comment_created'])
 const linkEvents = new Set(['issuelink_created', 'issuelink_deleted'])
 
+function validDeliveryId(id, secret) {
+  return typeof id === 'string' && /^[!-~]{1,256}$/.test(id) && preview(id, secret) === id
+}
+
 // Issue-link payloads name both issue ids and no project. Journal a link only
 // when a GET shows that at least one side is in the configured project. The
 // other side is its key when that read matches, and the literal "[redacted]"
@@ -431,7 +435,7 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     }
     const deliveryId = req.headers['x-atlassian-webhook-identifier']
     if (linkEvents.has(body?.webhookEvent)) {
-      if (typeof deliveryId !== 'string' || !/^[!-~]{1,256}$/.test(deliveryId) || preview(deliveryId, secret) !== deliveryId) return respond(res, 400)
+      if (!validDeliveryId(deliveryId, secret)) return respond(res, 400)
       const outcome = await acceptLink(deliveryId, body)
       if (outcome.notice) journal.recordJiraDelivery(config.source.source_id, deliveryId, outcome.notice)
       return respond(res, outcome.status)
@@ -439,11 +443,10 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     if (!acceptedEvents.has(body?.webhookEvent)) return respond(res, 204)
     const issue = scopedIssue(config, body.issue)
     if (!issue) return respond(res, 403)
-    const id = deliveryId
     // Jira uses this tenant-scoped identifier unchanged on retry.
-    if (typeof id !== 'string' || !/^[!-~]{1,256}$/.test(id) || preview(id, secret) !== id) return respond(res, 400)
-    const notice = normalize(config, body, issue, id, new Date().toISOString(), secret)
-    journal.recordJiraDelivery(config.source.source_id, id, notice)
+    if (!validDeliveryId(deliveryId, secret)) return respond(res, 400)
+    const notice = normalize(config, body, issue, deliveryId, new Date().toISOString(), secret)
+    journal.recordJiraDelivery(config.source.source_id, deliveryId, notice)
     respond(res, 204)
   }
   const server = createServer({ headersTimeout: 5000, requestTimeout: 10000 }, (req, res) => {
