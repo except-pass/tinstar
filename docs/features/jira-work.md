@@ -48,7 +48,7 @@ Tin Star requests English status names from Jira Cloud for transition matching a
 | --- | --- |
 | `create_work` | Set `provider: "jira"`, `name`, and `operation_id`. Task is the default. Optionally include `issue_type: "Epic"`, `description`, or `owner`. Jira must confirm Backlog on create readback. |
 | `get_work` | Pass the returned immutable `card.id` as `card_id` for get, edit, transition, and link calls. The ID has the form `jira:<site hostname>:<project ID>:<issue ID>`. The result includes the display key, native fields and links. The default detailed read includes up to 50 recent comments. Set `details: false` to skip comments. |
-| `update_work` | Use `kind: "jira_edit"` and the ticket ID. Edit `name`, `description`, or `owner`. Use `null` to clear description or owner where allowed. Send `add_questions` with `id`, `question` and optional `options`, or `answers` with `id` and `answer`. Set `blocker` with `type`, `target` and `unblocks_when`, clear it with `null`, or add a Jira comment with `note`. |
+| `update_work` | Use `kind: "jira_edit"` and the ticket ID. Edit `name`, `description`, `owner`, or `assignee`. The service account resolves Assignee by exact display name or a unique assignable name prefix, such as Will. Use `null` to clear Assignee or to clear description or Owner where allowed. Send `add_questions` with `id`, `question` and optional `options`, or `answers` with `id` and `answer`. Set `blocker` with `type`, `target` and `unblocks_when`, clear it with `null`, or add a Jira comment with `note`. |
 | `transition_work` | Supply `verb` and give `to` for verbs with several destinations. Supply `evidence` and `reason` where relevant. Use `disposition` only for Park, Cancel, and Stop and Requeue. Entry into Verify in Prod requires identical `required_revision` and `live_revision`. The [transition rules](../../src/server/reconciliation/jiraWorkRules.ts) define allowed routes and required evidence, reasons and dispositions. |
 | `link_work` | Set `action: "add"` with `target_key`, native link type `type`, and `direction` as displayed on this ticket. Set `action: "remove"` with the native `link_id`. |
 
@@ -63,6 +63,20 @@ A human can move a ticket between Tin Star’s pre-write project check and Jira 
 The main path is Backlog → To Do → Queued → In Progress. Review and release paths use Ready for Review, Waiting for Prod Release and Verify in Prod before Done. Fast-track goes directly to Queued. Complete Directly goes from In Progress to Done for verified work without remaining review or release. Decision and Waiting For pause active work. Answer Decision and Resolve Wait choose an explicit destination. Recovery verbs return work to To Do or Queued. Cancel records the reason and disposition for live work, Park returns work to Backlog, and Reopen returns a terminal ticket to To Do or Queued.
 
 Decision Questions uses headings such as `D1 [Open]: Which option should we adopt?`. Options and answers follow on indented lines, for example `  Answer: Use the first option.` Change the heading to `[Answered]` when answering in Jira. MCP edits reread the field before applying targeted changes, preserve untouched ADF content, and leave field history in Jira. Jira has no conditional field write, so a native edit between the reread and the write can still race with the MCP edit. Before entering Queued, provide an owner, instructions and a clear success condition, with the primary blocker removed. Start rechecks instructions and blockers, including blockers staged before Block. Return a Queued ticket to To Do before clearing its instructions. Tin Star checks the declared evidence and Jira readback. Jira remains the place to inspect the underlying work and its history.
+
+## First Mate status sync
+
+The worker-link coordinator reads the existing configured snapshot files. An exact `card: TSW-n` declaration binds a source task to this workflow. A fresh spawned or working attempt can start the issue. A green pull request goes to Ready for Review with Will assigned when `yolo` is off. With `yolo` on, the mate retains the merge action and the issue stays In Progress. A published merge or completed backlog entry needs its pull request URL to complete the issue. Open decision requests add D-questions and assign Will. External holds supply an Event blocker with the published dependency ID, or the task identity when no dependency ID is present.
+
+Configure Jira work mode for project 10639 on the coordinator's existing config root. Its service account needs to read issue history and search assignable users, as well as edit, assign, comment on, and transition TSW issues. The adapter uses the shared Jira workflow and audits missing snapshots, skipped issues, and mutation readback. It preserves terminal issues, issues with a status or Assignee change after the last automated write, and existing blockers it cannot attribute to the proposed wait.
+
+```sh
+npm run --silent worker-links:adapter -- --config-home DIR --audit-file FILE --card TSW-1
+```
+
+The command above reports the plan. Add `--apply --max-cards 1` to perform it. Keep the audit and its adjacent `.tsw-state.json` checkpoint across invocations and preserve the coordinator's Jira receipts in its config root. Each confirmed step records the Jira history position so a later run can detect and preserve owner changes even if an issue returns to its earlier status or assignee. Select only TSW keys with `--card` for a Jira-only invocation. With both boards configured and no filter, the write bound applies to each board.
+
+Production release routing needs a published deploy requirement. Automatic requeue needs a durable unlanded-cleanup disposition. Both routes await source evidence.
 
 ## Local smoke check
 

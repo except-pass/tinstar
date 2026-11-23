@@ -9,6 +9,7 @@ import { record, text } from './values'
 import { cardReferences } from './references'
 import { queueSignals } from './queueInputs'
 import { collectedDispatch } from './dispatchProvenance'
+import { tswSnapshot } from './tswSnapshot'
 import type { CodexActivity } from '../../shared/codexActivity'
 
 const fields = <K extends string>(value: unknown, keys: K[]): Record<K, string | number | boolean | null> => Object.fromEntries(keys.map(key => {
@@ -115,6 +116,7 @@ export function fleetObservation(source: FleetSource) {
       last_event: fields(record(record(task.paths).status_log).last_event, ['state', 'note', 'raw', 'age_seconds']),
       lastEventText: text(record(task.hints).last_event_text),
       pr: fields(task.pr, ['url', 'source', 'head']),
+      ...tswSnapshot(record(task.backlog), 'task.backlog.body_lines', task.yolo),
       backlog: { ...fields(task.backlog, ['id', 'title', 'state', 'hold_reason', 'blocked_by', 'hold_until']), ...readinessFields(task.backlog) },
     }))
     const backlog = snapshot.backlog?.records
@@ -139,7 +141,7 @@ export function fleetObservation(source: FleetSource) {
         ledger: { role: 'change-signal-only', cursor: ledger, scope: source.snapshotFile ? 'not-collected' : 'local-file-stat' },
         tasks, backlog: Array.isArray(backlog) ? backlog.map(row => ({ ...queueSignals(row), ...readinessFields(row), ...collectedDispatch(row, 'backlog.body_lines'), ...fields(row, [
           'id', 'title', 'state', 'kind', 'repo', 'hold_reason', 'hold_until', 'blocked_by', 'captain_actionable', 'pr_url',
-        ]), cardReferences: cardReferences(row, 'backlog') })) : null,
+        ]), cardReferences: cardReferences(row, 'backlog'), ...tswSnapshot(row, 'backlog.body_lines') })) : null,
       },
     }
   }, 20_000, maxAgeMs, 'Fleet snapshot unavailable, invalid, or from a different home; check the configured source', Date.now, (previous, current) => ({ ...current,

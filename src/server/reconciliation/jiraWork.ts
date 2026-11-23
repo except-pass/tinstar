@@ -10,6 +10,7 @@ import {
   type JiraCreate, type JiraEdit, type JiraExternalBlocker, type JiraLink, type JiraTransition,
 } from './jiraWorkRules'
 import { CreationReceipts } from './workflowReceipts'
+import { tswKey, tswProjectId } from './tswSnapshot'
 
 const createProperty = 'tinstar.work.create'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -28,6 +29,7 @@ type Issue = {
   id: string; issue_id: string; key: string; url: string; project_id: string; issue_type: string; status: string; name: string;
   description: string; instructionText: string; owner: string | null; decisions: string; decisionDocument: any; updated_at: string; links: Link[];
   blockerConditionText: string;
+  assignee: string | null; assignee_id: string | null;
   externalBlocker: { type: string | null; target: string; unblocks_when: string };
 }
 type Attempt = {
@@ -37,6 +39,10 @@ type Attempt = {
   confirm: (card: Issue) => ReturnType<JiraWork['saved']>
 }
 type WriteInput = JiraCreate | JiraEdit | JiraTransition | JiraLink
+export type JiraWorkCard = ReturnType<JiraWork['view']>
+export type JiraHistoryCursor = { total: number; last: string | null }
+export type JiraTrackedChange = { field: 'status' | 'assignee'; from: string | null; to: string | null; byService: boolean }
+type BeforeWrite = (current: JiraWorkCard) => void
 
 /** Native Jira work records share Tin Star's MCP and Jira transport. This
  * adapter only calls issue APIs and has no dispatch or Jira admin capability. */
@@ -66,7 +72,7 @@ export class JiraWork extends JiraClient {
 
   private async read(id: string, allowOtherTypes = false): Promise<Issue> {
     await this.checkProject(id)
-    const fields = ['summary', 'project', 'issuetype', 'status', 'description', 'updated', 'issuelinks', ...Object.values(this.config.fields)]
+    const fields = ['summary', 'project', 'issuetype', 'status', 'description', 'assignee', 'updated', 'issuelinks', ...Object.values(this.config.fields)]
     const raw = await this.request(`issue/${id}?fields=${fields.join(',')}`)
     const f = raw.fields
     if (!nativeId(raw.id) || raw.id !== id || f?.project?.id !== this.config.projectId || typeof raw.key !== 'string') {
@@ -88,6 +94,7 @@ export class JiraWork extends JiraClient {
       id: this.qualified(id), issue_id: id, key: raw.key, url: `${this.config.url}/browse/${encodeURIComponent(raw.key)}`,
       project_id: this.config.projectId, issue_type: issueType ?? f.issuetype.name ?? f.issuetype.id,
       name: f.summary, status: f.status.name, updated_at: f.updated, owner: f[owner]?.value ?? null,
+      assignee: f.assignee?.displayName ?? null, assignee_id: f.assignee?.accountId ?? null,
       description: text(f.description), instructionText: text(f.description, 'omit'), decisions: text(f[decisions]), decisionDocument: f[decisions], links,
       blockerConditionText: text(f[blockerCondition], 'omit'),
       externalBlocker: { type: f[blockerType]?.value ?? null, target: text(f[blockerTarget]), unblocks_when: text(f[blockerCondition]) },
@@ -146,6 +153,64 @@ export class JiraWork extends JiraClient {
         return { outcome: 'available', card, comments: page.comments.map(({ updated_at: _updated, ...comment }) => comment), more_comments: page.total > page.comments.length }
       } catch { return { outcome: 'available', card, warnings: ['Jira comments could not be read'] } }
     } catch (error) { return { outcome: 'unavailable', message: this.message(error) } }
+  }
+
+  async readTswCard(key: string) {
+    if (this.config.projectId !== tswProjectId || !tswKey(key)) throw new JiraWorkInputError('Status sync requires an exact TSW issue key')
+    const target = await this.resolveLinkTarget(key)
+    if (target.key !== key || target.projectId !== tswProjectId) throw new JiraWorkInputError('Jira key no longer identifies this TSW issue')
+    const issue = await this.read(target.id)
+    if (issue.key !== key) throw new JiraWorkInputError('Jira key changed while reading the TSW issue')
+    return this.view(issue)
+  }
+
+  async statusHistory(cardId: string, after?: JiraHistoryCursor) {
+    const id = this.id(cardId)
+    await this.checkProject(id)
+    const page = async (offset: number, count: number) => {
+      const result = await this.request(`issue/${id}/changelog?startAt=${offset}&maxResults=${count}`)
+      if (!Number.isSafeInteger(result.total) || result.total < 0 || result.startAt !== offset || !Array.isArray(result.values) ||
+        result.values.some(entry => !nativeId(entry.id) || !Array.isArray(entry.items))) throw new Error('Incomplete Jira change history')
+      return { total: result.total as number, values: result.values as Array<{ id: string; author?: { accountId?: string }; items: Array<Record<string, any>> }> }
+    }
+    const changes: JiraTrackedChange[] = []
+    if (!after) {
+      const first = await page(0, 1)
+      if (first.total === 0) return { cursor: { total: 0, last: null }, changes }
+      const tail = first.total === 1 ? first : await page(first.total - 1, 1)
+      const last = tail.values[0]
+      if (!last) throw new Error('Missing Jira history baseline')
+      return { cursor: { total: first.total, last: last.id }, changes }
+    }
+    let offset = Math.max(0, after.total - 1)
+    let last = after.last
+    let service: string | undefined
+    for (;;) {
+      const result = await page(offset, 100)
+      if (result.total < after.total || offset < result.total && !result.values.length ||
+          after.total > 0 && offset === after.total - 1 && result.values[0]?.id !== after.last) {
+        throw new Error('Jira change history no longer contains the saved baseline')
+      }
+      for (const entry of result.values.slice(Math.max(0, after.total - offset))) {
+        last = entry.id
+        for (const item of entry.items) {
+          const field = item.fieldId ?? item.field
+          if (field !== 'status' && field !== 'assignee') continue
+          const from = field === 'status' ? item.fromString : item.from
+          const to = field === 'status' ? item.toString : item.to
+          // Jira may migrate between native status IDs with the same name.
+          if (field === 'status' && (typeof from !== 'string' || typeof to !== 'string') ||
+              field === 'assignee' && (from != null && typeof from !== 'string' || to != null && typeof to !== 'string')) {
+            throw new Error('Incomplete Jira status or assignee history')
+          }
+          if (from === to) continue
+          service ??= await this.serviceAccountId()
+          changes.push({ field, from: from ?? null, to: to ?? null, byService: entry.author?.accountId === service })
+        }
+      }
+      offset += result.values.length
+      if (offset >= result.total) return { cursor: { total: result.total, last }, changes }
+    }
   }
 
   private message(error: unknown) {
@@ -315,18 +380,30 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  private checkEdit(issue: Issue, input: JiraEdit) {
+  private checkEdit(issue: Issue, input: JiraEdit, assigneeId: string | null | undefined) {
     const equal = (actual: unknown, expected: unknown) => expected === undefined || isDeepStrictEqual(actual, expected)
     const questions = input.add_questions || input.answers ? readJiraDecisions(issue.decisions) : []
     const blocker = input.blocker === undefined ? undefined : input.blocker ?? { type: null, target: '', unblocks_when: '' }
     if (!equal(issue.name, input.name) || !equal(issue.description, input.description === null ? '' : input.description) ||
-      !equal(issue.owner, input.owner) || !equal(issue.externalBlocker, blocker) ||
+      !equal(issue.owner, input.owner) || !equal(issue.assignee_id, assigneeId) || !equal(issue.externalBlocker, blocker) ||
       input.add_questions?.some(question => {
         const saved = questions.find(item => item.id === question.id)
         return saved?.question !== question.question || !isDeepStrictEqual(saved.options ?? [], question.options ?? [])
       }) || input.answers?.some(answer => questions.find(item => item.id === answer.id)?.answer !== answer.answer)) {
       throw new JiraWorkUnconfirmed('Jira field readback differs from the requested edit')
     }
+  }
+
+  private async resolveAssignee(id: string, name: string) {
+    const users = await this.request(`user/assignable/search?${new URLSearchParams({ issueId: id, query: name, maxResults: '1000' })}`)
+    if (!Array.isArray(users)) throw new Error('Incomplete Jira assignee search')
+    const eligible = users.filter(user => user.active === true && typeof user.accountId === 'string' && user.accountId &&
+      typeof user.displayName === 'string')
+    const exact = eligible.filter(user => user.displayName.toLowerCase() === name.toLowerCase())
+    const abbreviated = eligible.filter(user => user.displayName.toLowerCase().startsWith(name.toLowerCase()))
+    const matches = new Set((exact.length ? exact : abbreviated).map(user => user.accountId as string))
+    if (matches.size !== 1) throw new JiraWorkInputError('Choose one unambiguous assignable Jira user by display name')
+    return [...matches][0]!
   }
 
   private editDecisionDocument(issue: Issue, input: JiraEdit) {
@@ -402,17 +479,18 @@ export class JiraWork extends JiraClient {
     return result
   }
 
-  edit(input: JiraEdit, actor: string) {
+  edit(input: JiraEdit, actor: string, beforeWrite?: BeforeWrite) {
     return this.mutate('edit', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = input.note ? `${input.note}\n\nRecorded via Tin Star (${actor})` : undefined
-      if (!note && [input.name, input.owner, input.description, input.blocker, input.add_questions, input.answers].every(value => value === undefined)) {
+      if (!note && [input.name, input.owner, input.assignee, input.description, input.blocker, input.add_questions, input.answers].every(value => value === undefined)) {
         throw new JiraWorkInputError('Supply a ticket edit or comment')
       }
       const baseline = !attempt.dispatched && note ? await this.commentBaseline(id) : undefined
       const current = await this.read(id)
+      const assigneeId = typeof input.assignee === 'string' ? await this.resolveAssignee(id, input.assignee) : input.assignee
       if (attempt.dispatched) {
-        this.checkEdit(current, input)
+        this.checkEdit(current, input, assigneeId)
         await this.checkComment(id, note)
         return attempt.confirm(current)
       }
@@ -425,6 +503,7 @@ export class JiraWork extends JiraClient {
       const fields: Record<string, unknown> = {}
       if (input.name !== undefined) fields.summary = input.name
       if (input.owner !== undefined) fields[mapping.owner] = input.owner === null ? null : { value: input.owner }
+      if (assigneeId !== undefined) fields.assignee = assigneeId === null ? null : { accountId: assigneeId }
       if (input.description !== undefined) fields.description = input.description === null ? null : jiraText(input.description)
       if (input.blocker !== undefined) {
         fields[mapping.blockerType] = input.blocker ? { value: input.blocker.type } : null
@@ -432,11 +511,12 @@ export class JiraWork extends JiraClient {
         fields[mapping.blockerCondition] = input.blocker ? jiraText(input.blocker.unblocks_when) : null
       }
       if (input.add_questions || input.answers) fields[mapping.decisions] = this.editDecisionDocument(current, input)
+      if (beforeWrite) beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
       await this.request(`issue/${id}`, 'PUT', { fields, ...this.commentUpdate(note) })
       const saved = await this.read(id)
       await this.checkComment(id, note, baseline)
-      this.checkEdit(saved, input)
+      this.checkEdit(saved, input, assigneeId)
       if (fields[mapping.decisions] && saved.decisions !== text(fields[mapping.decisions])) {
         throw new JiraWorkUnconfirmed('Jira did not confirm the full Decision Questions field')
       }
@@ -444,7 +524,7 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  transition(input: JiraTransition, actor: string) {
+  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite) {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
@@ -472,6 +552,7 @@ export class JiraWork extends JiraClient {
       const response = await this.request(`issue/${id}/transitions`)
       const candidates = response.transitions?.filter((candidate: Record<string, any>) => candidate.name === input.verb && candidate.to?.name === to && candidate.isAvailable !== false)
       if (candidates?.length !== 1 || !nativeId(candidates[0]?.id)) throw new JiraWorkInputError('Jira does not offer the requested named transition to that status')
+      if (beforeWrite) beforeWrite(this.view(await this.read(id)))
       await attempt.dispatch()
       await this.request(`issue/${id}/transitions`, 'POST', { transition: { id: candidates[0].id } }).catch(error => {
         if (!note || isWriteRejection(error)) throw error
