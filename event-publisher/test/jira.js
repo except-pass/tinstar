@@ -100,7 +100,7 @@ Server.prototype.listen = function (port, host) {
     error => error.code === 2 && error.stderr.includes('EVENTS_JIRA_WEBHOOK_SECRET'))
   const serve = async (env = {}, extraOptions = '') => {
     const publisher = start(t, args, {
-      ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret, ...env,
+      ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret, EVENTS_JIRA_READ_TOKEN: '', ...env,
       NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import ${JSON.stringify(listenerPreload)}`, extraOptions].filter(Boolean).join(' '),
     })
     const listening = /Jira webhook listening on (http:\/\/127\.0\.0\.1:\d+\/webhooks\/jira)\n/
@@ -323,6 +323,7 @@ Server.prototype.listen = function (port, host) {
     88888008: { status: 500 },
     88888009: { disconnect: true },
     88888010: { stall: true },
+    88888011: { status: 408 },
     98767: { project: jira.projectId, key: 'WORK-9', self: 'https://other.atlassian.net/rest/api/3/issue/98767' },
   }))
   const fixture = createServer((req, res) => {
@@ -402,9 +403,6 @@ globalThis.fetch = async (url, options = {}) => {
     { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
   ])
   equal(created[0].occurred_at, new Date(occurred).toISOString())
-  equal((await post('link-before-token', tswLink)).status, 204)
-  equal((await post('link-same-native', tswLink)).status, 204)
-  deepEqual(await since(cursor), created)
   const cloudCursor = await afterSequence()
   equal((await post('link-cloud-self', linkDelivery('issuelink_created', 77002, 98765, 98768))).status, 204)
   deepEqual((await since(cloudCursor)).map(linkShape), [
@@ -412,7 +410,8 @@ globalThis.fetch = async (url, options = {}) => {
     { key: 'WORK-3', id: '98768', link: '77002', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98768`, change: { field: 'links', before: null, after: 'is blocked by WORK-1' } },
   ])
   const deleteCursor = await afterSequence()
-  equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
+  const deletedLink = linkDelivery('issuelink_deleted', 77001, 98765, 98766)
+  equal((await post('link-delete', deletedLink)).status, 204)
   const deleted = await since(deleteCursor)
   for (const event of [...created, ...deleted]) {
     equal(Object.hasOwn(event.evidence.source_reference, 'account_id'), false)
@@ -421,8 +420,16 @@ globalThis.fetch = async (url, options = {}) => {
     { key: 'WORK-1', id: '98765', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: 'blocks WORK-2', after: null } },
     { key: 'WORK-2', id: '98766', link: '77001', webhook: 'issuelink_deleted', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98766`, change: { field: 'links', before: 'is blocked by WORK-1', after: null } },
   ])
-  equal((await post('link-delete', linkDelivery('issuelink_deleted', 77001, 98765, 98766))).status, 204)
+  const beforeRetryReads = readFileSync(fetchLog, 'utf8')
+  const work2 = issues.get('98766')
+  issues.set('98766', { status: 503 })
+  for (const [id, delivery] of [['link-before-token', tswLink], ['link-delete', deletedLink]]) {
+    equal((await post(id, delivery)).status, 204)
+    equal((await post(`${id}-same-native`, delivery)).status, 204)
+  }
+  equal(readFileSync(fetchLog, 'utf8'), beforeRetryReads)
   deepEqual(await since(deleteCursor), deleted)
+  issues.set('98766', work2)
   for (const action of ['created', 'deleted']) {
     const labelCursor = await afterSequence()
     const delivery = linkDelivery(`issuelink_${action}`, 77040, 98765, 98766)
@@ -430,6 +437,17 @@ globalThis.fetch = async (url, options = {}) => {
     equal((await post(`link-without-label-${action}`, delivery)).status, 204)
     deepEqual((await since(labelCursor)).map(event => event.change), ['WORK-2', 'WORK-1'].map(target => ({
       field: 'links', before: action === 'deleted' ? target : null, after: action === 'created' ? target : null,
+    })))
+  }
+  for (const action of ['created', 'deleted']) {
+    const labelCursor = await afterSequence()
+    const delivery = linkDelivery(`issuelink_${action}`, 77041, 98765, 98766)
+    delivery.issueLink.issueLinkType = { outwardName: 'requires authorization:', inwardName: 'password: synthetic-value' }
+    equal((await post(`link-with-credential-label-${action}`, delivery)).status, 204)
+    deepEqual((await since(labelCursor)).map(event => event.change), [
+      'requires authorization: WORK-2', 'password: [credential omitted] WORK-1',
+    ].map(text => ({
+      field: 'links', before: action === 'deleted' ? text : null, after: action === 'created' ? text : null,
     })))
   }
   const jiraJournalState = () => {
@@ -464,9 +482,11 @@ globalThis.fetch = async (url, options = {}) => {
     deepEqual(jiraJournalState(), beforeForeign)
   }
   const mixedCursor = await afterSequence()
-  equal((await post('link-mixed', linkDelivery('issuelink_created', 77022, 98765, 88888001))).status, 204)
+  const mixedLink = linkDelivery('issuelink_created', 77022, 98765, 88888001)
+  mixedLink.issueLink.issueLinkType.outwardName = 'requires authorization:'
+  equal((await post('link-mixed', mixedLink)).status, 204)
   deepEqual((await since(mixedCursor)).map(linkShape), [
-    { key: 'WORK-1', id: '98765', link: '77022', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'blocks [redacted]' } },
+    { key: 'WORK-1', id: '98765', link: '77022', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'requires authorization: [redacted]' } },
   ])
   const wrongSiteCursor = await afterSequence()
   equal((await post('link-wrong-site', linkDelivery('issuelink_created', 77025, 98765, 98767))).status, 204)
@@ -481,7 +501,7 @@ globalThis.fetch = async (url, options = {}) => {
   const beforeSkipped = jiraJournalState()
   equal((await post('link-both-missing', linkDelivery('issuelink_deleted', 77024, 88888003, 88888004))).status, 204)
   deepEqual(jiraJournalState(), beforeSkipped)
-  for (const [index, status] of [403, 401, 429, 500, 'network', 'timeout'].entries()) {
+  for (const [index, status] of [403, 401, 429, 500, 'network', 'timeout', 408].entries()) {
     const failedSide = 88888005 + index
     const endpoints = index % 2 === 0 ? [failedSide, 98766] : [98766, failedSide]
     const action = index % 2 === 0 ? 'created' : 'deleted'

@@ -115,9 +115,11 @@ start from Clavis. Run `events serve` to open the fixed loopback listener at
 Give Jira the approved public HTTPS URL
 that proxies only this pathname, with the request bytes and Jira headers preserved.
 The listener ignores query parameters such as Jira's `triggeredByUser`.
-Keep the registration restricted to one immutable project ID using Jira JQL and
-include the JSON body. Select issue creation, issue updates, comment creation,
-and the issue-link events `issuelink_created` and `issuelink_deleted`.
+Use Jira JQL to restrict issue creation, issue updates, and comment creation to
+one immutable project ID. Include the JSON body and also select
+`issuelink_created` and `issuelink_deleted`. Either link event can arrive from
+other projects, so the publisher checks project scope before writing to the
+journal. [Atlassian webhook filtering](https://developer.atlassian.com/cloud/jira/platform/webhooks/#available-webhook-events)
 Use a distinct secret for this registration. To retire or rotate it, disable or
 update the registration before removing or replacing the Clavis value.
 Inject the Tin Star Jira service account into `EVENTS_JIRA_READ_TOKEN` the same
@@ -142,8 +144,10 @@ immutable Jira issue ID, display key, source delivery ID, source timestamp when
 supplied, and the available before and after values. Link changes are recorded
 when present in the issue update changelog. Issue-link webhooks are recorded
 separately, because an issue update often carries no Link changelog item. For
-each signed `issuelink_created` or `issuelink_deleted` delivery the publisher
-GETs both issues with `fields=project,key`. It journals `ticket.links.changed`
+both `issuelink_created` and `issuelink_deleted`, the publisher skips the
+`jira_subtask` and `jira_gh_epic_story` hierarchy styles without looking up
+issues or writing to the journal. For a new ordinary link delivery with a
+configured token, it GETs both issues with `fields=project,key`. It journals `ticket.links.changed`
 on each side whose project id is the configured project. The other side is
 `blocks WORK-2` style text when that side is in the same project, using the
 link type's outward name on the source issue and inward name on the destination
@@ -151,7 +155,7 @@ issue. When the other side belongs to another project, returns HTTP 404, or
 provides unusable issue data, the text uses the literal `[redacted]` and the
 journal and logs omit that issue's key, summary, and id. When neither side can
 be verified in the configured project, the publisher acknowledges the delivery
-without writing to the journal. If either lookup fails with HTTP 401, 403, 429,
+without writing to the journal. If either lookup fails with HTTP 401, 403, 408, 429,
 5xx, or a network error or timeout, the publisher returns HTTP 503 without
 writing to the journal. Link removals caused by deleting a TSW issue are
 outside the scope of link activity coverage.

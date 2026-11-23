@@ -110,12 +110,15 @@ function textOf(value, onOmission, depth = 0) {
   return children.filter(child => child !== undefined).join(['paragraph', 'heading', 'codeBlock'].includes(value.type) ? '' : '\n')
 }
 
+function boundPreview(text, limit = previewLimit) {
+  return text.length > limit ? text.slice(0, limit).toWellFormed() + '…' : text
+}
+
 function projector(secret) {
   return (value, onOmission = () => {}) => {
     const text = textOf(value, onOmission)
     if (typeof text !== 'string') return text
-    const output = preview(text, secret)
-    return output.length > previewLimit ? output.slice(0, previewLimit).toWellFormed() + '…' : output
+    return boundPreview(preview(text, secret))
   }
 }
 
@@ -336,7 +339,7 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     }
     if (response.status !== 200) {
       await response.body?.cancel()
-      const retryable = [401, 403, 429].includes(response.status) || response.status >= 500
+      const retryable = [401, 403, 408, 429].includes(response.status) || response.status >= 500
       return { kind: retryable ? 'transient' : 'unreadable' }
     }
     const declared = Number(response.headers.get('content-length'))
@@ -364,6 +367,8 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     if (!link) return { status: 400 }
     if (!token) return { status: 204 }
     const action = body.webhookEvent === 'issuelink_deleted' ? 'deleted' : 'created'
+    const native = `issuelink:${action}:${link.id}`
+    if (journal.hasJiraDelivery(config.source.source_id, delivery, native)) return { status: 204 }
     const [sourceSide, destinationSide] = await Promise.all([readIssue(link.sourceId), readIssue(link.destinationId)])
     if (sourceSide.kind === 'transient' || destinationSide.kind === 'transient') return { status: 503 }
     const participants = []
@@ -375,8 +380,8 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
     const observedAt = new Date().toISOString()
     const phrase = (name, other) => {
       const label = name?.trim().replace(/\s+/g, ' ')
-      const target = other.kind === 'tsw' ? other.key : '[redacted]'
-      return redact(label ? `${label} ${target}` : target)
+      const target = redact(other.kind === 'tsw' ? other.key : '[redacted]')
+      return label ? `${boundPreview(redact(label), previewLimit - target.length - 1)} ${target}` : target
     }
     const events = participants.map(({ subject, other, name }) => {
       const text = phrase(name, other)
@@ -402,7 +407,7 @@ export async function startJiraWebhook(journal, config, secret, readToken) {
         },
       }
     })
-    return { status: 204, notice: { native: `issuelink:${action}:${link.id}`, observedAt, events } }
+    return { status: 204, notice: { native, observedAt, events } }
   }
   const respond = (res, status) => {
     res.writeHead(status, status >= 400 ? { Connection: 'close' } : {})

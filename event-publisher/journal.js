@@ -207,6 +207,14 @@ export class Journal {
     return this.recordAttempt(observation).written
   }
 
+  hasJiraDelivery(sourceId, deliveryId, native) {
+    return this.db.prepare(`
+      SELECT 1 FROM jira_deliveries
+      WHERE source_id = ? AND (delivery_id = ? OR native_id = ?)
+      LIMIT 1
+    `).get(sourceId, deliveryId, native) !== undefined
+  }
+
   recordJiraDelivery(sourceId, deliveryId, { native, observedAt, events, reason }) {
     this.db.exec('BEGIN IMMEDIATE')
     try {
