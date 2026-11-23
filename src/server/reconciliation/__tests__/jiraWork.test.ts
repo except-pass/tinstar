@@ -305,8 +305,21 @@ it('assigns only an exact Jira display name', async () => {
   expect(await edit('missing', 'Nobody')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   expect(await edit('prefix', 'Will')).toMatchObject({ outcome: 'not-saved', code: 'invalid-work' })
   expect(writes()).toHaveLength(0)
-  expect(await edit('assign', 'William Gathright')).toMatchObject({ outcome: 'saved', card: { assignee: 'William Gathright', owner: 'Avery' } })
+  const assigned = await edit('assign', 'William Gathright')
+  expect(assigned).toMatchObject({ outcome: 'saved', card: { assignee: 'William Gathright', owner: 'Avery' } })
   expect(await edit('assign', 'William Gathright')).toMatchObject({ outcome: 'saved', code: 'already-saved' })
+  const card_id = created.card.id
+  const reads = await Promise.all([
+    call('get_work', { card_id, details: true }),
+    call('get_work', { card_id, details: false }),
+  ])
+  const moved = await call('transition_work', { card_id, operation_id: 'prioritize-assigned', verb: 'Prioritize' })
+  const linked = await call('link_work', { card_id, operation_id: 'link-assigned', action: 'add', target_key: 'OTHER-1', type: 'Blocks', direction: 'inward' })
+  expect(created.card).not.toHaveProperty('assignee_id')
+  for (const result of [assigned, ...reads, moved, linked]) {
+    expect(result.card).toMatchObject({ assignee: 'William Gathright' })
+    expect(result.card).not.toHaveProperty('assignee_id')
+  }
   expect(writes()).toHaveLength(1)
 })
 
@@ -453,12 +466,12 @@ it.each(['review note', 'transition'] as const)('resumes the persisted TSW retry
   else f.controls.commentResponse = 'wrong-id'
   const retry = await f.run(true)
   const operationId = `${original}-retry-1`
-  expect(retry).toMatchObject({ stopped: true, audits: expect.arrayContaining([
+  expect(retry).toMatchObject({ stopped: isReview, audits: expect.arrayContaining([
     expect.objectContaining({ result: 'dispatch-retry', operationId }),
   ]) })
   f.controls.commentResponse = undefined
   expect(await f.run(true)).toMatchObject({ stopped: false, audits: expect.arrayContaining([
-    expect.objectContaining({ result: 'verified', operationId }),
+    expect.objectContaining({ result: isReview ? 'verified' : 'note-repaired', operationId }),
   ]) })
   expect(issue.fields.status.name).toBe(isReview ? 'Ready for Review' : 'Done')
   expect(issue.comments.filter(comment => adfText(comment.body).includes(`Operation: ${operationId}`))).toHaveLength(1)
@@ -490,14 +503,14 @@ it.each(['Fast-track', 'Complete Directly'] as const)('recovers evidence for a l
   }
   f.controls.commentResponse = 'rejected'
   const first = await f.run(true)
-  expect(first.stopped).toBe(true)
-  const operationId = first.audits.find(entry => entry.result === 'unconfirmed-status-or-assignee-change')!.operationId
-  expect((await f.jira().readTswCard('TSW-1')).status).toBe(verb === 'Fast-track' ? 'Queued' : 'Done')
+  expect(first.stopped).toBe(false)
+  const operationId = first.audits.find(entry => entry.result === 'landed-note-pending')!.operationId
+  expect((await f.jira().readTswCard('TSW-1')).status).toBe(verb === 'Fast-track' ? 'In Progress' : 'Done')
   f.controls.commentResponse = undefined
   if (verb === 'Complete Directly') await f.publish([])
   const resumed = await f.run(true)
   expect(resumed).toMatchObject({ stopped: false, audits: expect.arrayContaining([
-    expect.objectContaining({ result: 'verified', operationId }),
+    expect.objectContaining({ result: 'note-repaired', operationId }),
   ]) })
   const issue = f.issues.get('60001')!
   expect(issue.fields.status.name).toBe(verb === 'Fast-track' ? 'In Progress' : 'Done')
@@ -505,6 +518,35 @@ it.each(['Fast-track', 'Complete Directly'] as const)('recovers evidence for a l
   const notes = issue.comments.map(comment => adfText(comment.body))
   expect(notes.filter(note => note.includes(`Operation: ${operationId}`))).toHaveLength(1)
   if (verb === 'Complete Directly') expect(notes.some(note => note.includes(fixturePull))).toBe(true)
+})
+
+it('abandons each rejected note after three repair passes without blocking Start', async () => {
+  const f = await tswFixture()
+  await f.create('abandon unavailable note')
+  await f.publish([tswTask('TSW-1')])
+  f.controls.commentResponse = 'rejected'
+  await f.run(true)
+  const issue = f.issues.get('60001')!
+  expect(issue.fields.status.name).toBe('In Progress')
+  const posts = () => f.requests.filter(request => request.method === 'POST' && request.path === 'issue/60001/comment').length
+  for (let pass = 1; pass <= 3; pass++) {
+    const run = await f.run(true)
+    expect(run.stopped).toBe(false)
+    expect(posts()).toBe(2 + pass * 2)
+    expect(run.audits.filter(entry => entry.result === (pass === 3 ? 'note-repair-abandoned' : 'note-repair-pending'))).toHaveLength(2)
+  }
+  await f.run(true)
+  expect(posts()).toBe(8)
+})
+
+it('uses a ready owner-merge PR to pass through Start after its worker exits', async () => {
+  const f = await tswFixture()
+  await f.create('ready PR')
+  await f.publish([tswTask('TSW-1', 'checks green: PR ready for review', 'off', { endpoint: { exists: false, agent_alive: 'dead' } })])
+  expect(await f.run(true)).toMatchObject({ stopped: false, plans: [{
+    steps: [{ kind: 'jira_edit' }, { verb: 'Fast-track' }, { verb: 'Start' }, { kind: 'jira_edit' }, { verb: 'Submit for Review' }],
+  }] })
+  expect(await f.jira().readTswCard('TSW-1')).toMatchObject({ status: 'Ready for Review', assignee: 'William Gathright', assignee_id: 'will-account' })
 })
 
 it.each(['dead', 'unknown'] as const)('leaves a retained endpoint in Backlog with %s activity evidence', async activity => {

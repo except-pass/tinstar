@@ -520,7 +520,37 @@ export class JiraWork extends JiraClient {
     })
   }
 
-  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, beforeRepair?: BeforeWrite) {
+  private async postTransitionAudit(id: string, note: string, deferAudit: boolean) {
+    const baseline = await this.commentBaseline(id).catch(() => undefined)
+    await this.checkProject(id)
+    const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
+      if (isWriteRejection(error)) {
+        const Rejected = deferAudit ? JiraWorkUnconfirmed : JiraAuditRejected
+        throw new Rejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
+      }
+      return undefined
+    })
+    const expected = nativeId(posted?.id) ? posted.id : baseline
+    if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+    await this.checkComment(id, note, expected)
+  }
+
+  async repairTransitionAudit(input: JiraTransition, actor: string) {
+    return this.mutate('transition', input, actor, async attempt => {
+      const note = this.transitionAudit(input, actor)
+      if (!attempt.dispatched || !note) throw new JiraWorkInputError('No dispatched transition audit to repair')
+      const id = this.id(input.card_id)
+      try {
+        await this.checkComment(id, note)
+      } catch (error) {
+        if (!(error instanceof JiraWorkUnconfirmed)) throw error
+        await this.postTransitionAudit(id, note, true)
+      }
+      return attempt.confirm(await this.read(id))
+    })
+  }
+
+  transition(input: JiraTransition, actor: string, beforeWrite?: BeforeWrite, deferAudit = false) {
     return this.mutate('transition', input, actor, async attempt => {
       const id = this.id(input.card_id)
       const note = this.transitionAudit(input, actor)
@@ -529,20 +559,6 @@ export class JiraWork extends JiraClient {
         if (issue.status !== destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
         return issue
       }
-      const postAudit = async (note: string) => {
-        const baseline = await this.commentBaseline(id).catch(() => undefined)
-        await this.checkProject(id)
-        const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
-          if (isWriteRejection(error)) {
-            const Rejected = beforeRepair ? JiraWorkUnconfirmed : JiraAuditRejected
-            throw new Rejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
-          }
-          return undefined
-        })
-        const expected = nativeId(posted?.id) ? posted.id : baseline
-        if (!expected) throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
-        await this.checkComment(id, note, expected)
-      }
       if (attempt.dispatched) {
         const destination = jiraTransitionDestination(input)
         if (!destination) throw new JiraWorkUnconfirmed('Jira did not confirm the requested destination status')
@@ -550,11 +566,7 @@ export class JiraWork extends JiraClient {
           await this.checkComment(id, note)
         } catch (error) {
           if (!(error instanceof JiraWorkUnconfirmed)) throw error
-          if (!beforeRepair || !note) {
-            return { ...attempt.confirm(await readDestination(destination)), message: 'The audit note may be missing from Jira.' }
-          }
-          beforeRepair(this.view(await readDestination(destination)))
-          await postAudit(note)
+          return { ...attempt.confirm(await readDestination(destination)), message: 'The audit note may be missing from Jira.' }
         }
         return attempt.confirm(await readDestination(destination))
       }
@@ -571,7 +583,7 @@ export class JiraWork extends JiraClient {
       })
       const saved = await readDestination(to)
       if (!note) return attempt.confirm(saved)
-      await postAudit(note)
+      await this.postTransitionAudit(id, note, deferAudit)
       return attempt.confirm(await readDestination(to))
     })
   }
