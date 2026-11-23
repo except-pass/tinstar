@@ -482,13 +482,27 @@ globalThis.fetch = async (url, options = {}) => {
     equal((await post(`link-foreign-again-${action}`, foreign)).status, 204)
     deepEqual(jiraJournalState(), beforeForeign)
   }
-  const mixedCursor = await afterSequence()
-  const mixedLink = linkDelivery('issuelink_created', 77022, 98765, 88888001)
-  mixedLink.issueLink.issueLinkType.outwardName = 'requires authorization:'
-  equal((await post('link-mixed', mixedLink)).status, 204)
-  deepEqual((await since(mixedCursor)).map(linkShape), [
-    { key: 'WORK-1', id: '98765', link: '77022', webhook: 'issuelink_created', type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`, change: { field: 'links', before: null, after: 'requires authorization: [redacted]' } },
-  ])
+  for (const [direction, linkId, sourceId, destinationId] of [
+    ['outward', 77022, 98765, 88888001],
+    ['inward', 77042, 88888001, 98765],
+  ]) {
+    for (const action of ['created', 'deleted']) {
+      const mixedCursor = await afterSequence()
+      const eventName = `issuelink_${action}`
+      const deliveryId = `link-mixed-${direction}-${action}`
+      const mixedLink = linkDelivery(eventName, linkId, sourceId, destinationId)
+      mixedLink.issueLink.issueLinkType[`${direction}Name`] = 'requires authorization:'
+      equal((await post(deliveryId, mixedLink)).status, 204)
+      const text = 'requires authorization: [redacted]'
+      deepEqual((await since(mixedCursor)).map(linkShape), [{
+        key: 'WORK-1', id: '98765', link: String(linkId), webhook: eventName,
+        type: 'ticket.links.changed', subject: `jira:ticket:${jira.cloudId}:98765`,
+        change: { field: 'links', before: action === 'deleted' ? text : null, after: action === 'created' ? text : null },
+      }])
+      ok(jiraJournalState().receipts.some(receipt =>
+        receipt.delivery_id === deliveryId && receipt.native_id === `issuelink:${action}:${linkId}`))
+    }
+  }
   const wrongSiteCursor = await afterSequence()
   equal((await post('link-wrong-site', linkDelivery('issuelink_created', 77025, 98765, 98767))).status, 204)
   deepEqual((await since(wrongSiteCursor)).map(event => event.change), [
@@ -523,10 +537,10 @@ globalThis.fetch = async (url, options = {}) => {
   match(linkText, /links blocks WORK-2 → —/)
   match(linkText, /links — → blocks \[redacted\]/)
   const hidden = ['ZZFOREIGN-1', 'ZZFOREIGN-2', '88888001', '88888002', '88888003', '88888004', '88888006', '88888007', '88888008', '88888009', '88888010', 'WORK-9', '98767', 'must not be stored', readToken]
-  const dump = readFileSync(dbPath)
+  const persisted = JSON.stringify(jiraJournalState())
   const fetchText = readFileSync(fetchLog, 'utf8')
   for (const needle of hidden) {
-    ok(!dump.includes(Buffer.from(needle)), needle)
+    ok(!persisted.includes(needle), needle)
     ok(!publisher.logs.stderr.includes(needle), needle)
     ok(!publisher.logs.stdout.includes(needle), needle)
     ok(!fetchText.includes(needle), needle)
