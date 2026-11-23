@@ -149,16 +149,23 @@ export async function runTswStatusSync(fleet: SourceSnapshot['fleet'], options: 
         const { operation_id: operationId } = repair.input
         const result = await (async () => {
           const card = await jira.readTswCard(key)
-          if (card.id !== checkpoint.cardId || card.id !== repair.input.card_id) return
+          if (card.id !== checkpoint.cardId || card.id !== repair.input.card_id) return { outcome: 'issue-identity-changed' }
           return await jira.repairTransitionAudit(repair.input, repair.actor) as { outcome?: string }
         })().catch(() => undefined)
         const repaired = result?.outcome === 'saved'
-        const attempts = repair.attempts + 1
-        const abandoned = !repaired && attempts >= noteRepairLimit
+        const identityChanged = result?.outcome === 'issue-identity-changed'
+        const attempts = repair.attempts + Number(result?.outcome === 'repair-rejected')
+        const abandoned = identityChanged || attempts >= noteRepairLimit
+        if (!repaired && !abandoned && attempts === repair.attempts) {
+          await audit(key, 'note-repair-pending', { operationId })
+          continue
+        }
         const noteRepairs = checkpoint.noteRepairs!.flatMap(entry =>
           entry !== repair ? [entry] : repaired || abandoned ? [] : [{ ...entry, attempts }])
         await save(key, { ...checkpoint, noteRepairs })
-        await audit(key, repaired ? 'note-repaired' : abandoned ? 'note-repair-abandoned' : 'note-repair-pending', { operationId })
+        await audit(key, repaired ? 'note-repaired' : abandoned ? 'note-repair-abandoned' : 'note-repair-pending', {
+          operationId, ...(identityChanged && { detail: 'issue-identity-changed' }),
+        })
       }
     }
     const byKey = new Map<string, StatusEvent | undefined>(events.map(event => [event.key, event]))

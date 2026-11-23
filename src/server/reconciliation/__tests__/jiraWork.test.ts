@@ -469,10 +469,16 @@ it.each(['review note', 'transition'] as const)('resumes the persisted TSW retry
   expect(retry).toMatchObject({ stopped: isReview, audits: expect.arrayContaining([
     expect.objectContaining({ result: 'dispatch-retry', operationId }),
   ]) })
+  issue.comments.unshift(...Array.from({ length: 51 }, (_, index) => ({ id: `newer-${index}`, body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Newer comment' }] }] } })))
+  const writeCount = f.requests.filter(request => request.path === path && request.method === method ||
+    request.path === 'issue/60001/comment' && request.method === 'POST').length
   f.controls.commentResponse = undefined
   expect(await f.run(true)).toMatchObject({ stopped: false, audits: expect.arrayContaining([
     expect.objectContaining({ result: isReview ? 'verified' : 'note-repaired', operationId }),
   ]) })
+  expect(f.requests.filter(request => request.path === path && request.method === method ||
+    request.path === 'issue/60001/comment' && request.method === 'POST'))
+    .toHaveLength(writeCount + Number(isReview))
   expect(issue.fields.status.name).toBe(isReview ? 'Ready for Review' : 'Done')
   expect(issue.comments.filter(comment => adfText(comment.body).includes(`Operation: ${operationId}`))).toHaveLength(1)
 })
@@ -554,6 +560,28 @@ it('completes a linked PR from the CI monitor merge detail after worker exit', a
   expect(f.issues.get('60001')!.comments.map(comment => adfText(comment.body))).toContainEqual(
     expect.stringContaining(`Complete Directly via Tin Star (Firstmate fleet)\nEvidence: First Mate reported delivery for task-TSW-1. ${fixturePull}`),
   )
+})
+
+it.each(['issue/60001', 'issue/60001/comment'])('preserves a repair through repeated pre-write failures on %s', async path => {
+  const f = await tswFixture()
+  await f.create('transient repair read failure')
+  await f.publish([tswTask('TSW-1')])
+  await f.run(true)
+  await f.publish([], [{ id: 'landed', body_lines: ['card: TSW-1'], completion: { verb: 'done' }, pr_url: fixturePull }])
+  f.controls.commentResponse = 'rejected'
+  const initial = await f.run(true)
+  const operationId = initial.audits.find(entry => entry.result === 'landed-note-pending')!.operationId
+  await f.publish([])
+  f.controls.commentResponse = undefined
+  const writes = () => f.requests.filter(request => request.path === 'issue/60001/comment' && request.method === 'POST').length
+  const previousWrites = writes()
+  for (let pass = 0; pass < 3; pass++) {
+    f.controls.beforeWrite = `GET ${path}`
+    expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'note-repair-pending', operationId }))
+    expect(writes()).toBe(previousWrites)
+  }
+  expect((await f.run(true)).audits).toContainEqual(expect.objectContaining({ result: 'note-repaired', operationId }))
+  expect(writes()).toBe(previousWrites + 1)
 })
 
 it('abandons each rejected note after three repair passes without blocking Start', async () => {
@@ -1272,7 +1300,7 @@ it.each([undefined, 'lost', 'unreadable'] as const)('confirms the dedicated audi
   expect(await call('transition_work', input)).toMatchObject({ outcome: 'saved', code: 'already-saved' })
   issue.comments.unshift(...Array.from({ length: 50 }, (_, i) => ({ id: `new-${i}`, body: 'Newer comment' })))
   expect(await call('transition_work', input)).toMatchObject({
-    outcome: 'saved', code: 'already-saved', card: { status: 'In Progress' }, message: expect.stringContaining('audit note may be missing'),
+    outcome: 'saved', code: 'already-saved', card: { status: 'In Progress' },
   })
   expect(writes()).toHaveLength(2)
 

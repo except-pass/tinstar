@@ -22,6 +22,7 @@ function text(value: unknown, unsupported: true | 'omit' = true) {
 class JiraWorkUnconfirmed extends Error {}
 class JiraCreateContradiction extends JiraWorkUnconfirmed {}
 class JiraAuditRejected extends JiraWorkUnconfirmed {}
+class JiraRepairRejected extends JiraWorkUnconfirmed {}
 const isWriteRejection = (error: unknown): error is JiraWriteError =>
   error instanceof JiraWriteError && error.method !== 'GET' && error.status >= 400 && error.status < 500 && error.status !== 408
 type Link = { id: string; type_id: string; type: string; label: string; direction: 'inward' | 'outward'; target_key: string; target_id: string }
@@ -134,10 +135,11 @@ export class JiraWork extends JiraClient {
       ...(blocker === undefined ? { external_blocker_fields: externalBlocker } : {}), ...(warnings.length ? { warnings } : {}) }
   }
 
-  private async notes(issueId: string) {
+  private async notes(issueId: string, startAt = 0) {
     await this.checkProject(issueId)
-    const body = await this.request(`issue/${issueId}/comment?startAt=0&maxResults=50&orderBy=-created`)
-    if (!Array.isArray(body.comments) || !Number.isInteger(body.total) || body.startAt !== 0) throw new Error('Incomplete Jira comment readback')
+    const body = await this.request(`issue/${issueId}/comment?startAt=${startAt}&maxResults=50&orderBy=-created`)
+    if (!Array.isArray(body.comments) || !Number.isSafeInteger(body.total) || body.total < 0 || body.startAt !== startAt ||
+      body.comments.length > body.total - startAt || !body.comments.length && startAt < body.total) throw new Error('Incomplete Jira comment readback')
     await this.checkProject(issueId)
     return { comments: body.comments.map((comment: Record<string, any>) => ({
       id: comment.id, body: comment.visibility == null ? text(comment.body) : undefined, created_at: comment.created, updated_at: comment.updated, author_id: comment.author?.accountId,
@@ -304,12 +306,25 @@ export class JiraWork extends JiraClient {
       return
     }
     const page = await this.notes(id)
+    if (!expected) {
+      const matches = (comment: typeof page.comments[number]) => comment.body === note && comment.author_id === accountId
+      let current = page
+      let offset = 0
+      for (;;) {
+        if (current.comments.some(matches)) return
+        offset += current.comments.length
+        if (offset >= page.total) break
+        current = await this.notes(id, offset)
+        if (current.total !== page.total) throw new Error('Jira comments changed during readback')
+      }
+      throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
+    }
     const matching = page.comments.filter(comment => {
       const createdAt = Date.parse(comment.created_at)
       if (comment.body !== note || comment.author_id !== accountId) return false
-      return !expected || (!expected.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= expected.time)
+      return !expected.ids.includes(comment.id) && createdAt === Date.parse(comment.updated_at) && createdAt >= expected.time
     })
-    if (expected ? matching.length !== 1 : matching.length === 0) {
+    if (matching.length !== 1) {
       throw new JiraWorkUnconfirmed('Jira did not confirm the requested comment')
     }
   }
@@ -525,7 +540,7 @@ export class JiraWork extends JiraClient {
     await this.checkProject(id)
     const posted = await this.request(`issue/${id}/comment`, 'POST', { body: jiraText(note) }).catch(error => {
       if (isWriteRejection(error)) {
-        const Rejected = deferAudit ? JiraWorkUnconfirmed : JiraAuditRejected
+        const Rejected = deferAudit ? JiraRepairRejected : JiraAuditRejected
         throw new Rejected(`Jira confirmed the destination status but rejected the audit comment (HTTP ${error.status}).`)
       }
       return undefined
@@ -544,7 +559,12 @@ export class JiraWork extends JiraClient {
         await this.checkComment(id, note)
       } catch (error) {
         if (!(error instanceof JiraWorkUnconfirmed)) throw error
-        await this.postTransitionAudit(id, note, true)
+        try {
+          await this.postTransitionAudit(id, note, true)
+        } catch (error) {
+          if (error instanceof JiraRepairRejected) return { outcome: 'repair-rejected' }
+          throw error
+        }
       }
       return attempt.confirm(await this.read(id))
     })
