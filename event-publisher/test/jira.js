@@ -350,9 +350,17 @@ globalThis.fetch = async () => {
     88888009: { disconnect: true },
     88888010: { stall: true },
     88888011: { status: 408 },
+    88888012: { status: 302 },
   }))
+  let redirectTargetHits = 0
   const fixture = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    if (url.pathname === '/redirect-target') {
+      redirectTargetHits += 1
+      res.writeHead(204)
+      res.end()
+      return
+    }
     const found = /^\/ex\/jira\/([^/]+)\/rest\/api\/3\/issue\/([^/]+)$/.exec(url.pathname)
     if (req.method !== 'GET' || !found || found[1] !== jira.cloudId || url.search !== '?fields=project,key') {
       res.writeHead(400)
@@ -366,7 +374,7 @@ globalThis.fetch = async () => {
     }
     if (issue?.stall) return
     if (!issue || issue.status) {
-      res.writeHead(issue?.status ?? 404)
+      res.writeHead(issue?.status ?? 404, issue?.status === 302 ? { Location: '/redirect-target' } : {})
       res.end()
       return
     }
@@ -393,9 +401,9 @@ const authorization = options => {
 globalThis.fetch = async (url, options = {}) => {
   const target = new URL(String(url))
   const method = options.method ?? 'GET'
-  if (target.hostname !== 'api.atlassian.com') {
-    appendFileSync(log, 'OTHER-HOST ' + method + '\\n')
-    throw new Error('Unexpected host in Jira lookup fixture')
+  if (target.origin !== 'https://api.atlassian.com') {
+    appendFileSync(log, 'OTHER-ORIGIN ' + method + '\\n')
+    throw new Error('Unexpected origin in Jira lookup fixture')
   }
   appendFileSync(log, method + ' ' + (target.search === '?fields=project,key' ? 'fields=project,key' : 'query') + ' auth=' + authorization(options) + '\\n')
   if (method !== 'GET') return new Response(null, { status: 405 })
@@ -516,6 +524,12 @@ globalThis.fetch = async (url, options = {}) => {
   const beforeSkipped = jiraJournalState()
   equal((await post('link-both-missing', linkDelivery('issuelink_deleted', 77024, 88888003, 88888004))).status, 204)
   deepEqual(jiraJournalState(), beforeSkipped)
+  for (const [action, endpoints] of [['created', [88888012, 98766]], ['deleted', [98766, 88888012]]]) {
+    const delivery = linkDelivery(`issuelink_${action}`, 77043, ...endpoints)
+    equal((await post(`link-redirect-${action}`, delivery)).status, 503)
+    deepEqual(jiraJournalState(), beforeSkipped)
+    equal(redirectTargetHits, 0)
+  }
   for (const [index, status] of [403, 401, 429, 500, 'network', 'timeout', 408].entries()) {
     const failedSide = 88888005 + index
     const endpoints = index % 2 === 0 ? [failedSide, 98766] : [98766, failedSide]
