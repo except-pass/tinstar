@@ -98,7 +98,16 @@ Server.prototype.listen = function (port, host) {
 `)
   await rejects(exec(process.execPath, [cli, ...args], { env: { ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: '' } }),
     error => error.code === 2 && error.stderr.includes('EVENTS_JIRA_WEBHOOK_SECRET'))
-  const serve = async (env = {}, extraOptions = '') => {
+  const unexpectedFetchLog = join(directory, 'unexpected-fetch.log')
+  const blockedFetchPreload = join(directory, 'jira-blocked-fetch-preload.mjs')
+  await writeFile(unexpectedFetchLog, '')
+  await writeFile(blockedFetchPreload, `import { appendFileSync } from 'node:fs'
+globalThis.fetch = async () => {
+  appendFileSync(${JSON.stringify(unexpectedFetchLog)}, 'fetch attempted\\n')
+  throw new Error('Unexpected outbound fetch in credential-free publisher')
+}
+`)
+  const serve = async (env = {}, extraOptions = `--import ${JSON.stringify(blockedFetchPreload)}`) => {
     const publisher = start(t, args, {
       ...process.env, EVENTS_JIRA_WEBHOOK_SECRET: secret, EVENTS_JIRA_READ_TOKEN: '', ...env,
       NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import ${JSON.stringify(listenerPreload)}`, extraOptions].filter(Boolean).join(' '),
@@ -165,6 +174,7 @@ Server.prototype.listen = function (port, host) {
   equal((await post('link-before-token', tswLink)).status, 503)
   equal((await post('link-delete', deletedLink)).status, 503)
   deepEqual(jiraJournalState(), beforeMissingToken)
+  equal(readFileSync(unexpectedFetchLog, 'utf8'), '')
 
   const watcher = start(t, ['watch', '--source', 'jira', '--type', 'ticket', '--db', dbPath, '--json'])
   await until(() => watcher.logs.stderr.includes('Watching from sequence 0'))
@@ -395,6 +405,7 @@ globalThis.fetch = async (url, options = {}) => {
 }
 `)
   await publisher.stop()
+  equal(readFileSync(unexpectedFetchLog, 'utf8'), '')
   await rm(envCheck, { force: true })
   publisher = await serve({ EVENTS_JIRA_READ_TOKEN: readToken }, `--import ${JSON.stringify(preloadPath)}`)
   ok(!publisher.logs.stderr.includes('issue-link events need EVENTS_JIRA_READ_TOKEN'))
